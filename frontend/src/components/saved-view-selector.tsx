@@ -8,6 +8,7 @@ import { DropdownMenu } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
+import { Localized } from "@/components/ui/localized";
 
 const RECENT_KEY = "ps-recent-saved-views";
 
@@ -74,7 +75,7 @@ export function SavedViewSelector({
     try { await action(); } finally { setBusy(false); }
   }
 
-  return (<>
+  return (<Localized><>
     <DropdownMenu
       open={open}
       onOpenChange={setMenuOpen}
@@ -143,5 +144,5 @@ export function SavedViewSelector({
       </form>
     </Modal>
     <ConfirmModal open={!!deleting} onClose={() => setDeleting(null)} onConfirm={() => deleting && void run(async () => { await onDelete(deleting); setDeleting(null); })} title="Delete saved view?" description={deleting ? `“${deleting.name}” will be removed. Models are not affected.` : ""} confirmLabel="Delete" busy={busy} />
-  </>);
+  </></Localized>);
 }

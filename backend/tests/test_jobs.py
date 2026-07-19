@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.core.time import utcnow
-from app.services.jobs import JobRegistry
+from app.services.jobs import JobRegistry, reconcile_interrupted_jobs
 
 
 def test_progress_hints_round_trip() -> None:
@@ -68,3 +68,31 @@ def test_running_jobs_never_pruned() -> None:
     registry.create()
 
     assert registry.get(running_id) is not None
+
+
+def test_job_status_survives_registry_recreation() -> None:
+    first = JobRegistry()
+    job_id = first.create(owner_user_id=7)
+    first.update(job_id, state="running", label="persisted", progress=25)
+
+    restored = JobRegistry().get(job_id)
+
+    assert restored is not None
+    assert restored.owner_user_id == 7
+    assert restored.state == "running"
+    assert restored.label == "persisted"
+    assert restored.progress == 25
+
+
+def test_restart_marks_interrupted_non_replayable_job_retryable() -> None:
+    registry = JobRegistry()
+    job_id = registry.create(owner_user_id=7)
+    registry.update(job_id, state="running", label="upload")
+
+    assert reconcile_interrupted_jobs() == 1
+    restored = JobRegistry().get(job_id)
+
+    assert restored is not None
+    assert restored.state == "failed"
+    assert restored.error == "interrupted_by_restart"
+    assert restored.retryable is True

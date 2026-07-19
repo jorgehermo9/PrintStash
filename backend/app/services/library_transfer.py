@@ -138,7 +138,13 @@ def create_archive(session: Session, user: User) -> Path:
                             "metadata": {
                                 key: _json_value(value)
                                 for key, value in md.model_dump(
-                                    exclude={"id", "file_id"}
+                                    # created_at is set fresh by Metadata's
+                                    # default_factory on import — carrying the
+                                    # source instance's ISO string through
+                                    # crashes ingestion.persist_artifact's
+                                    # write (SQLite datetime columns require a
+                                    # real datetime, not a string).
+                                    exclude={"id", "file_id", "created_at"}
                                 ).items()
                             }
                             if md

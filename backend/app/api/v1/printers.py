@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from pathlib import Path
 from typing import Awaitable, Callable, List, Optional
 
@@ -64,6 +63,7 @@ from app.services.printer_hub import (
     get_hub,
     get_hub_from_ws,
 )
+from app.services.printer_jobs import PrinterJobError, transfer_artifact
 from app.services.printer_provider import (
     ProviderError,
     capabilities_for_provider,
@@ -158,6 +158,10 @@ def _to_read(p: Printer) -> PrinterRead:
         capabilities=PrinterCapabilities(**caps.as_api_dict()),
         notes=p.notes,
         group=p.group,
+        is_default=p.is_default,
+        drain_mode=p.drain_mode,
+        drain_reason=p.drain_reason,
+        drain_updated_at=p.drain_updated_at,
         status=p.status,
         last_seen_at=p.last_seen_at,
         last_error=p.last_error,
@@ -656,20 +660,6 @@ async def send_to_printer(
     blob_exists = await run_in_threadpool(backend.exists, f.path)
     if not blob_exists:
         raise HTTPException(status_code=410, detail="file_blob_missing")
-    temp_file = tempfile.NamedTemporaryFile(
-        prefix=f"print-{f.id}-",
-        suffix=Path(f.original_filename).suffix,
-        delete=False,
-    )
-    temp_target = Path(temp_file.name)
-    temp_file.close()
-    try:
-        local = await run_in_threadpool(backend.download_to_path, f.path, temp_target)
-    except Exception as exc:
-        temp_target.unlink(missing_ok=True)
-        logger.warning("failed to stage print upload file=%s", f.id)
-        raise HTTPException(status_code=502, detail="storage_error") from exc
-
     remote_name = (
         payload.remote_filename.strip()
         if payload.remote_filename
@@ -693,10 +683,17 @@ async def send_to_printer(
     session.refresh(job)
 
     try:
-        await provider.upload(local, remote_name)
-        if payload.start_print:
-            await provider.start(remote_name)
+        await transfer_artifact(
+            backend, provider, f, remote_name, start_print=payload.start_print
+        )
     except ProviderError as exc:
+        job.state = PrintJobState.FAILED
+        job.error = exc.code
+        job.finished_at = utcnow()
+        session.add(job)
+        session.commit()
+        raise HTTPException(status_code=502, detail=exc.code) from exc
+    except PrinterJobError as exc:
         job.state = PrintJobState.FAILED
         job.error = exc.code
         job.finished_at = utcnow()
@@ -713,12 +710,6 @@ async def send_to_printer(
         session.add(job)
         session.commit()
         raise HTTPException(status_code=502, detail="provider_error") from exc
-    finally:
-        try:
-            temp_target.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("failed to remove temp print upload %s", temp_target)
-
     # Upload-only is not a queued print. It only records transfer history; user
     # can start the remote file later from printer inventory.
     job.state = (
@@ -858,6 +849,27 @@ async def _printer_control(printer_id: int, session: Session, action: str) -> di
     except Exception as exc:
         logger.error("printer control failed action=%s printer=%s", action, printer_id)
         raise HTTPException(status_code=502, detail="provider_error") from exc
+    if action == "cancel":
+        now = utcnow()
+        active_jobs = session.exec(
+            select(PrintJob).where(
+                PrintJob.printer_id == printer_id,
+                PrintJob.state.in_(  # type: ignore[union-attr]
+                    [
+                        PrintJobState.STARTED,
+                        PrintJobState.PRINTING,
+                        PrintJobState.PAUSED,
+                    ]
+                ),
+            )
+        ).all()
+        for job in active_jobs:
+            job.state = PrintJobState.CANCELLED
+            job.finished_at = now
+            job.updated_at = now
+            session.add(job)
+        if active_jobs:
+            session.commit()
     return {"ok": True}
 
 

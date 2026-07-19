@@ -11,16 +11,45 @@ import asyncio
 import time
 
 import httpx
+import pytest
 from sqlmodel import Session, select
 
 from app.db.models import File, FileType, Model, Printer, PrintJob, PrintJobState
 from app.db.session import get_session_factory
 from app.services import runtime_config
+from app.services.moonraker import MoonrakerClient, MoonrakerError
 from app.services.printer_hub import PrinterHub
 from tests.e2e.fakes.mock_printer import create_app
 from tests.e2e.fakes.server import start_server
 
 REMOTE = "demo.gcode"
+
+
+def test_mock_enforces_moonraker_http_and_websocket_api_key() -> None:
+    app, _state = create_app(api_key="secret")
+    running = start_server(app)
+    try:
+
+        async def _run() -> None:
+            assert (await MoonrakerClient(running.base_url, "secret").info())["result"]
+            with pytest.raises(MoonrakerError, match="moonraker 401"):
+                await MoonrakerClient(running.base_url, "wrong").info()
+
+            statuses: list[dict] = []
+            stop = asyncio.Event()
+
+            async def on_status(status: dict) -> None:
+                statuses.append(status)
+                stop.set()
+
+            await MoonrakerClient(running.base_url, "secret").subscribe(
+                on_status, stop_event=stop
+            )
+            assert statuses
+
+        asyncio.run(_run())
+    finally:
+        running.stop()
 
 
 def _seed(db_session: Session, base_url: str) -> tuple[int, int]:

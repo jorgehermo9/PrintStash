@@ -186,6 +186,35 @@ class MoonrakerClient:
             try:
                 logger.info("moonraker ws connect %s", url)
                 async with websockets.connect(url, max_size=8 * 1024 * 1024) as ws:
+                    if self.api_key:
+                        request_id += 1
+                        identify_payload = {
+                            "jsonrpc": "2.0",
+                            "method": "server.connection.identify",
+                            "params": {
+                                "client_name": "PrintStash",
+                                "version": "1",
+                                "type": "agent",
+                                "url": "https://printstash.io",
+                                "api_key": self.api_key,
+                            },
+                            "id": request_id,
+                        }
+                        await ws.send(json.dumps(identify_payload))
+                        identify_raw = await asyncio.wait_for(
+                            ws.recv(), timeout=self.timeout
+                        )
+                        identify_response = json.loads(identify_raw)
+                        if (
+                            identify_response.get("id") != request_id
+                            or "error" in identify_response
+                        ):
+                            detail = identify_response.get("error", {}).get(
+                                "message", "authentication failed"
+                            )
+                            raise MoonrakerError(
+                                f"moonraker websocket authentication failed: {detail}"
+                            )
                     request_id += 1
                     sub_payload = {
                         "jsonrpc": "2.0",

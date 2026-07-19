@@ -48,6 +48,18 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
     assert "allow_download" in share_columns
     assert "selected_file_ids_json" in share_columns
 
+    user_columns = {col["name"]: col for col in inspector.get_columns("users")}
+    assert "oidc_issuer" in user_columns
+    assert "oidc_subject" in user_columns
+    assert user_columns["oidc_managed"]["nullable"] is False
+
+    config_columns = {
+        col["name"]: col for col in inspector.get_columns("system_config")
+    }
+    assert "oidc_enabled" in config_columns
+    assert "oidc_client_secret" in config_columns
+    assert "oidc_admin_groups" in config_columns
+
 
 # --------------------------------------------------------------------------- #
 # Strict coverage for the migration runner (app/db/migrate.py) and create_all

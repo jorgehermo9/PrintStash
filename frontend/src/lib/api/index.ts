@@ -11,6 +11,7 @@ export * from "@/lib/api/backup";
 export * from "@/lib/api/config";
 export * from "@/lib/api/documents";
 export * from "@/lib/api/filaments";
+export * from "@/lib/api/fleet";
 export * from "@/lib/api/libraries";
 export * from "@/lib/api/models";
 export * from "@/lib/api/saved-views";

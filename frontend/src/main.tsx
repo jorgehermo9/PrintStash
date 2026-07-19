@@ -4,6 +4,8 @@ import { RouterProvider } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 
 import { queryClient } from "@/lib/query-client";
+import { I18nProvider } from "@/lib/i18n";
+import { registerPwa } from "@/lib/pwa";
 
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
@@ -26,13 +28,17 @@ const ReactQueryDevtools = import.meta.env.DEV
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-      {ReactQueryDevtools ? (
-        <Suspense fallback={null}>
-          <ReactQueryDevtools initialIsOpen={false} />
-        </Suspense>
-      ) : null}
-    </QueryClientProvider>
+    <I18nProvider>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+        {ReactQueryDevtools ? (
+          <Suspense fallback={null}>
+            <ReactQueryDevtools initialIsOpen={false} />
+          </Suspense>
+        ) : null}
+      </QueryClientProvider>
+    </I18nProvider>
   </StrictMode>,
 );
+
+registerPwa();

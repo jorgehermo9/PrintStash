@@ -19,6 +19,7 @@ import {
   updateVaultConfig,
 } from "@/lib/api";
 import { toast } from "@/lib/toast";
+import { Localized } from "@/components/ui/localized";
 import { trackImportJob } from "@/lib/task-center";
 import type {
   ExternalLibrary,
@@ -285,6 +286,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   if (!loaded) return null;
 
   return (
+    <Localized>
     <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
@@ -558,5 +560,6 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
         onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
       />
     </div>
+    </Localized>
   );
 }

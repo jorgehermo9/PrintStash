@@ -27,9 +27,23 @@ const mockUsePrinterDashboard = vi.fn<() => { data: Dashboard; refetch: () => vo
   data: { total_printers: 0, status_counts: {}, active_jobs: 0, groups: [] },
   refetch: vi.fn(),
 }));
+const mockUseFleetQueue = vi.fn(() => ({ data: [], isLoading: false, refetch: vi.fn() }));
+const mockUseFleetSummary = vi.fn(() => ({
+  data: {
+    total_printers: 0,
+    queued_jobs: 0,
+    active_jobs: 0,
+    draining_printers: 0,
+    maintenance_printers: 0,
+    attention_jobs: 0,
+  },
+  refetch: vi.fn(),
+}));
 vi.mock("@/lib/queries", () => ({
   usePrinters: () => mockUsePrinters(),
   usePrinterDashboard: () => mockUsePrinterDashboard(),
+  useFleetQueue: () => mockUseFleetQueue(),
+  useFleetSummary: () => mockUseFleetSummary(),
 }));
 vi.mock("@/lib/use-require-auth", () => ({
   useRequireAuth: () => ({ isAuthenticated: true, showAuthRequiredToast: vi.fn() }),
@@ -69,6 +83,10 @@ function makePrinter(overrides: Partial<PrinterRead> = {}): PrinterRead {
     },
     notes: null,
     group: null,
+    is_default: false,
+    drain_mode: false,
+    drain_reason: null,
+    drain_updated_at: null,
     status: "ready",
     last_seen_at: null,
     last_error: null,
@@ -182,6 +200,12 @@ describe("printer setup", () => {
 });
 
 describe("printer card", () => {
+  it("switches to global queue empty state", async () => {
+    render(<PrintersPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "Queue" }));
+    expect(screen.getByText("No queued print jobs")).toBeInTheDocument();
+  });
+
   it("summarizes fleet health and filters by printer group", async () => {
     mockUsePrinters.mockReturnValue({
       data: [

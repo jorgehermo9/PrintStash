@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n, type MessageKey } from "@/lib/i18n";
 import { Drawer } from "@/components/ui/drawer";
 import { TaskList } from "@/components/task-list";
 import {
@@ -29,7 +30,7 @@ import {
 
 type NavItem = {
   href: string;
-  label: string;
+  labelKey: MessageKey;
   icon: LucideIcon;
   adminOnly?: boolean;
   external?: boolean;
@@ -39,14 +40,14 @@ type NavItem = {
 // into the "More" sheet. Wiki and Settings sit last because they're also one tap
 // away from the avatar menu in the top bar.
 const NAV_ITEMS: NavItem[] = [
-  { href: "/", label: "Vault", icon: Box },
-  { href: "/printers", label: "Printers", icon: Printer, adminOnly: true },
-  { href: "/statistics", label: "Stats", icon: BarChart3, adminOnly: true },
-  { href: "/profiles", label: "Profiles", icon: SlidersHorizontal },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/", labelKey: "nav.vault", icon: Box },
+  { href: "/printers", labelKey: "nav.printers", icon: Printer, adminOnly: true },
+  { href: "/statistics", labelKey: "nav.stats", icon: BarChart3, adminOnly: true },
+  { href: "/profiles", labelKey: "nav.profiles", icon: SlidersHorizontal },
+  { href: "/settings", labelKey: "nav.settings", icon: Settings },
   {
     href: "https://xiao-villamor.github.io/PrintStash/",
-    label: "Wiki",
+    labelKey: "nav.wiki",
     icon: BookOpen,
     external: true,
   },
@@ -63,6 +64,7 @@ function isItemActive(item: NavItem, pathname: string): boolean {
 }
 
 export function BottomNavBar() {
+  const { t } = useI18n();
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
@@ -106,13 +108,13 @@ export function BottomNavBar() {
         <button
           type="button"
           onClick={() => setMoreOpen(true)}
-          aria-label="More"
+          aria-label={t("nav.more")}
           aria-expanded={moreOpen}
           aria-current={moreActive ? "page" : undefined}
           className="group flex flex-1 flex-col items-center justify-center gap-1 pt-2 pb-1.5"
         >
           <TabIcon icon={MoreHorizontal} active={moreActive || moreOpen} />
-          <TabLabel active={moreActive || moreOpen}>More</TabLabel>
+          <TabLabel active={moreActive || moreOpen}>{t("nav.more")}</TabLabel>
         </button>
       </nav>
 
@@ -134,12 +136,13 @@ export function BottomNavBar() {
 }
 
 function NavTab({ item, active }: { item: NavItem; active: boolean }) {
+  const { t } = useI18n();
   const className =
     "group flex flex-1 flex-col items-center justify-center gap-1 pt-2 pb-1.5 active:scale-95 transition-transform duration-press";
   const content = (
     <>
       <TabIcon icon={item.icon} active={active} />
-      <TabLabel active={active}>{item.label}</TabLabel>
+      <TabLabel active={active}>{t(item.labelKey)}</TabLabel>
     </>
   );
   if (item.external) {
@@ -209,6 +212,7 @@ function MoreSheet({
   onLogout?: () => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [tasksOpen, setTasksOpen] = useState(false);
   const activeTasks = tasks.filter((task) => task.status === "pending" || task.status === "running").length;
 
@@ -217,17 +221,17 @@ function MoreSheet({
       open={open}
       onClose={onClose}
       side="bottom"
-      ariaLabel="More"
+      ariaLabel={t("nav.more")}
       containerClassName="md:hidden"
       className="max-h-[85dvh] overflow-y-auto rounded-t-2xl border-t border-border bg-card px-4 pt-3 pb-safe shadow-2xl"
     >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted-foreground/25" />
         <div className="mb-3 flex items-center justify-between">
-          <span className="text-sm font-semibold text-foreground">More</span>
+          <span className="text-sm font-semibold text-foreground">{t("nav.more")}</span>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t("nav.close")}
             className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <X className="h-4 w-4" />
@@ -245,7 +249,7 @@ function MoreSheet({
               const inner = (
                 <>
                   <item.icon className="h-5 w-5" />
-                  <span className="text-xs font-medium">{item.label}</span>
+                  <span className="text-xs font-medium">{t(item.labelKey)}</span>
                 </>
               );
               if (item.external) {
@@ -272,7 +276,7 @@ function MoreSheet({
             className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <Bell className="h-4 w-4 text-muted-foreground" />
-            <span className="flex-1">Tasks</span>
+            <span className="flex-1">{t("nav.tasks")}</span>
             <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-3xs text-muted-foreground">
               {activeTasks ? `${activeTasks} active` : tasks.length}
             </span>
@@ -286,7 +290,7 @@ function MoreSheet({
               <User className="h-4 w-4" />
             </div>
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-              {username ?? "Account"}
+              {username ?? t("nav.account")}
             </span>
             <button
               type="button"
@@ -294,7 +298,7 @@ function MoreSheet({
               className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
             >
               <LogOut className="h-4 w-4" />
-              Log out
+              {t("nav.logOut")}
             </button>
           </div>
         )}

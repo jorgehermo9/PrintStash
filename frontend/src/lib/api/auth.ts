@@ -2,6 +2,7 @@ import { authHeaders, getJson, getUrl, handleResponse, sendAction, sendJson } fr
 import {
   ApiKeyCreateResponse,
   ApiKeyRead,
+  AuthProvidersRead,
   LoginRequest,
   TokenResponse,
   UserCreate,
@@ -9,6 +10,14 @@ import {
   UserRead,
   UserUpdate,
 } from "@/types";
+
+export function getAuthProviders(): Promise<AuthProvidersRead> {
+  return getJson<AuthProvidersRead>("/api/v1/auth/providers");
+}
+
+export function oidcLoginUrl(): string {
+  return getUrl("/api/v1/auth/oidc/login");
+}
 
 export function login(body: LoginRequest): Promise<TokenResponse> {
   return sendJson<TokenResponse>("/api/v1/auth/login", "POST", body);

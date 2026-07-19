@@ -12,6 +12,7 @@ import {
 import type { MakerWorldStatus } from "@/types";
 import { userMessage } from "@/lib/errors";
 import { useAuth } from "@/lib/auth-context";
+import { Localized } from "@/components/ui/localized";
 
 // "creds": entering email + password. "code": entering the emailed/app code.
 type Step = "creds" | "code";
@@ -134,6 +135,7 @@ export function MakerWorldConnectCard() {
   const connected = !!status?.connected;
 
   return (
+    <Localized>
     <div className="bg-card border border-border rounded overflow-hidden">
       <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b border-border flex items-center justify-between gap-2">
         <div className="min-w-0">
@@ -337,5 +339,6 @@ export function MakerWorldConnectCard() {
         {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       </div>
     </div>
+    </Localized>
   );
 }

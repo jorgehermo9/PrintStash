@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { DropdownMenu } from "@/components/ui/dropdown-menu";
 import { SavedViewSelector } from "@/components/saved-view-selector";
+import { Localized } from "@/components/ui/localized";
 import { useMobileFilterDrawer } from "@/lib/mobile-filter-context";
 import {
   SlidersHorizontal,
@@ -833,6 +834,7 @@ async function onMainDrop(e: React.DragEvent) {
   })();
 
   return (
+    <Localized>
     <>
       <Modal
         open={saveViewOpen}
@@ -1312,6 +1314,7 @@ async function onMainDrop(e: React.DragEvent) {
         onClear={clearSelection}
       />
     </>
+    </Localized>
   );
 }
 

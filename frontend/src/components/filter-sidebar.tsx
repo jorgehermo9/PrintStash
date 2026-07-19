@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "@/lib/navigation";
 import { CollectionRead, ModelListItem, PrinterRead, TagRead } from "@/types";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Localized } from "@/components/ui/localized";
 import { Box, ChevronRight, Folder, FolderOpen, Search, Trash2, X } from "lucide-react";
 import {
   DndContext,
@@ -571,6 +572,7 @@ export function FilterSidebarContent({
     "text-muted-foreground";
 
   return (
+    <Localized>
     <DndContext
       sensors={sensors}
       collisionDetection={pointerWithin}
@@ -781,6 +783,7 @@ export function FilterSidebarContent({
       </div>
 
     </DndContext>
+    </Localized>
   );
 }
 

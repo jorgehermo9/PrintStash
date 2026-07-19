@@ -119,7 +119,14 @@ class PrusaLinkClient:
         printer = (
             status.get("printer") if isinstance(status.get("printer"), dict) else {}
         )
-        job_data = job.get("job") if isinstance(job.get("job"), dict) else job
+        if isinstance(job.get("job"), dict):
+            job_data = job["job"]
+        elif job:
+            job_data = job
+        elif isinstance(status.get("job"), dict):
+            job_data = status["job"]
+        else:
+            job_data = {}
         raw_state = str(
             job_data.get("state")
             or printer.get("state")
@@ -162,6 +169,10 @@ class PrusaLinkClient:
         )
         temp = telemetry.get("temp-bed") or telemetry.get("temp_bed") or {}
         nozzle = telemetry.get("temp-nozzle") or telemetry.get("temp_nozzle") or {}
+        bed_actual = printer.get("temp_bed", temp.get("actual"))
+        bed_target = printer.get("target_bed", temp.get("target"))
+        nozzle_actual = printer.get("temp_nozzle", nozzle.get("actual"))
+        nozzle_target = printer.get("target_nozzle", nozzle.get("target"))
         return {
             "print_stats": {
                 "state": state_map.get(raw_state, raw_state),
@@ -172,12 +183,12 @@ class PrusaLinkClient:
             },
             "virtual_sdcard": {"progress": max(0.0, min(1.0, progress))},
             "heater_bed": {
-                "temperature": temp.get("actual"),
-                "target": temp.get("target"),
+                "temperature": bed_actual,
+                "target": bed_target,
             },
             "extruder": {
-                "temperature": nozzle.get("actual"),
-                "target": nozzle.get("target"),
+                "temperature": nozzle_actual,
+                "target": nozzle_target,
             },
             "prusalink": {
                 "job_id": job_data.get("id"),
@@ -186,22 +197,38 @@ class PrusaLinkClient:
         }
 
     async def list_files(self) -> list[dict[str, Any]]:
-        body = await self._request("GET", "/api/v1/files/local")
-        files = body.get("files", body if isinstance(body, list) else [])
+        body = await self._request("GET", "/api/v1/files/local/")
+        files = body.get(
+            "children", body.get("files", body if isinstance(body, list) else [])
+        )
         if not isinstance(files, list):
             return []
         result: list[dict[str, Any]] = []
-        for item in files:
-            if not isinstance(item, dict):
-                continue
-            result.append(
-                {
-                    "path": item.get("path") or item.get("name"),
-                    "filename": item.get("name") or item.get("path"),
-                    "size": item.get("size"),
-                    "modified": item.get("m_timestamp") or item.get("modified"),
-                }
-            )
+
+        def append_items(items: list[Any], parent: str = "") -> None:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("display_name") or "")
+                path = str(
+                    item.get("path")
+                    or "/".join(part for part in (parent, name) if part)
+                )
+                if str(item.get("type", "")).upper() == "FOLDER":
+                    children = item.get("children")
+                    if isinstance(children, list):
+                        append_items(children, path)
+                    continue
+                result.append(
+                    {
+                        "path": path or name,
+                        "filename": item.get("display_name") or name or path,
+                        "size": item.get("size"),
+                        "modified": item.get("m_timestamp") or item.get("modified"),
+                    }
+                )
+
+        append_items(files)
         return result
 
     async def upload(self, local_path: Path, remote_filename: str) -> dict[str, Any]:
@@ -228,11 +255,11 @@ class PrusaLinkClient:
         )
 
     async def start(self, remote_filename: str) -> dict[str, Any]:
-        # PrusaLink retains OctoPrint-compatible select/print for an existing file.
+        # Current PrusaLink v1 starts an existing file by POSTing its resource;
+        # request body is intentionally empty per the published OpenAPI contract.
         return await self._request(
             "POST",
-            f"/api/files/local/{self._file_path(remote_filename)}",
-            json={"command": "select", "print": True},
+            f"/api/v1/files/local/{self._file_path(remote_filename)}",
         )
 
     async def _active_job_id(self) -> str:

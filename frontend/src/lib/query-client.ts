@@ -41,6 +41,8 @@ export const queryKeys = {
   tags: ["tags"] as const,
   printers: ["printers"] as const,
   printerDashboard: ["printers", "dashboard"] as const,
+  fleetQueue: ["fleet", "queue"] as const,
+  fleetSummary: ["fleet", "summary"] as const,
   printer: (id: number) => ["printers", id] as const,
   filamentProfiles: ["filament-profiles"] as const,
   printerProfiles: ["printer-profiles"] as const,
@@ -95,6 +97,11 @@ export function invalidateQueriesForPath(path: string): void {
     bust(queryKeys.collections);
   }
   if (/\/printers(\/|$|\?)/.test(path)) {
+    bust(queryKeys.printers);
+  }
+  if (/\/fleet(\/|$|\?)/.test(path)) {
+    bust(queryKeys.fleetQueue);
+    bust(queryKeys.fleetSummary);
     bust(queryKeys.printers);
   }
   if (/\/filament-profiles(\/|$|\?)/.test(path)) {

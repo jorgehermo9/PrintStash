@@ -6,6 +6,7 @@ so the swap is mechanical.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import uuid
@@ -13,6 +14,8 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from app.core.time import utcnow
+from app.db.models import BackgroundJob
+from app.db.session import get_session_factory
 from app.schemas.ingest import (
     ImportCompletion,
     ImportFailedItem,
@@ -58,7 +61,9 @@ def _safe_result(value: Any, key: str | None = None) -> Any:
     ``extract_selected``, which matches selections against the full path.
     """
     if isinstance(value, dict):
-        return {item_key: _safe_result(item, item_key) for item_key, item in value.items()}
+        return {
+            item_key: _safe_result(item, item_key) for item_key, item in value.items()
+        }
     if isinstance(value, list):
         if key == "entries":
             return value
@@ -75,6 +80,72 @@ class JobRegistry:
         self._jobs: Dict[str, IngestJobStatus] = {}
         self._lock = threading.Lock()
 
+    @staticmethod
+    def _status_payload(job: IngestJobStatus) -> str:
+        return json.dumps(
+            job.model_dump(
+                mode="json",
+                exclude={"job_id", "owner_user_id", "visible"},
+            ),
+            separators=(",", ":"),
+        )
+
+    def _persist(self, job: IngestJobStatus) -> None:
+        with get_session_factory().scoped_session() as session:
+            row = session.get(BackgroundJob, job.job_id)
+            if row is None:
+                row = BackgroundJob(
+                    id=job.job_id,
+                    owner_user_id=job.owner_user_id,
+                    visible=job.visible,
+                    created_at=utcnow(),
+                )
+            row.owner_user_id = job.owner_user_id
+            row.visible = job.visible
+            row.state = job.state
+            row.status_json = self._status_payload(job)
+            row.updated_at = utcnow()
+            row.finished_at = job.finished_at
+            session.add(row)
+            session.commit()
+
+    def _load_one(self, job_id: str) -> IngestJobStatus | None:
+        with get_session_factory().scoped_session() as session:
+            row = session.get(BackgroundJob, job_id)
+            if row is None:
+                return None
+            payload = json.loads(row.status_json or "{}")
+            return IngestJobStatus(
+                job_id=row.id,
+                owner_user_id=row.owner_user_id,
+                visible=row.visible,
+                **payload,
+            )
+
+    def _load_all(self) -> list[IngestJobStatus]:
+        from sqlmodel import select
+
+        with get_session_factory().scoped_session() as session:
+            rows = session.exec(
+                select(BackgroundJob).order_by(BackgroundJob.created_at)
+            ).all()
+            return [
+                IngestJobStatus(
+                    job_id=row.id,
+                    owner_user_id=row.owner_user_id,
+                    visible=row.visible,
+                    **json.loads(row.status_json or "{}"),
+                )
+                for row in rows
+            ]
+
+    def _delete_persisted(self, job_id: str) -> None:
+        with get_session_factory().scoped_session() as session:
+            row = session.get(BackgroundJob, job_id)
+            if row is not None:
+                session.delete(row)
+                session.commit()
+
     def _prune_locked(self) -> None:
         cutoff = utcnow() - _FINISHED_TTL
         stale = [
@@ -84,6 +155,7 @@ class JobRegistry:
         ]
         for job_id in stale:
             del self._jobs[job_id]
+            self._delete_persisted(job_id)
         if len(self._jobs) > _MAX_JOBS:
             # Oldest finished jobs first; dict preserves insertion order.
             finished = [
@@ -104,6 +176,7 @@ class JobRegistry:
                 visible=visible,
                 state="pending",
             )
+            self._persist(self._jobs[job_id])
         return job_id
 
     def update(
@@ -184,7 +257,9 @@ class JobRegistry:
                 job.completion = completion
             elif state == "completed":
                 job.completion = (
-                    "completed_with_warnings" if job.failed or job.skipped else "completed"
+                    "completed_with_warnings"
+                    if job.failed or job.skipped
+                    else "completed"
                 )
             elif state == "failed" and not job.succeeded:
                 job.completion = "failed_before_import"
@@ -194,31 +269,58 @@ class JobRegistry:
                 job.failed_items = [
                     ImportFailedItem(
                         name=safe_item(
-                            item.name if isinstance(item, ImportFailedItem) else str(item.get("name", "item"))
+                            item.name
+                            if isinstance(item, ImportFailedItem)
+                            else str(item.get("name", "item"))
                         )
                         or "item",
                         reason=safe_error(
-                            item.reason if isinstance(item, ImportFailedItem) else str(item.get("reason", "import_failed"))
+                            item.reason
+                            if isinstance(item, ImportFailedItem)
+                            else str(item.get("reason", "import_failed"))
                         )
                         or "import_failed",
                         retryable=(
-                            item.retryable if isinstance(item, ImportFailedItem) else bool(item.get("retryable", False))
+                            item.retryable
+                            if isinstance(item, ImportFailedItem)
+                            else bool(item.get("retryable", False))
                         ),
                     )
                     for item in failed_items[:100]
                 ]
+            self._persist(job)
 
     def get(self, job_id: str) -> Optional[IngestJobStatus]:
         with self._lock:
-            return self._jobs.get(job_id)
+            persisted = self._load_one(job_id)
+            if persisted is None:
+                self._jobs.pop(job_id, None)
+                return None
+            cached = self._jobs.get(job_id)
+            if cached is not None:
+                return cached
+            self._jobs[job_id] = persisted
+            return persisted
 
-    def list_for_user(self, user_id: int, *, is_superuser: bool = False) -> list[IngestJobStatus]:
+    def list_for_user(
+        self, user_id: int, *, is_superuser: bool = False
+    ) -> list[IngestJobStatus]:
         with self._lock:
+            persisted = self._load_all()
+            persisted_ids = {job.job_id for job in persisted}
+            self._jobs = {
+                job_id: job
+                for job_id, job in self._jobs.items()
+                if job_id in persisted_ids
+            }
+            for job in persisted:
+                self._jobs.setdefault(job.job_id, job)
             self._prune_locked()
             return [
                 job
                 for job in reversed(self._jobs.values())
-                if job.visible and (is_superuser or job.owner_user_id in (None, user_id))
+                if job.visible
+                and (is_superuser or job.owner_user_id in (None, user_id))
             ]
 
     def snapshot_counts(self) -> Dict[str, int]:
@@ -234,10 +336,49 @@ class JobRegistry:
             "failed": 0,
         }
         with self._lock:
+            persisted = self._load_all()
+            persisted_ids = {job.job_id for job in persisted}
+            self._jobs = {
+                job_id: job
+                for job_id, job in self._jobs.items()
+                if job_id in persisted_ids
+            }
+            for job in persisted:
+                self._jobs.setdefault(job.job_id, job)
             for job in self._jobs.values():
                 counts[job.state] = counts.get(job.state, 0) + 1
             counts["total"] = len(self._jobs)
         return counts
+
+
+def reconcile_interrupted_jobs() -> int:
+    """Resolve work stranded in RUNNING by an unclean process shutdown."""
+    from sqlmodel import select
+
+    with get_session_factory().scoped_session() as session:
+        rows = list(
+            session.exec(
+                select(BackgroundJob).where(BackgroundJob.state == "running")
+            ).all()
+        )
+    for row in rows:
+        jobs = JobRegistry()
+        status = jobs.get(row.id)
+        if status is None:
+            continue
+        if row.replay_safe:
+            status.state = "pending"
+            status.started_at = None
+            status.error = None
+            jobs._persist(status)
+        else:
+            jobs.update(
+                row.id,
+                state="failed",
+                error="interrupted_by_restart",
+                retryable=True,
+            )
+    return len(rows)
 
 
 registry = JobRegistry()

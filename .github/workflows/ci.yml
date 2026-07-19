@@ -8,6 +8,14 @@ on:
   # Callable from the release workflow so a tag can't publish without these
   # checks passing first (see ghcr.yml).
   workflow_call:
+  # Nightly "full-matrix" gate + on-demand run. Every job below already runs
+  # per-PR (backend + coverage, storage-s3/MinIO, e2e-real Playwright, frontend
+  # mock-API Playwright); these two triggers re-run the whole gauntlet off-peak
+  # daily and on manual dispatch, so a comprehensive gate exists without adding
+  # new job definitions or slowing individual PRs.
+  schedule:
+    - cron: "27 4 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -44,7 +52,50 @@ jobs:
         run: uv run ruff check app/ tests/
 
       - name: Test backend
-        run: uv run pytest tests -v
+        run: uv run pytest tests -v --cov=app --cov-report=term-missing --cov-fail-under=95
+
+  storage-s3:
+    name: Storage backend (S3/MinIO)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev --frozen
+
+      # GitHub Actions `services:` containers can't override CMD, and
+      # minio/minio's image needs an explicit `server /data` command to run
+      # as a server (its default CMD just prints usage and exits) — so start
+      # it by hand instead of as a service container.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9100:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data
+          for i in $(seq 1 20); do
+            curl -fsS http://localhost:9100/minio/health/live && break
+            sleep 1
+          done
+
+      - name: Test S3 storage backend + backup destination against real MinIO
+        env:
+          PRINTSTASH_TEST_S3_ENDPOINT: http://localhost:9100
+        run: uv run pytest tests/test_storage_s3.py tests/test_backup_restore.py -v
 
   security:
     name: Security scan

@@ -10,6 +10,7 @@ import { queryKeys } from "@/lib/query-client";
 import { formatGrams } from "@/lib/format";
 import { userMessage } from "@/lib/errors";
 import type { SpoolmanStatus } from "@/types";
+import { Localized } from "@/components/ui/localized";
 
 const INPUT_CLASS =
   "w-full px-2.5 py-1.5 text-sm rounded border border-border bg-background text-foreground placeholder:text-muted-foreground/40 disabled:opacity-50";
@@ -103,6 +104,7 @@ export function SpoolmanConnectCard({ canEdit }: { canEdit: boolean }) {
   }, [baseUrl, apiKey]);
 
   return (
+    <Localized>
     <div className="bg-card border border-border rounded overflow-hidden">
       <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b border-border flex items-center justify-between gap-2">
         <div className="min-w-0">
@@ -306,5 +308,6 @@ export function SpoolmanConnectCard({ canEdit }: { canEdit: boolean }) {
         )}
       </div>
     </div>
+    </Localized>
   );
 }

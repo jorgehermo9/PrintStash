@@ -54,12 +54,60 @@ Files in `backend/alembic/versions/`, named `<rev>_snake_description.py`
 
 - `cd backend && uv run pytest tests -v` — must pass; report actual results,
   never claim a run you didn't do.
-- Tests are per-concern files (`tests/test_<service>.py`); e2e flows in
-  `tests/e2e/` with fakes under `tests/e2e/fakes/`.
 - Data-integrity and security fixes: write the failing test first
   (AGENTS.md rule 4).
 - Lint: `uv run ruff check app/ tests/` and `uv run ruff format app/ tests/`.
 - No real secrets/access codes in fixtures or tests.
+
+### Test layers
+
+Four layers, each with its own home:
+
+- **Unit / integration** — `backend/tests/test_<concern>.py`. Per-concern
+  files; provider integration packs are `tests/test_<provider>_integration.py`.
+- **Backend e2e** — `backend/tests/e2e/`. Boots the real app and drives full
+  flows against contract-enforcing fakes under `tests/e2e/fakes/` (printer
+  emulators, `mock_oidc_provider.py`). Part of `pytest tests` since it's a
+  subdirectory; no separate command. Fakes share a wall-clock `print_sim.py`
+  so no real hardware or background tasks are needed.
+- **Mock-API Playwright** — `frontend/tests/e2e/`, run with `pnpm test:e2e`.
+  Route smoke tests against mocked API responses.
+- **Real-backend Playwright** — `frontend/tests/e2e-real/`, run with
+  `pnpm test:e2e:real`. Drives the UI against a real uvicorn backend.
+
+### Printer emulators (standalone)
+
+The HTTP-transport emulators are runnable standalone for manual testing (check
+each file's docstring for its exact flags — they differ per provider):
+
+```bash
+cd backend
+uv run python -m tests.e2e.fakes.mock_printer   --port 7125 --print-seconds 5   # Moonraker + Spoolman
+uv run python -m tests.e2e.fakes.mock_prusalink --port 8080 --auth-mode api_key --api-key secret
+uv run python -m tests.e2e.fakes.mock_octoprint --port 5000 --print-seconds 5
+```
+
+Bambu's MQTT/FTPS protocol fakes run in-process and verify credentials, TLS,
+topics, pushall status, command acknowledgements, and upload semantics. Centauri
+Carbon (CC1) runs real SDCP frames over a loopback WebSocket; Carbon 2 remains a
+connection-seam fake because its protocol needs MQTT registration plus HTTP
+serial-number bootstrap. These are test helpers rather than standalone CLIs.
+
+### The rule
+
+**New feature = unit tests + one e2e test for its headline capability.** The
+unit tests cover the branches; the e2e test proves the release's marquee flow
+works end to end through the real app (and, for UI features, through
+`e2e-real/`). This applies to humans and AI contributors alike.
+
+### CI
+
+Per-PR jobs live in `.github/workflows/ci.yml` (backend + coverage gate,
+`storage-s3`/MinIO, frontend, e2e-real, security, migration-upgrade, docker).
+A `schedule` (nightly) + `workflow_dispatch` re-runs the whole gauntlet as a
+comprehensive off-peak / on-demand gate. Backend coverage is gated at
+`--cov-fail-under=85`; frontend vitest thresholds (`vite.config.ts`) are an
+informative floor for now.
 
 ## API changes
 

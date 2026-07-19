@@ -21,7 +21,12 @@ manufacturing platform.
   Carbon 2 have beta local status/control support, but no upload or inventory.
   Neptune 2/3, OrangeStorm, and SLA models are not covered.
 - Provider behavior still needs more real-world hardware validation across
-  printers, firmware versions, networks, and auth setups.
+  printers, firmware versions, networks, and auth setups. In particular, the
+  0.11.0 protocol corrections — the Moonraker `server.connection.identify`
+  handshake, Bambu LAN MQTT report-confirmed commands and status reads, and the
+  PrusaLink v1 file/job/start alignment — are verified against mocked transports
+  and emulators only; no real-hardware Validation Log rows exist yet (see
+  `docs/provider-support.md`).
 
 ## Deployment
 
@@ -90,11 +95,50 @@ manufacturing platform.
 - The app is not a slicer, not a firmware replacement, and not a full queue
   manager.
 
+## Fleet Scheduling
+
+- Fleet scheduling is administrator-managed and limited to Vault-backed
+  plain-text G-code. It does not slice, modify, or validate G-code.
+- Automatic dispatch requires a provider that advertises both upload and start
+  capabilities. Status/control-only integrations remain visible but are not
+  eligible routing targets.
+- Maintenance windows are one-off. Recurring maintenance, deadlines,
+  dependency graphs, production orders, and automatic print-failure recovery
+  are not implemented.
+- Soft drain blocks new dispatches but deliberately never pauses or cancels an
+  active print.
+- The default dispatcher uses the local database and asyncio. No Redis or
+  external queue is required; horizontal multi-node scheduling is not a 0.11
+  target.
+- Active jobs are always returned by the fleet queue API. Finished history is
+  limited to 20 rows by default and can be paged in bounded batches up to 100.
+- If the process stops after provider I/O begins but before its outcome is
+  persisted, PrintStash reports `dispatch_outcome_unknown` and disables
+  automatic retry. Check the physical printer before enqueueing that work again.
+- Scheduler health, last-tick time, blocked jobs, and dispatch outcomes are
+  exposed through authenticated health details and Prometheus metrics.
+
+## Auth And Platform
+
+- OIDC is optional and configured under Settings → SSO or with environment
+  variables. Saved client secrets are encrypted at rest. Local login remains
+  available; PrintStash does not synchronize IdP passwords or provide an IdP.
+- JIT provisioning maps only configured group names to superuser access. It does
+  not import arbitrary provider roles or organizations.
+- Offline PWA support caches the application shell and previously fetched static
+  assets. API data, printer state, uploads, and library mutations always require
+  a live connection to the self-hosted server and are never cached by the service
+  worker.
+- English and Spanish establish the localization seam. Remaining feature-heavy
+  screens will be extracted incrementally; untranslated strings fall back to
+  English.
+
 ## Not Current Project Goals
 
 - CNC, laser, vinyl, PCB, or non-3D-printing adapters.
 - Formal plugin system.
-- Fleet scheduling strategies such as least-busy routing or maintenance windows.
+- Advanced production scheduling beyond manual/default/least-busy routing and
+  one-off maintenance windows.
 - Advanced organization administration, approval workflows, and external
   business-system integrations.
 - Cost analytics and advanced production traceability.

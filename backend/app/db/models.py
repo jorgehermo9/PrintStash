@@ -14,7 +14,8 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from sqlalchemy import Column, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Integer, Text, UniqueConstraint
+from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Relationship, SQLModel
 
 from app.core.time import utcnow
@@ -77,6 +78,12 @@ class PrintJobState(str, Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     FAILED = "failed"
+
+
+class RoutingStrategy(str, Enum):
+    MANUAL = "manual"
+    DEFAULT = "default"
+    LEAST_BUSY = "least_busy"
 
 
 class CollectionRole(str, Enum):
@@ -477,6 +484,16 @@ class Printer(SQLModel, table=True):
     detected_model: Optional[str] = Field(default=None, max_length=128)
     notes: Optional[str] = None
     group: Optional[str] = Field(default=None, max_length=128, index=True)
+    is_default: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0", index=True),
+    )
+    drain_mode: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0", index=True),
+    )
+    drain_reason: Optional[str] = Field(default=None, max_length=512)
+    drain_updated_at: Optional[datetime] = None
 
     # Cached liveness info (refreshed by the live-state worker).
     status: PrinterStatus = Field(default=PrinterStatus.UNKNOWN, index=True)
@@ -493,6 +510,9 @@ class Printer(SQLModel, table=True):
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("oidc_issuer", "oidc_subject", name="uq_users_oidc_identity"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(max_length=128, unique=True, index=True)
@@ -503,6 +523,14 @@ class User(SQLModel, table=True):
     # Incrementing this value invalidates every access token issued for user.
     # Persisted in DB so logout survives API restarts and multiple processes.
     auth_version: int = Field(default=0)
+    # External identity is additive: local users keep these null and local login
+    # remains available even when OIDC is configured.
+    oidc_issuer: Optional[str] = Field(default=None, max_length=512, index=True)
+    oidc_subject: Optional[str] = Field(default=None, max_length=255, index=True)
+    oidc_managed: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0", index=True),
+    )
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
@@ -565,6 +593,22 @@ class SystemConfig(SQLModel, table=True):
     jwt_secret: Optional[str] = Field(
         default=None, sa_column=Column(EncryptedText(), nullable=True)
     )
+
+    # Optional OpenID Connect provider. Null values fall back to VAULT_OIDC_*
+    # environment settings; client secret is encrypted at rest.
+    oidc_enabled: Optional[bool] = None
+    oidc_issuer_url: Optional[str] = Field(default=None, max_length=512)
+    oidc_client_id: Optional[str] = Field(default=None, max_length=255)
+    oidc_client_secret: Optional[str] = Field(
+        default=None, sa_column=Column(EncryptedText(), nullable=True)
+    )
+    oidc_scopes: Optional[str] = Field(default=None, max_length=512)
+    oidc_username_claim: Optional[str] = Field(default=None, max_length=128)
+    oidc_groups_claim: Optional[str] = Field(default=None, max_length=128)
+    oidc_admin_groups: Optional[str] = Field(default=None, max_length=1024)
+    oidc_display_name: Optional[str] = Field(default=None, max_length=128)
+    oidc_redirect_uri: Optional[str] = Field(default=None, max_length=1024)
+    oidc_allow_insecure_http: Optional[bool] = None
 
     # S3 / R2 settings
     s3_bucket: Optional[str] = Field(default=None, max_length=256)
@@ -746,6 +790,29 @@ class PrintJob(SQLModel, table=True):
     state: PrintJobState = Field(default=PrintJobState.QUEUED, index=True)
     progress: float = Field(default=0.0)  # 0.0–1.0
     error: Optional[str] = Field(default=None, max_length=1024)
+    routing_strategy: RoutingStrategy = Field(
+        default=RoutingStrategy.MANUAL,
+        sa_column=Column(
+            SAEnum(RoutingStrategy), nullable=False, server_default="MANUAL", index=True
+        ),
+    )
+    queue_position: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default="0", index=True),
+    )
+    provider_job_id: Optional[str] = Field(default=None, max_length=255, index=True)
+    blocked_reason: Optional[str] = Field(default=None, max_length=255)
+    dispatch_claimed_at: Optional[datetime] = Field(default=None, index=True)
+    dispatch_attempts: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
+    retryable: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0", index=True),
+    )
+    requested_by: Optional[int] = Field(
+        default=None, foreign_key="users.id", index=True
+    )
 
     # Distinguishes vault-initiated jobs from those detected on the printer.
     source: str = Field(default="vault", max_length=16)  # "vault" or "external"
@@ -785,6 +852,58 @@ class PrintJob(SQLModel, table=True):
     finished_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PrinterMaintenanceWindow(SQLModel, table=True):
+    __tablename__ = "printer_maintenance_windows"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(foreign_key="printers.id", index=True)
+    starts_at: datetime = Field(index=True)
+    ends_at: datetime = Field(index=True)
+    reason: Optional[str] = Field(default=None, max_length=512)
+    deleted_at: Optional[datetime] = Field(default=None, index=True)
+    deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PrinterMaintenanceLog(SQLModel, table=True):
+    __tablename__ = "printer_maintenance_logs"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(foreign_key="printers.id", index=True)
+    performed_at: datetime = Field(default_factory=utcnow, index=True)
+    category: str = Field(max_length=64, index=True)
+    note: str = Field(max_length=4096)
+    counter_value: Optional[float] = None
+    counter_unit: Optional[str] = Field(default=None, max_length=32)
+    deleted_at: Optional[datetime] = Field(default=None, index=True)
+    deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class BackgroundJob(SQLModel, table=True):
+    __tablename__ = "background_jobs"
+
+    id: str = Field(primary_key=True, max_length=64)
+    owner_user_id: Optional[int] = Field(
+        default=None, foreign_key="users.id", index=True
+    )
+    visible: bool = Field(default=True, index=True)
+    kind: str = Field(default="generic", max_length=64, index=True)
+    state: str = Field(default="pending", max_length=16, index=True)
+    status_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    payload_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    replay_safe: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+    finished_at: Optional[datetime] = Field(default=None, index=True)
 
 
 class PrinterFile(SQLModel, table=True):

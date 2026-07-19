@@ -44,6 +44,17 @@ class VaultConfigRead(BaseModel):
     auto_mark_known_good: bool = True
     external_libraries_enabled: bool = False
     currency: str = "USD"
+    oidc_enabled: bool = False
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    has_oidc_client_secret: bool = False
+    oidc_scopes: str = "openid profile email groups"
+    oidc_username_claim: str = "preferred_username"
+    oidc_groups_claim: str = "groups"
+    oidc_admin_groups: str = "printstash-admins"
+    oidc_display_name: str = "Single sign-on"
+    oidc_redirect_uri: str = ""
+    oidc_allow_insecure_http: bool = False
 
 
 class VaultConfigUpdate(BaseModel):
@@ -52,6 +63,17 @@ class VaultConfigUpdate(BaseModel):
     auto_mark_known_good: Optional[bool] = None
     external_libraries_enabled: Optional[bool] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    oidc_enabled: Optional[bool] = None
+    oidc_issuer_url: Optional[str] = Field(default=None, max_length=512)
+    oidc_client_id: Optional[str] = Field(default=None, max_length=255)
+    oidc_client_secret: Optional[str] = Field(default=None, max_length=2048)
+    oidc_scopes: Optional[str] = Field(default=None, max_length=512)
+    oidc_username_claim: Optional[str] = Field(default=None, max_length=128)
+    oidc_groups_claim: Optional[str] = Field(default=None, max_length=128)
+    oidc_admin_groups: Optional[str] = Field(default=None, max_length=1024)
+    oidc_display_name: Optional[str] = Field(default=None, max_length=128)
+    oidc_redirect_uri: Optional[str] = Field(default=None, max_length=1024)
+    oidc_allow_insecure_http: Optional[bool] = None
 
     storage_backend: Optional[str] = None
     data_dir: Optional[str] = None
@@ -176,7 +198,9 @@ async def makerworld_verify(
             status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code
         ) from exc
     if not result.token:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_code")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_code"
+        )
     runtime_config.set_makerworld_token(session, result.token)
     return MakerWorldLoginResponse(status="ok", connected=True)
 
@@ -201,7 +225,9 @@ def makerworld_set_token(
     if token.lower().startswith("token="):
         token = token.split("=", 1)[1].split(";", 1)[0].strip()
     if not token:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_token")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="missing_token"
+        )
     runtime_config.set_makerworld_token(session, token)
     return MakerWorldStatus(**runtime_config.makerworld_status(session))
 
@@ -271,6 +297,17 @@ def update_config(
         backup_s3_region=body.backup_s3_region,
         backup_s3_access_key=body.backup_s3_access_key,
         backup_s3_secret_key=body.backup_s3_secret_key,
+        oidc_enabled=body.oidc_enabled,
+        oidc_issuer_url=body.oidc_issuer_url,
+        oidc_client_id=body.oidc_client_id,
+        oidc_client_secret=body.oidc_client_secret,
+        oidc_scopes=body.oidc_scopes,
+        oidc_username_claim=body.oidc_username_claim,
+        oidc_groups_claim=body.oidc_groups_claim,
+        oidc_admin_groups=body.oidc_admin_groups,
+        oidc_display_name=body.oidc_display_name,
+        oidc_redirect_uri=body.oidc_redirect_uri,
+        oidc_allow_insecure_http=body.oidc_allow_insecure_http,
     )
 
     cfg = runtime_config.get_effective_config(session)

@@ -7,11 +7,13 @@ import {
 import {
   getPrintStatistics,
   getDashboard,
+  getFleetSummary,
   getSpoolmanStatus,
   getVaultConfig,
   getVaultStats,
   listCollections,
   listFilamentProfiles,
+  listFleetQueue,
   listModels,
   listPrinterProfiles,
   listPrinters,
@@ -23,11 +25,13 @@ import { queryKeys } from "@/lib/query-client";
 import type {
   CollectionRead,
   Dashboard,
+  FleetSummary,
   FilamentProfileRead,
   ListModelsParams,
   ModelListItem,
   PrinterProfileRead,
   PrinterRead,
+  PrintJobRead,
   PrintStatisticsRead,
   SpoolmanStatus,
   SpoolRead,
@@ -86,6 +90,23 @@ export function usePrinterDashboard(options?: { enabled?: boolean; refetchInterv
     queryKey: queryKeys.printerDashboard,
     queryFn: () => getDashboard({ fresh: true }),
     enabled: options?.enabled ?? true,
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
+export function useFleetQueue(options?: { refetchInterval?: number; historyLimit?: number }) {
+  const historyLimit = options?.historyLimit ?? 20;
+  return useQuery<PrintJobRead[]>({
+    queryKey: [...queryKeys.fleetQueue, historyLimit],
+    queryFn: () => listFleetQueue(historyLimit),
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
+export function useFleetSummary(options?: { refetchInterval?: number }) {
+  return useQuery<FleetSummary>({
+    queryKey: queryKeys.fleetSummary,
+    queryFn: getFleetSummary,
     refetchInterval: options?.refetchInterval,
   });
 }

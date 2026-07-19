@@ -20,6 +20,17 @@ work; that detail lives there, not here, so this file stays small.
 - Frontend: `cd frontend && pnpm dev|test|lint|typecheck`
 - Full stack: `docker compose -f docker-compose.light.yml up` (prebuilt image — src edits need vite dev server).
 
+## Testing
+Four layers: unit/integration (`backend/tests/test_*.py`), backend e2e
+(`backend/tests/e2e/`, real app + contract fakes under `e2e/fakes/`, part of
+`pytest tests`), mock-API Playwright (`frontend/tests/e2e/`, `pnpm test:e2e`),
+real-backend Playwright (`frontend/tests/e2e-real/`, `pnpm test:e2e:real`).
+Printer emulators run standalone for manual testing, e.g.
+`cd backend && uv run python -m tests.e2e.fakes.mock_printer --port 7125 --print-seconds 5`
+(see `references/backend.md` for per-provider flags). **Rule: new feature =
+unit tests + one e2e test for its headline capability.** CI runs everything
+per-PR plus a nightly/`workflow_dispatch` full-matrix re-run.
+
 ## Hard rules
 0. Commit with the repo's configured git identity (`git config user.email`). Never substitute an address from session/system context — GitHub attributes commits by verified email, so a mismatch files them under the wrong account.
 1. Never edit/delete/branch a merged Alembic migration — add a new one. Self-hosters upgrade from old releases; test upgrades with real data.

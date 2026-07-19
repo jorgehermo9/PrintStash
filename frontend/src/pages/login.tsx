@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useRouter } from "@/lib/navigation";
 import { AlertCircle, Clock3, ShieldCheck } from "lucide-react";
@@ -11,17 +11,42 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth-context";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LocaleToggle } from "@/components/locale-toggle";
 import { consumeSessionExpired } from "@/lib/auth";
+import { getAuthProviders, oidcLoginUrl } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
+import type { AuthProvidersRead } from "@/types";
 
 export default function LoginPage() {
-  const { login, user } = useAuth();
+  const { login, refresh, user } = useAuth();
+  const { t } = useI18n();
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remember_me, setremember_me] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [providers, setProviders] = useState<AuthProvidersRead | null>(null);
   const [sessionExpired] = useState(consumeSessionExpired);
+
+  useEffect(() => {
+    let alive = true;
+    void getAuthProviders().then((value) => {
+      if (alive) setProviders(value);
+    }).catch(() => undefined);
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("oidc") === "success") {
+      setBusy(true);
+      void refresh()
+        .then(() => router.replace("/"))
+        .catch(() => setError(t("auth.ssoFailed")))
+        .finally(() => setBusy(false));
+    } else if (params.has("oidc_error")) {
+      setError(t("auth.ssoFailed"));
+    }
+    return () => { alive = false; };
+  }, [refresh, router, t]);
 
   if (user) {
     return <Navigate to="/" replace />;
@@ -36,9 +61,9 @@ export default function LoginPage() {
       router.replace("/");
     } catch (err: any) {
       if (err.message?.includes("401")) {
-        setError("Invalid username or password.");
+        setError(t("auth.invalid"));
       } else {
-        setError(err.message || "Login failed.");
+        setError(err.message || t("auth.failed"));
       }
     } finally {
       setBusy(false);
@@ -52,7 +77,8 @@ export default function LoginPage() {
         className="pointer-events-none absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-3xl"
       />
 
-      <div className="absolute right-5 top-5">
+      <div className="absolute right-5 top-5 flex items-center gap-1">
+        <LocaleToggle />
         <ThemeToggle />
       </div>
 
@@ -63,10 +89,10 @@ export default function LoginPage() {
               <BrandMark className="h-9 w-9" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-on-surface">
-              Welcome back
+              {t("auth.welcome")}
             </h1>
             <CardDescription className="text-on-surface-variant">
-              Sign in to manage your PrintStash vault.
+              {t("auth.description")}
             </CardDescription>
           </CardHeader>
 
@@ -78,7 +104,7 @@ export default function LoginPage() {
                   className="flex gap-2.5 rounded-md border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-on-surface"
                 >
                   <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
-                  <p>Session expired. Sign in again to continue.</p>
+                  <p>{t("auth.expired")}</p>
                 </div>
               )}
 
@@ -87,7 +113,7 @@ export default function LoginPage() {
                   htmlFor="username"
                   className="block text-xs font-mono uppercase tracking-wider text-on-surface-variant"
                 >
-                  Username
+                  {t("auth.username")}
                 </label>
                 <Input
                   id="username"
@@ -108,7 +134,7 @@ export default function LoginPage() {
                   htmlFor="password"
                   className="block text-xs font-mono uppercase tracking-wider text-on-surface-variant"
                 >
-                  Password
+                  {t("auth.password")}
                 </label>
                 <Input
                   id="password"
@@ -129,7 +155,7 @@ export default function LoginPage() {
                   onChange={setremember_me}
                   ariaLabel="Remember me"
                 />
-                <span className="text-sm text-on-surface-variant">Remember me on this device</span>
+                <span className="text-sm text-on-surface-variant">{t("auth.remember")}</span>
               </div>
 
               {error && (
@@ -144,19 +170,38 @@ export default function LoginPage() {
               )}
 
               <Button type="submit" loading={busy} className="w-full">
-                Sign in
+                {t("auth.signIn")}
               </Button>
             </form>
 
+            {providers?.oidc_enabled && (
+              <div className="mt-5 space-y-4">
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" />
+                  <span>{t("auth.or")}</span>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={busy}
+                  onClick={() => window.location.assign(oidcLoginUrl())}
+                >
+                  {t("auth.signInWith", { provider: providers.oidc_display_name })}
+                </Button>
+              </div>
+            )}
+
             <div className="mt-6 flex items-center justify-center gap-2 border-t border-outline-variant pt-5 text-xs text-on-surface-variant">
               <ShieldCheck className="h-4 w-4 text-primary" aria-hidden />
-              <span>Your credentials stay with your self-hosted server.</span>
+              <span>{t("auth.local")}</span>
             </div>
           </CardContent>
         </Card>
 
         <p className="mt-5 text-center font-mono text-2xs uppercase tracking-wider text-muted-foreground">
-          PrintStash · Your prints, your vault
+          PrintStash · {t("auth.tagline")}
         </p>
       </div>
     </main>

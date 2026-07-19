@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from sqlmodel import Session
 
@@ -13,6 +14,7 @@ from app.services import print_results, runtime_config
 from app.services.spoolman import (
     SpoolmanClient,
     SpoolmanError,
+    active_spool_sync,
     get_spoolman_client,
     use_spool_weight_sync,
 )
@@ -75,6 +77,100 @@ class TestSpoolmanClient:
         with patch("app.services.spoolman.get_http_client") as mock_get_client:
             mock_get_client.return_value.request = AsyncMock(return_value=resp)
             assert asyncio.run(client.active_spool()) is None
+
+    def test_active_spool_swallows_spoolman_error(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(
+                return_value=_mock_resp(500, text="down")
+            )
+            assert asyncio.run(client.active_spool()) is None
+
+    def test_active_spool_unparseable_value_returns_none(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = _mock_resp(200, {"value": "not-an-int"})
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            assert asyncio.run(client.active_spool()) is None
+
+    def test_transport_error_becomes_spoolman_error(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(
+                side_effect=httpx.ConnectError("connection refused")
+            )
+            with pytest.raises(SpoolmanError, match="transport error") as exc:
+                asyncio.run(client.health_check())
+            assert exc.value.code == "transport"
+
+    def test_transport_error_falls_back_to_exception_class_name(self):
+        # httpx connect errors sometimes stringify to "" — the client should
+        # fall back to the exception class name so the UI shows something.
+        client = SpoolmanClient("http://spoolman.local:7912")
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(
+                side_effect=httpx.ConnectError("")
+            )
+            with pytest.raises(SpoolmanError, match="ConnectError"):
+                asyncio.run(client.health_check())
+
+    def test_non_json_response_wraps_raw_text(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.side_effect = ValueError("not json")
+        resp.text = "plain text body"
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            result = asyncio.run(client.health_check())
+            assert result == {"raw": "plain text body"}
+
+    def test_health_check_wraps_non_dict_response(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = _mock_resp(200, ["unexpected", "list"])
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            result = asyncio.run(client.health_check())
+            assert result == {"raw": ["unexpected", "list"]}
+
+    def test_list_vendors_unwraps_list(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = _mock_resp(200, [{"id": 1, "name": "Prusament"}])
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            result = asyncio.run(client.list_vendors())
+            assert result == [{"id": 1, "name": "Prusament"}]
+
+    def test_list_vendors_defensive_default_on_non_list(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = _mock_resp(200, {"unexpected": "dict"})
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            assert asyncio.run(client.list_vendors()) == []
+
+    def test_list_filaments_unwraps_list(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = _mock_resp(200, [{"id": 5, "material": "PLA"}])
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            result = asyncio.run(client.list_filaments())
+            assert result == [{"id": 5, "material": "PLA"}]
+
+    def test_get_spool_unwraps_dict(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = _mock_resp(200, {"id": 9, "remaining_weight": 500})
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            result = asyncio.run(client.get_spool(9))
+            assert result == {"id": 9, "remaining_weight": 500}
+
+    def test_get_spool_defensive_default_on_non_dict(self):
+        client = SpoolmanClient("http://spoolman.local:7912")
+        resp = _mock_resp(200, ["not", "a", "dict"])
+        with patch("app.services.spoolman.get_http_client") as mock_get_client:
+            mock_get_client.return_value.request = AsyncMock(return_value=resp)
+            result = asyncio.run(client.get_spool(9))
+            assert result == {"raw": ["not", "a", "dict"]}
 
 
 class TestGetSpoolmanClient:
@@ -197,3 +293,61 @@ class TestUseSpoolWeightSync:
             mock_put.return_value = _mock_resp(404, text="no spool")
             with pytest.raises(SpoolmanError, match="spoolman 404"):
                 use_spool_weight_sync("http://spoolman.local", None, 9, 5.0)
+
+    def test_raises_on_transport_error(self):
+        with patch("app.services.spoolman.httpx.put") as mock_put:
+            mock_put.side_effect = httpx.ConnectError("refused")
+            with pytest.raises(SpoolmanError, match="transport error") as exc:
+                use_spool_weight_sync("http://spoolman.local", None, 9, 5.0)
+            assert exc.value.code == "transport"
+
+    def test_sets_auth_headers_when_api_key_given(self):
+        with patch("app.services.spoolman.httpx.put") as mock_put:
+            mock_put.return_value = _mock_resp(200, {"id": 9})
+            use_spool_weight_sync("http://spoolman.local", "secret", 9, 5.0)
+            call = mock_put.call_args
+            assert call.kwargs["headers"]["Authorization"] == "Bearer secret"
+            assert call.kwargs["headers"]["X-Api-Key"] == "secret"
+
+
+class TestActiveSpoolSync:
+    def test_returns_parsed_value(self):
+        with patch("app.services.spoolman.httpx.get") as mock_get:
+            mock_get.return_value = _mock_resp(200, {"value": "12"})
+            assert active_spool_sync("http://spoolman.local", None) == 12
+
+    def test_returns_none_on_non_2xx(self):
+        with patch("app.services.spoolman.httpx.get") as mock_get:
+            mock_get.return_value = _mock_resp(500, text="down")
+            assert active_spool_sync("http://spoolman.local", None) is None
+
+    def test_returns_none_on_transport_error(self):
+        with patch("app.services.spoolman.httpx.get") as mock_get:
+            mock_get.side_effect = httpx.ConnectError("refused")
+            assert active_spool_sync("http://spoolman.local", None) is None
+
+    def test_returns_none_on_invalid_json(self):
+        with patch("app.services.spoolman.httpx.get") as mock_get:
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.side_effect = ValueError("bad json")
+            mock_get.return_value = resp
+            assert active_spool_sync("http://spoolman.local", None) is None
+
+    def test_returns_none_when_value_unset(self):
+        with patch("app.services.spoolman.httpx.get") as mock_get:
+            mock_get.return_value = _mock_resp(200, {"value": None})
+            assert active_spool_sync("http://spoolman.local", None) is None
+
+    def test_returns_none_on_unparseable_value(self):
+        with patch("app.services.spoolman.httpx.get") as mock_get:
+            mock_get.return_value = _mock_resp(200, {"value": "garbage"})
+            assert active_spool_sync("http://spoolman.local", None) is None
+
+    def test_sets_auth_headers_when_api_key_given(self):
+        with patch("app.services.spoolman.httpx.get") as mock_get:
+            mock_get.return_value = _mock_resp(200, {"value": "3"})
+            active_spool_sync("http://spoolman.local", "secret")
+            call = mock_get.call_args
+            assert call.kwargs["headers"]["Authorization"] == "Bearer secret"
+            assert call.kwargs["headers"]["X-Api-Key"] == "secret"

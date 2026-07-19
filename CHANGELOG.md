@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+
+- **Fleet queue and routing.** Administrators can queue Vault G-code across configured printers using manual, default-printer, or deterministic least-busy routing, then reorder, reroute, cancel, and retry eligible failed dispatches.
+- **Maintenance-aware scheduling.** Printers can be placed in soft-drain mode, assigned one-off maintenance windows, and given a simple maintenance log without interrupting active prints.
+- **Persistent background progress.** Import and scan job status now survives application restarts; interrupted non-replayable work is marked failed and retryable instead of disappearing or hanging indefinitely.
+- **Fleet operations UI.** Printer management now includes Fleet, Queue, and Maintenance views, and Model send dialogs can add G-code to the fleet queue.
+- **OIDC / SSO login.** Optional generic OpenID Connect supports Authentik, Authelia, and similar providers with discovery, authorization-code PKCE, validated ID tokens, collision-safe just-in-time users, configurable admin-group mapping, fallback local login, and encrypted setup under Settings → SSO.
+- **Installable offline shell.** PrintStash now includes a web-app manifest and service worker so it can be installed as a PWA and reopen its cached shell when the server is temporarily unreachable.
+- **Localization foundation.** A typed, persisted locale system ships with English and Spanish catalogs, a global language switch, and translated login, desktop, mobile, profile, and Settings navigation surfaces.
+
+### Changed
+
+- Immediate sends and scheduled dispatches share one storage-to-provider transfer seam while preserving provider capability checks and local-first storage behavior.
+- Printer jobs expose additive routing, queue, provider identity, dispatch-attempt, and blocked-reason fields without removing existing history fields.
+- The previously planned 0.12 Auth and Platform scope is included in 0.11.0.
+- Fleet queue reads keep active work visible while limiting terminal history to 20 rows by default, with bounded pagination up to 100 rows in the UI and API.
+- The local `TaskQueue` now wakes database-backed fleet dispatch immediately while timeout polling preserves queued work across restarts without Redis or another external service.
+
+### Fixed
+
+- Moonraker WebSocket connections now send the required `server.connection.identify` handshake before subscribing when an API key is configured, instead of silently subscribing unauthenticated.
+- Bambu LAN MQTT commands wait for the printer's own report before treating a print/pause/cancel/resume as successful, and status queries read the pushed MQTT report instead of a nonexistent local HTTPS status endpoint.
+- PrusaLink file listing, job state, and start-print now match the real v1 API: recursive folder listings, telemetry read from `printer` fields, and starting a file via `POST /api/v1/files/local/{path}` instead of the OctoPrint-style select/print body.
+- Cancelling a printer job now also marks its active PrintStash job row as cancelled, instead of leaving it stuck in a started/printing/paused state after the provider cancel succeeds.
+
+### Security
+
+- Dispatches interrupted between provider upload/start and the final database write are marked as an unknown outcome and cannot be retried automatically, preventing accidental duplicate prints after restart.
+- OIDC ID tokens accept only asymmetric RS/ES signing algorithms, and HTTPS callback configurations force Secure state, nonce, verifier, and session cookies.
+
+### Operations
+
+- Prometheus now reports fleet jobs, blocked work, dispatcher outcomes, scheduler liveness, and last-tick time; authenticated health details expose the same scheduler state.
+- PWA registration bypasses HTTP caching for service-worker updates, replaces old cache generations, activates waiting workers, and revalidates cached static assets while preserving offline navigation fallback.
+
 ## 0.10.0
 
 ### Added

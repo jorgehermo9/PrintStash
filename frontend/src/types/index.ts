@@ -67,6 +67,7 @@ export type {
   PrinterDiagnostics,
   MoonrakerConfigRead,
   PrintJobState,
+  RoutingStrategy,
   PrinterRead,
   PrinterFileRead,
   PrinterCreate,
@@ -78,9 +79,16 @@ export type {
   DashboardGroup,
   PrinterSnapshot,
   PrinterStatusResponse,
+  FleetSummary,
+  QueueJobCreate,
+  QueueJobUpdate,
+  PrinterRoutingUpdate,
+  MaintenanceWindow,
+  MaintenanceLog,
 } from "./printers";
 
 export type {
+  AuthProvidersRead,
   ApiKeyCreateResponse,
   ApiKeyRead,
   LoginRequest,

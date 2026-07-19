@@ -22,13 +22,17 @@ SESSION_COOKIE_NAME = "printstash_session"
 
 
 def set_session_cookie(
-    response: Response, token: str, *, max_age: int | None = None
+    response: Response,
+    token: str,
+    *,
+    max_age: int | None = None,
+    secure: bool | None = None,
 ) -> None:
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         httponly=True,
-        secure=bool(settings.session_cookie_secure),
+        secure=bool(settings.session_cookie_secure if secure is None else secure),
         samesite="strict",
         path="/",
         max_age=max_age,
@@ -70,7 +74,8 @@ def create_access_token(
     expires_delta: timedelta | None = None,
     auth_version: int = 0,
 ) -> str:
-    expire = datetime.now(timezone.utc) + (expires_delta
+    expire = datetime.now(timezone.utc) + (
+        expires_delta
         if expires_delta is not None
         else timedelta(minutes=settings.access_token_expire_minutes)
     )
@@ -210,6 +215,9 @@ def authenticate_user(session: Session, username: str, password: str) -> Optiona
     user = get_user_by_username(session, username)
     if not user or not user.is_active:
         logger.info("login failed: user=%s not found or inactive", username)
+        return None
+    if user.oidc_managed:
+        logger.info("local login rejected for oidc-managed user: user=%s", username)
         return None
     if not verify_password(password, user.hashed_password):
         logger.info("login failed: user=%s bad password", username)

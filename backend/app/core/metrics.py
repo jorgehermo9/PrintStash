@@ -15,6 +15,8 @@ Instruments:
 - ``printer_status`` — gauge of live printers by provider/status, set at scrape
   time so it always reflects the current fleet.
 - ``app_info`` — static version info.
+- ``fleet_jobs`` — current fleet jobs by normalized state.
+- ``fleet_scheduler`` — scheduler liveness/tick timestamp and dispatch outcomes.
 """
 
 from __future__ import annotations
@@ -51,6 +53,38 @@ app_info = Info(
     registry=registry,
 )
 
+fleet_jobs = Gauge(
+    "printstash_fleet_jobs",
+    "Current normalized fleet jobs by state.",
+    labelnames=("state",),
+    registry=registry,
+)
+
+fleet_blocked_jobs = Gauge(
+    "printstash_fleet_blocked_jobs",
+    "Queued fleet jobs currently blocked from dispatch.",
+    registry=registry,
+)
+
+fleet_scheduler_running = Gauge(
+    "printstash_fleet_scheduler_running",
+    "Whether the local fleet scheduler loop is running.",
+    registry=registry,
+)
+
+fleet_scheduler_last_tick = Gauge(
+    "printstash_fleet_scheduler_last_tick_timestamp_seconds",
+    "Unix timestamp of the latest fleet scheduler tick.",
+    registry=registry,
+)
+
+fleet_dispatches = Counter(
+    "printstash_fleet_dispatches_total",
+    "Fleet dispatch attempts by terminal dispatcher outcome.",
+    labelnames=("outcome",),
+    registry=registry,
+)
+
 
 def observe_request(method: str, path: str, status: int, duration_seconds: float) -> None:
     """Record one completed HTTP request. Best-effort: never raises to callers."""
@@ -67,4 +101,11 @@ def record_ingestion_terminal(state: str) -> None:
     try:
         ingestion_jobs.labels(state=state).inc()
     except Exception:  # noqa: BLE001 — metrics must never break a job
+        pass
+
+
+def record_fleet_dispatch(outcome: str) -> None:
+    try:
+        fleet_dispatches.labels(outcome=outcome).inc()
+    except Exception:  # noqa: BLE001 — metrics must never break dispatch
         pass

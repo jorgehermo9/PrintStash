@@ -37,6 +37,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TabBar } from "@/components/ui/tabs";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
+import { FleetMaintenancePanel } from "@/components/fleet-panels";
 import { cn } from "@/lib/utils";
 import { PRINTER_MODEL_OPTIONS, providerAddress, providerLabel } from "@/lib/printer-providers";
 import {
@@ -134,7 +135,7 @@ export function PrinterDetailPage({
   const [machineBusy, setMachineBusy] = useState<string | null>(null);
   const [hotendTarget, setHotendTarget] = useState("");
   const [bedTarget, setBedTarget] = useState("");
-  const [activeTab, setActiveTab] = useState<"status" | "files" | "jobs" | "config" | "diagnostics" | "settings">("status");
+  const [activeTab, setActiveTab] = useState<"status" | "files" | "jobs" | "maintenance" | "config" | "diagnostics" | "settings">("status");
   const [startingFileId, setStartingFileId] = useState<number | null>(null);
   const [deletingFileId, setDeletingFileId] = useState<number | null>(null);
   const [syncingFiles, setSyncingFiles] = useState(false);
@@ -494,6 +495,7 @@ export function PrinterDetailPage({
             { key: "status" as const, label: "Status" },
             { key: "files" as const, label: "Files" },
             { key: "jobs" as const, label: "Jobs" },
+            { key: "maintenance" as const, label: "Maintenance" },
             ...(printer.provider === "moonraker"
               ? [{ key: "config" as const, label: "Config" }]
               : []),
@@ -863,6 +865,12 @@ export function PrinterDetailPage({
           canEdit={auth.isAuthenticated}
           onSaved={(updated) => setPrinter(updated)}
         />
+      )}
+
+      {activeTab === "maintenance" && (
+        <div className="animate-panel-in">
+          <FleetMaintenancePanel printers={[printer]} onPrintersChanged={() => { void loadPrinter(); }} />
+        </div>
       )}
 
       {/* History */}

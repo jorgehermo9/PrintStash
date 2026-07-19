@@ -7,6 +7,9 @@ import { defineConfig, devices } from "@playwright/test";
 const port = Number(process.env.PLAYWRIGHT_REAL_PORT ?? 3310);
 const apiPort = Number(process.env.PLAYWRIGHT_REAL_API_PORT ?? 8410);
 const apiBase = `http://127.0.0.1:${apiPort}`;
+// Standalone Moonraker + Spoolman emulator (backend/tests/e2e/fakes/mock_printer.py)
+// for fleet.spec.ts — a real, live printer with no physical hardware involved.
+const mockPrinterPort = Number(process.env.PLAYWRIGHT_MOCK_PRINTER_PORT ?? 7530);
 
 export default defineConfig({
   testDir: "./tests/e2e-real",
@@ -40,6 +43,13 @@ export default defineConfig({
       url: `http://127.0.0.1:${port}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+    },
+    {
+      command: "bash tests/e2e-real/scripts/start-mock-printer.sh",
+      url: `http://127.0.0.1:${mockPrinterPort}/printer/info`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+      env: { PLAYWRIGHT_MOCK_PRINTER_PORT: String(mockPrinterPort) },
     },
   ],
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],

@@ -103,7 +103,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!isLoggedIn()) return;
     try {
       const me = await getMe();
       const stored: StoredUser = {
@@ -114,9 +113,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       storeLogin("", stored, { silent: true });
       setUser(stored);
-    } catch {
+    } catch (error) {
       clearLogin();
       setUser(null);
+      throw error;
     }
   }, []);
 

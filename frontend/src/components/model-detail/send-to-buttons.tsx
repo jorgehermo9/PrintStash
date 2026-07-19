@@ -4,13 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "@/lib/navigation";
 import { FileCode2, Loader2, Printer as PrinterIcon, Send, WifiOff } from "lucide-react";
 
-import { sendToPrinter } from "@/lib/api";
+import { enqueueFleetJob, sendToPrinter } from "@/lib/api";
 import { usePrinters, useSpoolmanStatus, useSpools } from "@/lib/queries";
 import { formatGrams } from "@/lib/format";
 import { createTask, updateTask } from "@/lib/task-center";
 import { toast } from "@/lib/toast";
 import { useRequireAuth } from "@/lib/use-require-auth";
-import { FileRead, ModelPrinterFileRead } from "@/types";
+import { FileRead, ModelPrinterFileRead, RoutingStrategy } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -53,6 +53,8 @@ export function SendToButtons({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSend, preselectFileId, gcodeFiles]);
   const [startPrint, setStartPrint] = useState(false);
+  const [deliveryMode, setDeliveryMode] = useState<"send" | "queue">("send");
+  const [routingStrategy, setRoutingStrategy] = useState<RoutingStrategy>("least_busy");
   // Spoolman inventory — only surfaced when the integration is enabled.
   const spoolmanEnabled = useSpoolmanStatus().data?.enabled ?? false;
   const spools = useSpools({ enabled: spoolmanEnabled }).data ?? [];
@@ -104,6 +106,10 @@ export function SendToButtons({
   );
 
   function togglePrinter(id: number) {
+    if (deliveryMode === "queue") {
+      setSelectedPrinterIds([id]);
+      return;
+    }
     setSelectedPrinterIds((current) =>
       current.includes(id)
         ? current.filter((currentId) => currentId !== id)
@@ -112,7 +118,31 @@ export function SendToButtons({
   }
 
   async function send() {
-    if (!selectedFile || selectedPrinters.length === 0) return;
+    if (!selectedFile) return;
+    if (deliveryMode === "queue") {
+      if (routingStrategy === "manual" && selectedPrinters.length === 0) return;
+      const spool = selectedSpoolId !== "" ? spools.find((candidate) => candidate.id === selectedSpoolId) : undefined;
+      setSending(true);
+      setError(null);
+      try {
+        await enqueueFleetJob({
+          file_id: selectedFile,
+          strategy: routingStrategy,
+          printer_id: routingStrategy === "manual" ? selectedPrinters[0]?.id : undefined,
+          spool_id: selectedSpoolId === "" ? null : selectedSpoolId,
+          spool_name: spool ? spool.filament_name || spool.name || `Spool ${spool.id}` : null,
+          spool_filament_id: spool?.filament_id ?? null,
+        });
+        setShowSend(false);
+        toast.success("Added to fleet queue");
+      } catch (e: any) {
+        setError(e.message || "Queue failed");
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+    if (selectedPrinters.length === 0) return;
     if (startPrint && !selectedPrintersCanStart) {
       setError("One or more selected printers support upload only.");
       return;
@@ -303,6 +333,25 @@ export function SendToButtons({
           </div>
 
           <fieldset className="space-y-2">
+            <legend className="mb-2 text-sm font-medium text-foreground">Action</legend>
+            <div className="grid grid-cols-2 gap-2">
+              <Button type="button" variant={deliveryMode === "send" ? "secondary" : "outline"} onClick={() => setDeliveryMode("send")}>Send now</Button>
+              <Button type="button" variant={deliveryMode === "queue" ? "secondary" : "outline"} onClick={() => { setDeliveryMode("queue"); setStartPrint(false); }}>Add to queue</Button>
+            </div>
+          </fieldset>
+
+          {deliveryMode === "queue" && (
+            <label className="block space-y-1.5 text-sm font-medium text-foreground">
+              Routing
+              <select value={routingStrategy} onChange={(event) => setRoutingStrategy(event.target.value as RoutingStrategy)} className={selectClassName}>
+                <option value="least_busy">Least busy eligible printer</option>
+                <option value="default">Default printer</option>
+                <option value="manual">Choose printer</option>
+              </select>
+            </label>
+          )}
+
+          {(deliveryMode === "send" || routingStrategy === "manual") && <fieldset className="space-y-2">
             <legend className="mb-2 text-sm font-medium text-foreground">Printers</legend>
             <div className="grid gap-2 sm:grid-cols-2">
               {printers.map((printer) => {
@@ -340,7 +389,7 @@ export function SendToButtons({
                 );
               })}
             </div>
-          </fieldset>
+          </fieldset>}
 
           {availablePrinters.length === 0 && (
             <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
@@ -382,7 +431,7 @@ export function SendToButtons({
             )}
           </div>
 
-          <label className={`flex items-start gap-3 rounded-lg border p-3 ${startPrint ? "border-warning/50 bg-warning/10" : "border-border bg-background"}`}>
+          {deliveryMode === "send" && <label className={`flex items-start gap-3 rounded-lg border p-3 ${startPrint ? "border-warning/50 bg-warning/10" : "border-border bg-background"}`}>
             <Checkbox
               checked={startPrint}
               onChange={setStartPrint}
@@ -399,7 +448,7 @@ export function SendToButtons({
                 <span className="mt-1 block text-xs text-warning">Remove upload-only printers to enable this option.</span>
               )}
             </span>
-          </label>
+          </label>}
 
           {selectedUploads.length > 0 && (
             <div className="rounded-md border border-success/30 bg-success/10 p-3 text-xs text-success">
@@ -418,10 +467,10 @@ export function SendToButtons({
           <Button
             onClick={send}
             loading={sending}
-            disabled={selectedPrinters.length === 0 || (startPrint && !selectedPrintersCanStart)}
+            disabled={!selectedFile || (deliveryMode === "send" ? selectedPrinters.length === 0 || (startPrint && !selectedPrintersCanStart) : routingStrategy === "manual" && selectedPrinters.length === 0)}
           >
             {!sending && <Send className="h-4 w-4" />}
-            {sending ? "Sending…" : startPrint ? "Send & start print" : "Send to printer"}
+            {sending ? (deliveryMode === "queue" ? "Queuing…" : "Sending…") : deliveryMode === "queue" ? "Add to queue" : startPrint ? "Send & start print" : "Send to printer"}
           </Button>
         </div>
       </Modal>

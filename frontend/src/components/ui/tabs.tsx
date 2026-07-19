@@ -43,6 +43,7 @@ export function TabBar<K extends string>({
       else setIndicator(null);
     };
     measure();
+    if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measure);
     ro.observe(list);
     return () => ro.disconnect();

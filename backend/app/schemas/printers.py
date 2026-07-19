@@ -5,7 +5,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.db.models import PrinterProvider, PrinterStatus, PrintJobState
+from app.db.models import PrinterProvider, PrinterStatus, PrintJobState, RoutingStrategy
 
 
 def validate_remote_filename_value(value: Optional[str]) -> Optional[str]:
@@ -170,6 +170,10 @@ class PrinterRead(BaseModel):
     capabilities: PrinterCapabilities
     notes: Optional[str] = None
     group: Optional[str] = None
+    is_default: bool = False
+    drain_mode: bool = False
+    drain_reason: Optional[str] = None
+    drain_updated_at: Optional[datetime] = None
     status: PrinterStatus
     last_seen_at: Optional[datetime] = None
     last_error: Optional[str] = None
@@ -249,7 +253,7 @@ class HomeAxes(BaseModel):
 
 class PrintJobRead(BaseModel):
     id: int
-    printer_id: int
+    printer_id: Optional[int] = None
     file_id: int
     model_id: int
     remote_filename: str
@@ -257,6 +261,14 @@ class PrintJobRead(BaseModel):
     progress: float
     source: str = "vault"
     error: Optional[str] = None
+    routing_strategy: RoutingStrategy = RoutingStrategy.MANUAL
+    queue_position: int = 0
+    provider_job_id: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    dispatch_claimed_at: Optional[datetime] = None
+    dispatch_attempts: int = 0
+    retryable: bool = False
+    requested_by: Optional[int] = None
     spool_id: Optional[int] = None
     spool_name: Optional[str] = None
     started_at: Optional[datetime] = None

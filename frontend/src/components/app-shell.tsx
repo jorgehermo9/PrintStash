@@ -9,6 +9,7 @@ import { Toaster } from "@/components/toaster";
 import { TopBar } from "@/components/top-bar";
 import { MobileFilterProvider } from "@/lib/mobile-filter-context";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n, type MessageKey } from "@/lib/i18n";
 
 const CHROMELESS_PREFIXES = ["/setup", "/login"];
 
@@ -16,33 +17,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, loading } = useAuth();
+  const { t } = useI18n();
   const chromeless = CHROMELESS_PREFIXES.some((p) => pathname.startsWith(p));
   const isVault = pathname === "/";
 
   useEffect(() => {
-    const title = pathname === "/"
-      ? "Vault"
+    const titleKey: MessageKey | null = pathname === "/"
+      ? "nav.vault"
       : pathname.startsWith("/models/")
-        ? "Model"
+        ? "nav.model"
         : pathname.startsWith("/documents/")
-          ? "Document"
+          ? "nav.document"
           : pathname.startsWith("/printers/")
-            ? "Printer"
+            ? "nav.printer"
             : pathname.startsWith("/printers")
-              ? "Printers"
+              ? "nav.printers"
               : pathname.startsWith("/statistics")
-                ? "Statistics"
+                ? "nav.statistics"
                 : pathname.startsWith("/settings")
-                  ? "Settings"
+                  ? "nav.settings"
                   : pathname.startsWith("/profiles")
-                    ? "Profiles"
+                    ? "nav.profiles"
                     : pathname.startsWith("/login")
-                      ? "Sign in"
+                      ? "nav.signIn"
                       : pathname.startsWith("/setup")
-                        ? "Setup"
-                        : "PrintStash";
-    document.title = `${title} · PrintStash`;
-  }, [pathname]);
+                        ? "nav.setup"
+                        : null;
+    document.title = `${titleKey ? t(titleKey) : "PrintStash"} · PrintStash`;
+  }, [pathname, t]);
 
   useEffect(() => {
     if (!chromeless && !loading && !user) {

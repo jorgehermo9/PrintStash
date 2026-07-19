@@ -30,6 +30,7 @@ import { toast } from "@/lib/toast";
 import { buttonVariants } from "@/components/ui/button";
 import { inputClasses } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { Localized } from "@/components/ui/localized";
 
 const CARD =
   "overflow-hidden rounded-lg border border-border bg-card shadow-sm";
@@ -256,6 +257,7 @@ export function NotificationsPanel({ canEdit }: { canEdit: boolean }) {
   }
 
   return (
+    <Localized>
     <div className="space-y-4">
       {/* Master switch */}
       <div className={`${CARD} px-4 sm:px-6 py-4 flex items-center justify-between gap-3`}>
@@ -434,6 +436,7 @@ export function NotificationsPanel({ canEdit }: { canEdit: boolean }) {
         </div>
       )}
     </div>
+    </Localized>
   );
 }
 
@@ -456,6 +459,7 @@ function ChannelForm({
   const scoped = draft.printerIds !== null;
 
   return (
+    <Localized>
     <form
       className={`${CARD} p-4 space-y-3`}
       onSubmit={(e) => {
@@ -594,5 +598,6 @@ function ChannelForm({
         </button>
       </div>
     </form>
+    </Localized>
   );
 }

@@ -89,6 +89,19 @@ def apply_overlay(session: Session) -> None:
     _set("backup_s3_region", config.backup_s3_region)
     _set("backup_s3_access_key", config.backup_s3_access_key)
     _set("backup_s3_secret_key", config.backup_s3_secret_key)
+    if config.oidc_enabled is not None:
+        _overlay["oidc_enabled"] = config.oidc_enabled
+    _set("oidc_issuer_url", config.oidc_issuer_url)
+    _set("oidc_client_id", config.oidc_client_id)
+    _set("oidc_client_secret", config.oidc_client_secret)
+    _set("oidc_scopes", config.oidc_scopes)
+    _set("oidc_username_claim", config.oidc_username_claim)
+    _set("oidc_groups_claim", config.oidc_groups_claim)
+    _set("oidc_admin_groups", config.oidc_admin_groups)
+    _set("oidc_display_name", config.oidc_display_name)
+    _set("oidc_redirect_uri", config.oidc_redirect_uri)
+    if config.oidc_allow_insecure_http is not None:
+        _overlay["oidc_allow_insecure_http"] = config.oidc_allow_insecure_http
     # A logged-in MakerWorld token overlays the env cookie as ``token=<jwt>`` so
     # the importer's existing cookie path picks it up (see makerworld_auth).
     if config.makerworld_token:
@@ -187,6 +200,17 @@ def update_config(
     backup_s3_region: Optional[str] = None,
     backup_s3_access_key: Optional[str] = None,
     backup_s3_secret_key: Optional[str] = None,
+    oidc_enabled: Optional[bool] = None,
+    oidc_issuer_url: Optional[str] = None,
+    oidc_client_id: Optional[str] = None,
+    oidc_client_secret: Optional[str] = None,
+    oidc_scopes: Optional[str] = None,
+    oidc_username_claim: Optional[str] = None,
+    oidc_groups_claim: Optional[str] = None,
+    oidc_admin_groups: Optional[str] = None,
+    oidc_display_name: Optional[str] = None,
+    oidc_redirect_uri: Optional[str] = None,
+    oidc_allow_insecure_http: Optional[bool] = None,
 ) -> SystemConfig:
     """Persist config overrides into DB + overlay dict.
 
@@ -221,6 +245,12 @@ def update_config(
             except (ValueError, TypeError):
                 _overlay[field_name] = 30
 
+    def _apply_bool(field_name: str, value: Optional[bool]) -> None:
+        if value is None:
+            return
+        setattr(config, field_name, value)
+        _overlay[field_name] = value
+
     _apply_str("storage_backend", storage_backend)
     _apply_str("data_dir", data_dir)
     _apply_str("thumb_dir", thumb_dir)
@@ -236,12 +266,24 @@ def update_config(
     _apply_str("backup_s3_region", backup_s3_region)
     _apply_str("backup_s3_access_key", backup_s3_access_key)
     _apply_str("backup_s3_secret_key", backup_s3_secret_key)
+    _apply_bool("oidc_enabled", oidc_enabled)
+    _apply_str("oidc_issuer_url", oidc_issuer_url)
+    _apply_str("oidc_client_id", oidc_client_id)
+    _apply_str("oidc_client_secret", oidc_client_secret)
+    _apply_str("oidc_scopes", oidc_scopes)
+    _apply_str("oidc_username_claim", oidc_username_claim)
+    _apply_str("oidc_groups_claim", oidc_groups_claim)
+    _apply_str("oidc_admin_groups", oidc_admin_groups)
+    _apply_str("oidc_display_name", oidc_display_name)
+    _apply_str("oidc_redirect_uri", oidc_redirect_uri)
+    _apply_bool("oidc_allow_insecure_http", oidc_allow_insecure_http)
 
     config.updated_at = utcnow()
     session.add(config)
     session.commit()
     session.refresh(config)
-    ensure_dirs()
+    if any(value is not None for value in (storage_backend, data_dir, thumb_dir)):
+        ensure_dirs()
 
     logger.info("runtime config updated")
     return config
@@ -471,6 +513,17 @@ def get_effective_config(session: Session) -> dict:
         "notifications_enabled": notifications_enabled(session),
         "spoolman_enabled": spoolman_enabled(session),
         "currency": currency(session),
+        "oidc_enabled": bool(settings.oidc_enabled),
+        "oidc_issuer_url": str(settings.oidc_issuer_url),
+        "oidc_client_id": str(settings.oidc_client_id),
+        "has_oidc_client_secret": bool(settings.oidc_client_secret),
+        "oidc_scopes": str(settings.oidc_scopes),
+        "oidc_username_claim": str(settings.oidc_username_claim),
+        "oidc_groups_claim": str(settings.oidc_groups_claim),
+        "oidc_admin_groups": str(settings.oidc_admin_groups),
+        "oidc_display_name": str(settings.oidc_display_name),
+        "oidc_redirect_uri": str(settings.oidc_redirect_uri),
+        "oidc_allow_insecure_http": bool(settings.oidc_allow_insecure_http),
     }
 
 

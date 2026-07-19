@@ -37,7 +37,12 @@ class RunningServer:
 
 def start_server(app: Starlette) -> RunningServer:
     port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+    # ws="wsproto" keeps uvicorn off its deprecated websockets.legacy backend
+    # (the default "auto" imports it and warns per handshake — Moonraker's status
+    # push in mock_printer opens a real WS, so it fired on every fleet test).
+    config = uvicorn.Config(
+        app, host="127.0.0.1", port=port, log_level="warning", lifespan="off", ws="wsproto"
+    )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

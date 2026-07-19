@@ -10,7 +10,15 @@ from sqlmodel import Session
 
 from app.core.config import _overlay
 from app.core.time import utcnow
-from app.db.models import ExternalLibrary, ExternalLibraryScanStatus
+from app.db.models import (
+    ExternalLibrary,
+    ExternalLibraryScanStatus,
+    File,
+    FileType,
+    Model,
+    PrintJob,
+    PrintJobState,
+)
 from app.services import external_library
 from app.services.jobs import JobRegistry
 
@@ -119,6 +127,44 @@ def test_metrics_counts_terminal_ingestion_jobs(client: TestClient) -> None:
 
     body = client.get("/metrics").text
     assert 'printstash_ingestion_jobs_total{state="completed"}' in body
+
+
+def test_metrics_exposes_fleet_queue_and_scheduler_state(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    model = Model(name="Blocked", slug="blocked", hash="c" * 64)
+    db_session.add(model)
+    db_session.commit()
+    db_session.refresh(model)
+    artifact = File(
+        model_id=model.id,
+        path="metrics/blocked.gcode",
+        original_filename="blocked.gcode",
+        file_type=FileType.GCODE,
+        version=1,
+        size_bytes=1,
+        sha256="d" * 64,
+    )
+    db_session.add(artifact)
+    db_session.commit()
+    db_session.refresh(artifact)
+    db_session.add(
+        PrintJob(
+            printer_id=None,
+            file_id=artifact.id,
+            model_id=model.id,
+            remote_filename="blocked.gcode",
+            state=PrintJobState.QUEUED,
+            blocked_reason="no_eligible_printer",
+        )
+    )
+    db_session.commit()
+
+    body = client.get("/metrics").text
+
+    assert 'printstash_fleet_jobs{state="queued"} 1.0' in body
+    assert "printstash_fleet_scheduler_last_tick_timestamp_seconds" in body
 
 
 def test_metrics_token_enforced_when_set(client: TestClient) -> None:

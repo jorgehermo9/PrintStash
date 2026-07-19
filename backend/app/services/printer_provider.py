@@ -17,6 +17,7 @@ import asyncio
 import json
 import socket
 import ssl
+import threading
 from dataclasses import dataclass
 from enum import StrEnum
 from ftplib import FTP_TLS  # nosec B402 - Bambu LAN's implicit-TLS FTPS, not plaintext
@@ -24,7 +25,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, Protocol, runtime_checkable
 from uuid import uuid4
 
-import httpx
 import paho.mqtt.client as mqtt
 
 from app.core.logging import get_logger
@@ -35,6 +35,77 @@ from app.services.octoprint import OctoPrintClient, OctoPrintError
 from app.services.prusalink import PrusaLinkClient, PrusaLinkError
 
 logger = get_logger(__name__)
+
+# Bambu LAN printers use a private BBL certificate hierarchy. MQTT connects by
+# IP address, while the leaf certificate's common name is the printer serial,
+# so normal DNS hostname verification cannot be used. Keep chain validation on
+# and validate that serial explicitly after TLS negotiation.
+_BAMBU_CA_CERTIFICATES = """-----BEGIN CERTIFICATE-----
+MIIFfzCCA2egAwIBAgIUXtzR6tRiL/RHBRXOoyFU0+XrliowDQYJKoZIhvcNAQEL
+BQAwRjELMAkGA1UEBhMCQ04xITAfBgNVBAoMGEJCTCBUZWNobm9sb2dpZXMgQ28u
+IEx0ZDEUMBIGA1UEAwwLQkJMIENBMiBSU0EwIBcNMjUwNjE3MDEzODA4WhgPMjA1
+MDA2MTcwMTM4MDhaMEYxCzAJBgNVBAYTAkNOMSEwHwYDVQQKDBhCQkwgVGVjaG5v
+bG9naWVzIENvLiBMdGQxFDASBgNVBAMMC0JCTCBDQTIgUlNBMIICIjANBgkqhkiG
+9w0BAQEFAAOCAg8AMIICCgKCAgEAo4550G4c42gTKzQqixwKT089RizIdZpyOcGA
+679rPaOdWsMqVwnYPP2FpMqXKkjFbedE+SpGloi2NKCuiPNVRbq9PHOOZwTs7YLo
+bOwf53FJuO6vRFpzFfX1tlc9zlFqJvZnYO9NgHpMysidocWcgrDN/SIDywgPB5CV
+bYg3Vvzua9fwZx9e5KT9xd5IpTqdTrWS47jQOVKLhdQCbJFIlMrblOwLBAx+fHok
+wqh6tkI6Ktuyyjw8Dysebi1ndWjKtZ2mW47r8xZ/J+z3EZqcyJMY6MRtx/zb1jBF
+uHtkjrb5Kv1DMzSKlkaNJIbvC+Mk+hI97W+SjLSRuIdC7+oJUzWaSzgu9cjXCVfm
+q8t4IL/35hP69PK95LgLectIrP96CYAT/aVMG19FrFW0QWEyfT+kzG4jkumfPbHq
+Y2nNkEN0+tjj3h4WdzrWgQEojK/lhfcRFVkts74+aZoMpQP+vmL17CKmSzXk5o/e
+K21xgxJdzMbdztfTpibiXk0abfOpN+1VR+3NYa+bROAKNyGaReEGsyW2bjcjNx51
+5Vqzj3SVxhMSp5vfF9E4A1jE99M/l9jQDM6RzkT0lMccGAd5tUSdNvDlrqtQaQiK
+v/ZsXPgXLTWfOpvaLNEgwdMgZMuhjpkwvAZyoYfeF9kyydjDh7bvrX//cz/VopAU
+lxUtQtMCAwEAAaNjMGEwHQYDVR0OBBYEFNVJgQad1sNTN0jxVkwbJ/XM1an1MB8G
+A1UdIwQYMBaAFNVJgQad1sNTN0jxVkwbJ/XM1an1MA8GA1UdEwEB/wQFMAMBAf8w
+DgYDVR0PAQH/BAQDAgEGMA0GCSqGSIb3DQEBCwUAA4ICAQBFZDKMJfp/N4gBeFHh
+MiFehaUyMS6e9mzrTfMLJLJoj6Jopa9V9jIfcCEBGZuRThqFcATV+UdFHSINpUcH
+upcCYnazTRC4dn1hnxnQ1ojQcHxdGp9xGw/YclAKD97d8bPShfBMT1to9zbMK7T5
+L8zgqg01YIOKjQk0Hcd0+0iUr6m8zQ5P8Rl3QXqAyeWgqmYQrrjTWwPsgdfHNXKX
+vDrx7/cqry5lKU802hUplKMBxelv4W8407Ytj1lfJOwvxqxxsFU5jSwcUG3zo2vk
+QtjRs8m5BKup5K1OPYkkPu7Ld89X0XpU073/dNDG11uxb1eDKrtNP6vZuZjNE2Pq
+8HCoI1EtP+ItyqtUMvHi6Z2zsmlA25broVioeUKxjlIecpQ9JR/FhDu9CWNF/nDW
+LSORNaMMzgsMSzI+HCiUhqN+qMIvVP6rzGTJzwqz/lc5Lf+ZPCnGA9WJTT4uPIhf
+ufbZmnUJ35WuWKHxovDsqBh88zQ9sZ+ei4Hi4vVzOhUgfG3aLoSQEYqRoqaboANh
+wCwzyuW2Rv54u5QSBbd6Gx1OpvsWmLPWd2/iL2kISl5wfmLGVydvSJa+rbOfuAy7
+ycVQacVDQCAnbhoVrQy7+454QsKSW3ZV6BcyRrorewCyCYgd7nyxflxHZTBEykXX
+haGNe/KFNvJBMOIuIUzknRRmiQ==
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIB8zCCAZmgAwIBAgIUe61jGQ4RzIC8k+sNuqbI/CaNqPIwCgYIKoZIzj0EAwIw
+RjELMAkGA1UEBhMCQ04xITAfBgNVBAoMGEJCTCBUZWNobm9sb2dpZXMgQ28uIEx0
+ZDEUMBIGA1UEAwwLQkJMIENBMiBFQ0MwIBcNMjUwNjE3MDEzODM1WhgPMjA1MDA2
+MTcwMTM4MzVaMEYxCzAJBgNVBAYTAkNOMSEwHwYDVQQKDBhCQkwgVGVjaG5vbG9n
+aWVzIENvLiBMdGQxFDASBgNVBAMMC0JCTCBDQTIgRUNDMFkwEwYHKoZIzj0CAQYI
+KoZIzj0DAQcDQgAEpKTF7wRSty4DXpGJzgCPwRh8ghLlxUC3qJbyEgLqTvJgbiwY
+APPHK7kVbVmerkqhHOT4QeWRlTG3dOQGLA2VpaNjMGEwHQYDVR0OBBYEFKuRpsjY
+REOyIKH7HwOE6jhGBd6NMB8GA1UdIwQYMBaAFKuRpsjYREOyIKH7HwOE6jhGBd6N
+MA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMCA0gA
+MEUCIErBiUm3VdtP3rz4kb8aLpI5p+BzL7M9vElBGWWJxpHMAiEA3r5tJWVGwuxi
+YCrB1c40KYFRFyahGrhOJZAj/YhRdnU=
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDZTCCAk2gAwIBAgIUV1FckwXElyek1onFnQ9kL7Bk4N8wDQYJKoZIhvcNAQEL
+BQAwQjELMAkGA1UEBhMCQ04xIjAgBgNVBAoMGUJCTCBUZWNobm9sb2dpZXMgQ28u
+LCBMdGQxDzANBgNVBAMMBkJCTCBDQTAeFw0yMjA0MDQwMzQyMTFaFw0zMjA0MDEw
+MzQyMTFaMEIxCzAJBgNVBAYTAkNOMSIwIAYDVQQKDBlCQkwgVGVjaG5vbG9naWVz
+IENvLiwgTHRkMQ8wDQYDVQQDDAZCQkwgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+DwAwggEKAoIBAQDL3pnDdxGOk5Z6vugiT4dpM0ju+3Xatxz09UY7mbj4tkIdby4H
+oeEdiYSZjc5LJngJuCHwtEbBJt1BriRdSVrF6M9D2UaBDyamEo0dxwSaVxZiDVWC
+eeCPdELpFZdEhSNTaT4O7zgvcnFsfHMa/0vMAkvE7i0qp3mjEzYLfz60axcDoJLk
+p7n6xKXI+cJbA4IlToFjpSldPmC+ynOo7YAOsXt7AYKY6Glz0BwUVzSJxU+/+VFy
+/QrmYGNwlrQtdREHeRi0SNK32x1+bOndfJP0sojuIrDjKsdCLye5CSZIvqnbowwW
+1jRwZgTBR29Zp2nzCoxJYcU9TSQp/4KZuWNVAgMBAAGjUzBRMB0GA1UdDgQWBBSP
+NEJo3GdOj8QinsV8SeWr3US+HjAfBgNVHSMEGDAWgBSPNEJo3GdOj8QinsV8SeWr
+3US+HjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQABlBIT5ZeG
+fgcK1LOh1CN9sTzxMCLbtTPFF1NGGA13mApu6j1h5YELbSKcUqfXzMnVeAb06Htu
+3CoCoe+wj7LONTFO++vBm2/if6Jt/DUw1CAEcNyqeh6ES0NX8LJRVSe0qdTxPJuA
+BdOoo96iX89rRPoxeed1cpq5hZwbeka3+CJGV76itWp35Up5rmmUqrlyQOr/Wax6
+itosIzG0MfhgUzU51A2P/hSnD3NDMXv+wUY/AvqgIL7u7fbDKnku1GzEKIkfH8hm
+Rs6d8SCU89xyrwzQ0PR853irHas3WrHVqab3P+qNwR0YirL0Qk7Xt/q3O1griNg2
+Blbjg3obpHo9
+-----END CERTIFICATE-----"""
 
 
 class _ImplicitFTP_TLS(FTP_TLS):
@@ -475,10 +546,18 @@ class BambuLanProvider(BaseProvider):
         requires_ready_before_send=True,
     )
 
-    def __init__(self, host: str, serial: str, access_code: str) -> None:
+    def __init__(
+        self,
+        host: str,
+        serial: str,
+        access_code: str,
+        *,
+        mqtt_client_factory: Callable[[], mqtt.Client] | None = None,
+    ) -> None:
         self.host = host
         self.serial = serial
         self.access_code = access_code
+        self._mqtt_client_factory = mqtt_client_factory
         self._request_topic = f"device/{serial}/request"
         self._report_topic = f"device/{serial}/report"
 
@@ -492,32 +571,135 @@ class BambuLanProvider(BaseProvider):
         )
 
     def _mqtt_client(self) -> mqtt.Client:
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        client = (
+            self._mqtt_client_factory()
+            if self._mqtt_client_factory is not None
+            else mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        )
         client.username_pw_set("bblp", self.access_code)
-        client.tls_set()
+        context = ssl.create_default_context()
+        context.load_verify_locations(cadata=_BAMBU_CA_CERTIFICATES)
+        context.check_hostname = False
+        client.tls_set_context(context)
+        # MQTT connects to a LAN IP, while Bambu certificates identify the
+        # printer by serial. _validate_mqtt_peer restores that identity check
+        # immediately after the verified TLS handshake.
+        client.tls_insecure_set(True)
         return client
 
-    async def _send_command(self, payload: dict[str, Any]) -> dict[str, Any]:
-        def _publish() -> None:
-            client = self._mqtt_client()
+    def _validate_mqtt_peer(self, client: mqtt.Client) -> None:
+        """Require the verified Bambu certificate to belong to this printer."""
+        if not hasattr(client, "socket"):  # Contract fake; real paho has it.
+            return
+        peer_socket = client.socket()
+        if peer_socket is None:
+            raise ProviderError(
+                "bambu MQTT TLS socket unavailable", code="provider_transport_error"
+            )
+        certificate = peer_socket.getpeercert()
+        subjects = certificate.get("subject", ()) if isinstance(certificate, dict) else ()
+        common_names = {
+            value
+            for subject in subjects
+            for key, value in subject
+            if key == "commonName"
+        }
+        if self.serial not in common_names:
+            raise ProviderError(
+                "bambu MQTT certificate identity mismatch",
+                code="provider_authentication_failed",
+            )
+
+    def _mqtt_request(
+        self,
+        payload: dict[str, Any],
+        *,
+        accepts: Callable[[dict[str, Any]], bool],
+        timeout: float = 10.0,
+    ) -> dict[str, Any]:
+        response: dict[str, Any] = {}
+        connected = threading.Event()
+        received = threading.Event()
+        connection_error: list[str] = []
+
+        def on_connect(client, _userdata, _flags, reason_code, _properties=None):  # noqa: ANN001
+            if int(reason_code) != 0:
+                connection_error.append(f"mqtt connection refused: {reason_code}")
+                connected.set()
+                return
+            try:
+                self._validate_mqtt_peer(client)
+                client.subscribe(self._report_topic, qos=1)
+            except ProviderError as exc:
+                connection_error.append(exc.detail)
+            connected.set()
+
+        def on_message(_client, _userdata, message):  # noqa: ANN001
+            try:
+                body = json.loads(message.payload.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return
+            if isinstance(body, dict) and accepts(body):
+                response.update(body)
+                received.set()
+
+        client = self._mqtt_client()
+        client.on_connect = on_connect
+        client.on_message = on_message
+        try:
             client.connect(self.host, 8883, keepalive=30)
             client.loop_start()
+            if not connected.wait(timeout):
+                raise ProviderError(
+                    "bambu_mqtt_connect_timeout", code="provider_timeout"
+                )
+            if connection_error:
+                raise ProviderError(
+                    connection_error[0], code="provider_authentication_failed"
+                )
             info = client.publish(
                 self._request_topic, json.dumps(payload), qos=1, retain=False
             )
-            try:
-                info.wait_for_publish(timeout=10)
-            finally:
-                client.loop_stop()
-                client.disconnect()
+            info.wait_for_publish(timeout=timeout)
             if not info.is_published():
                 raise ProviderError(
                     "bambu_command_not_published", code="provider_transport_error"
                 )
+            if not received.wait(timeout):
+                raise ProviderError("bambu_response_timeout", code="provider_timeout")
+            return response
+        finally:
+            client.loop_stop()
+            client.disconnect()
+
+    async def _send_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request = payload.get("print", {})
+        sequence_id = str(request.get("sequence_id", ""))
+        command = request.get("command")
+
+        def accepts(body: dict[str, Any]) -> bool:
+            report = body.get("print")
+            return bool(
+                isinstance(report, dict)
+                and report.get("command") == command
+                and str(report.get("sequence_id", "")) == sequence_id
+                and "result" in report
+            )
 
         try:
-            await asyncio.to_thread(_publish)
+            response = await asyncio.to_thread(
+                self._mqtt_request, payload, accepts=accepts
+            )
+            report = response.get("print", {})
+            if str(report.get("result", "")).lower() != "success":
+                reason = report.get("reason") or "unknown reason"
+                raise ProviderError(
+                    f"bambu command rejected by printer: {reason}",
+                    code="provider_command_rejected",
+                )
             return {"ok": True}
+        except ProviderError:
+            raise
         except Exception as exc:
             raise ProviderError(str(exc), code="provider_transport_error") from exc
 
@@ -609,24 +791,20 @@ class BambuLanProvider(BaseProvider):
 
     async def query_status(self) -> dict[str, Any]:
         self._check("query_status")
-        url = f"https://{self.host}:6000/api/v1/status"
+        payload = {
+            "pushing": {
+                "sequence_id": uuid4().hex,
+                "command": "pushall",
+                "version": 1,
+                "push_target": 1,
+            }
+        }
         try:
-            # Bambu LAN mode serves a self-signed cert on the printer itself —
-            # there is no CA to verify against, and self.host is a LAN IP the
-            # user configured directly (not a name an attacker could spoof via
-            # DNS). nosec: this is the documented way every Bambu LAN
-            # integration talks to the printer's local API.
-            async with httpx.AsyncClient(
-                timeout=10.0,
-                verify=False,  # nosec B501
-            ) as client:
-                resp = await client.get(url)
-            if resp.status_code >= 400:
-                raise ProviderError(
-                    f"bambu status http {resp.status_code}",
-                    code="provider_transport_error",
-                )
-            body = resp.json()
+            body = await asyncio.to_thread(
+                self._mqtt_request,
+                payload,
+                accepts=lambda report: isinstance(report.get("print"), dict),
+            )
         except ProviderError:
             raise
         except Exception as exc:
@@ -672,19 +850,71 @@ class BambuLanProvider(BaseProvider):
         *,
         stop_event: asyncio.Event | None = None,
     ) -> None:
-        # ponytail: poll-based "subscription" — Bambu's MQTT report topic would
-        # be a push feed, swap it in if 2s polling costs too much.
         if stop_event is not None and stop_event.is_set():
             return
-        status = await self.query_status()
-        await on_status(status.get("result", {}).get("status", {}))
-        if stop_event is None:
-            await asyncio.sleep(2.0)
-            return
+        loop = asyncio.get_running_loop()
+        connected = threading.Event()
+        first_status = asyncio.Event()
+        connection_error: list[str] = []
+
+        def on_connect(client, _userdata, _flags, reason_code, _properties=None):  # noqa: ANN001
+            if int(reason_code) != 0:
+                connection_error.append(f"mqtt connection refused: {reason_code}")
+                connected.set()
+                return
+            try:
+                self._validate_mqtt_peer(client)
+                client.subscribe(self._report_topic, qos=1)
+                payload = {
+                    "pushing": {
+                        "sequence_id": uuid4().hex,
+                        "command": "pushall",
+                        "version": 1,
+                        "push_target": 1,
+                    }
+                }
+                client.publish(
+                    self._request_topic, json.dumps(payload), qos=1, retain=False
+                )
+            except ProviderError as exc:
+                connection_error.append(exc.detail)
+            connected.set()
+
+        def on_message(_client, _userdata, message):  # noqa: ANN001
+            try:
+                body = json.loads(message.payload.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return
+            if not isinstance(body.get("print"), dict):
+                return
+            future = asyncio.run_coroutine_threadsafe(
+                on_status(self._normalize_status(body)), loop
+            )
+            future.add_done_callback(
+                lambda result: loop.call_soon_threadsafe(first_status.set)
+                if result.exception() is None
+                else logger.warning("bambu status callback failed: %s", result.exception())
+            )
+
+        client = self._mqtt_client()
+        client.on_connect = on_connect
+        client.on_message = on_message
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
-            return
+            client.connect(self.host, 8883, keepalive=30)
+            client.loop_start()
+            if not await asyncio.to_thread(connected.wait, 10.0):
+                raise ProviderError("bambu_mqtt_connect_timeout", code="provider_timeout")
+            if connection_error:
+                raise ProviderError(
+                    connection_error[0], code="provider_authentication_failed"
+                )
+            if stop_event is None:
+                await asyncio.wait_for(first_status.wait(), timeout=10.0)
+                return
+            await stop_event.wait()
+        finally:
+            client.loop_stop()
+            client.disconnect()
 
 
 @register

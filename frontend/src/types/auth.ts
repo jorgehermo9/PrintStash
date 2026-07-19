@@ -18,8 +18,14 @@ export interface UserRead {
   email: string | null;
   is_superuser: boolean;
   is_active: boolean;
+  oidc_managed?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AuthProvidersRead {
+  oidc_enabled: boolean;
+  oidc_display_name: string;
 }
 
 export interface UserCreate {

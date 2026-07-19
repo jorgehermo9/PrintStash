@@ -133,6 +133,33 @@ def _jobs_probe() -> dict:
         return {"ok": False, "error": exc.__class__.__name__}
 
 
+def _fleet_scheduler_probe() -> dict:
+    from app.db.models import PrintJobState
+    from app.services.printer_jobs import scheduler_snapshot
+
+    try:
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob.state, func.count(PrintJob.id)).group_by(PrintJob.state)
+            ).all()
+        counts = {state.value: count for state, count in rows}
+        for state in PrintJobState:
+            counts.setdefault(state.value, 0)
+        snapshot = scheduler_snapshot()
+        return {
+            # Informational like the generic jobs probe: detailed state exposes
+            # a stopped loop, but it does not make the whole API unhealthy.
+            "ok": True,
+            "counts": counts,
+            "running": snapshot["running"],
+            "last_tick_at": snapshot["last_tick_at"],
+            "last_dispatch_at": snapshot["last_dispatch_at"],
+            "last_error": snapshot["last_error"],
+        }
+    except Exception as exc:
+        return {"ok": False, "error": exc.__class__.__name__}
+
+
 def _external_libraries_probe() -> dict:
     # Informational: RUNNING usually means a scan is genuinely in progress
     # (orphans are reset at startup), so this never flips the overall status.
@@ -227,6 +254,7 @@ def health_details() -> dict:
         "backup": _backup_probe(),
         "printer_providers": _provider_probe(),
         "jobs": _jobs_probe(),
+        "fleet_scheduler": _fleet_scheduler_probe(),
         "external_libraries": _external_libraries_probe(),
         "spoolman": _spoolman_probe(),
     }

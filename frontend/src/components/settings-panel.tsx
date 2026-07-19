@@ -36,6 +36,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { TabBar } from "@/components/ui/tabs";
 import { inputClasses } from "@/components/ui/input";
+import { Localized } from "@/components/ui/localized";
 import { cn } from "@/lib/utils";
 import { useRouter, useSearchParams } from "@/lib/navigation";
 import { CURRENCY_OPTIONS } from "@/lib/currency";
@@ -44,6 +45,7 @@ import { StorageConfigCard } from "@/components/storage-config-card";
 import { MakerWorldConnectCard } from "@/components/makerworld-connect-card";
 import { NotificationsPanel } from "@/components/notifications-panel";
 import { SpoolmanConnectCard } from "@/components/spoolman-connect-card";
+import { OidcSettingsCard } from "@/components/oidc-settings-card";
 import { BrandMark } from "@/components/brand-mark";
 import {
   createApiKey,
@@ -93,6 +95,7 @@ import {
   writeCardMetrics,
 } from "@/lib/card-metrics";
 import { toast } from "@/lib/toast";
+import { useI18n, type MessageKey } from "@/lib/i18n";
 import {
   readPrinterCardImagePreference,
   writePrinterCardImagePreference,
@@ -120,6 +123,7 @@ type SettingsSection =
   | "imports"
   | "libraries"
   | "notifications"
+  | "sso"
   | "spoolman"
   | "design"
   | "trash"
@@ -127,19 +131,20 @@ type SettingsSection =
 
 const SETTINGS_SECTIONS: {
   id: SettingsSection;
-  label: string;
+  labelKey: MessageKey;
   icon: typeof Server;
 }[] = [
-  { id: "overview", label: "Overview", icon: Server },
-  { id: "access", label: "Users & Access", icon: Users },
-  { id: "storage", label: "Storage", icon: HardDrive },
-  { id: "imports", label: "Imports", icon: Download },
-  { id: "libraries", label: "Shared volumes", icon: FolderSync },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "spoolman", label: "Spoolman", icon: Boxes },
-  { id: "design", label: "Design", icon: Palette },
-  { id: "trash", label: "Trash", icon: Trash2 },
-  { id: "about", label: "About", icon: Info },
+  { id: "overview", labelKey: "settings.overview", icon: Server },
+  { id: "access", labelKey: "settings.access", icon: Users },
+  { id: "storage", labelKey: "settings.storage", icon: HardDrive },
+  { id: "imports", labelKey: "settings.imports", icon: Download },
+  { id: "libraries", labelKey: "settings.libraries", icon: FolderSync },
+  { id: "notifications", labelKey: "settings.notifications", icon: Bell },
+  { id: "sso", labelKey: "settings.sso", icon: ShieldCheck },
+  { id: "spoolman", labelKey: "settings.spoolman", icon: Boxes },
+  { id: "design", labelKey: "settings.design", icon: Palette },
+  { id: "trash", labelKey: "settings.trash", icon: Trash2 },
+  { id: "about", labelKey: "settings.about", icon: Info },
 ];
 
 function settingsSection(value: string | null): SettingsSection {
@@ -220,6 +225,7 @@ function SettingsCard({
 
 export function SettingsPanel() {
   const { user } = useAuth();
+  const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
   const latestRelease = CHANGELOG[0];
@@ -270,6 +276,9 @@ export function SettingsPanel() {
   const [cardMetrics, setCardMetrics] = useState<CardMetrics>(DEFAULT_CARD_METRICS);
   const [showPrinterCardImage, setShowPrinterCardImage] = useState(false);
   const [printerImageWarningOpen, setPrinterImageWarningOpen] = useState(false);
+  const visibleSettingsSections = SETTINGS_SECTIONS.filter(
+    (section) => section.id !== "sso" || user?.is_superuser,
+  );
 
   useEffect(() => {
     setActiveSection(settingsSection(searchParams.get("section")));
@@ -810,6 +819,7 @@ export function SettingsPanel() {
   );
 
   return (
+    <Localized>
     <div className="w-full space-y-6">
       <ConfirmModal
         open={purgeTarget !== null}
@@ -841,18 +851,18 @@ export function SettingsPanel() {
         confirmLabel="Download & enable"
       />
 
-      <PageHeader title="Settings" description="Vault configuration and display preferences" />
+      <PageHeader title={t("settings.title")} description={t("settings.description")} />
 
       <div className="border-b border-border pb-3 lg:hidden">
         <TabBar
-          tabs={SETTINGS_SECTIONS.map((section) => {
+          tabs={visibleSettingsSections.map((section) => {
             const Icon = section.icon;
             return {
               key: section.id,
               label: (
                 <>
                   <Icon className="h-4 w-4" />
-                  {section.label}
+                  {t(section.labelKey)}
                 </>
               ),
             };
@@ -868,7 +878,7 @@ export function SettingsPanel() {
 
       <div className="lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-6">
         <nav aria-label="Settings sections" className="sticky top-0 hidden rounded-lg border border-border bg-card p-2 shadow-sm lg:block">
-          {SETTINGS_SECTIONS.map((section) => {
+          {visibleSettingsSections.map((section) => {
             const Icon = section.icon;
             const isActive = section.id === activeSection;
             return (
@@ -885,7 +895,7 @@ export function SettingsPanel() {
                 )}
               >
                 <Icon className="h-4 w-4 shrink-0" />
-                <span>{section.label}</span>
+                <span>{t(section.labelKey)}</span>
               </button>
             );
           })}
@@ -1552,6 +1562,8 @@ export function SettingsPanel() {
         </div>
       )}
 
+      {activeSection === "sso" && user?.is_superuser && <OidcSettingsCard />}
+
       {activeSection === "spoolman" && (
         <div className="space-y-6 animate-panel-in">
           <SpoolmanConnectCard canEdit={!!user?.is_superuser} />
@@ -2004,5 +2016,6 @@ export function SettingsPanel() {
         </main>
       </div>
     </div>
+    </Localized>
   );
 }

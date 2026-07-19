@@ -20,6 +20,8 @@ import { useAuth } from "@/lib/auth-context";
 import { lastVaultHref } from "@/lib/last-collection";
 import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LocaleToggle } from "@/components/locale-toggle";
+import { useI18n } from "@/lib/i18n";
 import { TaskList } from "@/components/task-list";
 import { DropdownMenu } from "@/components/ui/dropdown-menu";
 import {
@@ -33,6 +35,7 @@ import {
 const WIKI_URL = "https://xiao-villamor.github.io/PrintStash/";
 
 function TopBarSearch() {
+  const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -99,7 +102,7 @@ function TopBarSearch() {
         <input
           ref={inputRef}
           className="block w-full pl-10 pr-10 sm:pr-14 py-2 border border-border rounded-lg leading-5 bg-muted text-foreground placeholder:text-muted-foreground focus:outline-none focus:bg-background focus:ring-1 focus:ring-ring focus:border-primary dark:border-primary-soft text-sm transition-colors"
-          placeholder="Search PrintStash..."
+          placeholder={t("nav.search")}
           aria-label="Search models"
           type="text"
           value={value}
@@ -113,7 +116,7 @@ function TopBarSearch() {
             type="button"
             onClick={clearSearch}
             className="absolute right-2 sm:right-10 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-muted-foreground pointer-events-auto"
-            aria-label="Clear search"
+            aria-label={t("nav.clearSearch")}
           >
             <XCircle className="h-4 w-4" />
           </button>
@@ -124,6 +127,7 @@ function TopBarSearch() {
 }
 
 export function TopBar() {
+  const { t } = useI18n();
   const pathname = usePathname();
   const router = useRouter();
   const { user, loading, logout } = useAuth();
@@ -174,9 +178,10 @@ export function TopBar() {
           className="hidden sm:flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <BookOpen className="h-4 w-4" />
-          Wiki
+          {t("nav.wiki")}
         </a>
         <ThemeToggle />
+        <LocaleToggle />
         <DropdownMenu
           open={tasksOpen}
           onOpenChange={setTasksOpen}
@@ -189,8 +194,8 @@ export function TopBar() {
               data-menu-trigger
               onClick={() => setTasksOpen((v) => !v)}
               className="relative text-muted-foreground hover:text-foreground p-1 rounded-full hover:bg-muted transition-colors"
-              aria-label="Notifications"
-              title="Notifications"
+              aria-label={t("nav.notifications")}
+              title={t("nav.notifications")}
               aria-haspopup="dialog"
               aria-expanded={tasksOpen}
             >
@@ -218,7 +223,7 @@ export function TopBar() {
               href="/login"
               className="flex items-center px-3 py-1.5 text-sm font-medium text-primary-foreground bg-primary rounded hover:bg-primary-hover transition-colors"
             >
-              Log In
+              {t("nav.logIn")}
             </Link>
           </div>
         ) : (
@@ -271,13 +276,14 @@ function ProfileMenu({
   onNavigate: () => void;
   onLogout: () => void;
 }) {
+  const { t } = useI18n();
   const items = [
-    { href: "/", label: "Vault", icon: Box },
-    { href: "/printers", label: "Printers", icon: Printer, adminOnly: true },
-    { href: "/statistics", label: "Statistics", icon: BarChart3, adminOnly: true },
-    { href: "/profiles", label: "Profiles", icon: SlidersHorizontal },
-    { href: WIKI_URL, label: "Wiki", icon: BookOpen, external: true },
-    { href: "/settings", label: "Settings", icon: Settings },
+    { href: "/", label: t("nav.vault"), icon: Box },
+    { href: "/printers", label: t("nav.printers"), icon: Printer, adminOnly: true },
+    { href: "/statistics", label: t("nav.statistics"), icon: BarChart3, adminOnly: true },
+    { href: "/profiles", label: t("nav.profiles"), icon: SlidersHorizontal },
+    { href: WIKI_URL, label: t("nav.wiki"), icon: BookOpen, external: true },
+    { href: "/settings", label: t("nav.settings"), icon: Settings },
   ].filter((item) => !item.adminOnly || isAdmin);
 
   return (
@@ -313,7 +319,7 @@ function ProfileMenu({
         className="flex w-full items-center gap-3 rounded-md border-t border-border px-3 py-2.5 text-left text-sm text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <LogOut className="h-4 w-4" />
-        <span>Log Out</span>
+        <span>{t("nav.logOut")}</span>
       </button>
     </div>
   );

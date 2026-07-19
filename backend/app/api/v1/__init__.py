@@ -11,6 +11,7 @@ from app.api.v1 import (
     external_libraries,
     filaments,
     files,
+    fleet,
     health,
     ingest,
     models,
@@ -41,6 +42,7 @@ api_router.include_router(printers.router)
 api_router.include_router(backup.router)
 api_router.include_router(config.router)
 api_router.include_router(external_libraries.router)
+api_router.include_router(fleet.router)
 api_router.include_router(notifications.router)
 api_router.include_router(spoolman.router)
 api_router.include_router(share.router)

@@ -104,6 +104,10 @@ def test_detailed_health_requires_admin_and_reports_release_components(
     assert body["components"]["database"]["ok"] is True
     assert body["components"]["storage"]["backend"] == "local"
     assert body["components"]["backup"]["s3_configured"] is False
+    scheduler = body["components"]["fleet_scheduler"]
+    assert scheduler["ok"] is True
+    assert "queued" in scheduler["counts"]
+    assert "last_tick_at" in scheduler
     providers = body["components"]["printer_providers"]["providers"]
     bambu = next(p for p in providers if p["provider"] == "bambu_lan")
     assert bambu["support_level"] == "beta"

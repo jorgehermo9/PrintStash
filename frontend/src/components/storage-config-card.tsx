@@ -5,6 +5,7 @@ import { Cloud, HardDrive, Key, RefreshCw, Save } from "lucide-react";
 import { getVaultConfig, updateVaultConfig } from "@/lib/api";
 import type { VaultConfigRead, VaultConfigUpdate } from "@/types";
 import { useRequireAuth } from "@/lib/use-require-auth";
+import { Localized } from "@/components/ui/localized";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -101,18 +102,21 @@ export function StorageConfigCard() {
 
   if (loading) {
     return (
+      <Localized>
       <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
         <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b border-border">
           <h3 className="text-sm font-semibold text-foreground">Storage configuration</h3>
         </div>
         <div className="p-3 sm:p-4 lg:p-6 text-sm text-muted-foreground">Loading...</div>
       </div>
+      </Localized>
     );
   }
 
   const canEdit = isAuthenticated;
 
   return (
+    <Localized>
     <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b border-border flex items-center justify-between gap-2">
         <div className="min-w-0">
@@ -394,5 +398,6 @@ export function StorageConfigCard() {
         )}
       </div>
     </div>
+    </Localized>
   );
 }

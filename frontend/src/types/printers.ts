@@ -28,6 +28,7 @@ export type PrintJobState =
   | "completed"
   | "cancelled"
   | "failed";
+export type RoutingStrategy = "manual" | "default" | "least_busy";
 
 export interface PrinterRead {
   id: number;
@@ -54,6 +55,10 @@ export interface PrinterRead {
   capabilities: PrinterCapabilities;
   notes: string | null;
   group: string | null;
+  is_default: boolean;
+  drain_mode: boolean;
+  drain_reason: string | null;
+  drain_updated_at: string | null;
   status: PrinterStatus;
   last_seen_at: string | null;
   last_error: string | null;
@@ -181,7 +186,7 @@ export interface PrinterUpdate {
 
 export interface PrintJobRead {
   id: number;
-  printer_id: number;
+  printer_id: number | null;
   file_id: number;
   model_id: number;
   remote_filename: string;
@@ -189,6 +194,14 @@ export interface PrintJobRead {
   progress: number;
   source: string;
   error: string | null;
+  routing_strategy: RoutingStrategy;
+  queue_position: number;
+  provider_job_id: string | null;
+  blocked_reason: string | null;
+  dispatch_claimed_at: string | null;
+  dispatch_attempts: number;
+  retryable: boolean;
+  requested_by: number | null;
   spool_id: number | null;
   spool_name: string | null;
   started_at: string | null;
@@ -247,4 +260,57 @@ export interface PrinterSnapshot {
 export interface PrinterStatusResponse {
   printer: PrinterRead;
   snapshot: PrinterSnapshot;
+}
+
+export interface FleetSummary {
+  total_printers: number;
+  queued_jobs: number;
+  active_jobs: number;
+  draining_printers: number;
+  maintenance_printers: number;
+  attention_jobs: number;
+}
+
+export interface QueueJobCreate {
+  file_id: number;
+  strategy: RoutingStrategy;
+  printer_id?: number | null;
+  spool_id?: number | null;
+  spool_name?: string | null;
+  spool_filament_id?: number | null;
+}
+
+export interface QueueJobUpdate {
+  strategy?: RoutingStrategy;
+  printer_id?: number | null;
+  queue_position?: number;
+  expected_updated_at?: string;
+}
+
+export interface PrinterRoutingUpdate {
+  is_default?: boolean;
+  drain_mode?: boolean;
+  drain_reason?: string | null;
+}
+
+export interface MaintenanceWindow {
+  id: number;
+  printer_id: number;
+  starts_at: string;
+  ends_at: string;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MaintenanceLog {
+  id: number;
+  printer_id: number;
+  performed_at: string;
+  category: string;
+  note: string;
+  counter_value: number | null;
+  counter_unit: string | null;
+  created_at: string;
+  updated_at: string;
 }

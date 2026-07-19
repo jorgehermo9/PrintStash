@@ -153,7 +153,7 @@ Goal: make the vault better as a daily-use 3D print library.
 - Reprint analytics for success, duration, filament, and cost
 - Versioned full-library archive migration and configured-root folder import
 
-## 0.11 — Fleet and Scheduling
+## 0.11 — Fleet and Scheduling (in development on 0.11.0)
 
 Goal: help small printer farms without turning PrintStash into a full slicer or
 queue manager.
@@ -162,13 +162,13 @@ queue manager.
 - Optional routing strategies: manual, default printer, least busy
 - Printer maintenance windows, soft-drain mode, and a simple maintenance log
 
-## 0.12 — Auth and Platform
+## Auth and Platform (folded into 0.11.0)
 
 Goal: fit cleanly into existing homelab infrastructure.
 
-- OIDC / SSO login (Authentik, Authelia, and similar)
-- Installable PWA with offline support (the mobile layout itself was refreshed in 0.8.x)
-- Localization (i18n) scaffolding
+- OIDC / SSO login (Authentik, Authelia, and similar) — included in 0.11.0
+- Installable PWA with offline support — included in 0.11.0
+- Localization (i18n) scaffolding — included in 0.11.0
 
 ## Later — Optional Cloud-Ready Adapters
 

@@ -22,6 +22,11 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class AuthProvidersRead(BaseModel):
+    oidc_enabled: bool = False
+    oidc_display_name: str = "Single sign-on"
+
+
 class RefreshRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -42,6 +47,7 @@ class UserRead(BaseModel):
     email: Optional[str] = None
     is_superuser: bool
     is_active: bool
+    oidc_managed: bool = False
     created_at: datetime
     updated_at: datetime
 

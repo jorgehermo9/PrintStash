@@ -21,7 +21,14 @@ from app.core.body_limit import RequestBodyLimitMiddleware
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.metrics import app_info as _app_info
-from app.core.metrics import observe_request, printer_status
+from app.core.metrics import (
+    fleet_blocked_jobs,
+    fleet_jobs,
+    fleet_scheduler_last_tick,
+    fleet_scheduler_running,
+    observe_request,
+    printer_status,
+)
 from app.core.metrics import registry as _metrics_registry
 from app.db.session import get_session_factory, init_db
 from app.services.audit import (
@@ -33,6 +40,7 @@ from app.services.backup import restore_in_progress
 from app.services.library_watcher import LibraryWatcher
 from app.services.notifications import run_dispatcher_loop
 from app.services.printer_hub import PrinterHub
+from app.services.printer_jobs import reconcile_stranded_dispatches, run_fleet_scheduler
 from app.services.runtime_config import apply_overlay, ensure_jwt_secret, is_configured
 from app.services.setup_token import current_setup_token
 from app.services.storage_backend import init_backend
@@ -68,6 +76,14 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "reset %d external library scan(s) stranded by restart", reset_count
             )
+    from app.services.jobs import reconcile_interrupted_jobs
+
+    interrupted_jobs = reconcile_interrupted_jobs()
+    if interrupted_jobs:
+        logger.warning("reconciled %d interrupted background job(s)", interrupted_jobs)
+    stranded_dispatches = reconcile_stranded_dispatches()
+    if stranded_dispatches:
+        logger.warning("reconciled %d stranded fleet dispatch(es)", stranded_dispatches)
     # Initialise storage backend (creates dirs or validates S3 bucket).
     _backend = init_backend()
     if not configured:
@@ -90,6 +106,7 @@ async def lifespan(app: FastAPI):
     app.state.gc_task = asyncio.create_task(_gc_loop())
     app.state.external_scan_task = asyncio.create_task(_external_scan_loop())
     app.state.notification_task = asyncio.create_task(run_dispatcher_loop())
+    app.state.fleet_scheduler_task = asyncio.create_task(run_fleet_scheduler())
     await hub.start_all()
     # Real-time folder watching is best-effort: never let it block startup.
     try:
@@ -101,6 +118,7 @@ async def lifespan(app: FastAPI):
     app.state.gc_task.cancel()
     app.state.external_scan_task.cancel()
     app.state.notification_task.cancel()
+    app.state.fleet_scheduler_task.cancel()
     await watcher.stop_all()
     await hub.stop_all()
     from app.services.browser_fetch import close_browser
@@ -315,9 +333,36 @@ def _refresh_printer_gauge() -> None:
         return
     printer_status.clear()
     for provider, prn_status in rows:
-        printer_status.labels(
-            provider=provider.value, status=prn_status.value
-        ).inc()
+        printer_status.labels(provider=provider.value, status=prn_status.value).inc()
+
+
+def _refresh_fleet_gauges() -> None:
+    from sqlalchemy import func
+
+    from app.db.models import PrintJob
+    from app.services.printer_jobs import scheduler_snapshot
+
+    try:
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob.state, func.count(PrintJob.id)).group_by(PrintJob.state)
+            ).all()
+            blocked = session.exec(
+                select(func.count(PrintJob.id)).where(
+                    PrintJob.blocked_reason.is_not(None)  # type: ignore[union-attr]
+                )
+            ).one()
+    except Exception:
+        logger.exception("metrics: failed to refresh fleet gauges")
+        return
+    fleet_jobs.clear()
+    for state, count in rows:
+        fleet_jobs.labels(state=state.value).set(count)
+    fleet_blocked_jobs.set(blocked)
+    snapshot = scheduler_snapshot()
+    fleet_scheduler_running.set(1 if snapshot["running"] else 0)
+    last_tick = snapshot["last_tick_at"]
+    fleet_scheduler_last_tick.set(last_tick.timestamp() if last_tick else 0)
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -333,6 +378,11 @@ def metrics_endpoint(request: Request) -> Response:
         auth = request.headers.get("authorization", "")
         provided = auth.split(" ", 1)[1] if auth.lower().startswith("bearer ") else ""
         if not hmac.compare_digest(provided, token):
-            return Response(status_code=status.HTTP_401_UNAUTHORIZED, content="unauthorized")
+            return Response(
+                status_code=status.HTTP_401_UNAUTHORIZED, content="unauthorized"
+            )
     _refresh_printer_gauge()
-    return Response(content=generate_latest(_metrics_registry), media_type=CONTENT_TYPE_LATEST)
+    _refresh_fleet_gauges()
+    return Response(
+        content=generate_latest(_metrics_registry), media_type=CONTENT_TYPE_LATEST
+    )

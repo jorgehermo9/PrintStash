@@ -15,6 +15,7 @@ _data/
 backend/_data/
 backend/dev.sqlite*
 *.sqlite
+backend/.coverage
 
 # Local-only large sample meshes/gcode for manual mesh/OOM testing (issue #29).
 # Too big to commit; point PRINTSTASH_MESH_CORPUS at them locally instead.

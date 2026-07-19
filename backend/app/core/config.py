@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     # stateless JWT that can't be revoked before it expires; operators who want
     # longer sessions can raise VAULT_REMEMBER_ME_DAYS.
     remember_me_days: int = 2
+    # Generic OpenID Connect login. Disabled by default so local username/password
+    # remains the zero-configuration, local-first path.
+    oidc_enabled: bool = False
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_scopes: str = "openid profile email groups"
+    oidc_username_claim: str = "preferred_username"
+    oidc_groups_claim: str = "groups"
+    oidc_admin_groups: str = "printstash-admins"
+    oidc_display_name: str = "Single sign-on"
+    oidc_redirect_uri: str = ""
+    oidc_allow_insecure_http: bool = False
     # Short-lived token embedded in slicer ("Open in slicer") download URLs so an
     # external slicer process can fetch the file without the user's login session.
     slicer_download_token_expire_minutes: int = 15
@@ -177,7 +190,7 @@ class Settings(BaseSettings):
     backup_s3_secret_key: str = ""
 
     app_name: str = "PrintStash"
-    app_version: str = "0.10.0"
+    app_version: str = "0.11.0"
 
     @property
     def incoming_dir(self) -> Path:

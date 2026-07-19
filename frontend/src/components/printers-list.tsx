@@ -22,6 +22,8 @@ import { Badge } from "@/components/ui/badge";
 import { Modal, ModalShell } from "@/components/ui/modal";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { PageHeader } from "@/components/ui/page-header";
+import { TabBar } from "@/components/ui/tabs";
+import { FleetMaintenancePanel, FleetQueuePanel } from "@/components/fleet-panels";
 import { readPrinterCardImagePreference } from "@/lib/printer-card-display";
 import { printerArtwork } from "@/lib/orca-printer-images";
 import { Plus, Trash2, RefreshCw, ArrowRight, Pencil, Printer as PrinterIcon, Network, Clock3, Search, Check, CircleAlert, Layers3, Play } from "lucide-react";
@@ -60,6 +62,7 @@ export function PrintersPage() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [showCardImages] = useState(readPrinterCardImagePreference);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<"fleet" | "queue" | "maintenance">("fleet");
   const visiblePrinters = useMemo(
     () => printers
       .filter((printer) => selectedGroup === null || (printer.group || "__ungrouped") === selectedGroup)
@@ -143,6 +146,16 @@ export function PrintersPage() {
         }
       />
 
+      <TabBar
+        tabs={[{ key: "fleet", label: "Fleet" }, { key: "queue", label: "Queue" }, { key: "maintenance", label: "Maintenance" }]}
+        active={activeView}
+        onChange={setActiveView}
+        className="border-b border-border"
+        tabClassName="px-4 py-2.5 text-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        activeTabClassName="text-foreground"
+      />
+
+      {activeView === "fleet" && <>
       {error && (
         <div className="animate-panel-in rounded border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           {error}
@@ -315,6 +328,11 @@ export function PrintersPage() {
           ))}
         </div>
       )}
+
+      </>}
+
+      {activeView === "queue" && <FleetQueuePanel printers={printers} />}
+      {activeView === "maintenance" && <FleetMaintenancePanel printers={printers} onPrintersChanged={() => { void printersQuery.refetch(); }} />}
 
       {addOpen && (
         <AddPrinterModal

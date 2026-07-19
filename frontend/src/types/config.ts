@@ -73,6 +73,17 @@ export interface VaultConfigRead {
   auto_mark_known_good: boolean;
   external_libraries_enabled: boolean;
   currency: string;
+  oidc_enabled: boolean;
+  oidc_issuer_url: string;
+  oidc_client_id: string;
+  has_oidc_client_secret: boolean;
+  oidc_scopes: string;
+  oidc_username_claim: string;
+  oidc_groups_claim: string;
+  oidc_admin_groups: string;
+  oidc_display_name: string;
+  oidc_redirect_uri: string;
+  oidc_allow_insecure_http: boolean;
 }
 
 export interface VaultConfigUpdate {
@@ -94,6 +105,17 @@ export interface VaultConfigUpdate {
   auto_mark_known_good?: boolean;
   external_libraries_enabled?: boolean;
   currency?: string;
+  oidc_enabled?: boolean;
+  oidc_issuer_url?: string;
+  oidc_client_id?: string;
+  oidc_client_secret?: string;
+  oidc_scopes?: string;
+  oidc_username_claim?: string;
+  oidc_groups_claim?: string;
+  oidc_admin_groups?: string;
+  oidc_display_name?: string;
+  oidc_redirect_uri?: string;
+  oidc_allow_insecure_http?: boolean;
 }
 
 export interface MakerWorldStatus {
