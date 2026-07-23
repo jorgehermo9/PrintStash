@@ -1,8 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-export type Locale = "en" | "es";
-
 const messages = {
   en: {
     "locale.label": "Language",
@@ -23,6 +21,7 @@ const messages = {
     "auth.local": "Your credentials stay with your self-hosted server.",
     "auth.tagline": "Your prints, your vault",
     "nav.vault": "Vault",
+    "nav.inbox": "Pending",
     "nav.model": "Model",
     "nav.document": "Document",
     "nav.printer": "Printer",
@@ -49,6 +48,7 @@ const messages = {
     "settings.access": "Users & Access",
     "settings.storage": "Storage",
     "settings.imports": "Imports",
+    "settings.maintenance": "Maintenance",
     "settings.libraries": "Shared volumes",
     "settings.notifications": "Notifications",
     "settings.sso": "SSO",
@@ -76,6 +76,7 @@ const messages = {
     "auth.local": "Tus credenciales permanecen en tu servidor autohospedado.",
     "auth.tagline": "Tus impresiones, tu bóveda",
     "nav.vault": "Bóveda",
+    "nav.inbox": "Pendientes",
     "nav.model": "Modelo",
     "nav.document": "Documento",
     "nav.printer": "Impresora",
@@ -102,6 +103,7 @@ const messages = {
     "settings.access": "Usuarios y acceso",
     "settings.storage": "Almacenamiento",
     "settings.imports": "Importaciones",
+    "settings.maintenance": "Mantenimiento",
     "settings.libraries": "Volúmenes compartidos",
     "settings.notifications": "Notificaciones",
     "settings.sso": "SSO",
@@ -112,7 +114,12 @@ const messages = {
   },
 } as const;
 
+/** Add a catalog here to make a locale available throughout the app. */
+export type Locale = keyof typeof messages;
 export type MessageKey = keyof typeof messages.en;
+export type MessageCatalog = Record<MessageKey, string>;
+export const messageCatalogs = messages satisfies Record<Locale, MessageCatalog>;
+export const SUPPORTED_LOCALES = Object.keys(messages) as Locale[];
 const STORAGE_KEY = "printstash.locale";
 
 type I18nValue = {
@@ -127,9 +134,12 @@ function initialLocale(): Locale {
   if (typeof window === "undefined") return "en";
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === "en" || stored === "es") return stored;
+    if (SUPPORTED_LOCALES.includes(stored as Locale)) return stored as Locale;
   } catch { /* Storage can be unavailable in hardened/private contexts. */ }
-  return navigator.language.toLowerCase().startsWith("es") ? "es" : "en";
+  const browserLocale = SUPPORTED_LOCALES.find((candidate) =>
+    navigator.language.toLowerCase().startsWith(candidate),
+  );
+  return browserLocale ?? "en";
 }
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
@@ -144,7 +154,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     locale,
     setLocale: setLocaleState,
     t(key, values) {
-      let message: string = messages[locale][key] ?? messages.en[key];
+      let message: string = messageCatalogs[locale][key] ?? messageCatalogs.en[key];
       for (const [name, replacement] of Object.entries(values ?? {})) {
         message = message.replaceAll(`{${name}}`, replacement);
       }

@@ -77,12 +77,16 @@ _init_test_db()
 
 
 _TRUNCATE_TABLES_ORDER = [
+    "vault_audit_findings",
+    "vault_audit_runs",
+    "inbox_items",
     "background_jobs",
     "model_stars",
     "saved_views",
     "notification_deliveries",
     "notification_channels",
     "printer_files",
+    "printer_permissions",
     "printer_maintenance_logs",
     "printer_maintenance_windows",
     "print_jobs",

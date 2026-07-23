@@ -10,11 +10,13 @@ import { formatGrams } from "@/lib/format";
 import { createTask, updateTask } from "@/lib/task-center";
 import { toast } from "@/lib/toast";
 import { useRequireAuth } from "@/lib/use-require-auth";
+import { useAuth } from "@/lib/auth-context";
 import { FileRead, ModelPrinterFileRead, RoutingStrategy } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Modal } from "@/components/ui/modal";
+import { Localized } from "@/components/ui/localized";
 
 const selectClassName =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
@@ -33,6 +35,7 @@ export function SendToButtons({
   preselectFileId?: number;
 }) {
   const auth = useRequireAuth();
+  const { user } = useAuth();
   const [internalOpen, setInternalOpen] = useState(false);
   const showSend = open ?? internalOpen;
   const setShowSend = onOpenChange ?? setInternalOpen;
@@ -55,6 +58,9 @@ export function SendToButtons({
   const [startPrint, setStartPrint] = useState(false);
   const [deliveryMode, setDeliveryMode] = useState<"send" | "queue">("send");
   const [routingStrategy, setRoutingStrategy] = useState<RoutingStrategy>("least_busy");
+  useEffect(() => {
+    if (user && !user.is_superuser) setRoutingStrategy("manual");
+  }, [user]);
   // Spoolman inventory — only surfaced when the integration is enabled.
   const spoolmanEnabled = useSpoolmanStatus().data?.enabled ?? false;
   const spools = useSpools({ enabled: spoolmanEnabled }).data ?? [];
@@ -76,7 +82,7 @@ export function SendToButtons({
   useEffect(() => {
     setSelectedPrinterIds((current) => {
       const capableIds = printers
-        .filter((printer) => printer.capabilities.can_upload)
+        .filter((printer) => printer.access.can_print && printer.capabilities.can_upload)
         .map((printer) => printer.id);
       if (capableIds.length === 0) return [];
       const kept = current.filter((id) => capableIds.includes(id));
@@ -89,7 +95,7 @@ export function SendToButtons({
     [printers, selectedPrinterIds],
   );
   const availablePrinters = useMemo(
-    () => printers.filter((printer) => printer.capabilities.can_upload),
+    () => printers.filter((printer) => printer.access.can_print && printer.capabilities.can_upload),
     [printers],
   );
   const selectedPrintersCanStart = selectedPrinters.every(
@@ -232,7 +238,7 @@ export function SendToButtons({
   const selectedFileDetails = gcodeFiles.find((file) => file.id === selectedFile);
 
   return (
-    <>
+    <Localized><>
       <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">Printer status</span>
@@ -336,7 +342,7 @@ export function SendToButtons({
             <legend className="mb-2 text-sm font-medium text-foreground">Action</legend>
             <div className="grid grid-cols-2 gap-2">
               <Button type="button" variant={deliveryMode === "send" ? "secondary" : "outline"} onClick={() => setDeliveryMode("send")}>Send now</Button>
-              <Button type="button" variant={deliveryMode === "queue" ? "secondary" : "outline"} onClick={() => { setDeliveryMode("queue"); setStartPrint(false); }}>Add to queue</Button>
+              <Button type="button" variant={deliveryMode === "queue" ? "secondary" : "outline"} onClick={() => { setDeliveryMode("queue"); setStartPrint(false); if (!user?.is_superuser) setRoutingStrategy("manual"); }}>Add to queue</Button>
             </div>
           </fieldset>
 
@@ -344,8 +350,8 @@ export function SendToButtons({
             <label className="block space-y-1.5 text-sm font-medium text-foreground">
               Routing
               <select value={routingStrategy} onChange={(event) => setRoutingStrategy(event.target.value as RoutingStrategy)} className={selectClassName}>
-                <option value="least_busy">Least busy eligible printer</option>
-                <option value="default">Default printer</option>
+                {user?.is_superuser && <option value="least_busy">Least busy eligible printer</option>}
+                {user?.is_superuser && <option value="default">Default printer</option>}
                 <option value="manual">Choose printer</option>
               </select>
             </label>
@@ -355,7 +361,7 @@ export function SendToButtons({
             <legend className="mb-2 text-sm font-medium text-foreground">Printers</legend>
             <div className="grid gap-2 sm:grid-cols-2">
               {printers.map((printer) => {
-                const disabled = !printer.capabilities.can_upload;
+                const disabled = !printer.access.can_print || !printer.capabilities.can_upload;
                 const selected = selectedPrinterIds.includes(printer.id);
                 const offline = printer.status === "offline" || printer.status === "unknown";
                 return (
@@ -474,6 +480,6 @@ export function SendToButtons({
           </Button>
         </div>
       </Modal>
-    </>
+    </></Localized>
   );
 }

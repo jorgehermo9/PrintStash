@@ -8,7 +8,7 @@ Roadmap feedback belongs in
 [the public roadmap discussion](https://github.com/xiao-villamor/PrintStash/discussions/1).
 Issues are better for confirmed bugs or scoped implementation work.
 
-## Current Release: 0.10.0 — Library Workflow Polish
+## Current Release: 0.11.1 — Vault Confidence and Capture
 
 Production hardening is in place. The app is useful for local-first 3D print
 library workflows, installable through Docker Compose (the default compose pulls
@@ -46,6 +46,11 @@ Developed features in the current app:
 - Per-user saved views and favorite/starred Models, with canonical URL-restorable filters
 - Mixed-Artifact comparison with metadata and actual measured print outcomes (success rate, duration, filament, cost)
 - Versioned full-library archive export/import (`printstash-library-v1`) and configured-root folder import
+- Read-only Quick/Full Vault audits with persisted findings, progress, cancellation, and narrow audited repairs (thumbnail/Metadata/recommended-Revision)
+- Backup archive verification and fail-closed backup creation when an owned blob is missing, unreadable, or changes size mid-archive
+- Durable Pending Imports for URL/browser capture: owner-scoped review, retry, Collection/tag assignment, and archive/file selection that survive a restart
+- Structured Artifact, Material, Slicer, printer model, Revision status, print outcome, storage, and upload-date filters with RBAC-scoped facets and Saved Views
+- Per-user, per-printer access roles (view/print/control/admin) enforced across live status, files, fleet, queue, routing, and maintenance
 
 The releases below are intentionally small: each is meant to be a single,
 shippable step rather than a multi-month epic. Versions are indicative, not
@@ -153,7 +158,7 @@ Goal: make the vault better as a daily-use 3D print library.
 - Reprint analytics for success, duration, filament, and cost
 - Versioned full-library archive migration and configured-root folder import
 
-## 0.11 — Fleet and Scheduling (in development on 0.11.0)
+## 0.11 — Fleet and Scheduling (delivered in 0.11.0)
 
 Goal: help small printer farms without turning PrintStash into a full slicer or
 queue manager.
@@ -161,6 +166,19 @@ queue manager.
 - Queue visibility with a provider-normalized job model
 - Optional routing strategies: manual, default printer, least busy
 - Printer maintenance windows, soft-drain mode, and a simple maintenance log
+
+## 0.11.1 — Vault Confidence and Capture (delivered in 0.11.1)
+
+- Read-only Quick/Full Vault audits with persisted safe findings, progress,
+  cancellation, and narrow audited repairs
+- Backup archive verification and fail-closed creation when owned blobs cannot
+  be included
+- Durable Pending Imports for URL/browser capture, review, retry, Collection/tag
+  assignment, and normal ingestion-pipeline persistence
+- Structured Artifact, Metadata, Revision, print-history, storage, and upload-date
+  filters with RBAC-scoped facets, canonical URLs, and Saved Views
+- Per-user, per-printer access roles for view-only status, printing, machine
+  control, and administration across live status, files, fleet, and maintenance
 
 ## Auth and Platform (folded into 0.11.0)
 

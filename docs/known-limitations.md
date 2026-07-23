@@ -95,10 +95,38 @@ manufacturing platform.
 - The app is not a slicer, not a firmware replacement, and not a full queue
   manager.
 
+## Vault Audit And Recovery
+
+- Audits are diagnostic and read-only. Repairs are deliberately limited to
+  regenerating thumbnails, reparsing Metadata from readable Artifacts, and
+  restoring the recommended Revision invariant. Missing primary blobs, hash
+  mismatches, unavailable external roots, and unowned objects require manual
+  recovery and are never deleted automatically.
+- Full audit hashes owned primary blobs and can be expensive on remote/S3
+  storage. Cancellation occurs between objects rather than during one object
+  stream.
+- Backup verification validates archive safety, manifest/database membership,
+  declared member sizes, and manifest compatibility. It does not restore an
+  individual blob or prove that every application-level database invariant is
+  healthy.
+
+## Pending Imports And Facets
+
+- Authenticated source sites may still require a fresh browser session through
+  the existing final import flow. Pending Imports and the browser helper never
+  persist or copy source-site cookies.
+- URL captures are limited to existing Printables, MakerWorld, Thingiverse,
+  direct-file, and safe archive resolvers. The browser helper does no scraping.
+- Facet counts describe Models in the currently filtered, accessible scope.
+  They are not self-excluding counts; selecting a value can therefore narrow
+  values in other groups.
+
 ## Fleet Scheduling
 
-- Fleet scheduling is administrator-managed and limited to Vault-backed
-  plain-text G-code. It does not slice, modify, or validate G-code.
+- Fleet scheduling is limited to Vault-backed plain-text G-code. Users with a
+  printer's `print` role can manually queue work to that printer; automatic
+  default/least-busy routing remains administrator-managed because it can select
+  another printer. PrintStash does not slice, modify, or validate G-code.
 - Automatic dispatch requires a provider that advertises both upload and start
   capabilities. Status/control-only integrations remain visible but are not
   eligible routing targets.
@@ -119,6 +147,11 @@ manufacturing platform.
   exposed through authenticated health details and Prometheus metrics.
 
 ## Auth And Platform
+
+- Printer roles are ordered: `view`, `print`, `control`, and `admin`. Grants are
+  per user and printer; group-wide grants, custom capability sets, time-limited
+  grants, and OIDC group-to-printer mapping are not implemented. API keys use
+  their owning user's current grants.
 
 - OIDC is optional and configured under Settings → SSO or with environment
   variables. Saved client secrets are encrypted at rest. Local login remains

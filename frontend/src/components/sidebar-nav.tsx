@@ -1,25 +1,35 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Link } from "@/lib/navigation";
 import { usePathname } from "@/lib/navigation";
-import { BookOpen, Box, SlidersHorizontal, LogIn, LogOut, Printer, Settings, User } from "lucide-react";
+import { BookOpen, Box, Inbox, SlidersHorizontal, LogIn, LogOut, Printer, Settings, User } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { BrandMark } from "@/components/brand-mark";
+import { listPendingImports } from "@/lib/api";
+import { useI18n, type MessageKey } from "@/lib/i18n";
 
 const mainItems = [
-  { href: "/", label: "Vault", icon: Box },
-  { href: "/printers", label: "Printers", icon: Printer, adminOnly: true },
-  { href: "/profiles", label: "Profiles", icon: SlidersHorizontal },
-  { href: "https://xiao-villamor.github.io/PrintStash/", label: "Wiki", icon: BookOpen, external: true },
+  { href: "/", labelKey: "nav.vault", icon: Box },
+  { href: "/inbox", labelKey: "nav.inbox", icon: Inbox },
+  { href: "/printers", labelKey: "nav.printers", icon: Printer, adminOnly: true },
+  { href: "/profiles", labelKey: "nav.profiles", icon: SlidersHorizontal },
+  { href: "https://xiao-villamor.github.io/PrintStash/", labelKey: "nav.wiki", icon: BookOpen, external: true },
 ];
 
 const bottomItems = [
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", labelKey: "nav.settings", icon: Settings },
 ];
 
 export function SidebarNav() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const { t } = useI18n();
+  const [pendingCount, setPendingCount] = useState(0);
+  useEffect(() => {
+    if (!user) { setPendingCount(0); return; }
+    listPendingImports(false).then((items) => setPendingCount(items.filter((item) => item.state !== "dismissed").length)).catch(() => setPendingCount(0));
+  }, [pathname, user]);
   const visibleMainItems = mainItems.filter((item) => !item.adminOnly || user?.is_superuser);
 
   return (
@@ -54,7 +64,7 @@ export function SidebarNav() {
               <a key={item.href} href={item.href} className={className}>
                 <item.icon className="h-5 w-5" />
                 <span className="font-mono text-xs tracking-wider uppercase">
-                  {item.label}
+                  {t(item.labelKey as MessageKey)}
                 </span>
               </a>
             );
@@ -63,8 +73,9 @@ export function SidebarNav() {
             <Link key={item.href} href={item.href} className={className}>
               <item.icon className="h-5 w-5" />
               <span className="font-mono text-xs tracking-wider uppercase">
-                {item.label}
+                {t(item.labelKey as MessageKey)}
               </span>
+              {item.href === "/inbox" && pendingCount > 0 && <span className="ml-auto rounded-full bg-accent px-2 py-0.5 font-mono text-3xs text-accent-foreground">{pendingCount}</span>}
             </Link>
           );
         })}
@@ -99,7 +110,7 @@ export function SidebarNav() {
             }`}
           >
             <LogIn className="h-5 w-5" />
-            <span className="font-mono text-xs tracking-wider uppercase">Sign in</span>
+            <span className="font-mono text-xs tracking-wider uppercase">{t("nav.signIn")}</span>
           </Link>
         )}
 
@@ -116,7 +127,7 @@ export function SidebarNav() {
               }`}
             >
               <item.icon className="h-5 w-5" />
-              <span className="font-mono text-xs tracking-wider uppercase">{item.label}</span>
+              <span className="font-mono text-xs tracking-wider uppercase">{t(item.labelKey as MessageKey)}</span>
             </Link>
           );
         })}

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.11.1
+
+**This patch-version release is an explicit exception to normal 0.x patch policy: it adds features and append-only database migrations. Back up before upgrading.**
+
+### Added
+
+- **Vault Maintenance.** Superusers can run persisted Quick or Full audits, inspect severity-grouped findings, cancel hashing between objects, repair eligible thumbnail/Metadata/Revision findings, and verify backup archive structure and manifest membership.
+- **Pending Imports and Quick Capture.** URL captures persist across restarts with owner-scoped review, retry, Collection/tag assignment, archive/file selection, and a minimal Manifest V3 browser helper that sends only current page URL/title.
+- **Structured Model filters.** Artifact type, material, slicer, printer model, Revision status, print history/outcome, storage location, and upload date extend canonical URLs, facet counts, and Saved Views.
+- **Per-printer access control.** Superusers can grant view, print, control, or admin roles independently for each printer. Printer, fleet, live WebSocket, remote-file, queue, routing, and maintenance APIs enforce the effective role; connection details and unavailable actions stay hidden in the UI.
+
+### Changed
+
+- Backup creation now fails if a database-owned blob is unreadable, missing, changes size, or vanishes while streaming instead of silently producing a smaller archive.
+- Completed Spanish translations across the Model detail print-settings panel, card-metric and metadata-field pickers, and remaining Settings surfaces left over from 0.11.0's localization foundation.
+
+### Fixed
+
+- Clearing all Structured Model filters at once now removes every active filter and date range from the URL instead of leaving the last-applied one in place.
+- The mobile bottom navigation no longer pushes "Profiles" into the overflow "More" sheet for administrators; it stays one tap away alongside Vault, Pending, and Printers.
+
+### Security
+
+- Pending Import URLs strip secret-shaped query parameters and reject embedded URL credentials; persisted manifests and API responses omit staging paths, cookies, and resolved download credentials.
+- Vault-audit and repair endpoints are superuser-only, Pending Imports are owner-scoped, and facet counts use the same Collection RBAC scope as Model browsing.
+- Printer grants are checked server-side on every REST and WebSocket boundary. Printing also requires existing Collection edit access to the source Model, and API keys inherit their owning user's printer grants.
+
 ## 0.11.0
 
 ### Added
