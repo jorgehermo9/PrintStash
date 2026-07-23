@@ -30,6 +30,16 @@ from app.services.printer_provider import ProviderError, get_provider_client
 from tests.e2e.fakes.mock_prusalink import create_app
 from tests.e2e.fakes.server import start_server
 
+
+@pytest.fixture(autouse=True)
+def _use_threaded_db(threaded_hub_db: None) -> None:
+    """Runs the real PrinterHub against a genuinely concurrent-safe test DB.
+
+    See ``threaded_hub_db`` in tests/conftest.py — this file drives real
+    asyncio.to_thread DB writes racing the test's own main-thread reads.
+    """
+
+
 REMOTE = "demo.gcode"
 API_KEY = "prusa-test-key"
 USERNAME = "maker"

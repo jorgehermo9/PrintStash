@@ -10,7 +10,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import event
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.engine import Engine
+from sqlalchemy.pool import NullPool, StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 # Settings() (app.core.config) reads VAULT_* env vars once at import time, so
@@ -38,6 +39,7 @@ from app.core.config import _overlay, settings  # noqa: E402
 from app.db.session import (  # noqa: E402
     SQLiteSessionFactory,
     _set_sqlite_pragmas,
+    get_session_factory,
     override_session_factory,
 )
 from app.services.printer_hub import PrinterHub  # noqa: E402
@@ -66,14 +68,43 @@ event.listen(_test_engine, "connect", _set_sqlite_pragmas)
 
 _test_factory = SQLiteSessionFactory(_test_engine)
 
+# A handful of e2e tests (test_prusalink_integration.py, test_octoprint_
+# integration.py, test_mock_printer_integration.py) run the *real*
+# PrinterHub polling loop against a real mock HTTP server: it does its DB
+# writes via asyncio.to_thread worker threads, genuinely concurrently with
+# the test's own main-thread session reads. StaticPool hands every session
+# the *same* one DBAPI connection (the only way sessions can share data on a
+# bare ``:memory:`` DB), but SQLite allows only one transaction per
+# connection — two truly concurrent threads fighting over it can interleave/
+# abort each other's transactions, which surfaced as those tests occasionally
+# reading a stale, pre-terminal job state after the terminal write had
+# already committed. ``cache=shared`` lets every session open its *own* real
+# connection (safe, standard concurrent SQLite) while still sharing one
+# in-memory database; those three files opt into it (see their local
+# ``_use_threaded_db`` autouse fixture) instead of it being the suite-wide
+# default, since NullPool's real per-checkout connections add contention
+# under the full suite's much higher, non-threaded concurrency.
+THREADED_DB_URL = "sqlite:///file:printstash_threaded_test?mode=memory&cache=shared&uri=true"
+_threaded_engine = create_engine(
+    THREADED_DB_URL,
+    connect_args={"check_same_thread": False, "uri": True},
+    poolclass=NullPool,
+)
+# Keeps the shared-cache DB alive: SQLite drops it once its last connection
+# closes, and NullPool never holds one open between checkouts.
+_threaded_keepalive_conn = _threaded_engine.raw_connection()
+event.listen(_threaded_engine, "connect", _set_sqlite_pragmas)
+_threaded_factory = SQLiteSessionFactory(_threaded_engine)
 
-def _init_test_db() -> None:
+
+def _init_test_db(engine: Engine) -> None:
     import app.db.models  # noqa: F401 — register all tables
 
-    SQLModel.metadata.create_all(_test_engine)
+    SQLModel.metadata.create_all(engine)
 
 
-_init_test_db()
+_init_test_db(_test_engine)
+_init_test_db(_threaded_engine)
 
 
 _TRUNCATE_TABLES_ORDER = [
@@ -110,7 +141,7 @@ _TRUNCATE_TABLES_ORDER = [
 ]
 
 
-def _truncate_all() -> None:
+def _truncate_all(engine: Engine = _test_engine) -> None:
     """Truncate all tables between tests.
 
     FK enforcement is off for the wipe: this is a teardown, not a delete path,
@@ -118,7 +149,7 @@ def _truncate_all() -> None:
     files, which go first). Leaving it on made the DELETEs fail silently and
     leak rows into the next test.
     """
-    with _test_engine.begin() as conn:
+    with engine.begin() as conn:
         conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
         for table in _TRUNCATE_TABLES_ORDER:
             try:
@@ -127,10 +158,10 @@ def _truncate_all() -> None:
                 pass
         conn.exec_driver_sql("PRAGMA foreign_keys=ON")
     # Re-create sentinel rows.
-    _ensure_test_sentinels()
+    _ensure_test_sentinels(engine)
 
 
-def _ensure_test_sentinels() -> None:
+def _ensure_test_sentinels(engine: Engine = _test_engine) -> None:
     """Create sentinel rows needed for external print job tests."""
     from app.db.models import (
         SENTINEL_FILE_HASH,
@@ -140,7 +171,7 @@ def _ensure_test_sentinels() -> None:
         Model,
     )
 
-    with Session(_test_engine) as session:
+    with Session(engine) as session:
         sm = session.exec(
             select(Model).where(Model.hash == SENTINEL_MODEL_HASH)
         ).first()
@@ -208,8 +239,12 @@ def _isolate_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def db_session() -> Iterator[Session]:
-    """Yield a fresh session with rollback after each test."""
-    session = Session(_test_engine)
+    """Yield a fresh session with rollback after each test.
+
+    Goes through the active session factory (not a hardcoded engine) so it
+    tracks whatever ``threaded_hub_db`` or similar has swapped in.
+    """
+    session = get_session_factory().session()
     try:
         yield session
     finally:
@@ -221,6 +256,25 @@ def db_session() -> Iterator[Session]:
 def db_factory() -> None:
     """Override the session factory ContextVar (alias — set by _patch_engine autouse)."""
     override_session_factory(_test_factory)
+
+
+@pytest.fixture
+def threaded_hub_db() -> Iterator[None]:
+    """Switch the active DB to the shared-cache engine for real cross-thread access.
+
+    For the e2e tests that run PrinterHub's actual polling loop (genuine
+    asyncio.to_thread DB writes racing the test's own main-thread reads) —
+    see the module docstring above ``_threaded_engine``. Runs *after*
+    ``_patch_engine`` (both function-scoped autouse-before-explicit, so
+    ``_patch_engine`` wins the ordering) and restores the default factory on
+    teardown so later tests are unaffected.
+    """
+    _truncate_all(_threaded_engine)
+    override_session_factory(_threaded_factory)
+    try:
+        yield
+    finally:
+        override_session_factory(_test_factory)
 
 
 @pytest.fixture
