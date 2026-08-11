@@ -1474,7 +1474,7 @@ wheels = [
 
 [[package]]
 name = "printstash"
-version = "0.11.2"
+version = "0.11.3"
 source = { virtual = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1544,7 +1544,7 @@ requires-dist = [
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
-    { name = "pycentauri", specifier = "==0.6.5" },
+    { name = "pycentauri", specifier = "==0.9.1" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pyjwt", specifier = ">=2.10" },
@@ -1637,7 +1637,7 @@ wheels = [
 
 [[package]]
 name = "pycentauri"
-version = "0.6.5"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1647,9 +1647,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/59/8a/7e2daeb5d8e18d0b384c3ab72dd6cda2deff902d0e0d2091f4801c8a6d82/pycentauri-0.6.5.tar.gz", hash = "sha256:fbc1d72030ca8696e008428015ace844dbd2f05f52203881a52cd34f9163ece8", size = 90023, upload-time = "2026-07-07T04:58:59.605Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/05/da/ed25970b19d8f9b26baa2a896cce13f07deb56b3f26ae85ebcec03f18449/pycentauri-0.9.1.tar.gz", hash = "sha256:688c9a49870ae72ab8d8ad5a5d5b960e2ff4414ff2a17e932d463e157351600a", size = 111998, upload-time = "2026-08-08T02:18:38.296Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/09/c5/d3f70768ef8aff12e80859593f0e3431327b7f3a6ac639ac380540da2fba/pycentauri-0.6.5-py3-none-any.whl", hash = "sha256:748c3ca960b81612172c0f63329352cdbd91148b7843c92282376f3aa2c0ad26", size = 77387, upload-time = "2026-07-07T04:58:58.238Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/7e/5b60b7f7a03465abf63f238efa6a4512e6f74e2f0906e0961eec9db42209/pycentauri-0.9.1-py3-none-any.whl", hash = "sha256:586a008c47114d50a829b97e58cad144de3a375bd630e54ab2f53b4118d58732", size = 92678, upload-time = "2026-08-08T02:18:36.689Z" },
 ]
 
 [[package]]

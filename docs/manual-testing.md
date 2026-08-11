@@ -65,11 +65,14 @@ only after you have seen the result yourself in the browser.
 - [ ] (If available) add a Neptune 4-family printer with the Elegoo preset;
       verify it persists as `elegoo_neptune4` and passes the Moonraker checks.
 - [ ] (If available) add an original Centauri Carbon; verify SDCP status,
-      temperatures, supervised start-existing-file, pause/resume/cancel, and
-      reconnect while paused using its saved mainboard ID.
+      temperatures, chunked upload, supervised start-existing-file,
+      pause/resume/cancel, and reconnect while paused using its saved
+      mainboard ID.
 - [ ] (If available) enable LAN Only on a Centauri Carbon 2, add its IP/access
-      code, then verify MQTT status and supervised controls. Confirm upload and
-      file inventory remain unavailable in UI and API capabilities.
+      code, then verify MQTT status, supervised controls, and upload (the CC2
+      upload path shares code with CC1's but is not yet confirmed against real
+      CC2 hardware — see `docs/provider-support.md`). Confirm file inventory
+      remains unavailable in UI and API capabilities.
 
 ## 4. Statistics (admin)
 
@@ -102,6 +105,10 @@ only after you have seen the result yourself in the browser.
 - [ ] After a Moonraker-measured completion, the spool decrements once.
 - [ ] Native-hook detection warning shows and write-back defaults off when the
       Moonraker active-spool hook is present.
+- [ ] Select a spool on send whose remaining weight is below the revision's
+      filament weight; a non-blocking warning shows and Send stays enabled.
+      Selecting an untracked spool (no `remaining_weight`) or a revision with
+      no parsed filament weight also warns instead of assuming it fits.
 
 ## 8. Public Share Links
 

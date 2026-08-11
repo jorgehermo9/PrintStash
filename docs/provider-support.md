@@ -103,17 +103,35 @@ support is documented separately below.
 Support level: beta.
 
 - Original Centauri Carbon: local SDCP v3 over WebSocket port 3030; no
-  authentication. Saving the mainboard ID is recommended because some firmware
-  states do not announce it while paused or errored.
+  authentication. Saving the mainboard ID is needed for reliable command paths:
+  firmware announcements become intermittent while idle and may be absent while
+  idle, paused, or errored. HTTP upload itself does not use the ID.
 - Centauri Carbon 2: authenticated local MQTT on port 1883. Enable **LAN Only**
   in printer network settings and enter the access code shown by the printer.
-- Both models: live status, temperatures, progress, start of a file already on
-  printer storage, pause, resume, and cancel.
+- Both models: live status, temperatures, progress, upload, start of a file
+  already on printer storage, pause, resume, and cancel.
+- Upload runs over plain HTTP (CC1: chunked multipart POST, 1 MiB chunks; CC2:
+  chunked PUT with `Content-Range`), independent of the SDCP/MQTT control
+  channel used for status and print control.
 
-Upload, file inventory/deletion, raw G-code, and measured consumption are not
-advertised. Original Carbon file-list probes can terminate its printer daemon;
-Carbon 2's documented file-list request does not answer on validated firmware.
-PrintStash therefore never probes those operations.
+File inventory/deletion, raw G-code, print-history import, and measured
+consumption are not advertised. Original Carbon file-list probes can terminate
+its printer daemon when sent with an empty payload; Carbon 2's documented
+file-list request does not answer on validated firmware. PrintStash therefore
+never probes those operations.
+
+Upload is advertised for both models, but only CC1's path has any real-world
+confirmation. A community report (PR #62) first exercised `pycentauri` 0.9.1's
+`upload_cc1()` and control-enabled connection directly, then ran PrintStash
+0.11.3 from source in an isolated instance against the same physical CC1. Live
+status/model detection and an upload-only Vault send completed through
+PrintStash's service layer, credential retrieval, capability gate, and ingest
+to send path; an independent SDCP listing confirmed the file on printer
+storage and the printer remained idle. Start, pause/resume/cancel, and
+reconnect-while-paused were not exercised because that printer could not start
+a job due to a separate hardware filament-runout fault, so this is still a
+partial hardware smoke rather than a complete Validation Log entry. CC2's
+upload path (`upload_cc2`, PUT with `Content-Range`) has no real-hardware report.
 
 ## Hardware Validation Log
 

@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from sqlalchemy import Boolean, Column, Integer, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Index, Integer, Text, UniqueConstraint, text
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -261,6 +261,20 @@ class File(SQLModel, table=True):
     """Physical artifact stored on disk; many-to-one with Model."""
 
     __tablename__ = "files"
+    __table_args__ = (
+        Index("uq_files_model_version", "model_id", "version", unique=True),
+        Index(
+            "uq_files_live_recommended_gcode",
+            "model_id",
+            unique=True,
+            sqlite_where=text(
+                "file_type = 'GCODE' AND is_recommended = 1 AND deleted_at IS NULL"
+            ),
+            postgresql_where=text(
+                "file_type = 'GCODE' AND is_recommended IS TRUE AND deleted_at IS NULL"
+            ),
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     model_id: int = Field(foreign_key="models.id", index=True)
@@ -416,6 +430,13 @@ class Model(SQLModel, table=True):
     name: str = Field(index=True, max_length=255)
     slug: str = Field(index=True, unique=True, max_length=255)
     hash: str = Field(index=True, unique=True, max_length=64)
+    # Allocated atomically before an Artifact is persisted. Keeping the counter
+    # on the owning Model turns version selection into a row-level write instead
+    # of the racy ``MAX(files.version) + 1`` read.
+    next_file_version: int = Field(
+        default=1,
+        sa_column=Column(Integer, nullable=False, server_default="1"),
+    )
 
     collection_id: Optional[int] = Field(
         default=None, foreign_key="collections.id", index=True
@@ -737,10 +758,13 @@ class SystemConfig(SQLModel, table=True):
         default=None, sa_column=Column(EncryptedText(), nullable=True)
     )
     # Whether PrintStash writes consumption back to Spoolman on measured-print
-    # completion. On by default; the write path skips at runtime when Moonraker's
-    # native Spoolman hook is decrementing the active spool (see
-    # spoolman_write_force) so a print is never counted twice.
-    spoolman_write_enabled: bool = Field(default=True)
+    # completion. Off by default: enabling Spoolman only turns on write-back for
+    # providers that report measured consumption (currently Moonraker); leaving
+    # it off by default avoids implying write-back for providers that can never
+    # report it. The write path also skips at runtime when Moonraker's native
+    # Spoolman hook is decrementing the active spool (see spoolman_write_force)
+    # so a print is never counted twice.
+    spoolman_write_enabled: bool = Field(default=False)
     # Override the native-hook double-count guard: when True, PrintStash writes
     # consumption back even if Spoolman reports an active spool (use only after
     # disabling Moonraker's own Spoolman decrement). Off by default so the guard
