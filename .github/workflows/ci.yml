@@ -48,6 +48,17 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --extra dev --frozen
 
+      - name: Verify optional async driver is absent from core
+        run: |
+          if uv export --no-dev --frozen | grep -q aiosqlite; then
+            echo "aiosqlite leaked into the core dependency set"
+            exit 1
+          fi
+          if grep -Eq '^name = "(asyncpg|psycopg2-binary)"' uv.lock; then
+            echo "a retired PostgreSQL driver remains in uv.lock"
+            exit 1
+          fi
+
       - name: Lint backend
         run: uv run ruff check app/ tests/
 
@@ -87,6 +98,32 @@ jobs:
 
       - name: Run backend compatibility suite
         run: uv run pytest tests -q
+
+  sqlite-async:
+    name: SQLite async extra
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install backend with SQLite async capability
+        run: uv sync --extra dev --extra async-db --frozen
+
+      - name: Test optional SQLite async contracts
+        run: uv run pytest tests/test_db_session.py -v -k "async or capability"
 
   postgres:
     name: PostgreSQL contracts
