@@ -5,6 +5,7 @@ import { useI18n, useOptionalI18n, type Locale } from "@/lib/i18n";
 
 const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Repair thumbnail", "Reparar miniatura"],
+  ["The backend will create these directories and probe them for writability before completing setup.", "El backend creará estos directorios y comprobará que se pueda escribir en ellos antes de completar la configuración."],
   ["Vault configuration and display preferences", "Configuración de la bóveda y preferencias de visualización"],
   ["Portable archive with models, metadata, print history, and original artifacts", "Archivo portátil con modelos, metadatos, historial de impresión y artefactos originales"],
   ["Export a versioned archive for migration to another PrintStash installation. Accounts, credentials, settings, and trash are excluded.", "Exporta un archivo versionado para migrar a otra instalación de PrintStash. Se excluyen cuentas, credenciales, ajustes y papelera."],
