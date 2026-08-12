@@ -813,8 +813,12 @@ def test_check_external_stat_raises_marks_unavailable(
 
     from pathlib import Path as _Path
 
-    def boom_stat(self):
-        raise OSError("permission denied")
+    original_stat = _Path.stat
+
+    def boom_stat(self, *args, **kwargs):
+        if self == linked:
+            raise OSError("permission denied")
+        return original_stat(self, *args, **kwargs)
 
     monkeypatch.setattr(_Path, "stat", boom_stat)
 
