@@ -115,6 +115,26 @@ describe("import reconnect", () => {
     tc = await import("@/lib/task-center");
     expect(tc.listTasks()[0]).toMatchObject({ jobId: "server-job-1", status: "pending" });
   });
+
+  it("does not let terminal history evict browser-local upload tasks", async () => {
+    const localTitles = ["Upload part-0.stl", "Upload part-1.stl", "Upload part-2.stl"];
+    localTitles.forEach((title) => tc.createTask({ title }));
+    listIngestJobs.mockResolvedValue(
+      Array.from({ length: 20 }, (_, index) => ({
+        job_id: `historical-job-${index}`,
+        state: "completed",
+        model_id: index + 1,
+        file_id: index + 1,
+        error: null,
+        started_at: null,
+        finished_at: "2026-06-14T11:00:00Z",
+      })),
+    );
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks().map((task) => task.title).sort()).toEqual(localTitles.sort());
+  });
 });
 
 describe("clearCompletedTasks", () => {
@@ -218,6 +238,7 @@ describe("terminal import contract", () => {
   it("emits one completion event per job id and never regresses terminal state", async () => {
     const completed = vi.fn();
     const unsubscribe = tc.subscribeImportJobCompletions(completed);
+    tc.trackImportJob("terminal-job", "Import archive");
     listIngestJobs.mockResolvedValue([
       {
         job_id: "terminal-job",

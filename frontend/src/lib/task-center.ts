@@ -252,6 +252,12 @@ function applyJob(job: IngestJobStatus): void {
   const existing = tasks.find(
     (task) => task.jobId === job.job_id || task.jobIds?.includes(job.job_id),
   );
+  // The reconnect endpoint includes a bounded terminal history so a locally
+  // tracked job can still observe completion after a reload. Do not turn that
+  // history into new Task Center rows: repeated syncs could otherwise evict
+  // freshly queued browser-local uploads before they receive their job IDs.
+  // Unknown active jobs are still discovered below and become reconnectable.
+  if (!existing && isTerminal(job)) return;
   if (existing?.status === "completed" || existing?.status === "failed") {
     if (isTerminal(job)) publishTerminal(job);
     return;
