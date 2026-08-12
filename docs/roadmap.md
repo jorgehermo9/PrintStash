@@ -8,7 +8,7 @@ Roadmap feedback belongs in
 [the public roadmap discussion](https://github.com/xiao-villamor/PrintStash/discussions/1).
 Issues are better for confirmed bugs or scoped implementation work.
 
-## Current Release: 0.11.1 — Vault Confidence and Capture
+## Current Release: 0.11.4 — Large-Library and Data-Safety Hardening
 
 Production hardening is in place. The app is useful for local-first 3D print
 library workflows, installable through Docker Compose (the default compose pulls
@@ -51,6 +51,13 @@ Developed features in the current app:
 - Durable Pending Imports for URL/browser capture: owner-scoped review, retry, Collection/tag assignment, and archive/file selection that survive a restart
 - Structured Artifact, Material, Slicer, printer model, Revision status, print outcome, storage, and upload-date filters with RBAC-scoped facets and Saved Views
 - Per-user, per-printer access roles (view/print/control/admin) enforced across live status, files, fleet, queue, routing, and maintenance
+- Globally sorted cursor browsing for large libraries, including SQL-backed print metrics and a lightweight desktop outliner
+- Bounded, hash-verified portable archive export/import with matching entry and uncompressed-size limits
+- Transactionally consistent SQLite backup/restore, explicit PostgreSQL backup capabilities, and structural orphan-schema validation
+- Elegoo Centauri Carbon and Carbon 2 Vault upload, with capability limits and hardware-validation status kept explicit
+- Durable session invalidation, atomic refresh-token rotation, final-superuser protection, and atomic first-run setup
+- One supported API process per vault, enforced at startup and reported through detailed health
+- SeaweedFS as the bundled local S3 service, with existing MinIO volumes retained under a legacy migration profile
 
 The releases below are intentionally small: each is meant to be a single,
 shippable step rather than a multi-month epic. Versions are indicative, not
@@ -180,6 +187,28 @@ queue manager.
   filters with RBAC-scoped facets, canonical URLs, and Saved Views
 - Per-user, per-printer access roles for view-only status, printing, machine
   control, and administration across live status, files, fleet, and maintenance
+
+## 0.11.2 — Theme Toggle Fix (delivered in 0.11.2)
+
+- The theme toggle uses the theme already applied to the page, so the first
+  click switches reliably.
+
+## 0.11.3 — Printer Upload and Backup Safety (delivered in 0.11.3)
+
+- Elegoo Centauri Carbon and Carbon 2 upload over their local HTTP transports
+- Spool coverage warnings and clearer Spoolman location data
+- Transactionally consistent SQLite backup and staged rollback-safe restore
+- Atomic Revision numbering and stricter orphan-database adoption
+
+## 0.11.4 — Large-Library and Data-Safety Hardening (delivered in 0.11.4)
+
+- Global cursor pagination and SQL-backed metric sorts across complete filtered libraries
+- Bounded portable archive work with matching export/import validation limits
+- Lower-query facets, vault totals, fleet dispatch, and background-job recovery
+- Stronger session invalidation, administrator invariants, deletion cleanup, and setup atomicity
+- One enforced API process per vault with topology health reporting
+- Real PostgreSQL contract tests and explicit SQLite-only built-in backup capability
+- SeaweedFS as the bundled local S3 service, with a legacy MinIO migration profile
 
 ## Auth and Platform (folded into 0.11.0)
 

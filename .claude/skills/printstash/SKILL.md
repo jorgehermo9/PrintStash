@@ -12,20 +12,10 @@ Redis/queues/cloud. `AGENTS.md` (layout, commands, hard rules) is binding.
 ## Where we are
 
 <!-- Update this block when a release ships. -->
-Latest shipped: v0.11.3 (Centauri Carbon upload beta, spool safeguards,
-ingestion fixes, and data-integrity hardening), merged to `main` and tagged.
-Active release work: `0.11.4`, on the existing version branch and consolidated
-PR. It combines the large-library performance pass with every backend-audit
-finding marked **Implementar ahora** or **Planificar**, by explicit release
-direction. Read `reports/17-backend-audit-0.11.4-implementation-plan.md` for
-the immediate findings and
-`reports/18-backend-audit-planned-findings-0.11.4.md` for the planned findings;
-read
-`reports/16-large-library-performance-implementation-plan.md` for the scale
-work already on the branch. Keep each fix in a traceable commit, obey the
-plans' internal gates, and run the real PostgreSQL and incremental Pyright
-gates introduced by the planned-finding pass. After 0.11.4 ships, resume 0.12
-planning from `docs/roadmap.md`.
+Latest shipped: v0.11.4 (large-library performance, archive and deletion
+safety, session and administrator hardening, enforced single-process topology,
+PostgreSQL contract coverage, and SeaweedFS for bundled local S3), merged to
+`main` and tagged. Next: resume 0.12 planning from `docs/roadmap.md`.
 
 Private plans live in `reports/`. They are local-only: never commit, publish,
 or quote them. Older long-range plans may not exist in every checkout; when
