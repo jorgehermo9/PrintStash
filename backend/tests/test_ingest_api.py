@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import struct
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -130,6 +132,34 @@ def _large_cube_stl(min_bytes: int = 1_200_000) -> bytes:
     body = b"\n".join(lines[1:-1]) + b"\n"
     repeat_count = min_bytes // len(body) + 1
     return b"solid large-cube\n" + body * repeat_count + b"endsolid large-cube\n"
+
+
+def _over_cap_binary_stl(n_triangles: int = 1_001) -> bytes:
+    output = io.BytesIO()
+    output.write(b"issue-67".ljust(80, b"\x00"))
+    output.write(struct.pack("<I", n_triangles))
+    record = struct.Struct("<12fH")
+    for index in range(n_triangles):
+        x = float(index % 100)
+        y = float((index // 100) % 100)
+        output.write(
+            record.pack(
+                0,
+                0,
+                1,
+                x,
+                y,
+                0,
+                x + 0.8,
+                y,
+                0,
+                x,
+                y + 0.8,
+                0,
+                0,
+            )
+        )
+    return output.getvalue()
 
 
 def _configure_storage(tmp_path: Path) -> None:
@@ -409,6 +439,41 @@ def test_ingest_model_accepts_payload_over_nginx_default_limit(
         select(Metadata).where(Metadata.file_id == file_row.id)
     ).one()
     assert metadata.bbox_x_mm == 1.0
+
+
+def test_issue_67_over_cap_stl_persists_authenticated_webp_fallback(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+
+    payload = _completed_job(
+        client,
+        client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={
+                "file": (
+                    "issue-67-over-limit.stl",
+                    _over_cap_binary_stl(),
+                    "application/sla",
+                )
+            },
+            data={"model_name": "Issue 67 Fallback"},
+        ),
+    )
+
+    assert payload["completion"] == "complete"
+    assert payload["thumbnail_status"] == "fallback_generated"
+    thumbnail = client.get(
+        f"/api/v1/files/{payload['file_id']}/thumbnail", headers=auth_headers
+    )
+    assert thumbnail.status_code == 200
+    assert thumbnail.headers["content-type"] == "image/webp"
+    assert thumbnail.content.startswith(WEBP_MAGIC)
 
 
 def test_reuploading_deleted_model_restores_it(

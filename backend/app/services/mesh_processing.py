@@ -23,11 +23,16 @@ from typing import Callable, Dict, Optional, Tuple
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import mesh_render
+from app.services import mesh_render, stl_fallback
 
 logger = get_logger(__name__)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class FallbackThumbnail(bytes):
+    """PNG bytes produced by the bounded STL fallback."""
+
 
 # Resolved once: the glibc handle used by _reclaim_memory, or False on a libc
 # without malloc_trim (musl/Alpine, non-Linux). None means "not looked up yet".
@@ -487,6 +492,27 @@ def analyze_mesh(
             # source — and for a large 3MF it lets us avoid trimesh's costly XML
             # parse entirely — so that path is gated on the large-3MF flag.
             thumb = extract_embedded_3mf_thumbnail(path)
+        if thumb is None and path.suffix.lower() == ".stl":
+            fallback = stl_fallback.render_stl_thumbnail(
+                path, width=width, height=height
+            )
+            if fallback is not None:
+                thumb = FallbackThumbnail(fallback.png)
+                if geometry["triangle_count"] is None:
+                    geometry.update(
+                        {
+                            "bbox_x_mm": round(
+                                fallback.bounds_max[0] - fallback.bounds_min[0], 2
+                            ),
+                            "bbox_y_mm": round(
+                                fallback.bounds_max[1] - fallback.bounds_min[1], 2
+                            ),
+                            "bbox_z_mm": round(
+                                fallback.bounds_max[2] - fallback.bounds_min[2], 2
+                            ),
+                            "triangle_count": fallback.triangle_count,
+                        }
+                    )
         if mesh is not None:
             # Free the mesh (and its NumPy arrays) before returning so a library
             # scan reclaims the memory between files instead of letting RSS climb.
@@ -533,7 +559,15 @@ def render_thumbnail(
                 if thumb is not None:
                     return thumb
             if not over_cap or settings.use_embedded_3mf_preview_for_large_files:
-                return extract_embedded_3mf_thumbnail(path)
+                embedded = extract_embedded_3mf_thumbnail(path)
+                if embedded is not None:
+                    return embedded
+            if path.suffix.lower() == ".stl":
+                fallback = stl_fallback.render_stl_thumbnail(
+                    path, width=width, height=height
+                )
+                if fallback is not None:
+                    return FallbackThumbnail(fallback.png)
             return None
         finally:
             if mesh is not None:

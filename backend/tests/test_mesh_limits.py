@@ -43,6 +43,35 @@ def _write_binary_stl(path: Path, n_triangles: int) -> None:
         fh.write(b"\x00" * (50 * n_triangles))  # 50 bytes per facet
 
 
+def _write_renderable_binary_stl(path: Path, n_triangles: int) -> None:
+    """Valid non-degenerate facets spread across the model bounds."""
+    record = struct.Struct("<12fH")
+    with path.open("wb") as fh:
+        fh.write(b"fallback-regression".ljust(80, b"\x00"))
+        fh.write(struct.pack("<I", n_triangles))
+        for index in range(n_triangles):
+            x = float(index % 100)
+            y = float((index // 100) % 100)
+            z = float(index % 7) * 0.1
+            fh.write(
+                record.pack(
+                    0.0,
+                    0.0,
+                    1.0,
+                    x,
+                    y,
+                    z,
+                    x + 0.8,
+                    y,
+                    z,
+                    x,
+                    y + 0.8,
+                    z,
+                    0,
+                )
+            )
+
+
 def _fake_mesh(num_faces: int):
     return SimpleNamespace(
         vertices=np.zeros((3, 3), dtype=np.float64),
@@ -82,6 +111,43 @@ def test_over_cap_mesh_is_never_loaded(tmp_path: Path, monkeypatch) -> None:
     # Indexed, but with no geometry/thumbnail — and crucially, no load attempt.
     assert geometry["triangle_count"] is None
     assert thumb is None
+
+
+def test_over_cap_valid_stl_uses_streaming_thumbnail_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+    path = tmp_path / "issue-67-over-limit.stl"
+    _write_renderable_binary_stl(path, 1_001)
+    monkeypatch.setattr(
+        mesh_processing,
+        "_load_mesh",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("fallback must not load through trimesh")
+        ),
+    )
+
+    geometry, thumb = mesh_processing.analyze_mesh(path)
+
+    assert isinstance(thumb, mesh_processing.FallbackThumbnail)
+    assert thumb.startswith(mesh_processing._PNG_MAGIC)
+    assert geometry["triangle_count"] == 1_001
+    assert geometry["bbox_x_mm"] == 99.8
+    assert geometry["bbox_y_mm"] == 10.8
+
+
+def test_stl_fallback_uniformly_caps_sample_to_100k(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "sampled.stl"
+    _write_renderable_binary_stl(path, 101)
+    result = stl_fallback.render_stl_thumbnail(path, max_triangles=10)
+
+    assert result is not None
+    assert result.triangle_count == 101
+    assert result.sampled_triangles == 10
 
 
 def test_over_cap_3mf_still_gets_embedded_preview(tmp_path: Path, monkeypatch) -> None:

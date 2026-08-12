@@ -32,6 +32,7 @@ from app.db.session import SessionFactory
 from app.services import gcode_parser, rbac, storage, taxonomy, thumbnail
 from app.services.hashing import sha256_file
 from app.services.jobs import registry
+from app.services.mesh_processing import FallbackThumbnail
 from app.services.profile_detection import upsert_detected_profiles
 from app.services.storage_backend import get_backend
 
@@ -548,7 +549,9 @@ def run_ingestion_pipeline(
         report("persisting")
         durable_ids: tuple[int, int] | None = None
         thumbnail_status = (
-            "generated"
+            "fallback_generated"
+            if isinstance(thumb_bytes, FallbackThumbnail)
+            else "generated"
             if thumb_bytes
             else "skipped"
             if strategy.file_type == FileType.GCODE
