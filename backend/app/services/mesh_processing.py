@@ -94,7 +94,7 @@ def _render_semaphore() -> "threading.BoundedSemaphore":
 def _estimate_triangle_count(path: Path) -> Optional[int]:
     """Best-effort triangle count *without* loading the mesh into memory.
 
-    Loading is itself the memory blow-up (trimesh.load of a 5M-triangle mesh
+    Loading is itself the memory blow-up (trimesh.load_mesh of a 5M-triangle mesh
     peaks at ~3.5 GB), so the only way to keep a dense lattice/gyroid model from
     OOM-killing the process is to estimate before we load and bail out (#24).
 
@@ -163,7 +163,7 @@ def _estimate_triangle_count(path: Path) -> Optional[int]:
             # an n-gon face into (n - 2) triangles, so summing that keeps the
             # estimate a conservative upper bound (tris/quads dominate real files,
             # where it's already exact). A full text scan is cheap — no float
-            # parsing, no mesh build — versus the trimesh.load it guards against.
+            # parsing, no mesh build — versus the trimesh.load_mesh it guards against.
             faces = 0
             with path.open("rb") as fh:
                 for line in fh:
@@ -195,6 +195,7 @@ def _estimate_triangle_count(path: Path) -> Optional[int]:
         return None
     return None
 
+
 # Measured peak RSS per triangle for a full load + thumbnail render, rounded up
 # for safety margin. 3MF's XML loader plus the crease-aware rasteriser cost far
 # more than a raw STL of the same geometry (~4.5x), so it gets its own factor.
@@ -223,7 +224,9 @@ def _detect_memory_limit_bytes() -> int | None:
     except (OSError, ValueError):
         pass
     try:  # cgroup v1
-        v1 = int(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes").read_text().strip())
+        v1 = int(
+            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes").read_text().strip()
+        )
         if 0 < v1 < (1 << 62):  # v1 uses a huge sentinel for "unlimited"
             limits.append(v1)
     except (OSError, ValueError):
@@ -330,10 +333,12 @@ def _load_mesh(path: Path):
     try:
         # process=False skips trimesh's vertex-merge + adjacency build, which we
         # don't need for bbox/volume/render and which adds ~15% peak memory.
-        loaded = trimesh.load(str(path), force="mesh", process=False)
+        loaded = trimesh.load_mesh(str(path), process=False)
     except Exception:
         logger.warning(
-            "mesh_processing: trimesh.load failed for %s", path.name, exc_info=True
+            "mesh_processing: trimesh.load_mesh failed for %s",
+            path.name,
+            exc_info=True,
         )
         return None
 
@@ -548,7 +553,7 @@ def to_stl_bytes(path: Path) -> Optional[bytes]:
         except OSError:
             return None
 
-    # Converting means a full trimesh.load + export; an over-cap mesh would OOM
+    # Converting means a full trimesh.load_mesh + export; an over-cap mesh would OOM
     # the process and take every request down with it (#24). Refuse it cleanly —
     # the caller surfaces a 500 instead, which is far better than a crash-loop.
     if _exceeds_cap(path):

@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     # Static ceiling on mesh density for geometry extraction + thumbnail
     # rendering. Loading + rasterising a mesh peaks (measured) at ~0.8–2 GB of RSS
     # per million triangles for STL/PLY/OBJ and ~3–4 GB/M for 3MF (its XML loader
-    # is far heavier) — paid mostly inside trimesh.load and our rasteriser, so a
+    # is far heavier) — paid mostly inside trimesh.load_mesh and our rasteriser, so a
     # dense model can OOM-kill a library scan (issues #24/#29). Above this estimate
     # the mesh is not loaded; the file is still indexed, and 3MF still gets its
     # embedded slicer preview. This is the hard ceiling; the RAM-aware cap below
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     # 3MF with no parseable <triangle>/.model parts, an unfamiliar header, a
     # compressed container whose mesh lives somewhere the estimator doesn't sum.
     # When it can't estimate, the old code loaded the file anyway, and the OOM is
-    # paid *inside* trimesh.load: a ~900 MB 3MF decompresses into tens of GB of
+    # paid *inside* trimesh.load_mesh: a ~900 MB 3MF decompresses into tens of GB of
     # mesh and OOM-kills the scan (issue #29). This byte cap is the format-blind
     # backstop: above it the mesh is never loaded — the file is still indexed and
     # a 3MF still gets its embedded slicer preview. 0 disables the size guard.

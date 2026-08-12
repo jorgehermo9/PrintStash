@@ -64,11 +64,9 @@ manufacturing platform.
 - There is no default admin account. If setup cannot complete, fix setup rather
   than looking for bundled credentials.
 - Images are published for `linux/amd64` and `linux/arm64` (Raspberry Pi 4/5,
-  ARM NAS, Apple-silicon VMs). On `linux/arm64`, STEP/STP preview and
-  thumbnailing are unavailable because the OpenCASCADE tessellation dependency
-  (`cascadio`) ships no Linux ARM wheel; STEP files still upload and store, they
-  just don't get a generated mesh preview. Every other file type and feature is
-  identical across architectures.
+  ARM NAS, Apple-silicon VMs). Cascadio 0.1.1 provides OpenCASCADE wheels for
+  both targets, so the full image can preview and thumbnail STEP/STP files on
+  either architecture.
 
 ## Data And Metadata
 

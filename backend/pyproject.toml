@@ -4,46 +4,44 @@ version = "0.11.4"
 description = "PrintStash — self-hosted 3D printing asset manager"
 requires-python = ">=3.11"
 dependencies = [
-    "cryptography>=44.0.0",
-    "alembic>=1.14",
+    "cryptography>=50,<51",
+    "alembic>=1.19,<2",
     "aiosqlite>=0.20",
     "asyncpg>=0.29",
-    "boto3>=1.35",
-    "botocore>=1.35,<2",
-    # STEP/STP tessellation (OpenCASCADE). Wheel-only with no Linux aarch64
-    # build, so it is excluded there; STEP preview/thumbnails degrade gracefully
-    # on ARM Linux while the rest of the app builds and runs. See
-    # docs/known-limitations.md.
-    "cascadio>=0.0.14; sys_platform != 'linux' or platform_machine != 'aarch64'",
-    "croniter>=3.0",
-    "fastapi>=0.115",
+    "boto3>=1.43,<2",
+    "botocore>=1.43,<2",
+    # STEP/STP tessellation (OpenCASCADE). Cascadio 0.1.1 publishes Linux
+    # aarch64 wheels, so full installations support STEP on both image targets.
+    "cascadio>=0.1.1,<0.2",
+    "croniter>=6.2,<7",
+    "fastapi>=0.141,<1",
     "httpcore>=1,<2",
-    "httpx>=0.27",
-    "lxml>=5.3",
-    "networkx>=3.2",
-    "numpy>=1.26,<2",
-    "orjson>=3.10",
+    "httpx>=0.28,<0.29",
+    "lxml>=6.1,<7",
+    "networkx>=3.6,<4",
+    "numpy>=2,<3",
+    "orjson>=3.11,<4",
     "paho-mqtt>=2.1",
     # Stealth-patched Playwright: renders Cloudflare-gated pages (MakerWorld)
     # server-side so collection/model imports work without a pasted cookie. The
     # Chromium binary is installed in the Dockerfile, not via pip. See
     # services/browser_fetch.py.
     "patchright>=1.49",
-    "pillow>=10.4",
-    "prometheus-client>=0.20",
-    "pydantic>=2.9",
-    "pydantic-settings>=2.5",
+    "pillow>=12.3,<13",
+    "prometheus-client>=0.26,<1",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.15,<3",
     "pwdlib[argon2,bcrypt]>=0.3,<1",
-    "PyJWT>=2.10",
-    "python-multipart>=0.0.12",
+    "PyJWT>=2.13,<3",
+    "python-multipart>=0.0.32,<0.1",
     "psycopg2-binary>=2.9",
-    "SQLAlchemy>=2.0,<2.1",
-    "sqlmodel>=0.0.22",
-    "starlette>=1.3,<2",
-    "trimesh>=4.4",
-    "uvicorn[standard]>=0.30",
-    "watchfiles>=0.24",
-    "websockets>=13",
+    "SQLAlchemy>=2.0.52,<2.1",
+    "sqlmodel>=0.0.39,<0.1",
+    "starlette>=1.6,<2",
+    "trimesh>=5,<6",
+    "uvicorn[standard]>=0.52,<1",
+    "watchfiles>=1.2,<2",
+    "websockets>=17,<18",
     "pycentauri==0.9.1",
 ]
 
