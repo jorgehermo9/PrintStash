@@ -25,6 +25,6 @@ if [ "$(id -u)" = "0" ]; then
   exec gosu printstash "$0" "$@"
 fi
 
-uv run python -m app.db.migrate
+/app/.venv/bin/python -m app.db.migrate
 
 exec "$@"

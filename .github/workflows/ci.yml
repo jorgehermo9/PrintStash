@@ -46,7 +46,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install backend dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev --extra full --frozen
 
       - name: Verify optional async driver is absent from core
         run: |
@@ -94,7 +94,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install backend dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev --extra full --frozen
 
       - name: Run backend compatibility suite
         run: uv run pytest tests -q
@@ -262,14 +262,23 @@ jobs:
         run: ./scripts/test_migration_upgrade.sh
 
   docker-smoke:
-    name: Docker compose smoke (build from source)
+    name: Docker full/lite smoke and size gate
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Build and start the light stack
-        run: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build --wait --wait-timeout 180 api frontend
+      - name: Build full API, lite API, and frontend
+        run: |
+          docker build --build-arg PRINTSTASH_VARIANT=full -t ghcr.io/xiao-villamor/printstash-api:latest backend
+          docker build --build-arg PRINTSTASH_VARIANT=lite -t printstash-api-lite-ci backend
+          docker build -t ghcr.io/xiao-villamor/printstash-frontend:latest frontend
+
+      - name: Verify image capabilities, size, and startup
+        run: ./scripts/check_api_image_variants.sh ghcr.io/xiao-villamor/printstash-api:latest printstash-api-lite-ci
+
+      - name: Start composed full stack
+        run: docker compose -f docker-compose.yml up -d --no-build --wait --wait-timeout 180 api frontend
 
       - name: Hit /health
         run: curl -fsS http://localhost:3000/api/v1/health

@@ -8,9 +8,6 @@ dependencies = [
     "alembic>=1.19,<2",
     "boto3>=1.43,<2",
     "botocore>=1.43,<2",
-    # STEP/STP tessellation (OpenCASCADE). Cascadio 0.1.1 publishes Linux
-    # aarch64 wheels, so full installations support STEP on both image targets.
-    "cascadio>=0.1.1,<0.2",
     "croniter>=6.2,<7",
     "fastapi>=0.141,<1",
     "httpcore>=1,<2",
@@ -20,11 +17,6 @@ dependencies = [
     "numpy>=2,<3",
     "orjson>=3.11,<4",
     "paho-mqtt>=2.1",
-    # Stealth-patched Playwright: renders Cloudflare-gated pages (MakerWorld)
-    # server-side so collection/model imports work without a pasted cookie. The
-    # Chromium binary is installed in the Dockerfile, not via pip. See
-    # services/browser_fetch.py.
-    "patchright>=1.49",
     "pillow>=12.3,<13",
     "prometheus-client>=0.26,<1",
     "pydantic>=2.13,<3",
@@ -46,6 +38,18 @@ dependencies = [
 [project.optional-dependencies]
 async-db = [
     "aiosqlite>=0.22,<1",
+]
+browser = [
+    # Stealth-patched Chromium automation for Cloudflare-gated imports.
+    "patchright>=1.49",
+]
+step = [
+    # OpenCASCADE tessellation; 0.1.1 ships amd64 and arm64 Linux wheels.
+    "cascadio>=0.1.1,<0.2",
+]
+full = [
+    "cascadio>=0.1.1,<0.2",
+    "patchright>=1.49",
 ]
 dev = [
     "bandit>=1.8",
