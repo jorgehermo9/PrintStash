@@ -4,6 +4,7 @@ import { Children, cloneElement, isValidElement, useEffect, useRef, type ReactEl
 import { useI18n, useOptionalI18n, type Locale } from "@/lib/i18n";
 
 const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
+  ["Repair thumbnail", "Reparar miniatura"],
   ["Vault configuration and display preferences", "Configuración de la bóveda y preferencias de visualización"],
   ["Portable archive with models, metadata, print history, and original artifacts", "Archivo portátil con modelos, metadatos, historial de impresión y artefactos originales"],
   ["Export a versioned archive for migration to another PrintStash installation. Accounts, credentials, settings, and trash are excluded.", "Exporta un archivo versionado para migrar a otra instalación de PrintStash. Se excluyen cuentas, credenciales, ajustes y papelera."],
@@ -977,7 +978,7 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["spool ·", "carrete ·"],
   ["Streams each archive and checks safe paths, manifest, database member, member counts, and sizes.", "Procesa cada archivo y comprueba rutas seguras, manifiesto, miembro de base de datos, recuentos y tamaños."],
   ["tags, comma separated", "etiquetas separadas por comas"],
-  ["The backend will create these directories and probe them for writability before completing setup.", "El backend creará estos directorios y comprobará que permiten escritura antes de completar la configuración."],
+  ["These are private PrintStash storage and must be empty. Add existing NAS or Nextcloud folders later under Settings → External Libraries; those files stay in place.", "Estos directorios son almacenamiento privado de PrintStash y deben estar vacíos. Añade después las carpetas NAS o Nextcloud existentes en Configuración → Bibliotecas externas; esos archivos permanecerán en su ubicación."],
   ["Use your username with this API key on", "Usa tu nombre de usuario con esta clave API en"],
   ["View: status and history · Print: send and start jobs · Control: pause, cancel, temperatures, homing, emergency stop · Admin: settings, files, routing, and maintenance", "Ver: estado e historial · Imprimir: enviar e iniciar trabajos · Control: pausar, cancelar, temperaturas, referencia y parada de emergencia · Administración: ajustes, archivos, enrutamiento y mantenimiento"],
   ["Write back anyway (I disabled Moonraker's hook)", "Escribir de todos modos (he desactivado el hook de Moonraker)"],
