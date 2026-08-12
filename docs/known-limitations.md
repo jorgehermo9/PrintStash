@@ -67,6 +67,9 @@ manufacturing platform.
   ARM NAS, Apple-silicon VMs). Cascadio 0.1.1 provides OpenCASCADE wheels for
   both targets, so the full image can preview and thumbnail STEP/STP files on
   either architecture.
+- The lite image intentionally omits browser-assisted imports and STEP/STP
+  tessellation. It still includes NumPy, Pillow, and Trimesh, so STL/OBJ/3MF
+  thumbnail generation does not depend on Chromium, OpenGL, or Cascadio.
 
 ## Data And Metadata
 

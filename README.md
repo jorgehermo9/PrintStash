@@ -144,8 +144,8 @@ are welcome in
 
 Requirements: Docker and Docker Compose. Prebuilt images are published for
 `linux/amd64` and `linux/arm64` (Raspberry Pi 4/5, ARM NAS, Apple-silicon VMs).
-On ARM, STEP/STP files upload and store but don't get a 3D preview — see
-[Known Limitations](#known-limitations--beta-notes).
+The full image supports STEP/STP preview and thumbnail generation on both
+architectures.
 
 A modest host is enough. As a starting point:
 
@@ -170,6 +170,14 @@ cp .env.example .env
 # e.g. `openssl rand -hex 32`.
 
 docker compose up -d
+```
+
+For the smallest SQLite/local-files deployment, use
+`docker-compose.light.yml`. Its API image omits browser automation and STEP
+tessellation but keeps STL/OBJ/3MF thumbnail generation:
+
+```bash
+docker compose -f docker-compose.light.yml up -d
 ```
 
 For a hardened production setup (API kept internal, frontend bound to localhost
@@ -246,10 +254,11 @@ deliberately not a full manufacturing platform. Set expectations accordingly:
   does not validate firmware macros, acceleration, pressure advance, or safety.
 - **Not for direct public exposure.** It is designed for trusted self-hosted
   networks (see [Security](#security)).
-- **ARM has no STEP preview.** Images run on `linux/amd64` and `linux/arm64`, but
-  the OpenCASCADE tessellation dependency ships no Linux ARM wheel, so on ARM
-  STEP/STP files upload and store without a generated 3D preview. All other file
-  types and features are identical across architectures.
+- **Full and lite images have different optional capabilities.** Both run on
+  `linux/amd64` and `linux/arm64` and generate STL/OBJ/3MF thumbnails. The full
+  image additionally includes browser-assisted imports and STEP/STP
+  tessellation; the lite image stores STEP files without generating their mesh
+  preview.
 
 Full detail — including non-goals — lives in
 [docs/known-limitations.md](./docs/known-limitations.md).

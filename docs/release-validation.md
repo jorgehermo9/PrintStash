@@ -22,10 +22,12 @@ Expected:
 ## Upgrade From Existing SQLite Volume
 
 ```bash
-docker compose down
-docker compose run --rm api uv run alembic upgrade head
-docker compose up -d
+docker compose pull
+docker compose up -d --wait
 ```
+
+The API entrypoint applies migrations before serving traffic. Do not override
+it with a separate `uv run alembic` command.
 
 Expected:
 
@@ -39,8 +41,14 @@ Expected:
 
 ```bash
 cd backend
+uv sync --extra dev --extra full --frozen
+uv run ruff format --check app/ tests/
 uv run ruff check app/ tests/
-uv run pytest tests -v
+uv run pyright
+uv run deptry app
+uv run pytest tests --cov=app --cov-report=term-missing --cov-fail-under=95
+uv run bandit -r app -q
+uv run pip-audit
 ```
 
 ## Frontend
@@ -48,9 +56,36 @@ uv run pytest tests -v
 ```bash
 cd frontend
 pnpm lint
-pnpm exec tsc --noEmit
+pnpm typecheck
+pnpm test
 pnpm build
+pnpm test:e2e
+pnpm test:e2e:real
 ```
+
+## Optional database and storage contracts
+
+- Run `tests/postgres` with `PRINTSTASH_TEST_POSTGRES_URL` against PostgreSQL
+  16 through Psycopg 3.
+- Run the async database contract once without extras (explicit capability
+  error) and once with `--extra async-db` for SQLite async.
+- Run `tests/test_storage_s3.py` against the pinned SeaweedFS service.
+- Run `./scripts/test_minio_migration.sh`; it verifies normal, Unicode, and
+  multipart objects twice with downloaded-content comparison.
+
+## Image variants
+
+Build both API variants, then enforce optional-package, size, and startup gates:
+
+```bash
+docker build --build-arg PRINTSTASH_VARIANT=full -t printstash-api-full backend
+docker build --build-arg PRINTSTASH_VARIANT=lite -t printstash-api-lite backend
+./scripts/check_api_image_variants.sh printstash-api-full printstash-api-lite
+```
+
+The publish workflows build both images for `linux/amd64` and `linux/arm64`.
+The lite image must be at least 700 MiB smaller than full and may not start more
+than 10% slower at the median.
 
 Current intentional lint warnings:
 

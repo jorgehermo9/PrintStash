@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased (target: 0.12.0)
+
+**This entry describes the pending 0.12.0 branch. No 0.12.0 image, tag, or release has been published yet. Back up before upgrading once it is released.**
+
+### Added
+
+- Import jobs now publish durable completion metadata, explicit complete/partial outcomes, thumbnail status and stable reasons, restart recovery, monotonic progress, structured metrics/logs, and no-store polling.
+- A memory-bounded streaming STL fallback generates 640×480 WebP thumbnails for oversized or otherwise unrasterizable meshes, including Vault Maintenance repair and Bulk upload flows ([#67](https://github.com/xiao-villamor/PrintStash/issues/67)).
+- Separate `printstash-api` full and `printstash-api-lite` images expose browser, STEP, and thumbnail capabilities through authenticated health details; lite retains NumPy/Pillow/Trimesh thumbnailing without Chromium or OpenCASCADE.
+- A transitional, idempotent MinIO-to-SeaweedFS helper copies objects without deletion and verifies their downloaded content with a digest-pinned rclone image.
+
+### Changed
+
+- New password hashes use Argon2; successful login transparently upgrades legacy bcrypt hashes while preserving bcrypt's historical 72-byte behavior only for legacy verification.
+- Mesh processing now uses NumPy 2, Trimesh 5's `load_mesh()`, and Cascadio 0.1.1, including STEP support in full amd64 and arm64 images.
+- PostgreSQL now uses Psycopg 3 for sync and optional async engines. `aiosqlite` moved to the opt-in `async-db` extra, and unused `asyncpg`/Psycopg 2 dependencies were removed.
+- FastAPI, Starlette, SQLModel, SQLAlchemy, Alembic, Uvicorn, WebSockets, and compatible patch/minor dependencies were refreshed; direct runtime dependencies and deptry checks now make dependency ownership explicit.
+- Patchright and Cascadio moved to `browser`, `step`, and `full` extras. The lite API image is more than 700 MiB smaller than full without losing mesh thumbnail generation.
+- The normal Compose stack no longer contains MinIO; SeaweedFS remains the bundled S3-compatible service, while external MinIO endpoints remain supported.
+
+### Fixed
+
+- Startup and hourly maintenance no longer infer file ownership by recursively deleting unindexed objects from configured storage. First-run local vault paths must now be writable, dedicated empty directories; failed uploads clean up only their exact destinations, and occupied paths are never overwritten. Existing NAS and Nextcloud folders belong under External Libraries.
+- Task Center is now the single import-job transition owner, emits one terminal event per job, rejects stale/out-of-order polling responses, resumes active work after reload/connectivity changes, and coordinates one post-Bulk refresh.
+- Import jobs cannot report completion before Model, Artifact, Metadata, primary storage, and expected thumbnail outputs are visible from a fresh session.
+- Oversized valid STL uploads no longer silently finish without thumbnails, and partial thumbnail outcomes remain visible and repairable instead of masquerading as complete success ([#67](https://github.com/xiao-villamor/PrintStash/issues/67)).
+
+### Security
+
+- Long, Unicode, and malformed password inputs and damaged legacy hashes now fail in controlled paths, and dependency CI adds weekly uv lock updates plus explicit vulnerability/dependency hygiene gates.
+
 ## 0.11.4
 
 **This patch-version release is an explicit exception to normal 0.x patch policy: it adds cursor pagination endpoints and an append-only index migration. Back up before upgrading.**

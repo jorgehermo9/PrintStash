@@ -57,14 +57,9 @@ uv run uvicorn app.main:app --reload
 ### Upgrade flow (Docker)
 
 ```bash
-# Stop old containers (keeps volumes)
-docker compose down
-
-# Run DB migrations against current VAULT_DB_URL
-docker compose run --rm api uv run alembic upgrade head
-
-# Start updated stack
-docker compose up -d --build
+# Pull or rebuild, then let the image entrypoint migrate before serving.
+docker compose pull
+docker compose up -d --wait
 ```
 
 ### SQLite -> Postgres migration helper
@@ -119,16 +114,19 @@ backend/
 From the repo root:
 
 ```bash
-docker compose up --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
 The compose file mounts named volumes under `/data/` so your files and DB
 survive container rebuilds.
 
-For upgrades, run migrations before starting a new backend image:
+The image entrypoint runs migrations before the API starts. Upgrade by pulling
+and recreating the services; do not override the entrypoint with a manual
+Alembic command:
 
 ```bash
-docker compose run --rm api uv run alembic upgrade head
+docker compose pull
+docker compose up -d --wait
 ```
 
 ## Postgres (optional adapter)
@@ -150,10 +148,11 @@ Then set:
 VAULT_DB_URL=postgresql://printstash:printstash@postgres:5432/printstash
 ```
 
-Run migrations before starting the API:
+Start the API with the PostgreSQL URL in an override. The image entrypoint
+normalizes the URL for Psycopg 3 and runs migrations before serving:
 
 ```bash
-docker compose run --rm api uv run alembic upgrade head
+docker compose up -d --wait api
 ```
 
 ## S3 / S3-compatible storage (optional feature)
