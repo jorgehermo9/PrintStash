@@ -7,18 +7,31 @@ from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import Response
+from fastapi import Request, Response
 from jwt import InvalidTokenError
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select, update
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.models import ApiKey, RefreshToken, User
+from app.db.session import get_session_factory
 
 logger = get_logger(__name__)
 ACCESS_BLOCKLIST: set[str] = set()
 SESSION_COOKIE_NAME = "printstash_session"
+
+
+def extract_access_token(
+    request: Request, bearer_token: str | None = None
+) -> str | None:
+    """Canonical bearer/cookie token extraction for auth and audit paths."""
+    if bearer_token:
+        return bearer_token
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1]
+    return request.cookies.get(SESSION_COOKIE_NAME)
 
 
 def set_session_cookie(
@@ -143,7 +156,11 @@ def revoke_access_token(token: str) -> None:
 
 
 def create_refresh_token(
-    session: Session, user_id: int, minutes: int = 60 * 24 * 14
+    session: Session,
+    user_id: int,
+    minutes: int = 60 * 24 * 14,
+    *,
+    commit: bool = True,
 ) -> str:
     raw_token = secrets.token_urlsafe(48)
     expires_at = utcnow() + timedelta(minutes=minutes)
@@ -154,22 +171,35 @@ def create_refresh_token(
         revoked=False,
     )
     session.add(record)
-    session.commit()
+    if commit:
+        session.commit()
     return raw_token
 
 
-def rotate_refresh_token(session: Session, raw_token: str) -> Optional[RefreshToken]:
-    token_hash = _token_hash(raw_token)
+def rotate_refresh_token(
+    session: Session, raw_token: str, *, commit: bool = True
+) -> Optional[int]:
+    """Atomically consume one live refresh token.
+
+    A conditional UPDATE is the compare-and-swap boundary: concurrent callers
+    cannot both transition the same row from live to revoked.
+    """
+    now = utcnow()
     record = session.exec(
-        select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        update(RefreshToken)
+        .where(
+            RefreshToken.token_hash == _token_hash(raw_token),
+            RefreshToken.revoked == False,  # noqa: E712
+            RefreshToken.expires_at > now,
+        )
+        .values(revoked=True, revoked_at=now)
+        .returning(RefreshToken.user_id)
     ).first()
-    if record is None or record.revoked or _as_utc(record.expires_at) <= utcnow():
+    if record is None:
         return None
-    record.revoked = True
-    record.revoked_at = utcnow()
-    session.add(record)
-    session.commit()
-    return record
+    if commit:
+        session.commit()
+    return int(record[0])
 
 
 def revoke_refresh_token(session: Session, raw_token: str) -> bool:
@@ -200,6 +230,49 @@ def revoke_all_refresh_tokens(session: Session, user_id: int) -> None:
         record.revoked_at = now
         session.add(record)
     session.commit()
+
+
+def invalidate_user_sessions(session: Session, user: User) -> None:
+    """Stage durable invalidation of every access and refresh session.
+
+    The caller owns the transaction so a credential or account-state change
+    and its session invalidation can never be committed separately.
+    """
+    if user.id is None:
+        raise ValueError("cannot invalidate sessions for an unpersisted user")
+    now = utcnow()
+    user.auth_version += 1
+    session.add(user)
+    session.exec(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user.id,
+            RefreshToken.revoked == False,  # noqa: E712
+        )
+        .values(revoked=True, revoked_at=now)
+    )
+
+
+def prune_expired_refresh_tokens(*, batch_size: int = 1000) -> int:
+    """Delete at most one bounded batch of expired refresh-token rows."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    with get_session_factory().scoped_session() as session:
+        expired_ids = list(
+            session.exec(
+                select(RefreshToken.id)
+                .where(RefreshToken.expires_at <= utcnow())
+                .order_by(RefreshToken.expires_at)
+                .limit(batch_size)
+            )
+        )
+        if not expired_ids:
+            return 0
+        result = session.exec(
+            delete(RefreshToken).where(RefreshToken.id.in_(expired_ids))  # type: ignore[union-attr]
+        )
+        session.commit()
+        return int(result.rowcount or 0)
 
 
 def get_user_by_username(session: Session, username: str) -> Optional[User]:

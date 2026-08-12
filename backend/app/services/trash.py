@@ -6,6 +6,7 @@ all live here. Query-side filtering uses ``app.db.scopes.live/trashed``.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Iterable
 
@@ -16,7 +17,9 @@ from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.models import (
     Collection,
+    Document,
     File,
+    FileType,
     Metadata,
     Model,
     Printer,
@@ -25,12 +28,15 @@ from app.db.models import (
     Tag,
     User,
 )
-from app.db.scopes import trashed
+from app.db.scopes import live, trashed
 from app.db.session import get_session_factory
 from app.services.storage_backend import get_backend
-from app.services.storage_utils import all_owned_blob_keys
+from app.services.storage_utils import ownership_snapshot
 
 logger = get_logger(__name__)
+_DOCUMENT_IMAGE_RE = re.compile(
+    r"/api/v1/documents/(\d+)/images/([0-9a-f]{64}\.(?:png|jpe?g|gif|webp))"
+)
 
 
 def trash_expires_at(
@@ -73,34 +79,116 @@ def restore_model(session: Session, model: Model) -> None:
     session.commit()
 
 
+def hard_delete_file(
+    session: Session,
+    file_row: File,
+    *,
+    maintain_revision_invariant: bool = True,
+) -> None:
+    """Permanently remove one Artifact and every vault-owned dependent.
+
+    Linked external bytes belong to the user and are never deleted. The caller
+    owns the surrounding transaction and commit.
+    """
+    if file_row.id is None:
+        return
+
+    backend = get_backend()
+    file_id = int(file_row.id)
+    if not file_row.is_external:
+        backend.delete(file_row.path)
+    backend.delete(backend.thumbnail_key(file_id))
+    backend.delete(backend.legacy_thumbnail_key(file_id))
+    shared_cache_owner = session.exec(
+        select(File.id).where(
+            File.id != file_id,
+            File.sha256 == file_row.sha256,
+        )
+    ).first()
+    if shared_cache_owner is None and file_row.sha256:
+        backend.delete(backend.stl_cache_key(file_row.sha256))
+
+    model = session.get(Model, file_row.model_id)
+    if model is not None and model.thumbnail_file_id == file_id:
+        model.thumbnail_file_id = None
+        model.thumbnail_path = None
+        model.updated_at = utcnow()
+        session.add(model)
+
+    was_live_recommended = (
+        maintain_revision_invariant
+        and file_row.file_type == FileType.GCODE
+        and file_row.deleted_at is None
+        and file_row.is_recommended
+    )
+    if was_live_recommended:
+        file_row.is_recommended = False
+        session.add(file_row)
+        session.flush()
+        replacement = session.exec(
+            select(File)
+            .where(
+                File.model_id == file_row.model_id,
+                File.id != file_id,
+                File.file_type == FileType.GCODE,
+                live(File),
+            )
+            .order_by(File.version.desc())  # type: ignore[attr-defined]
+        ).first()
+        if replacement is not None:
+            replacement.is_recommended = True
+            session.add(replacement)
+
+    session.exec(delete(PrinterFile).where(PrinterFile.file_id == file_id))
+    session.exec(delete(PrintJob).where(PrintJob.file_id == file_id))
+    session.exec(delete(Metadata).where(Metadata.file_id == file_id))
+    session.delete(file_row)
+
+
+def hard_delete_document(session: Session, document: Document) -> None:
+    """Permanently remove a Document row and every vault-owned blob."""
+    if document.id is None:
+        return
+    backend = get_backend()
+    if document.filename:
+        backend.delete(backend.document_file_key(document.id, document.filename))
+    for document_id, name in _DOCUMENT_IMAGE_RE.findall(document.body or ""):
+        if int(document_id) == document.id:
+            backend.delete(backend.document_image_key(document.id, name))
+    session.delete(document)
+
+
+def restore_document(session: Session, document: Document) -> None:
+    document.deleted_at = None
+    document.deleted_by = None
+    document.updated_at = utcnow()
+    session.add(document)
+
+
+def hard_delete_collection(session: Session, collection: Collection) -> None:
+    """Permanently remove a Collection and its namespaced readme images."""
+    if collection.id is None:
+        return
+    backend = get_backend()
+    prefix = backend.collection_image_key(collection.id, "")
+    for key in backend.walk_keys(prefix):
+        backend.delete(key)
+    session.delete(collection)
+
+
 def hard_delete_model(session: Session, model: Model) -> None:
     """Permanently remove a model, related DB rows, and stored blobs."""
     if model.id is None:
         return
 
-    backend = get_backend()
     file_rows = session.exec(select(File).where(File.model_id == model.id)).all()
-    file_ids = [row.id for row in file_rows if row.id is not None]
-
-    for file_row in file_rows:
-        # External (NAS-linked) blobs are user-owned: never delete the original
-        # bytes — only the vault-owned thumbnails. The DB row is still removed.
-        if not file_row.is_external:
-            backend.delete(file_row.path)
-        if file_row.id is not None:
-            backend.delete(backend.thumbnail_key(file_row.id))
-            backend.delete(backend.legacy_thumbnail_key(file_row.id))
-
     model.thumbnail_file_id = None
     model.thumbnail_path = None
     session.add(model)
     session.flush()
-
-    if file_ids:
-        session.exec(delete(PrinterFile).where(PrinterFile.file_id.in_(file_ids)))  # type: ignore[call-overload, union-attr]
-        session.exec(delete(PrintJob).where(PrintJob.file_id.in_(file_ids)))  # type: ignore[call-overload, union-attr]
-        session.exec(delete(Metadata).where(Metadata.file_id.in_(file_ids)))  # type: ignore[call-overload, union-attr]
-        session.exec(delete(File).where(File.id.in_(file_ids)))  # type: ignore[call-overload, union-attr]
+    for file_row in file_rows:
+        hard_delete_file(session, file_row, maintain_revision_invariant=False)
+    session.flush()
 
     # Don't bulk-delete the tag links here: ``Model.tags`` is a link_model
     # (many-to-many) relationship, so deleting the model already removes its
@@ -129,14 +217,11 @@ def hard_delete_expired_models(session: Session, retention_days: int) -> list[in
 
 def _cleanup_orphan_blobs(session: Session) -> int:
     backend = get_backend()
-    owned = all_owned_blob_keys(session)
+    snapshot = ownership_snapshot(session)
+    protected = snapshot.claimed_keys | {blob.key for blob in snapshot.external}
     removed = 0
-    if settings.storage_backend == "s3":
-        walker = backend.walk_keys("vault-data/files/")
-    else:
-        walker = backend.walk_keys(str(settings.data_dir))
-    for key in walker:
-        if key not in owned:
+    for key in snapshot.discovered_keys:
+        if key not in protected:
             backend.delete(key)
             removed += 1
     return removed
@@ -166,7 +251,34 @@ def gc_soft_deleted(retention_days: int | None = None) -> dict[str, int]:
     with get_session_factory().scoped_session() as session:
         purged_model_ids = hard_delete_expired_models(session, effective_retention)
         purged["rows"] += len(purged_model_ids)
-        for model in (File, Tag, Collection, Printer, User):
+        expired_documents = session.exec(
+            select(Document).where(
+                trashed(Document),
+                Document.deleted_at < cutoff,  # type: ignore[operator]
+            )
+        ).all()
+        for document in expired_documents:
+            hard_delete_document(session, document)
+        purged["rows"] += len(expired_documents)
+        expired_files = session.exec(
+            select(File).where(
+                trashed(File),
+                File.deleted_at < cutoff,  # type: ignore[operator]
+            )
+        ).all()
+        for file_row in expired_files:
+            hard_delete_file(session, file_row)
+        purged["rows"] += len(expired_files)
+        expired_collections = session.exec(
+            select(Collection).where(
+                trashed(Collection),
+                Collection.deleted_at < cutoff,  # type: ignore[operator]
+            )
+        ).all()
+        for collection in expired_collections:
+            hard_delete_collection(session, collection)
+        purged["rows"] += len(expired_collections)
+        for model in (Tag, Printer, User):
             result = session.exec(
                 delete(model).where(
                     trashed(model),

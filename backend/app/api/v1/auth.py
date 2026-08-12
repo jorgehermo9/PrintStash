@@ -6,6 +6,7 @@ Stage 4 will graft OAuth2 / multi-tenant onto the same surface.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -18,7 +19,7 @@ from app.core.config import settings
 from app.core.ratelimit import rate_limit
 from app.core.security import oauth2_scheme, require_user
 from app.db.models import User
-from app.db.session import get_session
+from app.db.session import get_session, get_session_factory
 from app.schemas.auth import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
@@ -38,14 +39,14 @@ from app.services.auth import (
     create_access_token,
     create_api_key,
     create_refresh_token,
+    invalidate_user_sessions,
     list_active_api_keys,
     revoke_access_token,
-    revoke_all_refresh_tokens,
     revoke_api_key,
-    revoke_refresh_token,
     rotate_refresh_token,
     set_session_cookie,
 )
+from app.services.backup import begin_mutating_operation, end_mutating_operation
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -58,6 +59,12 @@ _OIDC_COOKIE_PATH = "/api/v1/auth/oidc"
 _OIDC_STATE_COOKIE = "printstash_oidc_state"
 _OIDC_NONCE_COOKIE = "printstash_oidc_nonce"
 _OIDC_VERIFIER_COOKIE = "printstash_oidc_verifier"
+
+
+def _provision_oidc_user(claims: dict) -> User:
+    """Provision an OIDC identity without blocking the async callback loop."""
+    with get_session_factory().scoped_session() as session:
+        return oidc.provision_user(session, claims)
 
 
 def _oidc_cookie(
@@ -117,7 +124,6 @@ async def oidc_callback(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
-    session: Session = Depends(get_session),
 ) -> RedirectResponse:
     response = RedirectResponse("/login?oidc=success", status_code=302)
     expected_state = request.cookies.get(_OIDC_STATE_COOKIE, "")
@@ -140,24 +146,31 @@ async def oidc_callback(
         redirect_uri = oidc.callback_uri(str(request.url_for("oidc_callback")))
         try:
             claims = await oidc.exchange_code(code, redirect_uri, verifier, nonce)
-            user = oidc.provision_user(session, claims)
-            scope = "admin" if user.is_superuser else "write"
-            access_token = create_access_token(
-                user.id,
-                user.username,
-                scope=scope,
-                expires_delta=timedelta(days=settings.remember_me_days),
-                auth_version=user.auth_version,
-            )
-            set_session_cookie(
-                response,
-                access_token,
-                max_age=int(timedelta(days=settings.remember_me_days).total_seconds()),
-                secure=bool(
-                    settings.session_cookie_secure
-                    or urlparse(redirect_uri).scheme == "https"
-                ),
-            )
+            if not begin_mutating_operation():
+                raise oidc.OIDCError("restore_in_progress")
+            try:
+                user = await asyncio.to_thread(_provision_oidc_user, claims)
+                scope = "admin" if user.is_superuser else "write"
+                access_token = create_access_token(
+                    user.id,
+                    user.username,
+                    scope=scope,
+                    expires_delta=timedelta(days=settings.remember_me_days),
+                    auth_version=user.auth_version,
+                )
+                set_session_cookie(
+                    response,
+                    access_token,
+                    max_age=int(
+                        timedelta(days=settings.remember_me_days).total_seconds()
+                    ),
+                    secure=bool(
+                        settings.session_cookie_secure
+                        or urlparse(redirect_uri).scheme == "https"
+                    ),
+                )
+            finally:
+                end_mutating_operation()
         except oidc.OIDCError as exc:
             response = RedirectResponse(
                 f"/login?oidc_error={exc.code}", status_code=302
@@ -230,14 +243,17 @@ def refresh(
     session: Session = Depends(get_session),
 ) -> TokenResponse:
     """Exchange a valid refresh token for a new access+refresh token pair."""
-    old_token = rotate_refresh_token(session, body.refresh_token)
-    if old_token is None:
+    user_id = rotate_refresh_token(session, body.refresh_token, commit=False)
+    if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid_refresh_token",
         )
-    user = session.get(User, old_token.user_id)
-    if user is None or not user.is_active:
+    user = session.get(User, user_id)
+    if user is None or not user.is_active or user.deleted_at is not None:
+        # Keep the presented token consumed even if its account can no longer
+        # authenticate; reactivation must not resurrect an old credential.
+        session.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid_refresh_token",
@@ -246,7 +262,8 @@ def refresh(
     access_token = create_access_token(
         user.id, user.username, scope=scope, auth_version=user.auth_version
     )
-    refresh_token = create_refresh_token(session, user_id=user.id)
+    refresh_token = create_refresh_token(session, user_id=user.id, commit=False)
+    session.commit()
     set_session_cookie(response, access_token)
     return TokenResponse(
         access_token=access_token,
@@ -266,12 +283,8 @@ def logout(
     """Invalidate access token and optionally revoke refresh token."""
     if token:
         revoke_access_token(token)
-    if body and body.refresh_token:
-        revoke_refresh_token(session, body.refresh_token)
-    current_user.auth_version += 1
-    session.add(current_user)
+    invalidate_user_sessions(session, current_user)
     session.commit()
-    revoke_all_refresh_tokens(session, current_user.id)
     clear_session_cookie(response)
     return {"ok": True}
 

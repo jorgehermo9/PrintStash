@@ -67,10 +67,13 @@ from app.schemas.models import (
     ModelFacetsRead,
     ModelFilters,
     ModelListItem,
+    ModelPageRead,
     ModelPrinterFileRead,
     ModelPrintJobRead,
     ModelRead,
+    ModelSort,
     ModelUpdate,
+    OutlinerModelRead,
     PrintStatisticsRead,
     RevisionBatchLabels,
     RevisionBatchResult,
@@ -108,9 +111,7 @@ _GCODE_SUFFIXES = {".gcode", ".g", ".gco", ".bgcode"}
 def _stage_gcode_upload(upload: UploadFile, suffix: str) -> Path:
     staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
     try:
-        storage.stream_to_path(
-            upload.file, staged, max_bytes=settings.max_upload_bytes
-        )
+        storage.stream_to_path(upload.file, staged, max_bytes=settings.max_upload_bytes)
     except storage.UploadTooLarge as exc:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -225,6 +226,128 @@ def list_models(
         filters=filters,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get(
+    "/page",
+    response_model=ModelPageRead,
+    summary="List a globally sorted cursor page of Models",
+)
+def page_models(
+    collection: Optional[str] = Query(None),
+    direct: bool = Query(False),
+    tag: Optional[List[str]] = Query(None),
+    q: Optional[str] = Query(None),
+    printer_id: Optional[int] = Query(None),
+    printer_presence: Optional[Literal["any", "none"]] = Query(None),
+    favorites: bool = Query(False),
+    file_type: Optional[List[FileType]] = Query(None),
+    material_type: Optional[List[str]] = Query(None),
+    slicer_name: Optional[List[str]] = Query(None),
+    printer_model: Optional[List[str]] = Query(None),
+    revision_status: Optional[List[FileRevisionStatus]] = Query(None),
+    printed: Optional[bool] = Query(None),
+    print_outcome: Optional[List[PrintJobState]] = Query(None),
+    storage_filter: Optional[List[Literal["vault", "external"]]] = Query(
+        None, alias="storage"
+    ),
+    uploaded_after: Optional[datetime] = Query(None),
+    uploaded_before: Optional[datetime] = Query(None),
+    sort: ModelSort = Query(ModelSort.DATE_DESC),
+    cursor: Optional[str] = Query(None, max_length=1024),
+    limit: int = Query(60, ge=1, le=200),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ModelPageRead:
+    if (
+        printer_id is not None or printer_presence is not None
+    ) and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="admin_required")
+    filters = ModelFilters(
+        collection=collection,
+        direct=direct,
+        tag=tag or [],
+        q=q,
+        printer_id=printer_id,
+        printer_presence=printer_presence,
+        favorites=favorites,
+        file_type=file_type or [],
+        material_type=material_type or [],
+        slicer_name=slicer_name or [],
+        printer_model=printer_model or [],
+        revision_status=revision_status or [],
+        printed=printed,
+        print_outcome=print_outcome or [],
+        storage=storage_filter or [],
+        uploaded_after=uploaded_after,
+        uploaded_before=uploaded_before,
+    )
+    try:
+        return model_views.page_items(
+            session,
+            current_user,
+            filters=filters,
+            sort=sort,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ValueError as exc:
+        if str(exc) == "invalid_model_cursor":
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise
+
+
+@router.get(
+    "/outliner",
+    response_model=list[OutlinerModelRead],
+    summary="List lightweight Model leaves for the desktop outliner",
+)
+def outliner_models(
+    tag: Optional[List[str]] = Query(None),
+    printer_id: Optional[int] = Query(None),
+    printer_presence: Optional[Literal["any", "none"]] = Query(None),
+    favorites: bool = Query(False),
+    file_type: Optional[List[FileType]] = Query(None),
+    material_type: Optional[List[str]] = Query(None),
+    slicer_name: Optional[List[str]] = Query(None),
+    printer_model: Optional[List[str]] = Query(None),
+    revision_status: Optional[List[FileRevisionStatus]] = Query(None),
+    printed: Optional[bool] = Query(None),
+    print_outcome: Optional[List[PrintJobState]] = Query(None),
+    storage_filter: Optional[List[Literal["vault", "external"]]] = Query(
+        None, alias="storage"
+    ),
+    uploaded_after: Optional[datetime] = Query(None),
+    uploaded_before: Optional[datetime] = Query(None),
+    limit: int = Query(500, ge=1, le=500),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> list[OutlinerModelRead]:
+    if (
+        printer_id is not None or printer_presence is not None
+    ) and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return model_views.outliner_items(
+        session,
+        current_user,
+        filters=ModelFilters(
+            tag=tag or [],
+            printer_id=printer_id,
+            printer_presence=printer_presence,
+            favorites=favorites,
+            file_type=file_type or [],
+            material_type=material_type or [],
+            slicer_name=slicer_name or [],
+            printer_model=printer_model or [],
+            revision_status=revision_status or [],
+            printed=printed,
+            print_outcome=print_outcome or [],
+            storage=storage_filter or [],
+            uploaded_after=uploaded_after,
+            uploaded_before=uploaded_before,
+        ),
+        limit=limit,
     )
 
 
@@ -369,7 +492,21 @@ def export_library_archive(
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> FileResponse:
-    path = library_transfer.create_archive(session, current_user)
+    try:
+        path = library_transfer.create_archive(session, current_user)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "archive_too_large":
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=detail,
+            ) from exc
+        if detail == "archive_blob_hash_mismatch":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=detail,
+            ) from exc
+        raise
     return FileResponse(
         path,
         media_type="application/zip",
@@ -383,7 +520,7 @@ def export_library_archive(
     dependencies=[Depends(require_superuser)],
     summary="Import a portable full-library archive",
 )
-async def import_library_archive(
+def import_library_archive(
     file: UploadFile = UploadFileParam(...),
     current_user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
@@ -678,8 +815,14 @@ def create_manual_print_job(
 ) -> ModelPrintJobRead:
     _require_model_role(session, current_user, model_id, CollectionRole.EDIT)
 
-    file_row = session.get(File, payload.file_id)
-    if file_row is None or file_row.model_id != model_id:
+    file_row = session.exec(
+        select(File).where(
+            File.id == payload.file_id,
+            File.model_id == model_id,
+            live(File),
+        )
+    ).first()
+    if file_row is None:
         raise HTTPException(status_code=404, detail={"code": "file_not_found"})
 
     # Either a registered printer (by id) or an ad-hoc free-text printer name.
@@ -693,10 +836,7 @@ def create_manual_print_job(
     elif not printer_name:
         raise HTTPException(status_code=422, detail={"code": "printer_required"})
 
-    try:
-        state = PrintJobState(payload.state)
-    except ValueError:
-        state = PrintJobState.COMPLETED
+    state = payload.state
 
     job = PrintJob(
         printer_id=payload.printer_id,
@@ -765,7 +905,6 @@ async def import_print_jobs_from_printer(
 
     try:
         return await job_import.import_print_jobs_from_printer(
-            session,
             model_id=model_id,
             printer_id=printer_id,
             moonraker_url=printer.moonraker_url,

@@ -263,6 +263,7 @@ class File(SQLModel, table=True):
     __tablename__ = "files"
     __table_args__ = (
         Index("uq_files_model_version", "model_id", "version", unique=True),
+        Index("ix_files_model_deleted_type", "model_id", "deleted_at", "file_type"),
         Index(
             "uq_files_live_recommended_gcode",
             "model_id",
@@ -425,6 +426,9 @@ class Model(SQLModel, table=True):
     """Logical asset, deduplicated by `hash` (source mesh sha256, gcode fallback)."""
 
     __tablename__ = "models"
+    __table_args__ = (
+        Index("ix_models_deleted_updated_id", "deleted_at", "updated_at", "id"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, max_length=255)
@@ -512,6 +516,15 @@ class Document(SQLModel, table=True):
 
 class Printer(SQLModel, table=True):
     __tablename__ = "printers"
+    __table_args__ = (
+        Index(
+            "uq_printers_live_default",
+            "is_default",
+            unique=True,
+            sqlite_where=text("is_default = 1 AND deleted_at IS NULL"),
+            postgresql_where=text("is_default IS TRUE AND deleted_at IS NULL"),
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=128)
@@ -983,6 +996,15 @@ class PrinterMaintenanceLog(SQLModel, table=True):
 
 class BackgroundJob(SQLModel, table=True):
     __tablename__ = "background_jobs"
+    __table_args__ = (
+        Index(
+            "ix_background_jobs_visible_state_owner_updated",
+            "visible",
+            "state",
+            "owner_user_id",
+            "updated_at",
+        ),
+    )
 
     id: str = Field(primary_key=True, max_length=64)
     owner_user_id: Optional[int] = Field(

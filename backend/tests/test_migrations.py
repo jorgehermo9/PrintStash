@@ -6,6 +6,7 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel
 
 import app.db.models  # noqa: F401 — register all tables on SQLModel.metadata
@@ -46,6 +47,27 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
     file_indexes = {index["name"]: index for index in inspector.get_indexes("files")}
     assert bool(file_indexes["uq_files_model_version"]["unique"]) is True
     assert bool(file_indexes["uq_files_live_recommended_gcode"]["unique"]) is True
+    assert file_indexes["ix_files_model_deleted_type"]["column_names"] == [
+        "model_id",
+        "deleted_at",
+        "file_type",
+    ]
+    model_indexes = {index["name"]: index for index in inspector.get_indexes("models")}
+    assert model_indexes["ix_models_deleted_updated_id"]["column_names"] == [
+        "deleted_at",
+        "updated_at",
+        "id",
+    ]
+    background_job_indexes = {
+        index["name"]: index for index in inspector.get_indexes("background_jobs")
+    }
+    assert background_job_indexes["ix_background_jobs_visible_state_owner_updated"][
+        "column_names"
+    ] == ["visible", "state", "owner_user_id", "updated_at"]
+    printer_indexes = {
+        index["name"]: index for index in inspector.get_indexes("printers")
+    }
+    assert bool(printer_indexes["uq_printers_live_default"]["unique"]) is True
 
     share_columns = {col["name"]: col for col in inspector.get_columns("share_links")}
     assert "model_id" in share_columns
@@ -131,12 +153,16 @@ def test_runner_orphan_db_is_adopted_without_table_exists_error(tmp_path: Path) 
     assert _current(url) == _head_revision()
 
 
-def test_runner_rejects_incomplete_orphan_schema_without_stamping(tmp_path: Path) -> None:
+def test_runner_rejects_incomplete_orphan_schema_without_stamping(
+    tmp_path: Path,
+) -> None:
     url = _url(tmp_path, "incomplete-orphan.sqlite")
     engine = create_engine(url)
     try:
         with engine.begin() as connection:
-            connection.execute(text("CREATE TABLE models (id INTEGER PRIMARY KEY, name TEXT)"))
+            connection.execute(
+                text("CREATE TABLE models (id INTEGER PRIMARY KEY, name TEXT)")
+            )
     finally:
         engine.dispose()
 
@@ -145,6 +171,101 @@ def test_runner_rejects_incomplete_orphan_schema_without_stamping(tmp_path: Path
 
     assert _current(url) is None
     assert "alembic_version" not in _table_names(url)
+
+
+def _rewrite_sqlite_table_definition(
+    url: str,
+    table_name: str,
+    old: str,
+    new: str,
+) -> None:
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            statement = connection.execute(
+                text(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type = 'table' AND name = :name"
+                ),
+                {"name": table_name},
+            ).scalar_one()
+            assert old in statement
+            connection.exec_driver_sql("PRAGMA writable_schema=ON")
+            connection.execute(
+                text(
+                    "UPDATE sqlite_master SET sql = :sql "
+                    "WHERE type = 'table' AND name = :name"
+                ),
+                {"sql": statement.replace(old, new), "name": table_name},
+            )
+            schema_version = connection.exec_driver_sql(
+                "PRAGMA schema_version"
+            ).scalar_one()
+            connection.exec_driver_sql(f"PRAGMA schema_version={schema_version + 1}")
+            connection.exec_driver_sql("PRAGMA writable_schema=OFF")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("table_name", "old", "new"),
+    [
+        ("users", "username VARCHAR(128) NOT NULL", "username INTEGER NOT NULL"),
+        (
+            "users",
+            "hashed_password VARCHAR(255) NOT NULL",
+            "hashed_password VARCHAR(255)",
+        ),
+        (
+            "users",
+            "oidc_managed BOOLEAN DEFAULT '0'",
+            "oidc_managed BOOLEAN DEFAULT '1'",
+        ),
+        (
+            "printer_permissions",
+            "FOREIGN KEY(user_id) REFERENCES users (id)",
+            "FOREIGN KEY(user_id) REFERENCES collections (id)",
+        ),
+    ],
+)
+def test_runner_rejects_structurally_divergent_orphan_schema(
+    tmp_path: Path,
+    table_name: str,
+    old: str,
+    new: str,
+) -> None:
+    url = _url(tmp_path, f"divergent-{table_name}-{abs(hash(old))}.sqlite")
+    engine = create_engine(url)
+    SQLModel.metadata.create_all(engine)
+    engine.dispose()
+    _rewrite_sqlite_table_definition(url, table_name, old, new)
+
+    with pytest.raises(migrate_mod.OrphanSchemaError, match="does not match"):
+        migrate_mod.run_migrations(url)
+
+    assert _current(url) is None
+
+
+def test_runner_rejects_orphan_with_wrong_partial_index_predicate(
+    tmp_path: Path,
+) -> None:
+    url = _url(tmp_path, "divergent-partial-index.sqlite")
+    engine = create_engine(url)
+    SQLModel.metadata.create_all(engine)
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("DROP INDEX uq_printers_live_default")
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX uq_printers_live_default "
+                "ON printers (is_default) WHERE is_default = 0"
+            )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(migrate_mod.OrphanSchemaError, match="does not match"):
+        migrate_mod.run_migrations(url)
+
+    assert _current(url) is None
 
 
 def test_revision_uniqueness_migration_repairs_existing_duplicates(
@@ -197,9 +318,11 @@ def test_revision_uniqueness_migration_repairs_existing_duplicates(
     engine = create_engine(url)
     try:
         with engine.connect() as connection:
-            versions = connection.execute(
-                text("SELECT version FROM files ORDER BY version")
-            ).scalars().all()
+            versions = (
+                connection.execute(text("SELECT version FROM files ORDER BY version"))
+                .scalars()
+                .all()
+            )
             recommended = connection.execute(
                 text("SELECT COUNT(*) FROM files WHERE is_recommended = 1")
             ).scalar_one()
@@ -210,6 +333,55 @@ def test_revision_uniqueness_migration_repairs_existing_duplicates(
         assert versions == [1, 2]
         assert recommended == 1
         assert next_version == 3
+    finally:
+        engine.dispose()
+
+
+def test_default_printer_migration_repairs_duplicates_and_enforces_uniqueness(
+    tmp_path: Path,
+) -> None:
+    url = _url(tmp_path, "duplicate-default-printers.sqlite")
+    cfg = migrate_mod._alembic_config(url)
+    command.upgrade(cfg, "c7e4a1b9d2f6")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            for name in ("First", "Second"):
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO printers (
+                            name, provider, moonraker_url, is_default,
+                            drain_mode, status, created_at, updated_at
+                        ) VALUES (
+                            :name, 'MOONRAKER', '', 1, 0, 'UNKNOWN',
+                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {"name": name},
+                )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            defaults = (
+                connection.execute(
+                    text("SELECT id FROM printers WHERE is_default = 1 ORDER BY id")
+                )
+                .scalars()
+                .all()
+            )
+        assert defaults == [1]
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE printers SET is_default = 1 WHERE id = 2")
+                )
     finally:
         engine.dispose()
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import Session, select
 
 from app.core.time import utcnow
@@ -22,6 +25,7 @@ from app.db.models import (
     PrinterStatus,
     PrintJob,
     PrintJobState,
+    RoutingStrategy,
     User,
 )
 from app.services import fleet
@@ -316,6 +320,88 @@ def test_scheduler_rechecks_drain_before_dispatch(
     )
     assert job["state"] == "queued"
     assert job["blocked_reason"] == "printer_unavailable"
+
+
+def test_scheduler_candidate_batch_has_a_fixed_query_budget(
+    db_session: Session,
+) -> None:
+    printer = Printer(
+        name="Offline batch",
+        moonraker_url="http://offline-batch",
+        status=PrinterStatus.OFFLINE,
+    )
+    db_session.add(printer)
+    db_session.commit()
+    artifact = _gcode(db_session)
+    for index in range(120):
+        db_session.add(
+            PrintJob(
+                printer_id=printer.id,
+                file_id=artifact.id,
+                model_id=artifact.model_id,
+                remote_filename=f"batch-{index}.gcode",
+                state=PrintJobState.QUEUED,
+                routing_strategy=RoutingStrategy.MANUAL,
+                queue_position=index + 1,
+            )
+        )
+    db_session.commit()
+    from app.services.printer_jobs import _claim_next_sync
+
+    statements: list[str] = []
+    measured_thread = threading.get_ident()
+
+    def _record(*args) -> None:  # noqa: ANN002
+        # The engine is process-wide in the suite. Ignore unrelated provider
+        # pollers that may still be finishing a worker-thread transaction.
+        if threading.get_ident() == measured_thread:
+            statements.append(args[2])
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        assert _claim_next_sync() is None
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+    db_session.expire_all()
+    blocked = db_session.exec(
+        select(PrintJob).where(PrintJob.blocked_reason == "printer_unavailable")
+    ).all()
+    assert len(blocked) == 100
+    assert len(statements) <= 14
+
+    # Previously blocked rows sort after untouched rows, so later ticks cannot
+    # starve candidates beyond the bounded first page.
+    assert _claim_next_sync() is None
+    db_session.expire_all()
+    assert (
+        len(
+            db_session.exec(
+                select(PrintJob).where(PrintJob.blocked_reason == "printer_unavailable")
+            ).all()
+        )
+        == 120
+    )
+
+
+def test_dispatch_sql_does_not_block_the_event_loop(monkeypatch) -> None:
+    from app.services import printer_jobs
+
+    def _slow_claim() -> None:
+        time.sleep(0.2)
+        return None
+
+    monkeypatch.setattr(printer_jobs, "_claim_next_sync", _slow_claim)
+
+    async def _run() -> None:
+        dispatch = asyncio.create_task(printer_jobs.dispatch_next())
+        started = time.monotonic()
+        await asyncio.sleep(0.02)
+        assert time.monotonic() - started < 0.1
+        assert await dispatch is None
+
+    asyncio.run(_run())
 
 
 def test_fleet_summary_counts_queue_drain_and_maintenance(
@@ -623,6 +709,64 @@ def test_queue_history_is_bounded_and_pageable(
         "history-8.gcode",
         "history-7.gcode",
         "history-6.gcode",
+    ]
+
+
+def test_queue_history_applies_rbac_before_pagination(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    visible = Printer(name="Visible", moonraker_url="http://visible")
+    hidden = Printer(name="Hidden", moonraker_url="http://hidden")
+    user = User(
+        username="queue-viewer",
+        hashed_password=hash_password("Password123"),
+        is_active=True,
+    )
+    db_session.add(visible)
+    db_session.add(hidden)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(visible)
+    db_session.refresh(hidden)
+    db_session.refresh(user)
+    db_session.add(
+        PrinterPermission(
+            user_id=user.id,
+            printer_id=visible.id,
+            role=PrinterRole.VIEW,
+        )
+    )
+    artifact = _gcode(db_session)
+    now = utcnow()
+    for index, printer in enumerate((hidden, visible, hidden, visible)):
+        db_session.add(
+            PrintJob(
+                printer_id=printer.id,
+                file_id=artifact.id,
+                model_id=artifact.model_id,
+                remote_filename=f"rbac-{index}.gcode",
+                state=PrintJobState.COMPLETED,
+                finished_at=now + timedelta(seconds=index),
+            )
+        )
+    db_session.commit()
+    token = create_access_token(
+        user.id,
+        user.username,
+        scope="write",
+        auth_version=user.auth_version,
+    )
+
+    response = client.get(
+        "/api/v1/fleet/queue?history_limit=2",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert [row["remote_filename"] for row in response.json()] == [
+        "rbac-3.gcode",
+        "rbac-1.gcode",
     ]
 
 
@@ -1173,7 +1317,9 @@ def test_patch_maintenance_window_invalid_range_404(
     assert resp.json()["detail"] == "maintenance_window_invalid"
 
 
-def _user_headers(db_session: Session, username: str, *, is_superuser: bool = False) -> dict[str, str]:
+def _user_headers(
+    db_session: Session, username: str, *, is_superuser: bool = False
+) -> dict[str, str]:
     user = User(
         username=username,
         hashed_password=hash_password("Password123"),
@@ -1187,7 +1333,9 @@ def _user_headers(db_session: Session, username: str, *, is_superuser: bool = Fa
     return {"Authorization": f"Bearer {token}"}
 
 
-def _grant_printer(db_session: Session, username: str, printer: Printer, role: PrinterRole) -> None:
+def _grant_printer(
+    db_session: Session, username: str, printer: Printer, role: PrinterRole
+) -> None:
     user = db_session.exec(select(User).where(User.username == username)).one()
     db_session.add(PrinterPermission(user_id=user.id, printer_id=printer.id, role=role))
     db_session.commit()
@@ -1213,18 +1361,25 @@ def test_create_queue_job_allows_non_superuser_with_printer_role(
     client: TestClient, db_session: Session
 ) -> None:
     printer = Printer(
-        name="MemberManual", moonraker_url="http://member-manual", status=PrinterStatus.READY
+        name="MemberManual",
+        moonraker_url="http://member-manual",
+        status=PrinterStatus.READY,
     )
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
 
-    collection = Collection(name="Member vault", slug="member-vault", path="member-vault")
+    collection = Collection(
+        name="Member vault", slug="member-vault", path="member-vault"
+    )
     db_session.add(collection)
     db_session.commit()
     db_session.refresh(collection)
     model = Model(
-        name="Member cube", slug="member-cube", hash="9" * 64, collection_id=collection.id
+        name="Member cube",
+        slug="member-cube",
+        hash="9" * 64,
+        collection_id=collection.id,
     )
     db_session.add(model)
     db_session.commit()
@@ -1246,7 +1401,9 @@ def test_create_queue_job_allows_non_superuser_with_printer_role(
     _grant_printer(db_session, "manual-member", printer, PrinterRole.PRINT)
     member = db_session.exec(select(User).where(User.username == "manual-member")).one()
     db_session.add(
-        CollectionPermission(user_id=member.id, collection_id=collection.id, role=CollectionRole.EDIT)
+        CollectionPermission(
+            user_id=member.id, collection_id=collection.id, role=CollectionRole.EDIT
+        )
     )
     db_session.commit()
 
@@ -1264,7 +1421,9 @@ def test_queue_error_maps_fleet_queue_job_not_found_to_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
 ) -> None:
     printer = Printer(
-        name="QueueErrorMapping", moonraker_url="http://queue-error-mapping", status=PrinterStatus.READY
+        name="QueueErrorMapping",
+        moonraker_url="http://queue-error-mapping",
+        status=PrinterStatus.READY,
     )
     db_session.add(printer)
     db_session.commit()
@@ -1289,7 +1448,9 @@ def test_queue_error_maps_fleet_queue_job_not_found_to_404(
     db_session.add(job)
     db_session.commit()
 
-    resp = client.post(f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers)
+    resp = client.post(
+        f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
+    )
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "queue_job_not_found"
@@ -1349,7 +1510,9 @@ def test_retry_queue_job_404_when_manual_printer_soft_deleted(
     db_session.add(printer)
     db_session.commit()
 
-    resp = client.post(f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers)
+    resp = client.post(
+        f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
+    )
 
     # _require_queue_job_role validates job.printer_id via printer_rbac before
     # the retry route ever calls fleet.retry_queue_job, so a soft-deleted
@@ -1397,7 +1560,9 @@ def test_patch_queue_job_403_for_non_superuser_strategy_change(
     client: TestClient, db_session: Session
 ) -> None:
     printer = Printer(
-        name="MemberStrategy", moonraker_url="http://member-strategy", status=PrinterStatus.READY
+        name="MemberStrategy",
+        moonraker_url="http://member-strategy",
+        status=PrinterStatus.READY,
     )
     db_session.add(printer)
     db_session.commit()
@@ -1428,7 +1593,9 @@ def test_patch_routing_maps_fleet_error_to_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
 ) -> None:
     printer = Printer(
-        name="RoutingRace", moonraker_url="http://routing-race", status=PrinterStatus.READY
+        name="RoutingRace",
+        moonraker_url="http://routing-race",
+        status=PrinterStatus.READY,
     )
     db_session.add(printer)
     db_session.commit()
@@ -1453,7 +1620,9 @@ def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
 ) -> None:
     printer = Printer(
-        name="MaintenanceRace", moonraker_url="http://maintenance-race", status=PrinterStatus.READY
+        name="MaintenanceRace",
+        moonraker_url="http://maintenance-race",
+        status=PrinterStatus.READY,
     )
     db_session.add(printer)
     db_session.commit()
@@ -1474,7 +1643,10 @@ def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
     resp = client.post(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
         headers=auth_headers,
-        json={"starts_at": now.isoformat(), "ends_at": (now + timedelta(minutes=5)).isoformat()},
+        json={
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=5)).isoformat(),
+        },
     )
     assert resp.status_code == 404
     assert resp.json()["detail"] == "printer_not_found"

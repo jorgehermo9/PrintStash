@@ -6,11 +6,19 @@ coverage on user/role management error branches, 165-220).
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-from sqlmodel import Session
+import threading
+import time
 
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from sqlmodel import Session, SQLModel, create_engine, select
+
+from app.api.v1 import admin as admin_api
 from app.core.time import utcnow
 from app.db.models import AuditLog, Collection, File, FileType, Model, Tag, User
+from app.schemas.auth import UserUpdate
+from app.services.audit import install_audit_listeners
 from app.services.auth import create_access_token, hash_password
 
 
@@ -40,7 +48,9 @@ def _headers(user: User) -> dict[str, str]:
 
 
 class TestRequireSuperuser:
-    def test_non_superuser_blocked(self, client: TestClient, db_session: Session) -> None:
+    def test_non_superuser_blocked(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         user = _user(db_session, "regular", superuser=False)
         resp = client.get("/api/v1/admin/users", headers=_headers(user))
         assert resp.status_code == 403
@@ -48,7 +58,9 @@ class TestRequireSuperuser:
 
 
 class TestListUsers:
-    def test_list_excludes_deleted(self, client: TestClient, db_session: Session) -> None:
+    def test_list_excludes_deleted(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         admin = _user(db_session, "admin1")
         gone = _user(db_session, "gone", superuser=False)
         gone.deleted_at = utcnow()
@@ -97,12 +109,16 @@ class TestUpdateUser:
     def test_update_not_found(self, client: TestClient, db_session: Session) -> None:
         admin = _user(db_session, "admin4")
         resp = client.patch(
-            "/api/v1/admin/users/999", json={"email": "x@x.com"}, headers=_headers(admin)
+            "/api/v1/admin/users/999",
+            json={"email": "x@x.com"},
+            headers=_headers(admin),
         )
         assert resp.status_code == 404
         assert resp.json()["detail"] == "user_not_found"
 
-    def test_update_deleted_user_404(self, client: TestClient, db_session: Session) -> None:
+    def test_update_deleted_user_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         admin = _user(db_session, "admin5")
         target = _user(db_session, "deleted-target", superuser=False)
         target.deleted_at = utcnow()
@@ -207,6 +223,48 @@ class TestResetPassword:
         )
         assert resp.status_code == 200
 
+    def test_reset_password_invalidates_existing_access_and_refresh_tokens(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _user(db_session, "admin-reset-sessions")
+        target = _user(db_session, "reset-sessions", superuser=False)
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "reset-sessions", "password": "Password123"},
+        ).json()
+
+        response = client.post(
+            f"/api/v1/admin/users/{target.id}/password",
+            json={"password": "NewPassword123"},
+            headers=_headers(admin),
+        )
+
+        assert response.status_code == 200
+        assert (
+            client.get(
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {login['access_token']}"},
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": login["refresh_token"]},
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post(
+                "/api/v1/auth/login",
+                json={
+                    "username": "reset-sessions",
+                    "password": "NewPassword123",
+                },
+            ).status_code
+            == 200
+        )
+
 
 class TestDeactivateUser:
     def test_deactivate_not_found(
@@ -224,7 +282,9 @@ class TestDeactivateUser:
         target.deleted_at = utcnow()
         db_session.add(target)
         db_session.commit()
-        resp = client.delete(f"/api/v1/admin/users/{target.id}", headers=_headers(admin))
+        resp = client.delete(
+            f"/api/v1/admin/users/{target.id}", headers=_headers(admin)
+        )
         assert resp.status_code == 404
 
     def test_deactivate_last_superuser_blocked(
@@ -238,14 +298,112 @@ class TestDeactivateUser:
     def test_deactivate_success(self, client: TestClient, db_session: Session) -> None:
         admin = _user(db_session, "admin-i")
         target = _user(db_session, "deactivate-me", superuser=False)
-        resp = client.delete(f"/api/v1/admin/users/{target.id}", headers=_headers(admin))
+        resp = client.delete(
+            f"/api/v1/admin/users/{target.id}", headers=_headers(admin)
+        )
         assert resp.status_code == 204
         db_session.refresh(target)
         assert target.is_active is False
 
+    def test_deactivate_invalidates_existing_access_and_refresh_tokens(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _user(db_session, "admin-deactivate-sessions")
+        target = _user(db_session, "deactivate-sessions", superuser=False)
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": target.username, "password": "Password123"},
+        ).json()
+
+        response = client.delete(
+            f"/api/v1/admin/users/{target.id}", headers=_headers(admin)
+        )
+
+        assert response.status_code == 204
+        assert (
+            client.get(
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {login['access_token']}"},
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": login["refresh_token"]},
+            ).status_code
+            == 401
+        )
+        reactivated = client.patch(
+            f"/api/v1/admin/users/{target.id}",
+            json={"is_active": True},
+            headers=_headers(admin),
+        )
+        assert reactivated.status_code == 200
+        assert (
+            client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": login["refresh_token"]},
+            ).status_code
+            == 401
+        )
+
+    def test_concurrent_admin_lockout_attempts_leave_one_active_superuser(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'admin-race.db'}",
+            connect_args={"check_same_thread": False, "timeout": 5},
+        )
+        SQLModel.metadata.create_all(engine)
+        with Session(engine) as session:
+            first = _user(session, "race-admin-a")
+            second = _user(session, "race-admin-b")
+            user_ids = [first.id, second.id]
+
+        original_count = admin_api._active_superuser_count  # noqa: SLF001
+
+        def slow_count(session: Session) -> int:
+            count = original_count(session)
+            time.sleep(0.1)
+            return count
+
+        monkeypatch.setattr(admin_api, "_active_superuser_count", slow_count)
+        start = threading.Barrier(3)
+        outcomes: list[int] = []
+
+        def deactivate(user_id: int) -> None:
+            with Session(engine) as session:
+                start.wait(timeout=5)
+                try:
+                    admin_api.update_user(
+                        user_id,
+                        UserUpdate(is_active=False),
+                        session,
+                    )
+                except HTTPException as exc:
+                    outcomes.append(exc.status_code)
+                else:
+                    outcomes.append(200)
+
+        threads = [
+            threading.Thread(target=deactivate, args=(user_id,)) for user_id in user_ids
+        ]
+        for thread in threads:
+            thread.start()
+        start.wait(timeout=5)
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert sorted(outcomes) == [200, 400]
+        with Session(engine) as session:
+            assert admin_api._active_superuser_count(session) == 1  # noqa: SLF001
+
 
 class TestAdminDeleteResource:
-    def test_unknown_resource_404(self, client: TestClient, db_session: Session) -> None:
+    def test_unknown_resource_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         admin = _user(db_session, "admin-j")
         resp = client.delete("/api/v1/admin/bogus/1", headers=_headers(admin))
         assert resp.status_code == 404
@@ -325,6 +483,42 @@ class TestAdminDeleteResource:
         db_session.expire_all()
         assert db_session.get(File, file_id) is None
 
+    def test_hard_delete_external_file_preserves_nas_bytes(
+        self, client: TestClient, db_session: Session, tmp_path
+    ) -> None:
+        admin = _user(db_session, "admin-external-file")
+        nas_path = tmp_path / "linked-model.stl"
+        original = b"user-owned-nas-bytes"
+        nas_path.write_bytes(original)
+
+        model = Model(name="linked", slug="linked", hash="8" * 64)
+        db_session.add(model)
+        db_session.commit()
+        db_session.refresh(model)
+        file_row = File(
+            model_id=model.id,
+            path=str(nas_path),
+            original_filename=nas_path.name,
+            file_type=FileType.STL,
+            size_bytes=len(original),
+            sha256="1" * 64,
+            is_external=True,
+        )
+        db_session.add(file_row)
+        db_session.commit()
+        db_session.refresh(file_row)
+        file_id = file_row.id
+
+        response = client.delete(
+            f"/api/v1/admin/files/{file_id}?hard=true",
+            headers=_headers(admin),
+        )
+
+        assert response.status_code == 204
+        db_session.expire_all()
+        assert db_session.get(File, file_id) is None
+        assert nas_path.read_bytes() == original
+
 
 class TestRestoreResource:
     def test_restore_unknown_resource_404(
@@ -360,6 +554,34 @@ class TestRestoreResource:
 
 
 class TestAuditLog:
+    def test_cookie_authenticated_mutation_records_actor(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        install_audit_listeners()
+        admin = _user(db_session, "cookie-audit-admin")
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": admin.username, "password": "Password123"},
+        )
+        assert login.status_code == 200
+
+        created = client.post(
+            "/api/v1/admin/users",
+            json={"username": "cookie-audit-target", "password": "Password123"},
+        )
+
+        assert created.status_code == 201
+        audit_row = db_session.exec(
+            select(AuditLog)
+            .where(
+                AuditLog.resource_type == "users",
+                AuditLog.resource_id == created.json()["id"],
+            )
+            .order_by(AuditLog.id.desc())
+        ).first()
+        assert audit_row is not None
+        assert audit_row.actor_id == admin.id
+
     def test_list_audit_returns_list(
         self, client: TestClient, db_session: Session
     ) -> None:

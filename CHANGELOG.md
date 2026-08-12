@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.11.4
+
+**This patch-version release is an explicit exception to normal 0.x patch policy: it adds cursor pagination endpoints and an append-only index migration. Back up before upgrading.**
+
+### Added
+
+- Model browsing now has globally sorted cursor pagination for date, name, print success, last print, duration, filament, and cost, plus a lightweight desktop-outliner endpoint.
+
+### Fixed
+
+- Portable library exports now enforce the same entry and uncompressed-size ceilings as imports, and verify every source Artifact while streaming, so PrintStash does not produce an archive it would reject on round-trip.
+- Remote thumbnails now expose storage ETags and honor `If-None-Match` with a bodyless `304`, matching local thumbnail cache revalidation.
+- Task Center synchronization now releases timers on cleanup, pauses while the tab is hidden, stops when idle, and backs off after transient errors.
+- Permanent deletion now preserves user-owned external/NAS bytes while consistently removing vault-owned Artifact blobs, thumbnails, dependent rows, Document files, and embedded Document images.
+- Password resets, account activation changes, role changes, and logout now invalidate all access and refresh sessions durably; refresh-token rotation is atomic under concurrent requests and expired rows are pruned in bounded batches.
+- First-run setup now commits its configuration, initial superuser, and completion marker in one transaction, so an interrupted request cannot leave a half-configured vault.
+- Concurrent administrator changes can no longer deactivate or demote the final active superuser.
+- OIDC callback provisioning now participates in backup-restore write quiescing, and cookie-authenticated mutations retain their actor in audit logs.
+- Manual print-history entries now reject trashed Artifacts and invalid states instead of silently treating bad state input as completed.
+- Document trash now supports listing, restore, permanent purge, and retention GC without leaking its binary or embedded-image blobs.
+- Rate-limit state now evicts expired or least-recently-used IP buckets at a fixed cardinality ceiling.
+- Shutdown now cancels and awaits every managed background loop before closing shared clients.
+- Fleet queue pagination now applies printer permissions in SQL before page limits, and one live default printer is enforced by the database with deterministic migration repair.
+- Orphan-database adoption now compares column types, nullability, defaults, keys, constraints, indexes, and partial predicates before stamping a schema as current.
+- Vault garbage collection now removes unreferenced STL caches and Collection images while preserving shared derivatives until their final owner is deleted.
+- Backup APIs now publish database capabilities and return a stable unsupported response for PostgreSQL instead of failing late in SQLite-specific code.
+- Numeric environment limits are validated at startup, including archive and S3 lifecycle relationships, while documented zero-value sentinels remain supported.
+- OpenAPI now describes the actual HTTP Bearer JWT contract used by programmatic clients.
+
+### Changed
+
+- The supported deployment topology is explicitly one API process per vault. Startup claims a vault lock and fails fast when another API process is active; detailed health reports this topology.
+- PostgreSQL 16 now has a real CI contract gate covering fresh migrations, CRUD/RBAC enums, partial indexes, and concurrent refresh-token consumption; critical backend modules and architecture seams also have an incremental Pyright gate.
+- The bundled local S3 service and real-storage CI gate now use pinned SeaweedFS 4.41 instead of archived MinIO. Existing MinIO volumes remain available through an explicit legacy profile for deliberate migration.
+
+### Security
+
+- The container build now pins the `uv` toolchain image to version `0.12.1` and an immutable multi-architecture digest.
+
+### Performance
+
+- Portable archive export now scopes accessible Models directly in SQL instead of first materializing the full metadata export, keeps large ID sets inside SQL subqueries, and hashes Artifact data in bounded chunks.
+- Portable archive import validates Artifact members in bounded chunks and runs blocking upload, ZIP, filesystem, and database work outside the async event loop.
+- Model metric sorts now run in SQL across the complete filtered library instead of draining every frontend page; mobile skips outliner leaves and desktop receives only its minimal tree fields.
+- Background-job reconnect reads filter and bound persisted history in SQL before deserialization, while active polling runs only while work exists.
+- External-library scans coalesce progress persistence to 250 ms or one-percent steps instead of committing once per unchanged Artifact.
+- Model facets and vault counters now each use one aggregate database round-trip, backed by composite indexes for live Artifact, Model cursor, and background-job lookup paths.
+- Fleet dispatch now processes bounded candidate batches, preloads routing and permission data in fixed-query snapshots, and moves synchronous database/import work out of async event loops.
+- Initial font CSS is limited to the Latin subset, and Vite's native TypeScript path resolver replaces the redundant plugin.
+
 ## 0.11.3
 
 **This patch-version release is an explicit exception to normal 0.x patch policy: it adds two user-facing features and an append-only database migration. Back up before upgrading.**
@@ -252,9 +302,9 @@
 - **S3/R2 backends could fail to boot on first run.** `_ensure_bucket`'s
   missing-bucket check compared against a response field
   (`Error.StatusCode`) that a `ClientError` never sets, so the auto-create
-  path never ran on a real S3-compatible store (including MinIO) — startup
+  path never ran on a real S3-compatible store — startup
   failed instead of creating the bucket. Found by adding integration tests
-  against a real MinIO instance.
+  against a real SeaweedFS instance.
 - **A rejected send-to-printer could leave a job stuck "uploading" forever.**
   The print job was marked `UPLOADING` before checking the printer's provider
   supported the upload; a 409 on an unsupported provider left it orphaned in

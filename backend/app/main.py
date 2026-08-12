@@ -30,6 +30,7 @@ from app.core.metrics import (
     printer_status,
 )
 from app.core.metrics import registry as _metrics_registry
+from app.core.topology import acquire_process_lock, release_process_lock
 from app.db.session import get_session_factory, init_db
 from app.services.audit import (
     clear_audit_context,
@@ -52,6 +53,13 @@ from app.services.trash import gc_soft_deleted
 logger = get_logger(__name__)
 
 
+async def _cancel_tasks(*tasks: asyncio.Task) -> None:
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def _safe_db_url(value: str) -> str:
     try:
         return make_url(value).render_as_string(hide_password=True)
@@ -61,6 +69,8 @@ def _safe_db_url(value: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    process_lock = acquire_process_lock()
+    app.state.process_lock = process_lock
     logger.info("starting %s v%s", settings.app_name, settings.app_version)
     _app_info.info({"version": settings.app_version, "name": settings.app_name})
     # DB must exist before we can read the runtime overlay.
@@ -93,7 +103,9 @@ async def lifespan(app: FastAPI):
 
     interrupted_imports = reconcile_interrupted_items()
     if interrupted_imports:
-        logger.warning("reconciled %d interrupted pending import(s)", interrupted_imports)
+        logger.warning(
+            "reconciled %d interrupted pending import(s)", interrupted_imports
+        )
     stranded_dispatches = reconcile_stranded_dispatches()
     if stranded_dispatches:
         logger.warning("reconciled %d stranded fleet dispatch(es)", stranded_dispatches)
@@ -128,10 +140,12 @@ async def lifespan(app: FastAPI):
         logger.exception("library watcher failed to start; scheduled scans still run")
     yield
     logger.info("shutting down printer hub")
-    app.state.gc_task.cancel()
-    app.state.external_scan_task.cancel()
-    app.state.notification_task.cancel()
-    app.state.fleet_scheduler_task.cancel()
+    await _cancel_tasks(
+        app.state.gc_task,
+        app.state.external_scan_task,
+        app.state.notification_task,
+        app.state.fleet_scheduler_task,
+    )
     await watcher.stop_all()
     await hub.stop_all()
     from app.services.browser_fetch import close_browser
@@ -139,6 +153,7 @@ async def lifespan(app: FastAPI):
 
     await close_http_client()
     await close_browser()
+    release_process_lock(process_lock)
     logger.info("shutting down")
 
 
@@ -168,6 +183,12 @@ async def _gc_loop() -> None:
                 await asyncio.to_thread(prune_history)
             except Exception:
                 logger.exception("pending import history pruning failed")
+            try:
+                from app.services.auth import prune_expired_refresh_tokens
+
+                await asyncio.to_thread(prune_expired_refresh_tokens)
+            except Exception:
+                logger.exception("expired refresh-token pruning failed")
         finally:
             end_mutating_operation()
         await asyncio.sleep(3600)
@@ -304,11 +325,14 @@ async def quiesce_writes_during_restore(request: Request, call_next):
 @app.middleware("http")
 async def bind_audit_context(request: Request, call_next):
     actor_id = None
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        from app.services.auth import verify_access_token  # deferred: avoids cycle
+    from app.services.auth import (  # deferred: avoids cycle
+        extract_access_token,
+        verify_access_token,
+    )
 
-        payload = verify_access_token(auth.split(" ", 1)[1])
+    token = extract_access_token(request)
+    if token:
+        payload = verify_access_token(token)
         if payload and payload.get("sub"):
             try:
                 actor_id = int(payload["sub"])

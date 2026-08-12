@@ -14,10 +14,24 @@ Redis/queues/cloud. `AGENTS.md` (layout, commands, hard rules) is binding.
 <!-- Update this block when a release ships. -->
 Latest shipped: v0.11.3 (Centauri Carbon upload beta, spool safeguards,
 ingestion fixes, and data-integrity hardening), merged to `main` and tagged.
-Next: 0.12 (`docs/roadmap.md`). Private plans
-live in gitignored `reports/` — start with
-`reports/14-implementation-plan-to-1.0.0.md` (OSS) and
-`reports/15-cloud-implementation-plan.md` (cloud); never commit or quote them.
+Active release work: `0.11.4`, on the existing version branch and consolidated
+PR. It combines the large-library performance pass with every backend-audit
+finding marked **Implementar ahora** or **Planificar**, by explicit release
+direction. Read `reports/17-backend-audit-0.11.4-implementation-plan.md` for
+the immediate findings and
+`reports/18-backend-audit-planned-findings-0.11.4.md` for the planned findings;
+read
+`reports/16-large-library-performance-implementation-plan.md` for the scale
+work already on the branch. Keep each fix in a traceable commit, obey the
+plans' internal gates, and run the real PostgreSQL and incremental Pyright
+gates introduced by the planned-finding pass. After 0.11.4 ships, resume 0.12
+planning from `docs/roadmap.md`.
+
+Private plans live in `reports/`. They are local-only: never commit, publish,
+or quote them. Older long-range plans may not exist in every checkout; when
+`reports/14-implementation-plan-to-1.0.0.md` or
+`reports/15-cloud-implementation-plan.md` is absent, use the public roadmap
+and changelog instead of reconstructing their contents.
 
 ## Before changing anything
 
@@ -41,7 +55,9 @@ live in gitignored `reports/` — start with
 | Backend, DB migration, testing, config | [references/backend.md](references/backend.md) |
 | Frontend / UI change | [references/frontend.md](references/frontend.md) |
 | Printer providers (new or changed) | [references/providers.md](references/providers.md) |
-| "What's next" / roadmap planning | `reports/14-implementation-plan-to-1.0.0.md` (read only the needed section) |
+| Implement a backend-audit finding on `0.11.4` | `reports/17-backend-audit-0.11.4-implementation-plan.md` for **Implementar ahora**; `reports/18-backend-audit-planned-findings-0.11.4.md` for **Planificar** (read shared constraints, dependency graph, finding card, and gate) |
+| Continue the `0.11.4` large-library pass | `reports/16-large-library-performance-implementation-plan.md` (read only the relevant card and shared constraints) |
+| "What's next" / roadmap planning after `0.11.4` | `reports/14-implementation-plan-to-1.0.0.md` when present (read only the needed section); otherwise `docs/roadmap.md` + `CHANGELOG.md` |
 
 ## Workflow for any change
 
@@ -51,10 +67,17 @@ live in gitignored `reports/` — start with
 3. Validate: `cd backend && uv run pytest tests -v && uv run ruff check app/ tests/`;
    frontend `pnpm lint && pnpm typecheck` (+ `pnpm test` if logic changed).
    Report results honestly — never say tests passed without running them.
+   Backend validation also includes `uv run pyright`; PostgreSQL-affecting
+   changes run `PRINTSTASH_TEST_POSTGRES_URL=... uv run pytest tests/postgres -v`
+   against a real supported server.
 4. Update docs the change invalidates (changelog entry, `docs/provider-support.md`,
    `docs/known-limitations.md`, docs — now in the `printstash-landing` repo,
    not this one) — see the routing table.
-5. One PR per bug/feature, conventional commit messages, repo git identity.
+5. Normally use one PR per bug/feature, conventional commit messages, and the
+   repo git identity. The existing `0.11.4` consolidated PR is the explicit
+   exception: keep its audit fixes traceable and respect plans 17 and 18; do
+   not split them onto another branch unless the user reverses that release
+   direction.
 
 ## Common mistakes to avoid
 

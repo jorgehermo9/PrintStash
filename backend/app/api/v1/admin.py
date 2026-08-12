@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel import Session, select
 
@@ -8,6 +10,7 @@ from app.core.time import utcnow
 from app.db.models import (
     AuditLog,
     Collection,
+    Document,
     File,
     Model,
     Printer,
@@ -18,13 +21,17 @@ from app.db.models import (
 )
 from app.db.session import get_session
 from app.schemas.auth import UserCreate, UserPasswordUpdate, UserRead, UserUpdate
-from app.services.auth import get_user_by_username, hash_password
-from app.services.storage_backend import get_backend
-from app.services.trash import gc_soft_deleted
+from app.services.auth import (
+    get_user_by_username,
+    hash_password,
+    invalidate_user_sessions,
+)
+from app.services.trash import gc_soft_deleted, hard_delete_document, hard_delete_file
 
 router = APIRouter(
     prefix="/admin", tags=["admin"], dependencies=[Depends(require_superuser)]
 )
+_admin_security_lock = threading.RLock()
 
 _RESOURCE_MODEL = {
     "models": Model,
@@ -35,6 +42,7 @@ _RESOURCE_MODEL = {
     "users": User,
     "tags": Tag,
     "collections": Collection,
+    "documents": Document,
 }
 
 
@@ -103,6 +111,18 @@ def update_user(
     payload: UserUpdate,
     session: Session = Depends(get_session),
 ) -> UserRead:
+    # Official deployments are single-process (validated at startup). This
+    # lock serializes the thread-pooled read/check/write transaction so two
+    # simultaneous demotions cannot both observe two active administrators.
+    with _admin_security_lock:
+        return _update_user_locked(user_id, payload, session)
+
+
+def _update_user_locked(
+    user_id: int,
+    payload: UserUpdate,
+    session: Session,
+) -> UserRead:
     user = session.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="user_not_found")
@@ -112,6 +132,13 @@ def update_user(
         next_is_superuser=payload.is_superuser,
         next_is_active=payload.is_active,
     )
+    changes_security_context = (
+        payload.is_active is not None and payload.is_active != user.is_active
+    ) or (
+        payload.is_superuser is not None and payload.is_superuser != user.is_superuser
+    )
+    if changes_security_context:
+        invalidate_user_sessions(session, user)
     if "email" in payload.model_fields_set:
         user.email = payload.email
     if payload.is_superuser is not None:
@@ -134,6 +161,7 @@ def reset_user_password(
     user = session.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="user_not_found")
+    invalidate_user_sessions(session, user)
     user.hashed_password = hash_password(payload.password)
     user.updated_at = utcnow()
     session.add(user)
@@ -144,10 +172,16 @@ def reset_user_password(
 
 @router.delete("/users/{user_id}", status_code=204)
 def deactivate_user(user_id: int, session: Session = Depends(get_session)) -> Response:
+    with _admin_security_lock:
+        return _deactivate_user_locked(user_id, session)
+
+
+def _deactivate_user_locked(user_id: int, session: Session) -> Response:
     user = session.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="user_not_found")
     _prevent_last_superuser_lockout(session, user, next_is_active=False)
+    invalidate_user_sessions(session, user)
     user.is_active = False
     user.updated_at = utcnow()
     session.add(user)
@@ -170,8 +204,11 @@ def admin_delete_resource(
         raise HTTPException(status_code=404, detail="resource_id_not_found")
     if hard:
         if isinstance(row, File):
-            get_backend().delete(row.path)
-        session.delete(row)
+            hard_delete_file(session, row)
+        elif isinstance(row, Document):
+            hard_delete_document(session, row)
+        else:
+            session.delete(row)
     else:
         row.deleted_at = utcnow()
         session.add(row)

@@ -50,13 +50,13 @@ def get_queue(
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[PrintJobRead]:
+    visible_ids = printer_rbac.accessible_printer_ids(session, current_user)
     rows = fleet.list_queue_page(
         session,
         history_limit=history_limit,
         history_offset=history_offset,
+        visible_printer_ids=visible_ids,
     )
-    visible_ids = printer_rbac.accessible_printer_ids(session, current_user)
-    rows = [job for job in rows if job.printer_id in visible_ids]
     return [PrintJobRead(**job.model_dump()) for job in rows]
 
 
@@ -193,7 +193,8 @@ def patch_printer_routing(
     try:
         printer = fleet.update_routing(session, printer_id, payload, current_user)
     except fleet.FleetError as exc:
-        raise HTTPException(status_code=404, detail=exc.code) from exc
+        status_code = 409 if exc.code == "default_printer_conflict" else 404
+        raise HTTPException(status_code=status_code, detail=exc.code) from exc
     return PrinterRoutingRead(
         printer_id=printer.id,  # type: ignore[arg-type]
         is_default=printer.is_default,
