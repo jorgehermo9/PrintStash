@@ -1,7 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import type { Server } from "node:http";
 
-import { setExternalLibrariesEnabled, startMockApi } from "./mock-api";
+import {
+  resetMockApiState,
+  setExternalLibrariesEnabled,
+  startMockApi,
+} from "./mock-api";
 
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? 4210);
 
@@ -22,6 +26,7 @@ test.afterAll(async () => {
 // returns this same superuser, so the auth bootstrap resolves and the app
 // renders the requested route instead of the login screen.
 test.beforeEach(async ({ page }) => {
+  resetMockApiState();
   await page.addInitScript(() => {
     localStorage.setItem("printstash.token", "test-token");
     localStorage.setItem(
