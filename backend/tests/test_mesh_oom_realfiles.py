@@ -9,8 +9,8 @@ a regression in the actual loader/renderer/guard is caught, not just the routing
 Three layers:
 
 * **Real guards** — a real over-triangle mesh and a real over-size file are
-  skipped end to end (no geometry, no crash), and a real compression-bomb 3MF is
-  caught without being decompressed.
+  kept away from trimesh but still receive bounded streaming STL geometry and
+  thumbnails; a real compression-bomb 3MF is caught without being decompressed.
 * **Real happy path** — a real dense mesh still produces geometry + a PNG.
 * **Leak detector** — processing the same real mesh many times must not grow
   resident memory, proving ``_reclaim_memory`` actually hands freed buffers back
@@ -90,32 +90,40 @@ def _write_real_stl(path: Path, *, subdivisions: int) -> int:
 # --------------------------------------------------------------------------- #
 # Real guards (genuine trimesh path, no monkeypatching of the loader).
 # --------------------------------------------------------------------------- #
-def test_real_over_triangle_mesh_is_skipped(tmp_path: Path, monkeypatch) -> None:
+def test_real_over_triangle_mesh_uses_streaming_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setitem(_overlay, "mesh_max_load_mb", 0)  # isolate the triangle cap
     p = tmp_path / "dense.stl"
     tri = _write_real_stl(p, subdivisions=4)  # 5120 real triangles
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", tri // 2)
 
-    # The estimator reads the real binary-STL header, so the real file is skipped
-    # before any load — no geometry, no thumbnail, but no crash either.
+    # The estimator reads the real binary-STL header, so trimesh is skipped.
+    # The bounded STL path still provides useful geometry and a thumbnail.
     geometry, thumb = mesh_processing.analyze_mesh(p)
-    assert geometry["triangle_count"] is None
-    assert thumb is None
+    assert geometry["triangle_count"] == tri
+    assert geometry["bbox_x_mm"] and geometry["bbox_x_mm"] > 0
+    assert isinstance(thumb, mesh_processing.FallbackThumbnail)
+    assert thumb.startswith(mesh_processing._PNG_MAGIC)
 
 
-def test_real_oversize_file_is_skipped_by_byte_cap(tmp_path: Path, monkeypatch) -> None:
+def test_real_oversize_file_uses_streaming_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
     # Triangle cap generous; only the byte cap can trip. A real, perfectly
     # loadable sphere is still skipped purely because the file is over the MB cap.
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 100_000_000)
     p = tmp_path / "big.stl"
-    _write_real_stl(p, subdivisions=6)  # ~1.3 MB on disk
+    tri = _write_real_stl(p, subdivisions=6)  # ~4 MB on disk
     size_mb = p.stat().st_size / (1024 * 1024)
     assert size_mb > 1.0
     monkeypatch.setitem(_overlay, "mesh_max_load_mb", 1)
 
     geometry, thumb = mesh_processing.analyze_mesh(p)
-    assert geometry["triangle_count"] is None
-    assert thumb is None
+    assert geometry["triangle_count"] == tri
+    assert geometry["bbox_x_mm"] and geometry["bbox_x_mm"] > 0
+    assert isinstance(thumb, mesh_processing.FallbackThumbnail)
+    assert thumb.startswith(mesh_processing._PNG_MAGIC)
 
 
 def test_real_compression_bomb_3mf_is_not_decompressed(
