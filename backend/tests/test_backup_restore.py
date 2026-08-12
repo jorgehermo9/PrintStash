@@ -1443,14 +1443,21 @@ def test_list_backups_finds_s3_only_backup(backup_s3_env: BackupEnv):
 
 @requires_s3
 def test_restore_downloads_s3_only_backup_before_restoring(backup_s3_env: BackupEnv):
-    _seed_model_with_blob(backup_s3_env, name="Widget", content=b"solid widget\n")
+    _model_id, key = _seed_model_with_blob(
+        backup_s3_env, name="Widget", content=b"solid widget\n"
+    )
     meta = backup.create_backup()
+    # Simulate the data-loss case that restore is allowed to repair. Restoring
+    # over a live destination must remain a conflict, even when the archive is
+    # downloaded from S3.
+    Path(key).unlink()
     Path(meta.path).unlink()
 
     result = backup.restore_backup(meta.id)
 
     assert result["backup_id"] == meta.id
     assert _read_model_names(backup_s3_env) == ["Widget"]
+    assert Path(key).read_bytes() == b"solid widget\n"
     # _download_backup_to_local must have pulled a fresh local copy.
     assert Path(meta.path).exists()
 
