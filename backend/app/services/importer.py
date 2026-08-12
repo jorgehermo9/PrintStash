@@ -101,9 +101,7 @@ async def download_to_staging(url: str) -> tuple[Path, str]:
         async with httpx.AsyncClient(
             transport=pinned_transport(target), timeout=60.0
         ) as client:
-            async with client.stream(
-                "GET", current, follow_redirects=False
-            ) as resp:
+            async with client.stream("GET", current, follow_redirects=False) as resp:
                 if resp.is_redirect:
                     location = resp.headers.get("location")
                     if not location:
@@ -344,9 +342,7 @@ def _ingest_one_file(
     original_filename = PurePosixPath(original_filename.replace("\\", "/")).name
     suffix = Path(original_filename).suffix.lower()
     resolved_name = model_name or Path(original_filename).stem
-    child = registry.create(
-        owner_user_id=actor_user_id, visible=False, kind="artifact"
-    )
+    child = registry.create(owner_user_id=actor_user_id, visible=False, kind="artifact")
     try:
         if suffix in _GCODE_SUFFIXES:
             ingest_orca_gcode(
@@ -425,7 +421,9 @@ def import_assets(
         registry.update(job_id, state="failed", error="no_importable_files")
         return
     override = model_name.strip() if model_name and total == 1 else None
-    registry.update(job_id, state="running", total_steps=total, total=total, stage="ingesting")
+    registry.update(
+        job_id, state="running", total_steps=total, total=total, stage="ingesting"
+    )
     results: list[dict] = []
     done = 0
     for staged, rel_name in staged_files:
@@ -468,7 +466,11 @@ def import_assets(
         error="import_failed" if not imported else None,
         retryable=bool(failures),
         failed_items=[
-            {"name": r.get("name", "item"), "reason": r.get("error", "import_failed"), "retryable": True}
+            {
+                "name": r.get("name", "item"),
+                "reason": r.get("error", "import_failed"),
+                "retryable": True,
+            }
             for r in failures
         ],
     )
@@ -500,12 +502,20 @@ def import_resolved_groups(
     """Ingest many already-staged groups (e.g. collection members) into one
     collection, recording each group's own ``source_url`` on its models."""
     total = sum(len(g.staged_files) for g in groups)
-    registry.update(job_id, state="running", total_steps=max(total, 1), total=total, stage="ingesting")
+    registry.update(
+        job_id,
+        state="running",
+        total_steps=max(total, 1),
+        total=total,
+        stage="ingesting",
+    )
     results: list[dict] = []
     done = 0
     for group in groups:
         if not group.staged_files:
-            results.append({"name": group.title, "error": group.error or "no_importable_files"})
+            results.append(
+                {"name": group.title, "error": group.error or "no_importable_files"}
+            )
             continue
         for staged, original_filename in group.staged_files:
             res = _ingest_one_file(
@@ -542,7 +552,11 @@ def import_resolved_groups(
     # the UI shows e.g. the MakerWorld login message rather than a generic one).
     if not imported:
         member_errors = {r["error"] for r in results if r.get("error")}
-        error = member_errors.pop() if len(member_errors) == 1 else "collection_import_failed"
+        error = (
+            member_errors.pop()
+            if len(member_errors) == 1
+            else "collection_import_failed"
+        )
         registry.update(
             job_id,
             state="failed",
@@ -553,7 +567,11 @@ def import_resolved_groups(
             failed=len(failures),
             retryable=True,
             failed_items=[
-                {"name": r.get("name", "item"), "reason": r.get("error", error), "retryable": True}
+                {
+                    "name": r.get("name", "item"),
+                    "reason": r.get("error", error),
+                    "retryable": True,
+                }
                 for r in failures
             ],
         )
@@ -572,7 +590,11 @@ def import_resolved_groups(
         failed=len(failures),
         retryable=bool(failures),
         failed_items=[
-            {"name": r.get("name", "item"), "reason": r.get("error", "import_failed"), "retryable": True}
+            {
+                "name": r.get("name", "item"),
+                "reason": r.get("error", "import_failed"),
+                "retryable": True,
+            }
             for r in failures
         ],
     )

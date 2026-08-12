@@ -109,7 +109,9 @@ def require_visible(session: Session, user: User, item_id: int) -> InboxItem:
     return row
 
 
-def list_visible(session: Session, user: User, *, include_completed: bool = True) -> list[InboxItemRead]:
+def list_visible(
+    session: Session, user: User, *, include_completed: bool = True
+) -> list[InboxItemRead]:
     stmt = select(InboxItem)
     if not user.is_superuser:
         stmt = stmt.where(InboxItem.owner_user_id == user.id)
@@ -127,13 +129,17 @@ def prune_history(retention_days: int = 30) -> int:
     with get_session_factory().scoped_session() as session:
         rows = session.exec(
             select(InboxItem).where(
-                InboxItem.state.in_((InboxItemState.COMPLETED, InboxItemState.DISMISSED)),  # type: ignore[attr-defined]
+                InboxItem.state.in_(
+                    (InboxItemState.COMPLETED, InboxItemState.DISMISSED)
+                ),  # type: ignore[attr-defined]
                 InboxItem.updated_at < cutoff,
             )
         ).all()
         for row in rows:
             if row.id is not None:
-                shutil.rmtree(settings.incoming_dir / "inbox" / str(row.id), ignore_errors=True)
+                shutil.rmtree(
+                    settings.incoming_dir / "inbox" / str(row.id), ignore_errors=True
+                )
             session.delete(row)
         session.commit()
         return len(rows)
@@ -142,7 +148,9 @@ def prune_history(retention_days: int = 30) -> int:
 def _require_target(session: Session, user: User, collection_id: int | None) -> None:
     if collection_id is None:
         if not user.is_superuser:
-            raise HTTPException(status_code=403, detail="root_collection_admin_required")
+            raise HTTPException(
+                status_code=403, detail="root_collection_admin_required"
+            )
         return
     rbac.require_collection_role(session, user, collection_id, CollectionRole.EDIT)
 
@@ -168,8 +176,14 @@ def create(session: Session, user: User, payload: InboxItemCreate) -> InboxItem:
     return row
 
 
-def update(session: Session, user: User, row: InboxItem, payload: InboxItemUpdate) -> InboxItem:
-    if row.state in {InboxItemState.IMPORTING, InboxItemState.COMPLETED, InboxItemState.DISMISSED}:
+def update(
+    session: Session, user: User, row: InboxItem, payload: InboxItemUpdate
+) -> InboxItem:
+    if row.state in {
+        InboxItemState.IMPORTING,
+        InboxItemState.COMPLETED,
+        InboxItemState.DISMISSED,
+    }:
         raise HTTPException(status_code=409, detail="pending_import_not_editable")
     if payload.title is not None:
         row.display_title = safe_item(payload.title)
@@ -310,10 +324,14 @@ async def resolve(item_id: int) -> None:
                     ],
                 }
             else:
-                download_url = await import_resolvers.resolve_page_url(source_url) or source_url
+                download_url = (
+                    await import_resolvers.resolve_page_url(source_url) or source_url
+                )
                 staged, filename = await importer.download_to_staging(download_url)
                 suffix = Path(filename).suffix.lower()
-                if suffix == ".zip" or (zipfile.is_zipfile(staged) and suffix != ".3mf"):
+                if suffix == ".zip" or (
+                    zipfile.is_zipfile(staged) and suffix != ".3mf"
+                ):
                     manifest, managed = await asyncio.to_thread(
                         _prepare_archive, item_id, staged, filename
                     )
@@ -339,7 +357,9 @@ async def _download_assets(url: str) -> list[tuple[Path, str]]:
     return [(staged, name)]
 
 
-async def run_import(item_id: int, selected_ids: list[str], session_factory: SessionFactory) -> None:
+async def run_import(
+    item_id: int, selected_ids: list[str], session_factory: SessionFactory
+) -> None:
     context = await asyncio.to_thread(
         _begin_import, item_id, selected_ids, session_factory
     )
@@ -364,7 +384,9 @@ async def run_import(item_id: int, selected_ids: list[str], session_factory: Ses
             )
         elif kind == "model_files":
             files_by_id = {item["id"]: item for item in manifest.get("files", [])}
-            wanted = [item for item in selected if item in files_by_id] or list(files_by_id)
+            wanted = [item for item in selected if item in files_by_id] or list(
+                files_by_id
+            )
             chosen = [
                 import_resolvers.ModelFile(
                     file_id=item_id_value,
@@ -411,7 +433,11 @@ def _begin_import(
         if user is None:
             return
         _require_target(session, user, row.target_collection_id)
-        collection = session.get(Collection, row.target_collection_id) if row.target_collection_id else None
+        collection = (
+            session.get(Collection, row.target_collection_id)
+            if row.target_collection_id
+            else None
+        )
         collection_path = collection.path if collection else None
         tags = ",".join(requested_tags(row.requested_tags_json)) or None
         manifest = _json_dict(row.manifest_json)
@@ -441,9 +467,7 @@ def _begin_import(
         }
 
 
-def _finish_import(
-    item_id: int, job_id: str, session_factory: SessionFactory
-) -> None:
+def _finish_import(item_id: int, job_id: str, session_factory: SessionFactory) -> None:
     job = registry.get(job_id)
     with session_factory.scoped_session() as session:
         row = session.get(InboxItem, item_id)
@@ -466,9 +490,7 @@ def _finish_import(
         session.commit()
 
 
-def _fail_import(
-    item_id: int, exc: Exception, session_factory: SessionFactory
-) -> None:
+def _fail_import(item_id: int, exc: Exception, session_factory: SessionFactory) -> None:
     with session_factory.scoped_session() as session:
         row = session.get(InboxItem, item_id)
         if row is not None:
@@ -515,7 +537,9 @@ def reconcile_interrupted_items() -> int:
     with get_session_factory().scoped_session() as session:
         rows = session.exec(
             select(InboxItem).where(
-                InboxItem.state.in_((InboxItemState.RESOLVING, InboxItemState.IMPORTING))  # type: ignore[attr-defined]
+                InboxItem.state.in_(
+                    (InboxItemState.RESOLVING, InboxItemState.IMPORTING)
+                )  # type: ignore[attr-defined]
             )
         ).all()
         for row in rows:

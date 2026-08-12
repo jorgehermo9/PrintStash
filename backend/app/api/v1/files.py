@@ -222,7 +222,9 @@ def _etag_matches(request: Request | None, etag: str) -> bool:
     if request is None:
         return False
     candidates = request.headers.get("if-none-match", "").split(",")
-    return any(candidate.strip().removeprefix("W/") in ("*", etag) for candidate in candidates)
+    return any(
+        candidate.strip().removeprefix("W/") in ("*", etag) for candidate in candidates
+    )
 
 
 def thumbnail_response(file_id: int, request: Request | None = None):

@@ -161,6 +161,20 @@ def _serialize_artifact_persistence(func: Callable[_P, _R]) -> Callable[_P, _R]:
     return serialized
 
 
+def _available_vault_key(backend, *, slug: str, version: int, filename: str) -> str:
+    """Choose an unused vault key without overwriting unclaimed bytes."""
+    candidate = backend.blob_key(slug, version, filename)
+    if not backend.exists(candidate):
+        return candidate
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    n = 2
+    while True:
+        candidate = backend.blob_key(slug, version, f"{stem}-{n}{suffix}")
+        if not backend.exists(candidate):
+            return candidate
+        n += 1
+
+
 def _apply_taxonomy(
     session: Session,
     model: Model,
@@ -301,74 +315,90 @@ def persist_artifact(
     dest_key = (
         dest_key_override
         if dest_key_override is not None
-        else backend.blob_key(model.slug, version, original_filename)
+        else _available_vault_key(
+            backend,
+            slug=model.slug,
+            version=version,
+            filename=original_filename,
+        )
     )
-
-    if move_blob:
-        backend.move_in(staged_path, dest_key)
-    size_bytes = backend.stat_size(dest_key)
-
-    # For write-back into a NAS library, capture the on-disk mtime of the file we
-    # just wrote so the next scan recognises it as unchanged (no re-import).
-    if is_external and source_mtime is None:
-        direct = backend.direct_path(dest_key)
-        if direct is not None:
-            try:
-                source_mtime = direct.stat().st_mtime
-            except OSError:
-                source_mtime = None
-
-    if file_type == FileType.GCODE:
-        recommended_rows = session.exec(
-            select(File).where(
-                File.model_id == model_id,
-                File.file_type == FileType.GCODE,
-                File.is_recommended == True,  # noqa: E712
-                live(File),
-            )
-        ).all()
-        if is_recommended:
-            # Clear first and flush before inserting the replacement so the
-            # partial unique index is never transiently violated.
-            for recommended in recommended_rows:
-                recommended.is_recommended = False
-                session.add(recommended)
-            if recommended_rows:
-                session.flush()
-        else:
-            # A Model's first live G-code claims the recommendation marker.
-            is_recommended = not recommended_rows
-
-    file_row = File(
-        model_id=model_id,
-        path=dest_key,
-        original_filename=original_filename,
-        file_type=file_type,
-        version=version,
-        size_bytes=size_bytes,
-        sha256=blob_hash,
-        revision_label=revision_label,
-        revision_status=revision_status,
-        revision_notes=revision_notes,
-        is_recommended=is_recommended,
-        is_external=is_external,
-        external_library_id=external_library_id,
-        source_mtime=source_mtime,
-    )
-    # One transaction for the whole artifact: a File row committed before its
-    # Metadata is a model that renders with no print time, filament or cost and
-    # no error to explain it. flush() allocates the id the thumbnail key needs
-    # without ending the transaction.
+    blob_written = False
+    thumbnail_key: str | None = None
     try:
+        if move_blob:
+            # External write-back callers also provide collision-safe paths, but
+            # enforce the invariant here at the persistence boundary as well.
+            if dest_key_override is not None and backend.exists(dest_key):
+                raise FileExistsError(dest_key)
+            backend.move_in(staged_path, dest_key)
+            blob_written = True
+        size_bytes = backend.stat_size(dest_key)
+
+        # For write-back into a NAS library, capture the on-disk mtime of the file we
+        # just wrote so the next scan recognises it as unchanged (no re-import).
+        if is_external and source_mtime is None:
+            direct = backend.direct_path(dest_key)
+            if direct is not None:
+                try:
+                    source_mtime = direct.stat().st_mtime
+                except OSError:
+                    source_mtime = None
+
+        if file_type == FileType.GCODE:
+            recommended_rows = session.exec(
+                select(File).where(
+                    File.model_id == model_id,
+                    File.file_type == FileType.GCODE,
+                    File.is_recommended == True,  # noqa: E712
+                    live(File),
+                )
+            ).all()
+            if is_recommended:
+                # Clear first and flush before inserting the replacement so the
+                # partial unique index is never transiently violated.
+                for recommended in recommended_rows:
+                    recommended.is_recommended = False
+                    session.add(recommended)
+                if recommended_rows:
+                    session.flush()
+            else:
+                # A Model's first live G-code claims the recommendation marker.
+                is_recommended = not recommended_rows
+
+        file_row = File(
+            model_id=model_id,
+            path=dest_key,
+            original_filename=original_filename,
+            file_type=file_type,
+            version=version,
+            size_bytes=size_bytes,
+            sha256=blob_hash,
+            revision_label=revision_label,
+            revision_status=revision_status,
+            revision_notes=revision_notes,
+            is_recommended=is_recommended,
+            is_external=is_external,
+            external_library_id=external_library_id,
+            source_mtime=source_mtime,
+        )
+        # One transaction for the whole artifact: a File row committed before its
+        # Metadata is a model that renders with no print time, filament or cost and
+        # no error to explain it. flush() allocates the id the thumbnail key needs
+        # without ending the transaction.
         session.add(file_row)
         session.flush()
         assert file_row.id is not None
 
         if thumb_bytes:
-            thumb_key = backend.thumbnail_key(file_row.id)
-            backend.write_bytes(thumbnail.to_webp(thumb_bytes), thumb_key)
+            candidate_thumbnail_key = backend.thumbnail_key(file_row.id)
+            if backend.exists(candidate_thumbnail_key):
+                raise FileExistsError(candidate_thumbnail_key)
+            # From this point onward, a failure can only leave bytes created by
+            # this call at the candidate key, so rollback may safely remove it.
+            thumbnail_key = candidate_thumbnail_key
+            backend.write_bytes(thumbnail.to_webp(thumb_bytes), thumbnail_key)
             if overwrite_thumbnail or not model.thumbnail_path:
-                model.thumbnail_path = thumb_key
+                model.thumbnail_path = thumbnail_key
                 model.thumbnail_file_id = file_row.id
                 session.add(model)
 
@@ -379,8 +409,12 @@ def persist_artifact(
         session.commit()
     except Exception:
         session.rollback()
-        # The blob was already moved into place. Leaving it is safe: no row
-        # claims it, so the orphan sweep collects it (see storage_utils).
+        # Delete only exact destinations selected by this failed write.  Never
+        # rely on a later directory walk to infer ownership.
+        if thumbnail_key is not None:
+            backend.delete(thumbnail_key)
+        if blob_written:
+            backend.delete(dest_key)
         raise
 
     session.refresh(file_row)
