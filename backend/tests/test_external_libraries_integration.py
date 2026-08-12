@@ -71,6 +71,7 @@ def test_scan_progress_coalescer_flushes_slow_work_by_time() -> None:
     assert coalescer.should_flush(1, now=0.24) is False
     assert coalescer.should_flush(2, now=0.25) is True
 
+
 FIXTURE_GCODE = Path(__file__).parent / "fixtures" / "sample.gcode"
 
 # A small but valid ASCII-STL cube (a real mesh trimesh can parse + thumbnail).
@@ -311,9 +312,7 @@ def test_write_back_never_overwrites_existing_nas_file(
 # --------------------------------------------------------------------------- #
 # Real folder shapes
 # --------------------------------------------------------------------------- #
-def test_scan_indexes_mixed_mesh_and_gcode(
-    tmp_path: Path, db_session: Session
-) -> None:
+def test_scan_indexes_mixed_mesh_and_gcode(tmp_path: Path, db_session: Session) -> None:
     """A realistic folder mixes meshes and slicer output; both index in place."""
     _configure_storage(tmp_path)
     _enable_feature(db_session)
@@ -338,9 +337,11 @@ def test_scan_indexes_mixed_mesh_and_gcode(
 def test_scan_indexes_but_skips_over_cap_mesh(
     tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A pathological dense file (the issue #29 case) must not OOM or abort the
-    scan: it is still indexed in place, but its mesh is never loaded, so geometry
-    is empty and the scan completes green."""
+    """A pathological dense file must avoid Trimesh without losing its preview.
+
+    The scan indexes it in place and the bounded STL fallback provides geometry
+    and a thumbnail, so the scan completes without an OOM or a partial result.
+    """
     trimesh = pytest.importorskip("trimesh")
     from app.db.models import Metadata
 
@@ -362,13 +363,19 @@ def test_scan_indexes_but_skips_over_cap_mesh(
     assert summary["errors"] == []
     db_session.refresh(lib)
     assert lib.last_scan_status == ExternalLibraryScanStatus.OK
-    # Indexed in place, but the over-cap mesh was never loaded → no geometry.
+    # Indexed in place; the over-cap mesh was never loaded through Trimesh, but
+    # the streaming fallback still publishes geometry and a thumbnail.
     files = _external_files(db_session)
     assert len(files) == 1
     md = db_session.exec(
         select(Metadata).where(Metadata.file_id == files[0].id)
     ).first()
-    assert md is None or md.triangle_count is None
+    assert md is not None
+    assert md.triangle_count == len(mesh.faces)
+    model = db_session.get(Model, files[0].model_id)
+    assert model is not None
+    assert model.thumbnail_path is not None
+    assert Path(model.thumbnail_path).is_file()
 
 
 def test_deep_nested_folders_build_collection_hierarchy(
