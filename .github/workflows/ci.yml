@@ -51,6 +51,9 @@ jobs:
       - name: Lint backend
         run: uv run ruff check app/ tests/
 
+      - name: Check dependency declarations
+        run: uv run deptry app/
+
       - name: Typecheck critical backend modules
         run: uv run pyright
 

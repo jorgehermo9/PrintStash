@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      backend-minor-patch:
+        update-types:
+          - minor
+          - patch
