@@ -13,7 +13,22 @@ import argparse
 from collections.abc import Iterable
 
 from sqlalchemy import MetaData, Table, create_engine, select, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
+
+
+def _normalize_postgres_url(postgres_url: str) -> str:
+    url = make_url(postgres_url)
+    if url.drivername in {
+        "postgres",
+        "postgresql",
+        "postgresql+asyncpg",
+        "postgresql+psycopg2",
+        "postgresql+psycopg",
+    }:
+        return url.set(drivername="postgresql+psycopg").render_as_string(
+            hide_password=False
+        )
+    return postgres_url
 
 
 def _ordered_table_names(table_names: Iterable[str]) -> list[str]:
@@ -55,7 +70,7 @@ def _copy_table(
 
 def copy_sqlite_to_postgres(sqlite_url: str, postgres_url: str) -> None:
     source_engine = create_engine(sqlite_url)
-    target_engine = create_engine(postgres_url)
+    target_engine = create_engine(_normalize_postgres_url(postgres_url))
 
     source_meta = MetaData()
     source_meta.reflect(bind=source_engine)

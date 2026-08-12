@@ -6,8 +6,6 @@ requires-python = ">=3.11"
 dependencies = [
     "cryptography>=50,<51",
     "alembic>=1.19,<2",
-    "aiosqlite>=0.20",
-    "asyncpg>=0.29",
     "boto3>=1.43,<2",
     "botocore>=1.43,<2",
     # STEP/STP tessellation (OpenCASCADE). Cascadio 0.1.1 publishes Linux
@@ -34,7 +32,7 @@ dependencies = [
     "pwdlib[argon2,bcrypt]>=0.3,<1",
     "PyJWT>=2.13,<3",
     "python-multipart>=0.0.32,<0.1",
-    "psycopg2-binary>=2.9",
+    "psycopg[binary]>=3.3,<4",
     "SQLAlchemy>=2.0.52,<2.1",
     "sqlmodel>=0.0.39,<0.1",
     "starlette>=1.6,<2",
@@ -46,6 +44,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+async-db = [
+    "aiosqlite>=0.22,<1",
+]
 dev = [
     "bandit>=1.8",
     "deptry>=0.23,<1",
@@ -79,11 +80,10 @@ optional_dependencies_dev_groups = ["dev"]
 # directly by application modules. Keep this allow-list narrow and auditable.
 DEP002 = [
     "aiosqlite",
-    "asyncpg",
     "cascadio",
     "lxml",
     "networkx",
-    "psycopg2-binary",
+    "psycopg",
     "python-multipart",
     "uvicorn",
 ]

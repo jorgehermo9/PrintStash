@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
+from importlib.util import find_spec
 from typing import AsyncGenerator, Generator, Iterator, Protocol, runtime_checkable
 
 from sqlalchemy import event, inspect
@@ -16,12 +17,14 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.db.url import normalize_async_database_url, normalize_database_url
 
 logger = get_logger(__name__)
 
 # `check_same_thread=False` is required for SQLite + FastAPI (multiple threads).
+_normalized_db_url = normalize_database_url(settings.db_url)
 _connect_args = (
-    {"check_same_thread": False} if settings.db_url.startswith("sqlite") else {}
+    {"check_same_thread": False} if _normalized_db_url.startswith("sqlite") else {}
 )
 
 
@@ -42,21 +45,27 @@ def _set_sqlite_pragmas(dbapi_conn, _record) -> None:
 
 
 _engine: Engine = create_engine(
-    settings.db_url,
+    _normalized_db_url,
     echo=False,
     connect_args=_connect_args,
 )
 
-if settings.db_url.startswith("sqlite"):
+if _normalized_db_url.startswith("sqlite"):
     event.listen(_engine, "connect", _set_sqlite_pragmas)
 
-_async_engine: AsyncEngine | None = None
-_async_session_maker: async_sessionmaker[AsyncSession] | None = None
+
+class AsyncDatabaseCapabilityError(RuntimeError):
+    """Raised when an optional async database capability is not installed."""
 
 
 def create_async_engine_for_db(db_url: str) -> AsyncEngine:
-    if db_url.startswith("sqlite"):
-        async_url = db_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    async_url = normalize_async_database_url(db_url)
+    if async_url.startswith("sqlite+aiosqlite"):
+        if find_spec("aiosqlite") is None:
+            raise AsyncDatabaseCapabilityError(
+                "SQLite async support is optional; install PrintStash with "
+                "the 'async-db' extra"
+            )
         engine = create_async_engine(
             async_url,
             echo=False,
@@ -64,26 +73,56 @@ def create_async_engine_for_db(db_url: str) -> AsyncEngine:
         )
         event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
         return engine
-    if db_url.startswith("postgresql://"):
-        async_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    elif db_url.startswith("postgres://"):
-        async_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    else:
-        async_url = db_url
     return create_async_engine(async_url, echo=False, pool_pre_ping=True)
 
 
-def _async_session_factory() -> async_sessionmaker[AsyncSession]:
-    global _async_engine, _async_session_maker
-    if _async_session_maker is None:
-        _async_engine = create_async_engine_for_db(settings.db_url)
-        _async_session_maker = async_sessionmaker(
-            bind=_async_engine,
+@runtime_checkable
+class AsyncSessionFactory(Protocol):
+    """Optional extension for code paths that genuinely need async sessions."""
+
+    def async_session(self) -> AsyncSession: ...
+    async def dispose(self) -> None: ...
+
+
+class SQLAlchemyAsyncSessionFactory:
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._session_maker = async_sessionmaker(
+            bind=engine,
             class_=AsyncSession,
             expire_on_commit=False,
             autoflush=False,
         )
-    return _async_session_maker
+
+    def async_session(self) -> AsyncSession:
+        return self._session_maker()
+
+    async def dispose(self) -> None:
+        await self._engine.dispose()
+
+
+def create_async_session_factory(db_url: str) -> SQLAlchemyAsyncSessionFactory:
+    return SQLAlchemyAsyncSessionFactory(create_async_engine_for_db(db_url))
+
+
+_default_async_factory: SQLAlchemyAsyncSessionFactory | None = None
+_async_factory_ctx: ContextVar[AsyncSessionFactory | None] = ContextVar(
+    "async_session_factory", default=None
+)
+
+
+def get_async_session_factory() -> AsyncSessionFactory:
+    override = _async_factory_ctx.get()
+    if override is not None:
+        return override
+    global _default_async_factory
+    if _default_async_factory is None:
+        _default_async_factory = create_async_session_factory(settings.db_url)
+    return _default_async_factory
+
+
+def override_async_session_factory(factory: AsyncSessionFactory | None) -> None:
+    _async_factory_ctx.set(factory)
 
 
 # ---------------------------------------------------------------------------
@@ -100,11 +139,11 @@ class SessionFactory(Protocol):
     - ``session()`` returns a raw Session — caller owns commit/close (background tasks).
     - ``scoped_session()`` returns a context manager — auto-closes on exit (FastAPI deps, ingestion).
 
-    ``async_session()`` is a placeholder for Stage 4 Postgres.
+    Async access is deliberately excluded; use ``AsyncSessionFactory`` only in
+    optional code paths that require it.
     """
 
     def session(self) -> Session: ...
-    def async_session(self) -> AsyncSession: ...
     def scoped_session(self) -> AbstractContextManager[Session]: ...
     def dispose(self) -> None: ...
 
@@ -117,10 +156,6 @@ class SQLiteSessionFactory:
 
     def session(self) -> Session:
         return Session(self._engine)
-
-    def async_session(self) -> AsyncSession:
-        maker = _async_session_factory()
-        return maker()
 
     def dispose(self) -> None:
         """Close idle pooled connections before/after a database restore."""
@@ -244,7 +279,7 @@ def get_session() -> Iterator[Session]:
 
 
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
-    factory = _factory_ctx.get()
+    factory = get_async_session_factory()
     session = factory.async_session()
     try:
         yield session
