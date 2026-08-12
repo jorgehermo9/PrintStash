@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+import bcrypt
 from sqlalchemy.sql.dml import Update
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -15,6 +16,7 @@ from app.services.auth import (
     hash_password,
     prune_expired_refresh_tokens,
     rotate_refresh_token,
+    verify_password,
 )
 
 
@@ -33,6 +35,92 @@ def _user(
     session.commit()
     session.refresh(user)
     return user
+
+
+def _legacy_bcrypt_hash(password: str) -> str:
+    password_bytes = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
+
+
+def test_new_password_hashes_use_argon2() -> None:
+    hashed = hash_password("Password123")
+
+    assert hashed.startswith("$argon2")
+    assert verify_password("Password123", hashed) is True
+    assert verify_password("NotThePassword", hashed) is False
+
+
+def test_password_hashing_supports_long_unicode_passwords() -> None:
+    password = "contraseña-🔐-" * 32
+    hashed = hash_password(password)
+
+    assert len(password.encode("utf-8")) > 72
+    assert verify_password(password, hashed) is True
+    assert verify_password(f"{password}!", hashed) is False
+
+
+def test_malformed_password_hash_is_a_controlled_failure() -> None:
+    assert verify_password("Password123", "not-a-password-hash") is False
+    assert verify_password("Password123", "$2b$invalid") is False
+
+
+def test_successful_legacy_bcrypt_login_rehashes_and_persists(
+    db_session: Session,
+) -> None:
+    user = User(
+        username="legacy-bcrypt",
+        hashed_password=_legacy_bcrypt_hash("Password123"),
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    user_id = user.id
+
+    authenticated = authenticate_user(db_session, user.username, "Password123")
+
+    assert authenticated is not None
+    assert authenticated.hashed_password.startswith("$argon2")
+    with Session(db_session.get_bind()) as fresh_session:
+        persisted = fresh_session.get(User, user_id)
+        assert persisted is not None
+        assert persisted.hashed_password.startswith("$argon2")
+
+
+def test_legacy_bcrypt_preserves_72_byte_semantics_only_until_rehash(
+    db_session: Session,
+) -> None:
+    shared_prefix = "🔐" * 18
+    original = f"{shared_prefix}-original-suffix"
+    same_legacy_prefix = f"{shared_prefix}-different-suffix"
+    user = User(
+        username="legacy-long-password",
+        hashed_password=_legacy_bcrypt_hash(original),
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    authenticated = authenticate_user(db_session, user.username, original)
+
+    assert authenticated is not None
+    assert authenticated.hashed_password.startswith("$argon2")
+    assert authenticate_user(db_session, user.username, same_legacy_prefix) is None
+
+
+def test_failed_legacy_bcrypt_login_does_not_rehash(db_session: Session) -> None:
+    legacy_hash = _legacy_bcrypt_hash("Password123")
+    user = User(
+        username="legacy-bad-login",
+        hashed_password=legacy_hash,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    assert authenticate_user(db_session, user.username, "WrongPassword") is None
+    db_session.refresh(user)
+    assert user.hashed_password == legacy_hash
 
 
 def test_inactive_user_cannot_login_with_password_or_api_key(
