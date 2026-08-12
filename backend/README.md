@@ -180,10 +180,18 @@ VAULT_S3_ACCESS_KEY=printstash
 VAULT_S3_SECRET_KEY=printstash-secret
 ```
 
-The bundled image is pinned to SeaweedFS 4.41. MinIO remains an S3-compatible
-endpoint, but its upstream repository is archived. Existing Compose-backed
-MinIO data is deliberately retained under the `minio-legacy` profile; migrate
-the objects before deleting its volume.
+The bundled image is pinned to SeaweedFS 4.41. MinIO remains supported as an
+external S3-compatible endpoint, but it is no longer part of the normal Compose
+stack because its upstream repository is archived. Existing Compose-backed
+MinIO volumes can be copied and download-verified with the one-release helper:
+
+```bash
+./scripts/migrate_minio_to_seaweedfs.sh
+```
+
+The helper never deletes source objects or the source volume. See
+[`docs/minio-migration.md`](../docs/minio-migration.md) before switching the API
+endpoint. The compatibility helper is scheduled for removal in 1.0.
 
 ### Storage and file capabilities
 

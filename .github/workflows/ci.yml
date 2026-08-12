@@ -291,6 +291,17 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.build.yml down -v
 
+  minio-migration:
+    name: MinIO to SeaweedFS migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Verify idempotent migration and downloaded content
+        run: ./scripts/test_minio_migration.sh
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
