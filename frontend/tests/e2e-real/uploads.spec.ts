@@ -50,11 +50,12 @@ test("bulk upload waits for three terminal jobs and loads every WebP", async ({ 
   await expect(dialog).toHaveCount(0);
   await page.getByRole("button", { name: "Notifications" }).click();
   for (const name of names) {
-    await expect(page.getByText(`Upload ${name}.stl`, { exact: true })).toBeVisible();
+    const taskHeader = page.getByText(`Upload ${name}.stl`, { exact: true }).locator("..");
+    await expect(taskHeader).toBeVisible();
+    await expect(taskHeader.getByText("completed", { exact: true })).toBeVisible({
+      timeout: 120_000,
+    });
   }
-  await expect(page.getByText("completed", { exact: true })).toHaveCount(3, {
-    timeout: 120_000,
-  });
 
   await page.goto(`/?c=${encodeURIComponent(collection)}`);
 
