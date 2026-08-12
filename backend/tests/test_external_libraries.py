@@ -321,6 +321,24 @@ def test_api_crud_and_path_validation(
     assert client.get("/api/v1/libraries", headers=auth_headers).json() == []
 
 
+def test_external_library_cannot_overlap_private_storage(
+    tmp_path: Path, client, db_session: Session, auth_headers: dict
+) -> None:
+    _configure_storage(tmp_path)
+    _enable_feature(db_session)
+    nested = Path(_overlay["data_dir"]) / "nextcloud"
+    nested.mkdir(parents=True)
+
+    response = client.post(
+        "/api/v1/libraries",
+        headers=auth_headers,
+        json={"name": "unsafe", "root_path": str(nested)},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "root_path_overlaps_managed_storage"
+
+
 def test_is_due_cron_logic() -> None:
     from datetime import datetime, timezone
 

@@ -24,8 +24,9 @@ from app.db.models import (
 )
 from app.db.session import SessionFactory, get_session_factory
 from app.schemas.inbox import InboxItemCreate, InboxItemRead, InboxItemUpdate
-from app.services import import_resolvers, importer, rbac
+from app.services import import_resolvers, importer, rbac, storage
 from app.services.jobs import registry, safe_error, safe_item
+from app.services.storage_paths import unlink_managed_file
 
 _SECRET_QUERY_KEYS = {
     "access_token",
@@ -207,7 +208,14 @@ def _managed_staging(item_id: int, source: Path) -> Path:
     directory = settings.incoming_dir / "inbox" / str(item_id)
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"source{source.suffix.lower()}"
-    shutil.move(str(source), target)
+    with source.open("rb") as incoming:
+        storage.stream_to_path(incoming, target)
+    try:
+        source.unlink()
+    except OSError:
+        # The managed copy is complete and create-only. Preserve a duplicate
+        # source rather than losing the durable staging reference.
+        pass
     return target
 
 
@@ -479,7 +487,7 @@ def _finish_import(item_id: int, job_id: str, session_factory: SessionFactory) -
             row.completed_at = utcnow()
             row.retryable = False
             if row.staging_key:
-                Path(row.staging_key).unlink(missing_ok=True)
+                unlink_managed_file(row.staging_key, settings.incoming_dir)
                 row.staging_key = None
         else:
             row.state = InboxItemState.FAILED
@@ -521,7 +529,7 @@ def dismiss(session: Session, row: InboxItem) -> None:
         raise HTTPException(status_code=409, detail="pending_import_busy")
     if row.staging_key:
         path = Path(row.staging_key)
-        path.unlink(missing_ok=True)
+        unlink_managed_file(path, settings.incoming_dir)
         try:
             path.parent.rmdir()
         except OSError:

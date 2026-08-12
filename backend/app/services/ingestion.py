@@ -34,7 +34,8 @@ from app.services.hashing import sha256_file
 from app.services.jobs import registry
 from app.services.mesh_processing import FallbackThumbnail
 from app.services.profile_detection import upsert_detected_profiles
-from app.services.storage_backend import get_backend
+from app.services.storage_backend import StorageCollisionError, get_backend
+from app.services.storage_ownership import record_creation
 
 logger = get_logger(__name__)
 
@@ -322,17 +323,19 @@ def persist_artifact(
             filename=original_filename,
         )
     )
-    blob_written = False
-    thumbnail_key: str | None = None
+    blob_receipt = None
+    thumbnail_receipt = None
     try:
         if move_blob:
-            # External write-back callers also provide collision-safe paths, but
-            # enforce the invariant here at the persistence boundary as well.
-            if dest_key_override is not None and backend.exists(dest_key):
-                raise FileExistsError(dest_key)
-            backend.move_in(staged_path, dest_key)
-            blob_written = True
-        size_bytes = backend.stat_size(dest_key)
+            # ``move_in`` performs the only authoritative collision check using
+            # the backend's atomic create-only primitive. An earlier exists()
+            # check would be a TOCTOU race.
+            blob_receipt = backend.move_in(staged_path, dest_key)
+        size_bytes = (
+            blob_receipt.size
+            if blob_receipt is not None
+            else backend.stat_size(dest_key)
+        )
 
         # For write-back into a NAS library, capture the on-disk mtime of the file we
         # just wrote so the next scan recognises it as unchanged (no re-import).
@@ -388,17 +391,17 @@ def persist_artifact(
         session.add(file_row)
         session.flush()
         assert file_row.id is not None
+        if blob_receipt is not None and not is_external:
+            record_creation(session, blob_receipt, object_kind="artifact")
 
         if thumb_bytes:
             candidate_thumbnail_key = backend.thumbnail_key(file_row.id)
-            if backend.exists(candidate_thumbnail_key):
-                raise FileExistsError(candidate_thumbnail_key)
-            # From this point onward, a failure can only leave bytes created by
-            # this call at the candidate key, so rollback may safely remove it.
-            thumbnail_key = candidate_thumbnail_key
-            backend.write_bytes(thumbnail.to_webp(thumb_bytes), thumbnail_key)
+            thumbnail_receipt = backend.create_bytes(
+                thumbnail.to_webp(thumb_bytes), candidate_thumbnail_key
+            )
+            record_creation(session, thumbnail_receipt, object_kind="thumbnail")
             if overwrite_thumbnail or not model.thumbnail_path:
-                model.thumbnail_path = thumbnail_key
+                model.thumbnail_path = candidate_thumbnail_key
                 model.thumbnail_file_id = file_row.id
                 session.add(model)
 
@@ -411,10 +414,13 @@ def persist_artifact(
         session.rollback()
         # Delete only exact destinations selected by this failed write.  Never
         # rely on a later directory walk to infer ownership.
-        if thumbnail_key is not None:
-            backend.delete(thumbnail_key)
-        if blob_written:
-            backend.delete(dest_key)
+        if thumbnail_receipt is not None:
+            backend.rollback_create(thumbnail_receipt)
+        # External-library bytes become user-owned at publication and are never
+        # removed by rollback cleanup. A failed DB transaction may leave an
+        # unindexed file, which is safer and the next scan can discover it.
+        if blob_receipt is not None and not is_external:
+            backend.rollback_create(blob_receipt)
         raise
 
     session.refresh(file_row)
@@ -502,6 +508,16 @@ def resolve_write_target(
             subpath = coll.path
     dest_dir = root / subpath if subpath else root
     dest_path = _collision_safe_path(dest_dir, original_filename)
+    try:
+        canonical_root = root.resolve(strict=True)
+        canonical_target = dest_path.resolve(strict=False)
+        canonical_target.relative_to(canonical_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        # A mirrored collection may have been replaced by a symlink since the
+        # library was configured. Never follow it outside the declared NAS
+        # boundary. The final create remains atomic/no-replace for collision
+        # safety after this topology check.
+        raise StorageCollisionError("external_library_symlink_escape") from exc
     return WriteTarget(str(dest_path), True, library_id, None)
 
 

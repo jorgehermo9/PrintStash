@@ -93,6 +93,7 @@ from app.services import (
 )
 from app.services.ingestion import add_gcode_revision_to_model
 from app.services.moonraker import MoonrakerError
+from app.services.storage_ownership import UnsafeStorageDeleteError
 from app.services.trash import (
     hard_delete_expired_models,
     hard_delete_model,
@@ -605,10 +606,17 @@ def list_trash(
     summary="Permanently delete expired trash items",
 )
 def purge_expired_trash(session: Session = Depends(get_session)) -> TrashPurgeRead:
-    purged_model_ids = hard_delete_expired_models(
-        session,
-        retention_days=int(settings.trash_retention_days),
-    )
+    try:
+        purged_model_ids = hard_delete_expired_models(
+            session,
+            retention_days=int(settings.trash_retention_days),
+        )
+    except UnsafeStorageDeleteError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_ownership_unverified",
+        ) from exc
     session.commit()
     return TrashPurgeRead(
         purged_model_ids=purged_model_ids,
@@ -1420,7 +1428,14 @@ def purge_model(
         m.collection_id,
         CollectionRole.EDIT,
     )
-    hard_delete_model(session, m)
+    try:
+        hard_delete_model(session, m)
+    except UnsafeStorageDeleteError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_ownership_unverified",
+        ) from exc
     session.commit()
     return TrashPurgeRead(purged_model_ids=[model_id], purged_count=1)
 

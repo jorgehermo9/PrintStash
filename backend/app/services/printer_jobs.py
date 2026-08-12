@@ -85,6 +85,9 @@ async def transfer_artifact(
     )
     target = Path(temp.name)
     temp.close()
+    # Storage downloads are create-only; remove only the placeholder this
+    # operation just created before publishing into its random destination.
+    target.unlink()
     try:
         try:
             local = await asyncio.to_thread(

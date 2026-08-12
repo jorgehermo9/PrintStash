@@ -14,7 +14,16 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from sqlalchemy import Boolean, Column, Index, Integer, Text, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -797,6 +806,41 @@ class SystemConfig(SQLModel, table=True):
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OwnedStorageObject(SQLModel, table=True):
+    """Object-level proof recorded only after a create-only storage write.
+
+    Legacy rows intentionally have no entry. Their bytes are therefore never
+    eligible for automated deletion: database presence, naming, and directory
+    placement are claims, not proof that this installation created an object.
+    """
+
+    __tablename__ = "owned_storage_objects"
+    __table_args__ = (
+        UniqueConstraint(
+            "backend", "namespace", "key", name="uq_owned_storage_locator"
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    backend: str = Field(max_length=32, index=True)
+    namespace: str = Field(max_length=1024, index=True)
+    key: str = Field(max_length=2048)
+    object_kind: str = Field(max_length=64, index=True)
+    token: str = Field(max_length=64)
+    size_bytes: int
+    etag: Optional[str] = Field(default=None, max_length=255)
+    device: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    inode: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    ctime_ns: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class ExternalLibraryCollectionMode(str, Enum):

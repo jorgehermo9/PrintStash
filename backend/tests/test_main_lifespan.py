@@ -421,6 +421,30 @@ async def test_gc_loop_logs_and_continues_past_each_task_failure(
 
 
 @pytest.mark.asyncio
+async def test_gc_loop_never_runs_storage_maintenance_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+    real_sleep = asyncio.sleep
+
+    def gc() -> None:
+        nonlocal called
+        called = True
+
+    async def stop_after_first_tick(_seconds: float) -> None:
+        await real_sleep(0)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(app_main, "gc_soft_deleted", gc)
+    monkeypatch.setattr(app_main.asyncio, "sleep", stop_after_first_tick)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app_main._gc_loop(storage_maintenance_enabled=False)
+
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_external_scan_loop_skips_during_restore_then_logs_scan_failure(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -150,7 +150,14 @@ def download_backup(backup_id: str) -> FileResponse:
     summary="Delete a backup",
 )
 def delete_backup(backup_id: str) -> dict:
-    if not backup.delete_backup(backup_id):
+    try:
+        deleted = backup.delete_backup(backup_id)
+    except backup.BackupOwnershipError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="backup_storage_ownership_unverified",
+        ) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail="backup_not_found")
     return {"backup_id": backup_id, "deleted": True}
 
@@ -178,6 +185,11 @@ def restore_backup(backup_id: str) -> dict:
         raise HTTPException(status_code=404, detail="backup_not_found") from exc
     except backup.RestoreConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except backup.BackupOwnershipError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="backup_storage_ownership_unverified",
+        ) from exc
     except Exception as exc:
         logger.exception("restore %s failed", backup_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

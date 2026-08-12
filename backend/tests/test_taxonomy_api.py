@@ -4,12 +4,16 @@ merge/rename/permission paths not covered by tests/test_taxonomy.py
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.db.models import CollectionPermission, CollectionRole, Model, User
 from app.services import taxonomy
 from app.services.auth import create_access_token, hash_password
+from app.services.storage_backend import get_backend
 
 
 def _user(session: Session, username: str, *, superuser: bool = False) -> User:
@@ -380,8 +384,15 @@ class TestCollectionImages:
         assert resp.json()["detail"] == "upload_too_large"
 
     def test_upload_and_serve_roundtrip(
-        self, client: TestClient, db_session: Session, auth_headers: dict[str, str]
+        self,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+        tmp_path: Path,
     ) -> None:
+        from app.core.config import _overlay
+
+        _overlay["thumb_dir"] = tmp_path / "thumbs"
         col = taxonomy.resolve_or_create_collection(db_session, "Imgs3")
         assert col is not None
         data = b"\x89PNG\r\n\x1a\nfake-png-bytes"
@@ -395,6 +406,33 @@ class TestCollectionImages:
         get = client.get(url, headers=auth_headers)
         assert get.status_code == 200
         assert get.content == data
+
+    def test_upload_image_collision_never_overwrites_existing_bytes(
+        self,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+        tmp_path: Path,
+    ) -> None:
+        from app.core.config import _overlay
+
+        _overlay["thumb_dir"] = tmp_path / "thumbs"
+        col = taxonomy.resolve_or_create_collection(db_session, "Collision")
+        data = b"\x89PNG\r\n\x1a\nincoming"
+        name = f"{hashlib.sha256(data).hexdigest()}.png"
+        destination = Path(get_backend().collection_image_key(col.id, name))
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"user-owned")
+
+        response = client.post(
+            f"/api/v1/collections/{col.id}/images",
+            files={"file": ("pic.png", data, "image/png")},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "storage_destination_exists"
+        assert destination.read_bytes() == b"user-owned"
 
     def test_serve_image_bad_name_404(
         self, client: TestClient, db_session: Session, auth_headers: dict[str, str]

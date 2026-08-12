@@ -16,6 +16,8 @@ count + per-entry + total uncompressed size caps).
 
 from __future__ import annotations
 
+import os
+import tempfile
 import threading
 import time
 import uuid
@@ -115,17 +117,28 @@ async def download_to_staging(url: str) -> tuple[Path, str]:
                 suffix = Path(original_filename).suffix.lower() or ".bin"
                 staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
                 staged.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_name = tempfile.mkstemp(
+                    prefix=".printstash-url-", dir=staged.parent
+                )
+                temp = Path(temp_name)
                 written = 0
                 limit = settings.max_upload_bytes
-                with staged.open("wb") as out:
-                    async for chunk in resp.aiter_bytes(1024 * 1024):
-                        written += len(chunk)
-                        if written > limit:
-                            out.close()
-                            staged.unlink(missing_ok=True)
-                            raise ImportError_("download_too_large")
-                        out.write(chunk)
-                return staged, original_filename
+                try:
+                    with os.fdopen(fd, "wb") as out:
+                        async for chunk in resp.aiter_bytes(1024 * 1024):
+                            written += len(chunk)
+                            if written > limit:
+                                raise ImportError_("download_too_large")
+                            out.write(chunk)
+                        out.flush()
+                        os.fsync(out.fileno())
+                    os.link(temp, staged, follow_symlinks=False)
+                    return staged, original_filename
+                finally:
+                    try:
+                        temp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
     raise ImportError_("url_too_many_redirects")
 
 

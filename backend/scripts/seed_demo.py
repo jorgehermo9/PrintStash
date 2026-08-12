@@ -26,21 +26,23 @@ from app.core.config import settings
 from app.core.time import utcnow
 from app.db.models import (
     Collection,
+    FilamentProfile,
     File,
     FileRevisionStatus,
     FileType,
-    FilamentProfile,
     Model,
     ModelTagLink,
-    PrintJob,
-    PrintJobState,
     Printer,
     PrinterProfile,
     PrinterProvider,
     PrinterStatus,
+    PrintJob,
+    PrintJobState,
     Tag,
 )
 from app.db.session import _engine
+from app.services.storage_backend import get_backend
+from app.services.storage_ownership import delete_owned_key, record_creation
 
 # Marker written into every seeded row's notes/description so --wipe is exact.
 _DEMO_MARKER = "seeded-demo-data"
@@ -136,6 +138,14 @@ def wipe(session: Session) -> None:
     models = session.exec(select(Model).where(Model.description == _DEMO_MARKER)).all()
     ids = [m.id for m in models]
     if ids:
+        backend = get_backend()
+        demo_files = session.exec(select(File).where(File.model_id.in_(ids))).all()
+        for file_row in demo_files:
+            if file_row.id is not None:
+                delete_owned_key(session, backend, backend.thumbnail_key(file_row.id))
+                delete_owned_key(
+                    session, backend, backend.legacy_thumbnail_key(file_row.id)
+                )
         session.exec(delete(PrintJob).where(PrintJob.model_id.in_(ids)))
         session.exec(delete(ModelTagLink).where(ModelTagLink.model_id.in_(ids)))
         session.exec(delete(File).where(File.model_id.in_(ids)))
@@ -157,6 +167,7 @@ def seed(session: Session) -> None:
     thumb_dir = Path(settings.thumb_dir)
     data_dir = Path(settings.data_dir)
     thumb_dir.mkdir(parents=True, exist_ok=True)
+    backend = get_backend()
 
     collections: dict[str, Collection] = {}
     for name, parent in COLLECTIONS:
@@ -295,9 +306,11 @@ def seed(session: Session) -> None:
             session.refresh(f)
         # Thumbnails: the API falls back to a legacy PNG at <thumb_dir>/<file_id>.png.
         hue = (rng.randint(40, 220), rng.randint(40, 220), rng.randint(40, 220))
-        (thumb_dir / f"{mesh.id}.png").write_bytes(_png(320, 320, hue))
+        thumb_key = backend.legacy_thumbnail_key(mesh.id)
+        thumb_receipt = backend.create_bytes(_png(320, 320, hue), thumb_key)
+        record_creation(session, thumb_receipt, object_kind="thumbnail")
         m.thumbnail_file_id = mesh.id
-        m.thumbnail_path = str(thumb_dir / f"{mesh.id}.png")
+        m.thumbnail_path = thumb_key
         for tag_name in tag_names:
             session.add(ModelTagLink(model_id=m.id, tag_id=tags[tag_name].id))
         session.add(m)

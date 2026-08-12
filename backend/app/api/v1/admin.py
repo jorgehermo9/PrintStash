@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import Session, select
 
 from app.core.security import require_superuser
@@ -26,6 +26,7 @@ from app.services.auth import (
     hash_password,
     invalidate_user_sessions,
 )
+from app.services.storage_ownership import UnsafeStorageDeleteError
 from app.services.trash import gc_soft_deleted, hard_delete_document, hard_delete_file
 
 router = APIRouter(
@@ -203,12 +204,19 @@ def admin_delete_resource(
     if row is None:
         raise HTTPException(status_code=404, detail="resource_id_not_found")
     if hard:
-        if isinstance(row, File):
-            hard_delete_file(session, row)
-        elif isinstance(row, Document):
-            hard_delete_document(session, row)
-        else:
-            session.delete(row)
+        try:
+            if isinstance(row, File):
+                hard_delete_file(session, row)
+            elif isinstance(row, Document):
+                hard_delete_document(session, row)
+            else:
+                session.delete(row)
+        except UnsafeStorageDeleteError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="storage_ownership_unverified",
+            ) from exc
     else:
         row.deleted_at = utcnow()
         session.add(row)

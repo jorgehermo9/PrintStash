@@ -49,11 +49,19 @@ const SETUP_ERROR_MESSAGES: Record<string, string> = {
     "The backend could not create the data directory. Check the path and container permissions.",
   data_dir_not_writable:
     "The backend cannot write to the data directory. Check filesystem permissions.",
+  data_dir_not_readable:
+    "The backend cannot inspect the data directory. Check filesystem permissions.",
+  data_dir_not_empty:
+    "The data directory must be a dedicated empty directory. To index existing NAS or Nextcloud files in place, finish setup with the default path, then add the folder under Settings → External Libraries.",
   invalid_thumb_dir_path: "The thumbnail directory path is not valid.",
   thumb_dir_not_creatable:
     "The backend could not create the thumbnail directory. Check the path and container permissions.",
   thumb_dir_not_writable:
     "The backend cannot write to the thumbnail directory. Check filesystem permissions.",
+  thumb_dir_not_readable:
+    "The backend cannot inspect the thumbnail directory. Check filesystem permissions.",
+  thumb_dir_not_empty:
+    "The thumbnail directory must be a dedicated empty directory.",
   invalid_storage_backend: "Choose either local disk or S3/R2 storage.",
   s3_bucket_required: "S3/R2 storage needs a bucket name.",
   invalid_setup_token:
@@ -583,8 +591,9 @@ function StorageStep(props: {
             />
           </div>
           <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-            The backend will create these directories and probe them for
-            writability before completing setup.
+            These are private PrintStash storage and must be empty. Add existing
+            NAS or Nextcloud folders later under Settings → External Libraries;
+            those files stay in place.
           </div>
         </div>
       ) : (

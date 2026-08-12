@@ -69,6 +69,11 @@ def _safe_db_url(value: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.services.storage_paths import validate_runtime_storage_paths
+
+    # Validate environment-time paths before even creating the process-lock
+    # rendezvous beside the database.
+    validate_runtime_storage_paths()
     process_lock = acquire_process_lock()
     app.state.process_lock = process_lock
     logger.info("starting %s v%s", settings.app_name, settings.app_version)
@@ -77,6 +82,9 @@ async def lifespan(app: FastAPI):
     init_db()
     with get_session_factory().scoped_session() as session:
         apply_overlay(session)
+        # Persisted runtime configuration can differ from environment
+        # defaults, so revalidate before creating the secrets key.
+        validate_runtime_storage_paths()
         # Must run after apply_overlay: that call clears the overlay dict.
         ensure_jwt_secret(session)
         configured = is_configured(session)
@@ -128,7 +136,9 @@ async def lifespan(app: FastAPI):
     app.state.printer_hub = hub
     watcher = LibraryWatcher()
     app.state.library_watcher = watcher
-    app.state.gc_task = asyncio.create_task(_gc_loop())
+    app.state.gc_task = asyncio.create_task(
+        _gc_loop(storage_maintenance_enabled=configured)
+    )
     app.state.external_scan_task = asyncio.create_task(_external_scan_loop())
     app.state.notification_task = asyncio.create_task(run_dispatcher_loop())
     app.state.fleet_scheduler_task = asyncio.create_task(run_fleet_scheduler())
@@ -157,11 +167,14 @@ async def lifespan(app: FastAPI):
     logger.info("shutting down")
 
 
-async def _gc_loop() -> None:
+async def _gc_loop(*, storage_maintenance_enabled: bool = True) -> None:
     # Run once at startup (not sleep-first): a container that lives less than
     # an hour — frequent redeploys, dev — would otherwise never GC expired
     # trash or prune old notification deliveries.
     while True:
+        if not storage_maintenance_enabled:
+            await asyncio.sleep(3600)
+            continue
         if not begin_mutating_operation():
             await asyncio.sleep(1)
             continue

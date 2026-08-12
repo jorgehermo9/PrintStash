@@ -191,47 +191,43 @@ def create_archive(session: Session, user: User) -> Path:
         raise ValueError("archive_too_large")
 
     fd, filename = tempfile.mkstemp(suffix=".printstash.zip")
-    Path(filename).unlink(missing_ok=True)
     try:
-        with zipfile.ZipFile(
-            filename, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
-        ) as archive:
-            backend = get_backend()
-            actual_size = len(manifest_bytes)
-            for artifact, entry in file_entries:
-                with backend.local_path(artifact.path) as source:
-                    digest = hashlib.sha256()
-                    artifact_size = 0
-                    with (
-                        source.open("rb") as source_file,
-                        archive.open(entry, "w", force_zip64=True) as archive_entry,
+        # Keep and write through the exclusive mkstemp descriptor. Unlinking
+        # the placeholder and reopening by name would create a race in which an
+        # unrelated file at the random path could be truncated.
+        with open(fd, "w+b", closefd=True) as output:
+            with zipfile.ZipFile(
+                output, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
+            ) as archive:
+                backend = get_backend()
+                actual_size = len(manifest_bytes)
+                for artifact, entry in file_entries:
+                    with backend.local_path(artifact.path) as source:
+                        digest = hashlib.sha256()
+                        artifact_size = 0
+                        with (
+                            source.open("rb") as source_file,
+                            archive.open(entry, "w", force_zip64=True) as archive_entry,
+                        ):
+                            while chunk := source_file.read(_HASH_CHUNK_SIZE):
+                                artifact_size += len(chunk)
+                                if actual_size + artifact_size > MAX_UNCOMPRESSED:
+                                    raise ValueError("archive_too_large")
+                                digest.update(chunk)
+                                archive_entry.write(chunk)
+                    if (
+                        artifact_size != artifact.size_bytes
+                        or digest.hexdigest() != artifact.sha256.lower()
                     ):
-                        while chunk := source_file.read(_HASH_CHUNK_SIZE):
-                            artifact_size += len(chunk)
-                            if actual_size + artifact_size > MAX_UNCOMPRESSED:
-                                raise ValueError("archive_too_large")
-                            digest.update(chunk)
-                            archive_entry.write(chunk)
-                if (
-                    artifact_size != artifact.size_bytes
-                    or digest.hexdigest() != artifact.sha256.lower()
-                ):
-                    raise ValueError("archive_blob_hash_mismatch")
-                actual_size += artifact_size
-                if actual_size > MAX_UNCOMPRESSED:
-                    raise ValueError("archive_too_large")
-            archive.writestr("manifest.json", manifest_bytes)
+                        raise ValueError("archive_blob_hash_mismatch")
+                    actual_size += artifact_size
+                    if actual_size > MAX_UNCOMPRESSED:
+                        raise ValueError("archive_too_large")
+                archive.writestr("manifest.json", manifest_bytes)
         return Path(filename)
     except Exception:
         Path(filename).unlink(missing_ok=True)
         raise
-    finally:
-        try:
-            import os
-
-            os.close(fd)
-        except OSError:
-            pass
 
 
 def _safe_entry(name: str) -> bool:
@@ -356,7 +352,7 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
                     )
                     with (
                         archive.open(artifact_data["entry"]) as src,
-                        staged.open("wb") as dst,
+                        staged.open("xb") as dst,
                     ):
                         shutil.copyfileobj(src, dst)
                     file_row = ingestion.persist_artifact(

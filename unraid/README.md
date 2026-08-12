@@ -71,7 +71,12 @@ From the `printstash-api` template:
   openssl rand -hex 32
   ```
 - Leave the volume paths at their defaults (`/mnt/user/appdata/printstash/...`)
-  or point them wherever you keep app data.
+  or point them at dedicated empty app-data directories.
+
+> **Never map an existing model, NAS, or Nextcloud folder to `/data/files`.**
+> This is PrintStash's private blob store, not an import path. Finish setup with
+> the default dedicated directory, then add existing folders under **Settings →
+> External Libraries** to index their files safely in place.
 
 The template already:
 - relies on the API image, which runs database migrations on every start
@@ -139,8 +144,8 @@ container variables are mainly bootstrap defaults:
 
 | Path | Holds |
 |------|-------|
-| `/data/files` | Uploaded models and G-code |
-| `/data/thumbs` | Generated thumbnails |
+| `/data/files` | Private PrintStash model/G-code storage; must be a dedicated directory, never an existing library |
+| `/data/thumbs` | Private generated-thumbnail storage; use a dedicated directory |
 | `/data/db` | SQLite database |
 | `/data/staging` | Temporary upload/import staging |
 | `/data/backups` | Local backup archives |

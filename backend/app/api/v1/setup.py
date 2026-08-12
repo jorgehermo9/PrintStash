@@ -6,14 +6,15 @@ auth. Once ``POST /setup`` succeeds, the endpoint becomes read-only and
 returns 409 on further attempts — re-running the wizard would let an attacker
 seize an established vault.
 
-Storage path validation is intentionally lenient: we try to create the
-directory and write a sentinel file. If that works, we accept it. The host
-operator is responsible for ensuring the path lives on persistent storage
-(usually a Docker volume mount).
+Storage path validation is deliberately fail-safe: local vault directories
+must be writable and empty on first setup.  An existing model library belongs
+behind the external-library indexing workflow, never the private blob-store
+path.
 """
 
 from __future__ import annotations
 
+import tempfile
 import threading
 from pathlib import Path
 
@@ -28,6 +29,12 @@ from app.schemas.setup import SetupRequest, SetupResponse, SetupStatus
 from app.services import runtime_config
 from app.services.auth import create_access_token, hash_password, set_session_cookie
 from app.services.setup_token import verify_setup_token
+from app.services.storage_paths import (
+    StoragePathOverlapError,
+    sqlite_database_path,
+    validate_disjoint_directories,
+    validate_file_outside_roots,
+)
 
 logger = get_logger(__name__)
 
@@ -42,8 +49,10 @@ _DEFAULT_DATA_DIR = str(FrozenSettings.model_fields["data_dir"].default)
 _DEFAULT_THUMB_DIR = str(FrozenSettings.model_fields["thumb_dir"].default)
 
 
-def _validate_writable_dir(path_str: str, label: str) -> Path:
-    """Create the directory if needed and confirm we can write into it."""
+def _validate_writable_dir(
+    path_str: str, label: str, *, require_empty: bool = False
+) -> Path:
+    """Create a directory and confirm it is writable and safe for first use."""
     try:
         path = Path(path_str).expanduser().resolve()
     except (OSError, RuntimeError) as exc:
@@ -61,9 +70,33 @@ def _validate_writable_dir(path_str: str, label: str) -> Path:
             detail=f"{label}_not_creatable",
         ) from exc
 
-    probe = path / ".printstash-write-probe"
+    if require_empty:
+        try:
+            populated = next(path.iterdir(), None) is not None
+        except OSError as exc:
+            logger.warning("setup: cannot inspect %s=%s: %s", label, path, exc)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{label}_not_readable",
+            ) from exc
+        if populated:
+            logger.warning("setup: refusing populated private vault %s=%s", label, path)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{label}_not_empty",
+            )
+
+    probe: Path | None = None
     try:
-        probe.write_text("ok", encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path,
+            prefix=".printstash-write-probe-",
+            delete=False,
+        ) as handle:
+            handle.write("ok")
+            probe = Path(handle.name)
     except OSError as exc:
         logger.warning("setup: %s=%s not writable: %s", label, path, exc)
         raise HTTPException(
@@ -71,10 +104,11 @@ def _validate_writable_dir(path_str: str, label: str) -> Path:
             detail=f"{label}_not_writable",
         ) from exc
     finally:
-        try:
-            probe.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if probe is not None:
+            try:
+                probe.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     return path
 
@@ -167,20 +201,72 @@ def _complete_setup(body: SetupRequest, session: Session) -> SetupResponse:
         )
 
     # 1. Validate local storage paths first — fail fast before mutating anything.
-    if storage_backend == "local" and body.data_dir:
-        _validate_writable_dir(body.data_dir, "data_dir")
-    if storage_backend == "local" and body.thumb_dir:
-        _validate_writable_dir(body.thumb_dir, "thumb_dir")
+    if storage_backend == "local":
+        # The browser omits unchanged defaults, so validate the effective paths,
+        # not only explicit overrides.  This catches a populated or read-only
+        # bind mount at /data/files before setup mutates any database state.
+        effective_data_dir = body.data_dir or str(settings.data_dir)
+        effective_thumb_dir = body.thumb_dir or str(settings.thumb_dir)
+        protected_dirs: dict[str, str | Path] = {
+            "data_dir": effective_data_dir,
+            "thumb_dir": effective_thumb_dir,
+            "staging_dir": settings.staging_dir,
+            "backup_dir": settings.backup_dir,
+        }
+        try:
+            resolved = validate_disjoint_directories(protected_dirs)
+            database_path = sqlite_database_path(str(settings.db_url))
+            if database_path is not None:
+                validate_file_outside_roots(database_path, resolved)
+            validate_file_outside_roots(settings.secrets_key_file, resolved)
+        except (OSError, RuntimeError, StoragePathOverlapError) as exc:
+            logger.warning("setup: refusing overlapping storage paths: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="storage_paths_overlap",
+            ) from exc
+
+        effective_data_dir = str(resolved["data_dir"])
+        effective_thumb_dir = str(resolved["thumb_dir"])
+        _validate_writable_dir(
+            effective_data_dir,
+            "data_dir",
+            require_empty=True,
+        )
+        _validate_writable_dir(
+            effective_thumb_dir,
+            "thumb_dir",
+            require_empty=True,
+        )
+    else:
+        effective_data_dir = body.data_dir
+        effective_thumb_dir = body.thumb_dir
+
+    effective_s3_bucket = (
+        body.s3_bucket if body.s3_bucket is not None else str(settings.s3_bucket)
+    )
+    effective_s3_endpoint_url = (
+        body.s3_endpoint_url
+        if body.s3_endpoint_url is not None
+        else str(settings.s3_endpoint_url)
+    )
+    effective_s3_region = (
+        body.s3_region if body.s3_region is not None else str(settings.s3_region)
+    )
 
     # 2. Persist storage and backup overrides into the runtime overlay.
     runtime_config.update_config(
         session,
         storage_backend=storage_backend,
-        data_dir=body.data_dir,
-        thumb_dir=body.thumb_dir,
-        s3_bucket=body.s3_bucket,
-        s3_endpoint_url=body.s3_endpoint_url,
-        s3_region=body.s3_region,
+        # Pin the effective roots. Leaving these null would let a later env
+        # change silently reinterpret existing rows against a different mount.
+        data_dir=effective_data_dir,
+        thumb_dir=effective_thumb_dir,
+        # Pin the remote namespace identity for the same reason as local roots:
+        # environment drift must not reinterpret owned keys in another bucket.
+        s3_bucket=effective_s3_bucket,
+        s3_endpoint_url=effective_s3_endpoint_url,
+        s3_region=effective_s3_region,
         s3_access_key=body.s3_access_key,
         s3_secret_key=body.s3_secret_key,
         backup_retention_days=body.backup_retention_days,

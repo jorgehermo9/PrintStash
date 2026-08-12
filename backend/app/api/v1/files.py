@@ -26,7 +26,8 @@ from app.db.session import SessionFactory, get_session, get_session_factory
 from app.schemas.ingest import IngestResponse
 from app.services import auth, rbac
 from app.services.jobs import registry
-from app.services.storage_backend import get_backend
+from app.services.storage_backend import StorageCollisionError, get_backend
+from app.services.storage_ownership import record_creation
 
 logger = get_logger(__name__)
 
@@ -323,9 +324,21 @@ def stl_response(f: File, request: Request):
     if data is None:
         raise HTTPException(status_code=500, detail="stl_conversion_failed")
 
+    receipt = None
     try:
-        backend.write_bytes(data, cache_key)
+        receipt = backend.create_bytes(data, cache_key)
+        with get_session_factory().scoped_session() as ownership_session:
+            record_creation(
+                ownership_session, receipt, object_kind="derived_stl_cache"
+            )
+            ownership_session.commit()
+    except StorageCollisionError:
+        # Another request won the create-only race. Serve our in-memory result;
+        # subsequent requests will use the already-published cache object.
+        pass
     except Exception:
+        if receipt is not None:
+            backend.rollback_create(receipt)
         logger.warning("stl cache write failed for file %s", f.id, exc_info=True)
 
     # Freshly converted bytes are already in memory (and bounded by the render

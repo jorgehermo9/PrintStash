@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Iterator
 
@@ -108,6 +109,7 @@ _init_test_db(_threaded_engine)
 
 
 _TRUNCATE_TABLES_ORDER = [
+    "owned_storage_objects",
     "vault_audit_findings",
     "vault_audit_runs",
     "inbox_items",
@@ -197,6 +199,22 @@ def _ensure_test_sentinels(engine: Engine = _test_engine) -> None:
             session.commit()
 
 
+def _reset_test_storage() -> None:
+    """Keep the shared default test roots isolated between test cases."""
+    for root in (
+        _TEST_STORAGE_ROOT / "files",
+        _TEST_STORAGE_ROOT / "thumbs",
+        _TEST_STORAGE_ROOT / "staging",
+        _TEST_STORAGE_ROOT / "backups",
+    ):
+        root.mkdir(parents=True, exist_ok=True)
+        for child in root.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
+
+
 @pytest.fixture(autouse=True)
 def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Override the session factory ContextVar to use the in-memory test engine.
@@ -209,6 +227,7 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     _overlay.clear()
     _overlay["db_url"] = TEST_DB_URL
     _overlay["secrets_key"] = "printstash-test-secrets-key"
+    _reset_test_storage()
     _truncate_all()
     # Drop the process-wide httpx client so a test that drives async egress in
     # its own asyncio.run() loop doesn't inherit one bound to a prior (closed)

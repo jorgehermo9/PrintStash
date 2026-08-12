@@ -95,6 +95,7 @@ def test_failed_thumbnail_does_not_leave_partial_model(
     db_session.rollback()
     assert db_session.exec(select(File).where(File.model_id == model.id)).all() == []
     assert db_session.exec(select(Metadata)).all() == []
+    assert not Path(storage.blob_key(model.slug, 1, "bracket.stl")).exists()
 
 
 def test_failed_metadata_does_not_leave_orphan_file_row(
@@ -119,6 +120,52 @@ def test_failed_metadata_does_not_leave_orphan_file_row(
 
     db_session.rollback()
     assert db_session.exec(select(File).where(File.model_id == model.id)).all() == []
+    assert not Path(storage.blob_key(model.slug, 1, "bracket.stl")).exists()
+
+
+def test_persist_never_overwrites_an_unclaimed_destination(
+    db_session: Session, storage, model: Model, tmp_path: Path
+) -> None:
+    occupied = Path(storage.blob_key(model.slug, 1, "bracket.stl"))
+    occupied.parent.mkdir(parents=True, exist_ok=True)
+    occupied.write_bytes(b"pre-existing user data")
+
+    file_row = _persist(db_session, model, _staged(tmp_path))
+
+    assert occupied.read_bytes() == b"pre-existing user data"
+    assert file_row.path != str(occupied)
+    assert Path(file_row.path).read_bytes() == b"solid bracket\nendsolid\n"
+
+
+def test_thumbnail_collision_preserves_existing_bytes_and_rolls_back_artifact(
+    db_session: Session,
+    storage,
+    model: Model,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    occupied = Path(storage.thumbnail_key(1))
+    occupied.parent.mkdir(parents=True, exist_ok=True)
+    occupied.write_bytes(b"user-owned thumbnail-shaped file")
+    monkeypatch.setattr(storage, "thumbnail_key", lambda _file_id: str(occupied))
+
+    with pytest.raises(Exception, match="already exists|collision"):
+        _persist(
+            db_session,
+            model,
+            _staged(tmp_path),
+            thumb_bytes=(
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+                b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+            ),
+        )
+
+    db_session.rollback()
+    assert occupied.read_bytes() == b"user-owned thumbnail-shaped file"
+    assert db_session.exec(select(File).where(File.model_id == model.id)).all() == []
+    assert not Path(storage.blob_key(model.slug, 1, "bracket.stl")).exists()
 
 
 def test_version_numbers_increment_across_revisions(

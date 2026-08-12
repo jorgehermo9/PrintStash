@@ -1,4 +1,4 @@
-"""Trash + orphan-blob GC on a remote (S3/R2-style) storage backend.
+"""Trash + GC safety on a remote (S3/R2-style) storage backend.
 
 The local-backend trash tests never exercise the ``direct_path() is None`` branch
 that S3/R2 deployments take. These inject a remote-style backend (no direct
@@ -6,8 +6,8 @@ filesystem path) to pin two blob-ownership invariants on that path:
 
 * hard delete removes the vault blob key and the thumbnail keys, but must never
   delete the bytes of a NAS-linked (external) file;
-* the orphan-blob sweep walks the complete vault namespace and deletes only
-  keys that no database row references.
+* maintenance never discovers and deletes objects merely because no database
+  row references them.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from app.core.config import _overlay
 from app.db.models import File, FileType, Model
 from app.services import trash
 from app.services.storage_backend import LocalStorageBackend
+from app.services.storage_ownership import UnsafeStorageDeleteError
 
 
 class _RecordingRemoteBackend(LocalStorageBackend):
@@ -41,7 +42,7 @@ class _RecordingRemoteBackend(LocalStorageBackend):
 
 class _WalkRecordingBackend(_RecordingRemoteBackend):
     """Remote backend that yields a fixed key listing and records the prefix it
-    was asked to walk — for asserting the orphan sweep's S3 prefix + decisions."""
+    was asked to walk — for asserting destructive GC never enumerates storage."""
 
     def __init__(self, keys: list[str]) -> None:
         super().__init__()
@@ -92,23 +93,24 @@ def test_hard_delete_on_remote_backend_respects_blob_ownership(
         db_session, model, nas_path, version=2, sha256="b" * 64, is_external=True
     )
 
-    trash.hard_delete_model(db_session, model)
-    db_session.commit()
+    with pytest.raises(UnsafeStorageDeleteError):
+        trash.hard_delete_model(db_session, model)
+    db_session.rollback()
 
-    # Vault blob key was deleted; the NAS-linked path was never deleted.
-    assert vault_key in backend.deleted
+    # These hand-built legacy rows have no positive creation receipts, so even
+    # the vault-shaped key is preserved. The NAS-linked path is never eligible.
+    assert vault_key not in backend.deleted
     assert nas_path not in backend.deleted
-    # Thumbnails are vault-owned for both files, so both are swept.
-    assert backend.thumbnail_key(vault_file.id) in backend.deleted
-    assert backend.thumbnail_key(ext_file.id) in backend.deleted
-    # Rows are gone regardless of blob ownership.
+    assert backend.thumbnail_key(vault_file.id) not in backend.deleted
+    assert backend.thumbnail_key(ext_file.id) not in backend.deleted
+    # Fail-closed also preserves the rows so an operator can recover/adopt them.
     db_session.expire_all()
-    assert db_session.get(Model, model.id) is None
-    assert db_session.get(File, vault_file.id) is None
-    assert db_session.get(File, ext_file.id) is None
+    assert db_session.get(Model, model.id) is not None
+    assert db_session.get(File, vault_file.id) is not None
+    assert db_session.get(File, ext_file.id) is not None
 
 
-def test_orphan_gc_on_remote_backend_uses_s3_prefix_and_keeps_referenced(
+def test_gc_on_remote_backend_never_discovers_or_deletes_unclaimed_objects(
     monkeypatch: pytest.MonkeyPatch, db_session: Session
 ) -> None:
     _overlay["storage_backend"] = "s3"
@@ -123,8 +125,6 @@ def test_orphan_gc_on_remote_backend_uses_s3_prefix_and_keeps_referenced(
 
     removed = trash._cleanup_orphan_blobs(db_session)
 
-    # The sweep covers the full S3-style vault namespace, including derivatives.
-    assert backend.walked == [""]
-    # ...and deletes only the key no File row references.
-    assert backend.deleted == [orphan_key]
-    assert removed == 1
+    assert backend.walked == []
+    assert backend.deleted == []
+    assert removed == 0

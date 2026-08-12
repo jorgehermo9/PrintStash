@@ -26,6 +26,7 @@ from app.db.models import (
 from app.services import ingestion as ingestion_service
 from app.services.auth import create_access_token, hash_password
 from app.services.storage_backend import get_backend
+from app.services.storage_ownership import record_creation
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 WEBP_MAGIC = b"RIFF"
@@ -621,9 +622,18 @@ def test_purge_expired_trash_uses_retention_setting(
     fresh_model_id = fresh_model.id
     old_file_path = old_file.path
     fresh_file_path = fresh_file.path
-    Path(old_file.path).parent.mkdir(parents=True, exist_ok=True)
-    Path(old_file.path).write_bytes(b"old")
-    Path(fresh_file.path).write_bytes(b"new")
+    backend = get_backend()
+    record_creation(
+        db_session,
+        backend.create_bytes(b"old", old_file.path),
+        object_kind="artifact",
+    )
+    record_creation(
+        db_session,
+        backend.create_bytes(b"new", fresh_file.path),
+        object_kind="artifact",
+    )
+    db_session.commit()
 
     purged = client.delete("/api/v1/models/trash/expired", headers=auth_headers)
 

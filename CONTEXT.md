@@ -51,8 +51,10 @@ A soft-deleted row awaiting retention expiry; query via
 _Avoid_: deleted (ambiguous with hard delete)
 
 **Trash lifecycle**:
-soft-delete → restore → expiry → hard delete (rows + blobs) → orphan-blob
-GC; owned solely by `services/trash` (including the hourly GC loop).
+soft-delete → restore → expiry → hard delete (rows + explicitly owned blobs);
+owned solely by `services/trash` (including the hourly GC loop). PrintStash
+never walks configured storage and deletes files merely because no database row
+claims them; failed writes clean up their exact destinations at the write site.
 
 ### Storage
 

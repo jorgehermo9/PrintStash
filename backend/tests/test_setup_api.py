@@ -114,6 +114,133 @@ class TestFirstRunSetup:
         assert response.json()["detail"] == "invalid_setup_token"
         assert db_session.exec(select(User)).first() is None
 
+    def test_setup_rejects_populated_default_data_directory(
+        self, client: TestClient, db_session: Session, tmp_path: Path
+    ) -> None:
+        """A mounted model library is not a safe private vault directory.
+
+        The frontend omits unchanged default paths, so setup must validate the
+        effective path rather than only explicit request overrides.
+        """
+        self._isolate_runtime_dirs(tmp_path)
+        existing = Path(_overlay["data_dir"]) / "Jonathan" / "part.stl"
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(b"user-owned")
+
+        response = client.post(
+            "/api/v1/setup",
+            json={
+                "setup_token": current_setup_token(),
+                "username": "admin",
+                "password": "Password123",
+                "storage_backend": "local",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "data_dir_not_empty"
+        assert existing.read_bytes() == b"user-owned"
+        assert db_session.exec(select(User)).first() is None
+
+    def test_setup_rejects_nested_or_aliased_storage_roots(
+        self, client: TestClient, db_session: Session, tmp_path: Path
+    ) -> None:
+        self._isolate_runtime_dirs(tmp_path)
+        shared = tmp_path / "shared"
+
+        response = client.post(
+            "/api/v1/setup",
+            json={
+                "setup_token": current_setup_token(),
+                "username": "admin",
+                "password": "Password123",
+                "storage_backend": "local",
+                "data_dir": str(shared),
+                "thumb_dir": str(shared / "thumbs"),
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "storage_paths_overlap"
+        assert db_session.exec(select(User)).first() is None
+
+    def test_setup_rejects_symlink_alias_between_storage_roots(
+        self, client: TestClient, db_session: Session, tmp_path: Path
+    ) -> None:
+        self._isolate_runtime_dirs(tmp_path)
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        alias = tmp_path / "alias"
+        alias.symlink_to(shared, target_is_directory=True)
+
+        response = client.post(
+            "/api/v1/setup",
+            json={
+                "setup_token": current_setup_token(),
+                "username": "admin",
+                "password": "Password123",
+                "storage_backend": "local",
+                "data_dir": str(shared),
+                "thumb_dir": str(alias),
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "storage_paths_overlap"
+        assert db_session.exec(select(User)).first() is None
+
+    @pytest.mark.parametrize("managed_role", ["staging_dir", "backup_dir"])
+    def test_setup_rejects_data_root_overlapping_managed_scratch_root(
+        self,
+        client: TestClient,
+        db_session: Session,
+        tmp_path: Path,
+        managed_role: str,
+    ) -> None:
+        self._isolate_runtime_dirs(tmp_path)
+
+        response = client.post(
+            "/api/v1/setup",
+            json={
+                "setup_token": current_setup_token(),
+                "username": "admin",
+                "password": "Password123",
+                "storage_backend": "local",
+                "data_dir": str(_overlay[managed_role]),
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "storage_paths_overlap"
+        assert db_session.exec(select(User)).first() is None
+
+    def test_setup_rejects_read_only_effective_root_before_db_mutation(
+        self,
+        client: TestClient,
+        db_session: Session,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._isolate_runtime_dirs(tmp_path)
+
+        def denied(*_args, **_kwargs):
+            raise PermissionError("read-only mount")
+
+        monkeypatch.setattr("app.api.v1.setup.tempfile.NamedTemporaryFile", denied)
+        response = client.post(
+            "/api/v1/setup",
+            json={
+                "setup_token": current_setup_token(),
+                "username": "admin",
+                "password": "Password123",
+                "storage_backend": "local",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "data_dir_not_writable"
+        assert db_session.exec(select(User)).first() is None
+
     def test_setup_rolls_back_config_and_user_when_finalization_fails(
         self,
         client: TestClient,

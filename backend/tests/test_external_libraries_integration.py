@@ -4,7 +4,7 @@ These complement the focused unit tests in ``test_external_libraries.py`` and
 exercise the safety invariants and full workflows that decide whether the
 feature is production-safe:
 
-* **NAS bytes are sacred** — neither trash hard-delete nor the orphan-blob GC
+* **NAS bytes are sacred** — neither trash hard-delete nor scheduled GC
   may ever touch a user's original files (only vault-owned thumbnails/rows go).
 * **Write-back never overwrites** an existing file on the NAS.
 * Revisions follow their model back into its library.
@@ -254,11 +254,8 @@ def test_hard_delete_model_never_destroys_nas_bytes(
     assert path.read_bytes() == original_bytes
 
 
-def test_orphan_gc_never_deletes_external_blobs(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """The hourly orphan-blob sweep walks vault storage only. External files live
-    outside the vault and must never be swept, even with retention at zero."""
+def test_gc_never_deletes_external_blobs(tmp_path: Path, db_session: Session) -> None:
+    """External files are user-owned and survive GC, even at zero retention."""
     _configure_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
@@ -307,6 +304,41 @@ def test_write_back_never_overwrites_existing_nas_file(
     f = _external_files(db_session, live_only=False)[0]
     assert Path(f.path).name == "part-2.gcode"
     assert Path(f.path).exists()
+
+
+def test_write_back_rejects_collection_symlink_escape(
+    tmp_path: Path, db_session: Session
+) -> None:
+    """A mirrored collection symlink cannot redirect a write outside the NAS."""
+    _configure_storage(tmp_path)
+    _enable_feature(db_session)
+    nas = tmp_path / "nas"
+    outside = tmp_path / "outside"
+    nas.mkdir(parents=True)
+    outside.mkdir()
+    (nas / "escaped").symlink_to(outside, target_is_directory=True)
+    lib = _make_library(
+        db_session, nas, collection_mode=ExternalLibraryCollectionMode.MIRROR
+    )
+
+    staged = _stage("part.gcode", _gcode_bytes("escape"))
+    job_id = registry.create()
+    ingest_orca_gcode(
+        job_id=job_id,
+        staged_path=staged,
+        original_filename="part.gcode",
+        model_name="Part",
+        collection="escaped",
+        tags=None,
+        source_hash=None,
+        target_library_id=lib.id,
+    )
+
+    job = registry.get(job_id)
+    assert job is not None
+    assert job.state == "failed"
+    assert job.error == "external_library_symlink_escape"
+    assert not (outside / "part.gcode").exists()
 
 
 # --------------------------------------------------------------------------- #

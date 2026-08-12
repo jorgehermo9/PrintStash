@@ -55,7 +55,8 @@ from app.schemas.models import (
     TagRead,
 )
 from app.services import rbac, taxonomy
-from app.services.storage_backend import get_backend
+from app.services.storage_backend import StorageCollisionError, get_backend
+from app.services.storage_ownership import record_creation
 from app.services.taxonomy import slugify
 
 # Raster image formats only — no SVG (script-capable) — keeps readme images
@@ -404,8 +405,22 @@ async def upload_collection_image(
     name = f"{hashlib.sha256(data).hexdigest()}{'.jpg' if ext == '.jpeg' else ext}"
     backend = get_backend()
     key = backend.collection_image_key(col.id, name)
-    if not backend.exists(key):
-        backend.write_bytes(data, key)
+    receipt = None
+    try:
+        receipt = backend.create_bytes(data, key)
+        record_creation(session, receipt, object_kind="collection_image")
+        session.commit()
+    except StorageCollisionError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_destination_exists",
+        ) from exc
+    except Exception:
+        session.rollback()
+        if receipt is not None:
+            backend.rollback_create(receipt)
+        raise
     return CollectionImageUpload(url=f"/api/v1/collections/{col.id}/images/{name}")
 
 

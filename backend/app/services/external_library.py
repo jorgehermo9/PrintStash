@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +50,8 @@ from app.services.ingestion import (
 )
 from app.services.jobs import registry
 from app.services.profile_detection import upsert_detected_profiles
-from app.services.storage_backend import get_backend
+from app.services.storage_backend import StorageCollisionError, get_backend
+from app.services.storage_ownership import record_creation
 
 logger = get_logger(__name__)
 
@@ -216,18 +218,32 @@ def _strategy_for(file_type: FileType):
 
 
 def _walk(root: Path) -> dict[str, tuple[int, float]]:
-    """Map every supported file under *root* to (size_bytes, mtime)."""
+    """Map supported regular files, aborting on any incomplete traversal.
+
+    A skipped stat/listing error would make a previously indexed path look
+    absent and trigger reconciliation. Symlinks are ignored so an external
+    root cannot escape its declared boundary.
+    """
     disk: dict[str, tuple[int, float]] = {}
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in SUFFIX_TO_FILE_TYPE:
-            continue
-        try:
-            st = path.stat()
-        except OSError:
-            continue
-        disk[str(path)] = (st.st_size, st.st_mtime)
+
+    def raise_walk_error(exc: OSError) -> None:
+        raise exc
+
+    for directory, dirnames, filenames in os.walk(
+        root, topdown=True, followlinks=False, onerror=raise_walk_error
+    ):
+        base = Path(directory)
+        # Never traverse a directory symlink, including implementations that
+        # include it in dirnames even with followlinks disabled.
+        dirnames[:] = [name for name in dirnames if not (base / name).is_symlink()]
+        for filename in filenames:
+            path = base / filename
+            if path.is_symlink() or path.suffix.lower() not in SUFFIX_TO_FILE_TYPE:
+                continue
+            st = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            disk[str(path)] = (st.st_size, st.st_mtime)
     return disk
 
 
@@ -335,10 +351,19 @@ def _reindex_changed(
     backend = get_backend()
     assert file_row.id is not None
     if thumb_bytes:
-        backend.write_bytes(
-            thumbnail.to_webp(thumb_bytes), backend.thumbnail_key(file_row.id)
-        )
-        backend.delete(backend.legacy_thumbnail_key(file_row.id))
+        try:
+            receipt = backend.create_bytes(
+                thumbnail.to_webp(thumb_bytes), backend.thumbnail_key(file_row.id)
+            )
+            record_creation(session, receipt, object_kind="thumbnail")
+        except StorageCollisionError:
+            # Existing thumbnails are never replaced without a separate,
+            # receipt-validated replacement primitive. Metadata reindexing can
+            # still succeed; preserving a stale derived image is safe.
+            logger.warning(
+                "external reindex preserved existing thumbnail for file %s",
+                file_row.id,
+            )
 
     md = session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).first()
     md_fields = {k: v for k, v in meta.items() if k in Metadata.model_fields}

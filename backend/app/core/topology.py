@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fcntl
-import os
 from pathlib import Path
 from typing import IO
 
@@ -27,17 +26,12 @@ def acquire_process_lock() -> IO[str]:
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
-        handle.seek(0)
-        owner = handle.read().strip() or "unknown"
         handle.close()
         raise RuntimeError(
-            "PrintStash supports a single API process; "
-            f"vault lock is already held by pid {owner}"
+            "PrintStash supports a single API process; vault lock is already held"
         ) from exc
-    handle.seek(0)
-    handle.truncate()
-    handle.write(str(os.getpid()))
-    handle.flush()
+    # The fixed lock path is only an advisory-lock rendezvous. Never truncate,
+    # append to, or otherwise claim ownership of pre-existing bytes there.
     return handle
 
 

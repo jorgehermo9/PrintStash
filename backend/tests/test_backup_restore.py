@@ -30,7 +30,15 @@ from sqlmodel import Session, SQLModel, create_engine, select
 import app.services.backup as backup
 import app.services.storage_backend as storage_backend
 from app.core.config import _overlay
-from app.db.models import Document, DocumentKind, File, FileType, Model, User
+from app.db.models import (
+    Document,
+    DocumentKind,
+    File,
+    FileType,
+    Model,
+    OwnedStorageObject,
+    User,
+)
 from app.db.session import (
     SQLiteSessionFactory,
     _set_sqlite_pragmas,
@@ -246,7 +254,9 @@ def test_verify_backup_checks_manifest_members_and_sizes(backup_env: BackupEnv):
 
 def test_create_backup_fails_when_owned_blob_is_missing(backup_env: BackupEnv):
     _, key = _seed_model_with_blob(backup_env, name="Missing", content=b"gone")
-    get_backend().delete(key)
+    direct = get_backend().direct_path(key)
+    assert direct is not None
+    direct.unlink()  # Simulate loss outside PrintStash; unchecked delete is disabled.
 
     with pytest.raises(FileNotFoundError):
         backup.create_backup()
@@ -327,7 +337,9 @@ def test_download_backup_archive_endpoint(client: TestClient, backup_env: Backup
 
 
 def test_restore_recovers_database_rows(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    _, key = _seed_model_with_blob(
+        backup_env, name="Widget", content=b"solid widget\n"
+    )
     meta = backup.create_backup()
 
     # Disaster: wipe every model row.
@@ -338,14 +350,33 @@ def test_restore_recovers_database_rows(backup_env: BackupEnv):
     backup_env.engine.dispose()
 
     assert _read_model_names(backup_env) == []
+    Path(key).unlink()
 
     backup.restore_backup(meta.id)
 
     assert "Widget" in _read_model_names(backup_env)
+    with backup_env.new_session() as session:
+        owned = session.exec(
+            select(OwnedStorageObject).where(OwnedStorageObject.key == key)
+        ).one()
+        receipt = storage_backend.CreationReceipt(
+            key=owned.key,
+            size=owned.size_bytes,
+            token=owned.token,
+            backend=owned.backend,
+            namespace=owned.namespace,
+            etag=owned.etag,
+            device=owned.device,
+            inode=owned.inode,
+            ctime_ns=owned.ctime_ns,
+        )
+        assert get_backend().creation_matches(receipt)
 
 
 def test_restore_replaces_live_wal_state_without_replay(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    _, key = _seed_model_with_blob(
+        backup_env, name="Widget", content=b"solid widget\n"
+    )
     meta = backup.create_backup()
 
     # Keep a WAL connection open with a committed post-backup change. A raw
@@ -361,6 +392,7 @@ def test_restore_replaces_live_wal_state_without_replay(backup_env: BackupEnv):
             "Post Backup State",
         )
         assert Path(f"{backup_env.db_file}-wal").exists()
+        Path(key).unlink()
 
         backup.restore_backup(meta.id)
 
@@ -398,6 +430,33 @@ def test_backup_includes_document_blobs(backup_env: BackupEnv):
 
     assert Path(key).exists(), "document blob was never in the archive"
     assert Path(key).read_bytes() == content
+    assert result["restored_files"] == 1
+
+
+def test_backup_includes_embedded_document_images(backup_env: BackupEnv):
+    from app.services.storage_ownership import record_creation
+
+    image_name = f"{'a' * 64}.png"
+    with backup_env.new_session() as session:
+        document = Document(name="Build notes", kind=DocumentKind.MARKDOWN)
+        session.add(document)
+        session.commit()
+        session.refresh(document)
+        document.body = (
+            f"![diagram](/api/v1/documents/{document.id}/images/{image_name})"
+        )
+        key = get_backend().document_image_key(document.id, image_name)
+        receipt = get_backend().create_bytes(b"irreplaceable-image", key)
+        record_creation(session, receipt, object_kind="document_image")
+        session.add(document)
+        session.commit()
+
+    meta = backup.create_backup()
+    Path(key).unlink()
+
+    result = backup.restore_backup(meta.id)
+
+    assert Path(key).read_bytes() == b"irreplaceable-image"
     assert result["restored_files"] == 1
 
 
@@ -470,8 +529,9 @@ def test_backup_writes_audit_row(backup_env: BackupEnv):
 def test_restore_writes_complete_row_on_success(backup_env: BackupEnv):
     from app.db.models import AuditLog
 
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    _, key = _seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
+    Path(key).unlink()
 
     backup.restore_backup(meta.id)
 
@@ -531,9 +591,7 @@ def test_failed_restore_writes_failed_row(
     assert "restore.failed" in actions
 
 
-def test_failed_blob_restore_rolls_back_files_and_keeps_database(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-):
+def test_restore_collision_preserves_files_and_database(backup_env: BackupEnv):
     _, first_key = _seed_model_with_blob(
         backup_env, name="First", content=b"backup-first"
     )
@@ -550,24 +608,45 @@ def test_failed_blob_restore_rolls_back_files_and_keeps_database(
         ).one().name = "Current First"
         session.commit()
 
-    real_write = backup._write_staged_blob
-    writes = 0
-
-    def fail_second_write(staged_path: Path, key: str) -> int:
-        nonlocal writes
-        writes += 1
-        if writes == 2:
-            raise OSError("simulated second blob failure")
-        return real_write(staged_path, key)
-
-    monkeypatch.setattr(backup, "_write_staged_blob", fail_second_write)
-
-    with pytest.raises(OSError, match="second blob failure"):
+    with pytest.raises(backup.RestoreConflictError, match="destination_exists"):
         backup.restore_backup(meta.id)
 
     assert Path(first_key).read_bytes() == b"current-first"
     assert Path(second_key).read_bytes() == b"current-second"
     assert "Current First" in _read_model_names(backup_env)
+
+
+def test_failed_blob_restore_removes_only_receipted_partial_creates(
+    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+):
+    _, first_key = _seed_model_with_blob(
+        backup_env, name="First", content=b"backup-first"
+    )
+    _, second_key = _seed_model_with_blob(
+        backup_env, name="Second", content=b"backup-second"
+    )
+    meta = backup.create_backup()
+    Path(first_key).unlink()
+    Path(second_key).unlink()
+
+    backend = get_backend()
+    real_create = backend.create_stream
+    writes = 0
+
+    def fail_second_write(source, key: str):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("simulated second blob failure")
+        return real_create(source, key)
+
+    monkeypatch.setattr(backend, "create_stream", fail_second_write)
+
+    with pytest.raises(OSError, match="second blob failure"):
+        backup.restore_backup(meta.id)
+
+    assert not Path(first_key).exists()
+    assert not Path(second_key).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -830,22 +909,21 @@ def test_list_local_backups_empty_when_dir_missing(backup_env: BackupEnv):
     assert backup.list_backups() == []
 
 
-def test_delete_backup_logs_but_survives_permission_error(
-    backup_env: BackupEnv, caplog: pytest.LogCaptureFixture
-):
+def test_delete_backup_aborts_on_permission_error(backup_env: BackupEnv):
     _seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     # Removing a file requires write on its parent dir, not the file itself.
     backup_env.backup_dir.chmod(0o500)
     try:
-        with caplog.at_level("ERROR"):
-            result = backup.delete_backup(meta.id)
+        with pytest.raises(
+            backup.BackupOwnershipError,
+            match="backup_storage_ownership_unverified",
+        ):
+            backup.delete_backup(meta.id)
     finally:
         backup_env.backup_dir.chmod(0o700)
 
-    assert result is False
-    assert any("failed to delete local" in r.message for r in caplog.records)
     assert Path(meta.path).exists()
 
     # Cleanup so tmp_path teardown can remove the archive.
@@ -1061,7 +1139,10 @@ def test_restore_skips_directory_entries_under_files_prefix(
             data = tar.extractfile(member).read() if member.isfile() else None
             entries.append((member, data))
 
-    with gzip.open(archive, "wb") as gz, tarfile.open(fileobj=gz, mode="w:") as tar:
+    updated_archive = io.BytesIO()
+    with gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz, tarfile.open(
+        fileobj=gz, mode="w:"
+    ) as tar:
         for member, data in entries:
             if data is not None:
                 tar.addfile(member, io.BytesIO(data))
@@ -1070,6 +1151,17 @@ def test_restore_skips_directory_entries_under_files_prefix(
         dir_info = tarfile.TarInfo(name="files/empty-subdir")
         dir_info.type = tarfile.DIRTYPE
         tar.addfile(dir_info)
+    from app.services.storage_ownership import replace_owned_bytes
+
+    with backup_env.new_session() as session:
+        replace_owned_bytes(
+            session,
+            storage_backend.LocalStorageBackend(),
+            str(archive),
+            updated_archive.getvalue(),
+            object_kind="backup",
+        )
+        session.commit()
 
     Path(key).unlink()
 
@@ -1229,7 +1321,7 @@ def test_restore_skips_unreadable_files_member(backup_env: BackupEnv):
     import tarfile
 
     content = b"solid widget\n"
-    _seed_model_with_blob(backup_env, name="Widget", content=content)
+    _, key = _seed_model_with_blob(backup_env, name="Widget", content=content)
     meta = backup.create_backup()
     archive = Path(meta.path)
 
@@ -1239,7 +1331,10 @@ def test_restore_skips_unreadable_files_member(backup_env: BackupEnv):
             data = tar.extractfile(member).read() if member.isfile() else None
             entries.append((member, data))
 
-    with gzip.open(archive, "wb") as gz, tarfile.open(fileobj=gz, mode="w:") as tar:
+    updated_archive = io.BytesIO()
+    with gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz, tarfile.open(
+        fileobj=gz, mode="w:"
+    ) as tar:
         for member, data in entries:
             if data is not None:
                 tar.addfile(member, io.BytesIO(data))
@@ -1248,6 +1343,19 @@ def test_restore_skips_unreadable_files_member(backup_env: BackupEnv):
         dir_info = tarfile.TarInfo(name="files/subdir")
         dir_info.type = tarfile.DIRTYPE
         tar.addfile(dir_info)
+    from app.services.storage_ownership import replace_owned_bytes
+
+    with backup_env.new_session() as session:
+        replace_owned_bytes(
+            session,
+            storage_backend.LocalStorageBackend(),
+            str(archive),
+            updated_archive.getvalue(),
+            object_kind="backup",
+        )
+        session.commit()
+
+    Path(key).unlink()
 
     result = backup.restore_backup(meta.id)
 
