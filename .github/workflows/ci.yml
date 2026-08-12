@@ -281,7 +281,10 @@ jobs:
         run: docker compose -f docker-compose.yml up -d --no-build --wait --wait-timeout 180 api frontend
 
       - name: Hit /health
-        run: curl -fsS http://localhost:3000/api/v1/health
+        run: >-
+          curl --fail --show-error --silent
+          --retry 5 --retry-delay 1 --retry-all-errors
+          http://localhost:3000/api/v1/health
 
       - name: Compose logs on failure
         if: failure()
