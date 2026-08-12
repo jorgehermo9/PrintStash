@@ -413,9 +413,15 @@ jobs:
           - image: printstash-api
             context: ./backend
             dockerfile: ./backend/Dockerfile
+            build-args: PRINTSTASH_VARIANT=full
+          - image: printstash-api-lite
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            build-args: PRINTSTASH_VARIANT=lite
           - image: printstash-frontend
             context: ./frontend
             dockerfile: ./frontend/Dockerfile
+            build-args: ""
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -439,6 +445,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: false
+          build-args: ${{ matrix.build-args }}
           cache-from: type=gha,scope=${{ matrix.image }}
           # ignore-error: a transient GitHub Actions Cache outage (e.g. a 503
           # while exporting) should not fail an otherwise-successful build.
