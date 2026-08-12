@@ -68,6 +68,49 @@ class IngestionStrategy:
     step_labels: tuple[str, ...]
 
 
+class ArtifactDurabilityError(RuntimeError):
+    """A committed artifact cannot be used from a fresh session/storage view."""
+
+
+class ThumbnailDurabilityError(RuntimeError):
+    """A thumbnail reported as generated is not visible in storage."""
+
+
+def _fault_injection_checkpoint(_stage: str, _job_id: str) -> None:
+    """Stable monkeypatch seam for commit-boundary regression tests."""
+
+
+def verify_durable_artifact(
+    session_factory: SessionFactory,
+    *,
+    model_id: int,
+    file_id: int,
+    thumbnail_status: str,
+) -> None:
+    """Verify rows and objects from a new transaction before publishing terminal."""
+    with session_factory.scoped_session() as verification_session:
+        model = verification_session.get(Model, model_id)
+        artifact = verification_session.get(File, file_id)
+        metadata = verification_session.exec(
+            select(Metadata).where(Metadata.file_id == file_id)
+        ).first()
+        if (
+            model is None
+            or artifact is None
+            or artifact.model_id != model_id
+            or metadata is None
+        ):
+            raise ArtifactDurabilityError("artifact_rows_not_durable")
+        primary_key = artifact.path
+
+    backend = get_backend()
+    if not backend.exists(primary_key):
+        raise ArtifactDurabilityError("artifact_blob_not_durable")
+    if thumbnail_status in {"generated", "fallback_generated"}:
+        if not backend.exists(backend.thumbnail_key(file_id)):
+            raise ThumbnailDurabilityError("thumbnail_blob_not_durable")
+
+
 def _model_exists_with_slug(session: Session, slug: str) -> bool:
     stmt = select(Model).where(Model.slug == slug)
     return session.exec(stmt).first() is not None
@@ -93,10 +136,10 @@ def _reserve_next_version(session: Session, model_id: int) -> int:
         else_=Model.next_file_version,
     )
     statement = (
-        update(Model)
-        .where(Model.id == model_id)
+        update(Model)  # pyright: ignore[reportCallIssue]
+        .where(Model.id == model_id)  # pyright: ignore[reportArgumentType]
         .values(next_file_version=reserved + 1)
-        .returning(Model.next_file_version)
+        .returning(Model.next_file_version)  # pyright: ignore[reportArgumentType]
     )
     next_value = session.execute(statement).scalar_one_or_none()
     if next_value is None:
@@ -450,7 +493,7 @@ def run_ingestion_pipeline(
     *session_factory* is a callable that returns a new SQLModel Session;
     when absent, falls back to the module-level engine (legacy).
     """
-    logger.info("ingest[%s] start file=%s", job_id, original_filename)
+    logger.info("ingestion_job job_id=%s stage=start result=running", job_id)
 
     # Step plan: hashing → strategy sub-steps → persisting. The registry keeps
     # the coarse state machine; step/label/progress are additive hints.
@@ -488,19 +531,37 @@ def run_ingestion_pipeline(
     try:
         report("hashing")
         blob_hash = sha256_file(staged_path)
-        logger.info("ingest[%s] sha256=%s", job_id, blob_hash)
+        logger.info("ingestion_job job_id=%s stage=hashed result=running", job_id)
 
         meta, thumb_bytes = strategy.process(staged_path, report)
         if thumb_bytes is None and strategy.file_type not in (FileType.GCODE,):
-            logger.warning("ingest[%s] thumbnail render returned None", job_id)
+            logger.warning(
+                "ingestion_job job_id=%s stage=thumbnail result=missing", job_id
+            )
         elif thumb_bytes:
             logger.info(
-                "ingest[%s] thumbnail extracted (%d bytes)", job_id, len(thumb_bytes)
+                "ingestion_job job_id=%s stage=thumbnail result=generated", job_id
             )
 
         dedup_hash = (source_hash or blob_hash).lower()
 
         report("persisting")
+        durable_ids: tuple[int, int] | None = None
+        thumbnail_status = (
+            "generated"
+            if thumb_bytes
+            else "skipped"
+            if strategy.file_type == FileType.GCODE
+            else "failed"
+        )
+        thumbnail_reason = (
+            None
+            if thumb_bytes
+            else "no_embedded_thumbnail"
+            if strategy.file_type == FileType.GCODE
+            else "renderer_no_output"
+        )
+        created = False
         with session_factory.scoped_session() as session:
             actor = (
                 session.get(User, actor_user_id) if actor_user_id is not None else None
@@ -512,14 +573,6 @@ def run_ingestion_pipeline(
                 source_url=source_url,
                 actor=actor,
             )
-            logger.info(
-                "ingest[%s] %s model_id=%s slug=%s",
-                job_id,
-                "new" if created else "dedup hit",
-                model.id,
-                model.slug,
-            )
-
             assert model.id is not None
 
             _apply_taxonomy(session, model, collection, tags)
@@ -533,6 +586,7 @@ def run_ingestion_pipeline(
                 target_library_id=target_library_id,
             )
 
+            _fault_injection_checkpoint("before_commit", job_id)
             file_row = persist_artifact(
                 session,
                 model=model,
@@ -551,29 +605,87 @@ def run_ingestion_pipeline(
             assert file_row.id is not None
 
             upsert_detected_profiles(session, meta)
+            durable_ids = (model.id, file_row.id)
 
-            registry.update(
-                job_id,
-                state="completed",
-                model_id=model.id,
-                file_id=file_row.id,
-                processed=1,
-                total=1,
-                succeeded=1,
-                deduplicated=0 if created else 1,
-                result={"created": created, "name": original_filename},
+        committed_at = utcnow()
+        assert durable_ids is not None
+        model_id, file_id = durable_ids
+        registry.update(
+            job_id,
+            model_id=model_id,
+            file_id=file_id,
+            committed_at=committed_at,
+            thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
+            thumbnail_reason=thumbnail_reason,
+            processed=1,
+            total=1,
+            succeeded=1,
+            deduplicated=0 if created else 1,
+        )
+        _fault_injection_checkpoint("after_commit", job_id)
+        try:
+            verify_durable_artifact(
+                session_factory,
+                model_id=model_id,
+                file_id=file_id,
+                thumbnail_status=thumbnail_status,
             )
-            logger.info(
-                "ingest[%s] done model_id=%s file_id=%s v=%s",
-                job_id,
-                model.id,
-                file_row.id,
-                file_row.version,
+        except ThumbnailDurabilityError:
+            thumbnail_status = "failed"
+            thumbnail_reason = "thumbnail_blob_not_durable"
+            verify_durable_artifact(
+                session_factory,
+                model_id=model_id,
+                file_id=file_id,
+                thumbnail_status=thumbnail_status,
             )
+        _fault_injection_checkpoint("before_terminal", job_id)
+        registry.finish(
+            job_id,
+            state="completed",
+            completion="partial" if thumbnail_status == "failed" else "complete",
+            thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
+            thumbnail_reason=thumbnail_reason,
+            result={"created": created, "name": original_filename},
+        )
 
     except Exception as exc:  # noqa: BLE001 — top-level task boundary
-        logger.exception("ingest[%s] failed: %s", job_id, exc)
-        registry.update(job_id, state="failed", error=str(exc))
+        logger.exception("ingestion_job job_id=%s stage=pipeline result=failed", job_id)
+        # A fault after commit still produced a useful durable Model. Publish a
+        # partial result so clients can repair optional post-processing instead
+        # of reporting a destructive false failure.
+        if "durable_ids" in locals() and durable_ids is not None:
+            model_id, file_id = durable_ids
+            try:
+                verify_durable_artifact(
+                    session_factory,
+                    model_id=model_id,
+                    file_id=file_id,
+                    thumbnail_status=(
+                        thumbnail_status if thumbnail_status != "failed" else "skipped"
+                    ),
+                )
+            except Exception:  # noqa: BLE001 — durability decides failed vs partial
+                registry.finish(job_id, state="failed", error=str(exc), retryable=True)
+            else:
+                registry.finish(
+                    job_id,
+                    state="completed",
+                    completion="partial",
+                    model_id=model_id,
+                    file_id=file_id,
+                    committed_at=locals().get("committed_at", utcnow()),
+                    thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
+                    thumbnail_reason="post_commit_exception",
+                    error="post_commit_exception",
+                    processed=1,
+                    total=1,
+                    succeeded=1,
+                    result={"created": created},
+                    retryable=True,
+                )
+        else:
+            registry.finish(job_id, state="failed", error=str(exc), retryable=True)
 
 
 def _gcode_strategy() -> IngestionStrategy:
@@ -688,7 +800,7 @@ def add_gcode_revision_to_model(
     """Attach a staged G-code file as a new revision of an existing model."""
     assert model.id is not None
     blob_hash = sha256_file(staged_path)
-    meta, thumb_bytes = _gcode_strategy().process(staged_path)
+    meta, thumb_bytes = _gcode_strategy().process(staged_path, _noop_progress)
 
     # Revisions follow the model: if it lives in a NAS library, write back there.
     dest = resolve_write_target(

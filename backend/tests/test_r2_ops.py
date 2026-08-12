@@ -49,9 +49,9 @@ def test_health_external_library_status_counts(
     )
     db_session.commit()
 
-    el = client.get(
-        "/api/v1/health/details", headers=auth_headers
-    ).json()["components"]["external_libraries"]
+    el = client.get("/api/v1/health/details", headers=auth_headers).json()[
+        "components"
+    ]["external_libraries"]
     assert el["running"] == 1
     assert el["status_counts"].get("running") == 1
     # A genuinely running scan must not flip overall status to degraded.
@@ -126,7 +126,9 @@ def test_metrics_counts_terminal_ingestion_jobs(client: TestClient) -> None:
     reg.update(job_id, state="completed")
 
     body = client.get("/metrics").text
-    assert 'printstash_ingestion_jobs_total{state="completed"}' in body
+    assert 'printstash_ingestion_jobs_total{kind="ingest",result="complete"}' in body
+    assert "printstash_ingestion_job_duration_seconds" in body
+    assert "printstash_ingestion_stuck_jobs" in body
 
 
 def test_metrics_exposes_fleet_queue_and_scheduler_state(

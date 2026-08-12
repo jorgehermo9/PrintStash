@@ -11,7 +11,7 @@ Instruments:
 - ``http_request_duration`` — request latency histogram, labelled by method,
   matched route template, and status. The route *template* (not the raw path)
   keeps label cardinality bounded.
-- ``ingestion_jobs`` — terminal ingestion job counter, labelled by outcome.
+- ``ingestion_jobs`` — terminal ingestion job counter, labelled by bounded kind/result.
 - ``printer_status`` — gauge of live printers by provider/status, set at scrape
   time so it always reflects the current fleet.
 - ``app_info`` — static version info.
@@ -36,7 +36,20 @@ http_request_duration = Histogram(
 ingestion_jobs = Counter(
     "printstash_ingestion_jobs_total",
     "Ingestion jobs that reached a terminal state, by outcome.",
-    labelnames=("state",),
+    labelnames=("kind", "result"),
+    registry=registry,
+)
+
+ingestion_job_duration = Histogram(
+    "printstash_ingestion_job_duration_seconds",
+    "Wall-clock duration of terminal ingestion jobs.",
+    labelnames=("kind", "result"),
+    registry=registry,
+)
+
+ingestion_stuck_jobs = Gauge(
+    "printstash_ingestion_stuck_jobs",
+    "Persisted pending/running ingestion jobs whose heartbeat is stale.",
     registry=registry,
 )
 
@@ -86,7 +99,9 @@ fleet_dispatches = Counter(
 )
 
 
-def observe_request(method: str, path: str, status: int, duration_seconds: float) -> None:
+def observe_request(
+    method: str, path: str, status: int, duration_seconds: float
+) -> None:
     """Record one completed HTTP request. Best-effort: never raises to callers."""
     try:
         http_request_duration.labels(
@@ -96,11 +111,21 @@ def observe_request(method: str, path: str, status: int, duration_seconds: float
         pass
 
 
-def record_ingestion_terminal(state: str) -> None:
-    """Increment the terminal ingestion-job counter for ``completed``/``failed``."""
+def record_ingestion_terminal(kind: str, result: str, duration_seconds: float) -> None:
+    """Record one terminal job using only bounded, non-sensitive labels."""
     try:
-        ingestion_jobs.labels(state=state).inc()
+        ingestion_jobs.labels(kind=kind, result=result).inc()
+        ingestion_job_duration.labels(kind=kind, result=result).observe(
+            max(0.0, duration_seconds)
+        )
     except Exception:  # noqa: BLE001 — metrics must never break a job
+        pass
+
+
+def set_ingestion_stuck_jobs(count: int) -> None:
+    try:
+        ingestion_stuck_jobs.set(max(0, count))
+    except Exception:  # noqa: BLE001 — metrics must never break a request
         pass
 
 

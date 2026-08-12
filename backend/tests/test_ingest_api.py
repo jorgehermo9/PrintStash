@@ -21,6 +21,7 @@ from app.db.models import (
     PrinterProfile,
     User,
 )
+from app.services import ingestion as ingestion_service
 from app.services.auth import create_access_token, hash_password
 from app.services.storage_backend import get_backend
 
@@ -297,6 +298,83 @@ def test_ingest_stl_creates_db_blob_and_thumbnail(
     assert thumbnail.status_code == 200, thumbnail.text
     assert thumbnail.headers["content-type"] == "image/webp"
     assert thumbnail.content.startswith(WEBP_MAGIC)
+
+
+def test_ingest_publishes_terminal_only_after_fresh_durability_check(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+    checkpoints: list[str] = []
+    observed_job_ids: list[str] = []
+    original_verify = ingestion_service.verify_durable_artifact
+
+    def observe_checkpoint(stage: str, current_job_id: str) -> None:
+        if stage == "after_commit":
+            observed_job_ids.append(current_job_id)
+
+    def observed_verify(*args, **kwargs) -> None:
+        status = ingestion_service.registry.get(observed_job_ids[-1])
+        assert status is not None
+        assert status.state == "running"
+        assert status.progress is None or status.progress < 100
+        assert status.committed_at is not None
+        checkpoints.append("fresh_session_and_storage")
+        original_verify(*args, **kwargs)
+
+    monkeypatch.setattr(
+        ingestion_service, "_fault_injection_checkpoint", observe_checkpoint
+    )
+    monkeypatch.setattr(ingestion_service, "verify_durable_artifact", observed_verify)
+    response = client.post(
+        "/api/v1/ingest/model",
+        headers=auth_headers,
+        files={"file": ("durable.stl", _cube_stl(), "application/sla")},
+        data={"model_name": "Durable Cube"},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers).json()
+    assert checkpoints == ["fresh_session_and_storage"]
+    assert status["state"] == "completed"
+    assert status["completion"] == "complete"
+    assert status["thumbnail_status"] == "generated"
+    assert status["committed_at"] is not None
+
+
+def test_exception_after_commit_is_a_durable_partial_result(
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+
+    def inject(stage: str, _job_id: str) -> None:
+        if stage == "after_commit":
+            raise RuntimeError("injected_after_commit")
+
+    monkeypatch.setattr(ingestion_service, "_fault_injection_checkpoint", inject)
+    response = client.post(
+        "/api/v1/ingest/model",
+        headers=auth_headers,
+        files={"file": ("post-commit.stl", _cube_stl(), "application/sla")},
+        data={"model_name": "Post Commit Cube"},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers).json()
+
+    assert status["state"] == "completed"
+    assert status["completion"] == "partial"
+    assert status["thumbnail_reason"] == "post_commit_exception"
+    assert status["retryable"] is True
+    assert db_session.get(Model, status["model_id"]) is not None
+    assert db_session.get(File, status["file_id"]) is not None
 
 
 def test_ingest_model_accepts_payload_over_nginx_default_limit(

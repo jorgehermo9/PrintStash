@@ -428,7 +428,7 @@ def rebuild_missing_thumbnails(
     current_user: User = Depends(require_superuser),
     session_factory: SessionFactory = Depends(get_session_factory),
 ) -> IngestResponse:
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="thumbnail_rebuild")
     background_tasks.add_task(_run_thumbnail_rebuild, job_id, force, session_factory)
     return IngestResponse(
         job_id=job_id, state="pending", message="thumbnail rebuild queued"

@@ -17,9 +17,14 @@ ImportStage = Literal[
     "completed",
 ]
 ImportCompletion = Literal[
-    "completed",
-    "completed_with_warnings",
-    "failed_before_import",
+    "complete",
+    "partial",
+]
+ThumbnailStatus = Literal[
+    "generated",
+    "fallback_generated",
+    "skipped",
+    "failed",
 ]
 
 
@@ -130,11 +135,14 @@ class IngestJobStatus(BaseModel):
     owner_user_id: Optional[int] = Field(default=None, exclude=True)
     visible: bool = Field(default=True, exclude=True)
     state: JobState
+    kind: str = "ingest"
     model_id: Optional[int] = None
     file_id: Optional[int] = None
     error: Optional[str] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    committed_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     # Progress hints — additive, absent for clients that only know the
     # original state machine.
     step: Optional[int] = None
@@ -151,5 +159,7 @@ class IngestJobStatus(BaseModel):
     skipped: int = 0
     failed: int = 0
     completion: Optional[ImportCompletion] = None
+    thumbnail_status: Optional[ThumbnailStatus] = None
+    thumbnail_reason: Optional[str] = None
     retryable: bool = False
     failed_items: list[ImportFailedItem] = Field(default_factory=list)

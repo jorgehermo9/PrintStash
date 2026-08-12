@@ -17,6 +17,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Response,
     UploadFile,
     status,
 )
@@ -104,9 +105,7 @@ def _stage_upload(upload: UploadFile, suffix: str) -> Path:
     """Stream an UploadFile into the staging dir; reject if it exceeds the limit."""
     staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
     try:
-        storage.stream_to_path(
-            upload.file, staged, max_bytes=settings.max_upload_bytes
-        )
+        storage.stream_to_path(upload.file, staged, max_bytes=settings.max_upload_bytes)
     except storage.UploadTooLarge as exc:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -309,7 +308,7 @@ async def ingest_orca(
     _validate_target_library(session, target_library_id)
 
     staged = await run_in_threadpool(_stage_upload, file, suffix)
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="gcode")
     background_tasks.add_task(
         ingest_orca_gcode,
         job_id=job_id,
@@ -367,7 +366,7 @@ async def ingest_model(
     _validate_target_library(session, target_library_id)
 
     staged = await run_in_threadpool(_stage_upload, file, suffix)
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="model")
     background_tasks.add_task(
         ingest_mesh,
         job_id=job_id,
@@ -385,7 +384,9 @@ async def ingest_model(
     return IngestResponse(job_id=job_id, state="pending")
 
 
-def _manifest_from_pending(archive_id: str, pending: "importer._PendingArchive") -> ArchiveManifest:
+def _manifest_from_pending(
+    archive_id: str, pending: "importer._PendingArchive"
+) -> ArchiveManifest:
     return ArchiveManifest(
         archive_id=archive_id,
         archive_name=pending.archive_name,
@@ -421,7 +422,9 @@ def _stage_model_files_manifest(
         files_token=token,
         page_title=page_title,
         files=[
-            ModelFileRead(file_id=f.file_id, name=f.name, file_type=f.file_type, size=f.size)
+            ModelFileRead(
+                file_id=f.file_id, name=f.name, file_type=f.file_type, size=f.size
+            )
             for f in files
         ],
     )
@@ -470,7 +473,9 @@ async def _handle_collection_url(
             collection_name=title,
             target_collection=target,
             members=[
-                CollectionMemberRead(source_id=m.source_id, title=m.title, page_url=m.page_url)
+                CollectionMemberRead(
+                    source_id=m.source_id, title=m.title, page_url=m.page_url
+                )
                 for m in members
             ],
         )
@@ -684,7 +689,9 @@ async def _run_collection_member_import(
 ) -> None:
     """Background task: stage selected collection members and ingest them."""
     try:
-        registry.update(job_id, state="running", stage="downloading", total=len(members))
+        registry.update(
+            job_id, state="running", stage="downloading", total=len(members)
+        )
         groups = await _stage_members(members, makerworld_cookie=makerworld_cookie)
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("collection member import failed")
@@ -730,7 +737,7 @@ async def ingest_url(
     _require_ingest_collection(session, current_user, req.collection)
 
     assert current_user.id is not None
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="url")
     background_tasks.add_task(
         _import_from_url,
         job_id=job_id,
@@ -805,7 +812,7 @@ async def inspect_archive_background(
         staged.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="archive_invalid")
     assert current_user.id is not None
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="archive_manifest")
     background_tasks.add_task(
         _inspect_uploaded_archive,
         job_id=job_id,
@@ -813,7 +820,9 @@ async def inspect_archive_background(
         original_filename=original_filename,
         actor_user_id=current_user.id,
     )
-    return IngestResponse(job_id=job_id, state="pending", message="archive inspection queued")
+    return IngestResponse(
+        job_id=job_id, state="pending", message="archive inspection queued"
+    )
 
 
 @router.post(
@@ -867,7 +876,7 @@ async def select_archive_entries(
         raise HTTPException(status_code=400, detail="no_importable_files")
 
     assert current_user.id is not None
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="archive")
     background_tasks.add_task(
         importer.import_assets,
         job_id=job_id,
@@ -913,7 +922,7 @@ async def select_model_files(
 
     pending_model_files.pop(files_token)
     assert current_user.id is not None
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="url_selection")
     background_tasks.add_task(
         _run_file_selection_import,
         job_id=job_id,
@@ -965,7 +974,7 @@ async def select_collection_members(
 
     pending_collections.pop(collection_token)
     assert current_user.id is not None
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="collection")
     background_tasks.add_task(
         _run_collection_member_import,
         job_id=job_id,
@@ -985,9 +994,11 @@ async def select_collection_members(
     summary="List reconnectable ingestion jobs for the current user",
 )
 def list_jobs(
+    response: Response,
     terminal_limit: int = Query(20, ge=0, le=100),
     current_user: User = Depends(require_user),
 ) -> list[IngestJobStatus]:
+    response.headers["Cache-Control"] = "no-store"
     assert current_user.id is not None
     return registry.list_for_user(
         current_user.id,
@@ -1003,8 +1014,10 @@ def list_jobs(
 )
 def get_job(
     job_id: str,
+    response: Response,
     current_user: User = Depends(require_user),
 ) -> IngestJobStatus:
+    response.headers["Cache-Control"] = "no-store"
     job = registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job_not_found")

@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import {
   createTag,
-  getJobStatus,
   getModel,
   getVaultConfig,
   inspectArchive,
@@ -33,6 +32,7 @@ import {
   linkTaskToJob,
   trackImportJob,
   updateTask,
+  waitForImportJob,
 } from "@/lib/task-center";
 import { useRequireAuth } from "@/lib/use-require-auth";
 import { useAuth } from "@/lib/auth-context";
@@ -86,13 +86,6 @@ function stemName(filename: string): string {
   return filename.replace(/\.[^/.]+$/, "");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-const POLL_INTERVAL_MS = 1_000;
-const POLL_TIMEOUT_MS = 15 * 60_000;
-
 function canWriteCollection(collection: CollectionRead): boolean {
   return collection.effective_role === "edit" || collection.effective_role === "admin";
 }
@@ -108,7 +101,7 @@ export function UploadModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onUploaded: () => void;
+  onUploaded: () => Promise<void>;
   defaultCollection?: string | null;
   preloadFiles?: File[] | null;
   preloadItems?: BulkItem[] | null;
@@ -291,7 +284,7 @@ function sortIntoSlots(files: File[]) {
     onClose();
   }
 
-  async function pollJob(
+  async function waitForJob(
     jid: string,
     taskId: string,
     {
@@ -310,59 +303,19 @@ function sortIntoSlots(files: File[]) {
       completeTask: boolean;
     },
   ): Promise<IngestJobStatus> {
-    const startedAt = Date.now();
-    let attempts = 0;
-
-    while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-      await sleep(POLL_INTERVAL_MS);
-      attempts += 1;
-      const status = await getJobStatus(jid);
-
-      if (status.state === "completed") {
-        updateTask(taskId, {
-          status: completeTask ? "completed" : "running",
-          progress: completeTask ? 100 : progressEnd,
-          detail: completedDetail,
-        });
-        return status;
-      }
-
-      if (status.state === "failed") {
-        updateTask(taskId, {
-          status: "failed",
-          progress: 100,
-          detail: status.error || "Ingestion job failed",
-        });
-        throw new Error(status.error || "Ingestion job failed");
-      }
-
-      if (status.state === "pending" || status.state === "running") {
-        // Prefer the backend's real per-step progress when available; fall
-        // back to the time-based estimate for older backends.
-        const fraction =
-          typeof status.progress === "number"
-            ? status.progress / 100
-            : Math.min(attempts / 60, 1);
-        const progress =
-          progressStart + fraction * (progressEnd - progressStart);
-        const stepDetail = status.label
-          ? `${status.label.replaceAll("_", " ")}${
-              status.step && status.total_steps
-                ? ` (${status.step}/${status.total_steps})`
-                : ""
-            }`
-          : null;
-        updateTask(taskId, {
-          status: status.state,
-          progress,
-          detail:
-            stepDetail ??
-            (status.state === "pending" ? pendingDetail : runningDetail),
-        });
-      }
+    void progressStart;
+    void pendingDetail;
+    void runningDetail;
+    const status = await waitForImportJob(jid);
+    if (status.state === "failed") {
+      throw new Error(status.error || "Ingestion job failed");
     }
-
-    throw new Error("Timed out waiting for ingestion to complete");
+    updateTask(taskId, {
+      status: completeTask ? "completed" : "running",
+      progress: completeTask ? 100 : progressEnd,
+      detail: completedDetail,
+    });
+    return status;
   }
 
   async function runUploadTask({
@@ -373,6 +326,7 @@ function sortIntoSlots(files: File[]) {
     collection,
     tagsForUpload,
     libraryId,
+    refreshAfter = true,
   }: {
     taskId: string;
     mesh: File | null;
@@ -381,6 +335,7 @@ function sortIntoSlots(files: File[]) {
     collection: string;
     tagsForUpload: string[];
     libraryId: number | "";
+    refreshAfter?: boolean;
   }) {
     const appendLibrary = (fd: FormData) => {
       if (libraryId !== "") fd.append("target_library_id", String(libraryId));
@@ -406,7 +361,7 @@ function sortIntoSlots(files: File[]) {
           status: "running",
           progress: 35,
         });
-        const meshStatus = await pollJob(meshRes.job_id, taskId, {
+        const meshStatus = await waitForJob(meshRes.job_id, taskId, {
           progressStart: 35,
           progressEnd: gcode ? 55 : 100,
           pendingDetail: "Waiting for the vault to start processing",
@@ -416,7 +371,7 @@ function sortIntoSlots(files: File[]) {
         });
 
         if (!gcode) {
-          onUploaded();
+          if (refreshAfter) await onUploaded();
           return;
         }
 
@@ -439,7 +394,7 @@ function sortIntoSlots(files: File[]) {
         appendLibrary(gcodeFd);
         const gcodeRes = await ingestOrca(gcodeFd);
         linkTaskToJob(taskId, gcodeRes.job_id);
-        await pollJob(gcodeRes.job_id, taskId, {
+        await waitForJob(gcodeRes.job_id, taskId, {
           progressStart: 70,
           progressEnd: 100,
           pendingDetail: "Waiting for the vault to start processing G-code",
@@ -447,7 +402,7 @@ function sortIntoSlots(files: File[]) {
           completedDetail: "Upload processed",
           completeTask: true,
         });
-        onUploaded();
+        if (refreshAfter) await onUploaded();
         return;
       }
 
@@ -465,7 +420,7 @@ function sortIntoSlots(files: File[]) {
         appendLibrary(fd);
         const res = await ingestOrca(fd);
         linkTaskToJob(taskId, res.job_id);
-        await pollJob(res.job_id, taskId, {
+        await waitForJob(res.job_id, taskId, {
           progressStart: 45,
           progressEnd: 100,
           pendingDetail: "Waiting for the vault to start processing",
@@ -473,7 +428,7 @@ function sortIntoSlots(files: File[]) {
           completedDetail: "Upload processed",
           completeTask: true,
         });
-        onUploaded();
+        if (refreshAfter) await onUploaded();
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -511,35 +466,33 @@ function sortIntoSlots(files: File[]) {
         expectedJobCount: 1,
       }),
     }));
-    for (const { item, taskId } of queue) {
-      // Mirror the file's source folder into a nested collection under the
-      // chosen base — the backend auto-creates intermediate collections.
-      const targetCollection = bulkTargetCollection(collection, item.relPath);
-      // runUploadTask owns its own error handling and marks the task failed,
-      // so one bad file doesn't abort the rest of the queue.
-      await runUploadTask({
-        taskId,
-        mesh: item.file,
-        gcode: null,
-        name: stemName(item.file.name),
-        collection: targetCollection,
-        tagsForUpload,
-        libraryId,
-      });
+    try {
+      for (const { item, taskId } of queue) {
+        // Mirror the file's source folder into a nested collection under the
+        // chosen base — the backend auto-creates intermediate collections.
+        const targetCollection = bulkTargetCollection(collection, item.relPath);
+        // runUploadTask owns its own error handling and marks the task failed,
+        // so one bad file doesn't abort the rest of the queue.
+        await runUploadTask({
+          taskId,
+          mesh: item.file,
+          gcode: null,
+          name: stemName(item.file.name),
+          collection: targetCollection,
+          tagsForUpload,
+          libraryId,
+          refreshAfter: false,
+        });
+      }
+    } finally {
+      // One invalidation after the entire queue, including partial failures.
+      await onUploaded();
     }
   }
 
-  // Inline poll (modal stays open) — used for URL import where the result may
-  // be an archive manifest the user must act on before anything is imported.
-  async function pollJobInline(jid: string): Promise<IngestJobStatus> {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-      await sleep(POLL_INTERVAL_MS);
-      const status = await getJobStatus(jid);
-      if (status.state === "completed" || status.state === "failed") return status;
-    }
-    throw new Error("Timed out waiting for the import to complete");
-  }
+  // Modal workflows await Task Center's common terminal event; they never
+  // start a second polling loop of their own.
+  const waitForJobInline = (jid: string) => waitForImportJob(jid);
 
   function collectionGate(): boolean {
     if (!auth.isAuthenticated) {
@@ -557,7 +510,7 @@ function sortIntoSlots(files: File[]) {
     const taskId = trackImportJob(jobId, title);
     void (async () => {
       try {
-        await pollJob(jobId, taskId, {
+        await waitForJob(jobId, taskId, {
           progressStart: 10,
           progressEnd: 100,
           pendingDetail: "Waiting for the vault to start importing",
@@ -565,7 +518,7 @@ function sortIntoSlots(files: File[]) {
           completedDetail: "Import processed",
           completeTask: true,
         });
-        onUploaded();
+        await onUploaded();
       } catch (err) {
         toast.error(err);
       }
@@ -582,7 +535,7 @@ function sortIntoSlots(files: File[]) {
         tags: selectedTags.length ? selectedTags.join(",") : undefined,
         review: reviewCollection || undefined,
       });
-      const status = await pollJobInline(res.job_id);
+      const status = await waitForJobInline(res.job_id);
       if (status.state === "failed") {
         throw new Error(status.error || "Import failed");
       }
@@ -625,12 +578,12 @@ function sortIntoSlots(files: File[]) {
         toast.success(
           `Imported ${imported} model${imported === 1 ? "" : "s"} from collection`,
         );
-        onUploaded();
+        await onUploaded();
         close();
         return;
       }
       toast.success("Model imported from URL");
-      onUploaded();
+      await onUploaded();
       close();
     } catch (err) {
       toast.error(err);
@@ -693,7 +646,7 @@ function sortIntoSlots(files: File[]) {
       fd.append("file", zipFile);
       const response = await inspectArchive(fd);
       trackImportJob(response.job_id, `Inspect ${zipFile.name}`);
-      const status = await pollJobInline(response.job_id);
+      const status = await waitForJobInline(response.job_id);
       if (status.state === "failed") throw new Error(status.error || "Archive inspection failed");
       const result = (status.result ?? {}) as Record<string, unknown>;
       const m: ArchiveManifest = {

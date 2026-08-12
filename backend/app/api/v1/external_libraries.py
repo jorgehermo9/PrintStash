@@ -265,7 +265,7 @@ def scan_now(
     session_factory: SessionFactory = Depends(get_session_factory),
 ) -> IngestResponse:
     get_or_404(session, ExternalLibrary, library_id, "library_not_found")
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="external_scan")
     background_tasks.add_task(
         external_library.scan_library,
         library_id,
@@ -297,7 +297,7 @@ def scan_path(
         raise HTTPException(status_code=400, detail="path_outside_library_root")
     if not candidate.is_dir() or not os.access(candidate, os.R_OK):
         raise HTTPException(status_code=400, detail="path_missing_or_unreadable")
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="external_scan")
     background_tasks.add_task(
         external_library.scan_library,
         library_id,

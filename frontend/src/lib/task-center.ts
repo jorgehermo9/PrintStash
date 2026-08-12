@@ -24,6 +24,9 @@ export interface TaskItem {
   skipped?: number;
   failed?: number;
   completion?: IngestJobStatus["completion"];
+  thumbnailStatus?: IngestJobStatus["thumbnail_status"];
+  thumbnailReason?: string | null;
+  serverUpdatedAt?: string | null;
   retryable?: boolean;
   failedItems?: Array<{ name: string; reason: string; retryable: boolean }>;
 }
@@ -31,8 +34,16 @@ export interface TaskItem {
 const TASK_EVENT = "printstash:tasks-changed";
 const STORAGE_KEY = "printstash:import-tasks:v1";
 const DISMISSED_JOBS_KEY = "printstash:dismissed-import-jobs:v1";
+const TERMINAL_EVENT = "printstash:import-job-terminal";
+const EMITTED_TERMINALS_KEY = "printstash:emitted-import-terminals:v1";
 let tasks: TaskItem[] = loadTasks();
 const dismissedJobIds = loadDismissedJobIds();
+const emittedTerminalJobIds = loadIdSet(EMITTED_TERMINALS_KEY);
+const terminalJobs = new Map<string, IngestJobStatus>();
+const terminalWaiters = new Map<
+  string,
+  Set<(job: IngestJobStatus) => void>
+>();
 let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncSubscribers = 0;
@@ -51,13 +62,22 @@ function loadTasks(): TaskItem[] {
 }
 
 function loadDismissedJobIds(): Set<string> {
+  return loadIdSet(DISMISSED_JOBS_KEY);
+}
+
+function loadIdSet(key: string): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const parsed = JSON.parse(localStorage.getItem(DISMISSED_JOBS_KEY) ?? "[]");
+    const parsed = JSON.parse(localStorage.getItem(key) ?? "[]");
     return new Set(Array.isArray(parsed) ? parsed.slice(0, 200) : []);
   } catch {
     return new Set();
   }
+}
+
+function persistIdSet(key: string, values: Set<string>): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(key, JSON.stringify([...values].slice(-200)));
 }
 
 function persist(): void {
@@ -66,11 +86,7 @@ function persist(): void {
 }
 
 function persistDismissedJobIds(): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(
-    DISMISSED_JOBS_KEY,
-    JSON.stringify([...dismissedJobIds].slice(-200)),
-  );
+  persistIdSet(DISMISSED_JOBS_KEY, dismissedJobIds);
 }
 
 function emit() {
@@ -206,10 +222,29 @@ function detailForJob(job: IngestJobStatus): string {
   const count = job.total == null ? "" : ` ${job.processed ?? 0}/${job.total}`;
   const item = job.current_item ? ` · ${job.current_item}` : "";
   if (job.state === "completed") {
+    if (job.completion === "partial") {
+      const reason = job.thumbnail_reason ?? job.error ?? "optional output unavailable";
+      return `${job.succeeded ?? 0} succeeded · partial: ${reason} · repair available in Vault Maintenance`;
+    }
     return `${job.succeeded ?? 0} succeeded, ${job.deduplicated ?? 0} deduplicated, ${job.skipped ?? 0} skipped, ${job.failed ?? 0} failed`;
   }
   if (job.state === "failed") return job.error ?? "Import failed before anything was added";
   return `${stage}${count}${item} · continues in background`;
+}
+
+function isTerminal(job: IngestJobStatus): boolean {
+  return job.state === "completed" || job.state === "failed";
+}
+
+function publishTerminal(job: IngestJobStatus): void {
+  if (!isTerminal(job)) return;
+  terminalJobs.set(job.job_id, job);
+  for (const resolve of terminalWaiters.get(job.job_id) ?? []) resolve(job);
+  terminalWaiters.delete(job.job_id);
+  if (emittedTerminalJobIds.has(job.job_id) || typeof window === "undefined") return;
+  emittedTerminalJobIds.add(job.job_id);
+  persistIdSet(EMITTED_TERMINALS_KEY, emittedTerminalJobIds);
+  window.dispatchEvent(new CustomEvent<IngestJobStatus>(TERMINAL_EVENT, { detail: job }));
 }
 
 function applyJob(job: IngestJobStatus): void {
@@ -217,7 +252,16 @@ function applyJob(job: IngestJobStatus): void {
   const existing = tasks.find(
     (task) => task.jobId === job.job_id || task.jobIds?.includes(job.job_id),
   );
-  if (existing && existing.status === job.state && (job.state === "completed" || job.state === "failed")) return;
+  if (existing?.status === "completed" || existing?.status === "failed") {
+    if (isTerminal(job)) publishTerminal(job);
+    return;
+  }
+  if (existing?.status === "running" && job.state === "pending") return;
+  if (
+    existing?.serverUpdatedAt &&
+    job.updated_at &&
+    Date.parse(job.updated_at) < Date.parse(existing.serverUpdatedAt)
+  ) return;
   const status: TaskStatus = job.state;
   const patch = {
     jobId: job.job_id,
@@ -234,12 +278,18 @@ function applyJob(job: IngestJobStatus): void {
     completion: job.completion,
     retryable: job.retryable,
     failedItems: job.failed_items,
+    thumbnailStatus: job.thumbnail_status,
+    thumbnailReason: job.thumbnail_reason,
+    serverUpdatedAt: job.updated_at,
   };
   if (existing) updateTask(existing.id, patch);
   else createTask({ title: "Import", ...patch });
+  publishTerminal(job);
 }
 
 function applyGroupedJobs(task: TaskItem, jobs: IngestJobStatus[]): void {
+  jobs.forEach(publishTerminal);
+  if (task.status === "completed" || task.status === "failed") return;
   const expected = Math.max(task.expectedJobCount ?? task.jobIds?.length ?? 1, 1);
   const failedJob = jobs.find((job) => job.state === "failed");
   if (failedJob) {
@@ -254,13 +304,11 @@ function applyGroupedJobs(task: TaskItem, jobs: IngestJobStatus[]): void {
   const allCompleted =
     jobs.length >= expected && jobs.every((job) => job.state === "completed");
   if (allCompleted) {
-    if (task.status !== "completed") {
-      updateTask(task.id, {
-        status: "completed",
-        progress: 100,
-        detail: expected === 1 ? "Upload processed" : `${expected} files processed`,
-      });
-    }
+    updateTask(task.id, {
+      status: "completed",
+      progress: 100,
+      detail: expected === 1 ? "Upload processed" : `${expected} files processed`,
+    });
     return;
   }
 
@@ -292,6 +340,33 @@ export function trackImportJob(jobId: string, title: string): string {
   });
   wakeImportJobSync();
   return taskId;
+}
+
+export function waitForImportJob(
+  jobId: string,
+  title = "Import",
+  timeoutMs = 15 * 60_000,
+): Promise<IngestJobStatus> {
+  trackImportJob(jobId, title);
+  const known = terminalJobs.get(jobId);
+  if (known) return Promise.resolve(known);
+  return new Promise((resolve, reject) => {
+    const stopSync = startImportJobSync();
+    const waiter = (job: IngestJobStatus) => {
+      clearTimeout(timeout);
+      stopSync();
+      resolve(job);
+    };
+    const timeout = setTimeout(() => {
+      terminalWaiters.get(jobId)?.delete(waiter);
+      stopSync();
+      reject(new Error("Timed out waiting for ingestion to complete"));
+    }, timeoutMs);
+    const waiters = terminalWaiters.get(jobId) ?? new Set();
+    waiters.add(waiter);
+    terminalWaiters.set(jobId, waiters);
+    void syncImportJobs().catch(() => wakeImportJobSync());
+  });
 }
 
 export async function syncImportJobs(): Promise<boolean> {
@@ -385,11 +460,16 @@ function onVisibilityChange(): void {
   else scheduleImportJobSync(0);
 }
 
+function onConnectivityRestored(): void {
+  scheduleImportJobSync(0);
+}
+
 export function startImportJobSync(): () => void {
   if (typeof window === "undefined") return () => {};
   syncSubscribers += 1;
   if (syncSubscribers === 1) {
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("online", onConnectivityRestored);
     scheduleImportJobSync(0);
   }
   let stopped = false;
@@ -401,6 +481,7 @@ export function startImportJobSync(): () => void {
       clearSyncTimer();
       syncWakePending = false;
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("online", onConnectivityRestored);
     }
   };
 }
@@ -409,4 +490,15 @@ export function subscribeTasks(callback: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   window.addEventListener(TASK_EVENT, callback);
   return () => window.removeEventListener(TASK_EVENT, callback);
+}
+
+export function subscribeImportJobCompletions(
+  callback: (job: IngestJobStatus) => void | Promise<void>,
+): () => void {
+  if (typeof window === "undefined") return () => {};
+  const listener = (event: Event) => {
+    void callback((event as CustomEvent<IngestJobStatus>).detail);
+  };
+  window.addEventListener(TERMINAL_EVENT, listener);
+  return () => window.removeEventListener(TERMINAL_EVENT, listener);
 }

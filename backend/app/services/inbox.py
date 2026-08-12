@@ -420,7 +420,7 @@ def _begin_import(
         row.error_code = None
         row.retryable = False
         row.updated_at = utcnow()
-        job_id = registry.create(owner_user_id=row.owner_user_id)
+        job_id = registry.create(owner_user_id=row.owner_user_id, kind="pending_import")
         job_row = session.get(BackgroundJob, job_id)
         if job_row is not None:
             job_row.kind = "pending_import"

@@ -3,6 +3,7 @@
 import { CheckCircle2, ChevronDown, Loader2, XCircle } from "lucide-react";
 
 import type { TaskItem } from "@/lib/task-center";
+import { Link } from "@/lib/navigation";
 
 export function TaskList({
   tasks,
@@ -91,6 +92,14 @@ function TaskRow({ task }: { task: TaskItem }) {
             >
               Review and retry
             </button>
+          )}
+          {task.thumbnailStatus === "failed" && !active && (
+            <Link
+              href="/settings?section=maintenance"
+              className="mt-2 inline-flex rounded border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Repair thumbnail
+            </Link>
           )}
         </div>
       </div>

@@ -344,7 +344,9 @@ def _ingest_one_file(
     original_filename = PurePosixPath(original_filename.replace("\\", "/")).name
     suffix = Path(original_filename).suffix.lower()
     resolved_name = model_name or Path(original_filename).stem
-    child = registry.create(owner_user_id=actor_user_id, visible=False)
+    child = registry.create(
+        owner_user_id=actor_user_id, visible=False, kind="artifact"
+    )
     try:
         if suffix in _GCODE_SUFFIXES:
             ingest_orca_gcode(
