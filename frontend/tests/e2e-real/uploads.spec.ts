@@ -43,6 +43,19 @@ test("bulk upload waits for three terminal jobs and loads every WebP", async ({ 
   await dialog.getByRole("button", { name: "None" }).click();
   await dialog.getByRole("option", { name: new RegExp(collection) }).click();
   await dialog.getByRole("button", { name: "Upload 3 models" }).click();
+
+  // Bulk owns a browser-local File queue until every item has been submitted.
+  // Observe the common Task Center terminal state before navigating, so this
+  // test verifies the complete queue instead of destroying its JS context.
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole("button", { name: "Notifications" }).click();
+  for (const name of names) {
+    await expect(page.getByText(`Upload ${name}.stl`, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByText("completed", { exact: true })).toHaveCount(3, {
+    timeout: 120_000,
+  });
+
   await page.goto(`/?c=${encodeURIComponent(collection)}`);
 
   for (const name of names) {
