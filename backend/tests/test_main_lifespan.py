@@ -434,12 +434,20 @@ async def test_external_scan_loop_skips_during_restore_then_logs_scan_failure(
     # Collapse the loop's per-tick 60s sleep so several iterations happen fast.
     monkeypatch.setattr(app_main.asyncio, "sleep", lambda _s: _real_sleep(0))
 
-    calls = {"admission_checks": 0, "scan_calls": 0, "mutation_ends": 0}
+    calls = {
+        "admission_checks": 0,
+        "admitted": 0,
+        "scan_calls": 0,
+        "mutation_ends": 0,
+    }
 
     def _begin_mutating_operation() -> bool:
         calls["admission_checks"] += 1
         # First tick: restore in progress (must skip). Second+ tick: clear.
-        return calls["admission_checks"] > 1
+        admitted = calls["admission_checks"] > 1
+        if admitted:
+            calls["admitted"] += 1
+        return admitted
 
     def _end_mutating_operation() -> None:
         calls["mutation_ends"] += 1
@@ -463,7 +471,9 @@ async def test_external_scan_loop_skips_during_restore_then_logs_scan_failure(
     # Skipped on the first tick (restore in progress): scan must not have run then.
     assert calls["admission_checks"] >= 2
     assert calls["scan_calls"] >= 1
-    assert calls["mutation_ends"] == calls["scan_calls"]
+    # Cancellation may land after admission but before the worker thread starts;
+    # every admitted slot must still be released exactly once.
+    assert calls["mutation_ends"] == calls["admitted"]
     assert any(
         "external library scan tick failed" in r.getMessage() for r in caplog.records
     )
