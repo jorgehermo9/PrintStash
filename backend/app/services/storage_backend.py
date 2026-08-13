@@ -897,7 +897,13 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
             ),
         )
 
-    def _multipart_create(self, src: BinaryIO, *, key: str, token: str) -> dict:
+    def _multipart_create(
+        self,
+        src: tempfile.SpooledTemporaryFile[bytes],
+        *,
+        key: str,
+        token: str,
+    ) -> dict:
         """Publish multipart data create-only, aborting every incomplete upload."""
         created = self._client.create_multipart_upload(
             Bucket=self._bucket,
