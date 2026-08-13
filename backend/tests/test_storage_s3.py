@@ -40,7 +40,9 @@ def s3_backend() -> Iterator[S3StorageBackend]:
             "s3_bucket": bucket,
             "s3_endpoint_url": _ENDPOINT,
             "s3_region": "us-east-1",
-            "s3_access_key": os.environ.get("PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"),
+            "s3_access_key": os.environ.get(
+                "PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"
+            ),
             "s3_secret_key": os.environ.get(
                 "PRINTSTASH_TEST_S3_SECRET_KEY", "printstash-secret"
             ),
@@ -77,7 +79,9 @@ def test_round_trips_bytes(s3_backend: S3StorageBackend):
     assert info.etag
 
 
-def test_upload_file_then_download_to_path(s3_backend: S3StorageBackend, tmp_path: Path):
+def test_upload_file_then_download_to_path(
+    s3_backend: S3StorageBackend, tmp_path: Path
+):
     src = tmp_path / "source.bin"
     src.write_bytes(b"payload bytes")
     key = "models/uploaded.bin"
@@ -109,9 +113,14 @@ def test_delete_removes_object(s3_backend: S3StorageBackend):
     receipt = s3_backend.create_bytes(b"gone soon", key)
     assert s3_backend.exists(key)
 
-    assert s3_backend.rollback_create(receipt) is True
-
-    assert not s3_backend.exists(key)
+    if receipt.version_id:
+        assert s3_backend.rollback_create(receipt) is True
+        assert not s3_backend.exists(key)
+    else:
+        # Compatible stores without immutable VersionId cannot authorize an
+        # exact delete. Preserve the bytes and leave the outbox intent blocked.
+        assert s3_backend.rollback_create(receipt) is False
+        assert s3_backend.exists(key)
 
 
 def test_exists_false_on_missing_key(s3_backend: S3StorageBackend):

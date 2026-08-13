@@ -295,7 +295,18 @@ def scan_now(
     session: Session = Depends(get_session),
     session_factory: SessionFactory = Depends(get_session_factory),
 ) -> IngestResponse:
-    get_or_404(session, ExternalLibrary, library_id, "library_not_found")
+    library = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
+    if (
+        library.scan_claim_token
+        and library.scan_claim_expires_at
+        and library.scan_claim_expires_at > utcnow()
+        and library.scan_job_id
+    ):
+        return IngestResponse(
+            job_id=library.scan_job_id,
+            state="pending",
+            message="library scan already queued",
+        )
     job_id = registry.create(owner_user_id=current_user.id, kind="external_scan")
     background_tasks.add_task(
         external_library.scan_library,

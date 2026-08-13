@@ -26,8 +26,15 @@ from app.services.auth import (
     hash_password,
     invalidate_user_sessions,
 )
+from app.services.storage_deletion import process_storage_delete_intents
 from app.services.storage_ownership import UnsafeStorageDeleteError
-from app.services.trash import gc_soft_deleted, hard_delete_document, hard_delete_file
+from app.services.trash import (
+    gc_soft_deleted,
+    hard_delete_collection,
+    hard_delete_document,
+    hard_delete_file,
+    hard_delete_model,
+)
 
 router = APIRouter(
     prefix="/admin", tags=["admin"], dependencies=[Depends(require_superuser)]
@@ -209,6 +216,10 @@ def admin_delete_resource(
                 hard_delete_file(session, row)
             elif isinstance(row, Document):
                 hard_delete_document(session, row)
+            elif isinstance(row, Model):
+                hard_delete_model(session, row)
+            elif isinstance(row, Collection):
+                hard_delete_collection(session, row)
             else:
                 session.delete(row)
         except UnsafeStorageDeleteError as exc:
@@ -221,6 +232,8 @@ def admin_delete_resource(
         row.deleted_at = utcnow()
         session.add(row)
     session.commit()
+    if hard:
+        process_storage_delete_intents()
     return Response(status_code=204)
 
 

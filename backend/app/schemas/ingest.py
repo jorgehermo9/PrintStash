@@ -62,6 +62,7 @@ class UrlIngestRequest(BaseModel):
 
 
 class ArchiveEntryRead(BaseModel):
+    entry_id: str
     name: str
     size_bytes: int
     file_type: Optional[str] = None  # FileType value if importable, else None
@@ -79,7 +80,8 @@ class ArchiveManifest(BaseModel):
 class ArchiveSelectRequest(BaseModel):
     """Body for POST /ingest/archive/{archive_id}/select."""
 
-    names: list[str]
+    entry_ids: list[str] = []
+    names: list[str] = []
     collection: Optional[str] = None
     tags: Optional[str] = None
 

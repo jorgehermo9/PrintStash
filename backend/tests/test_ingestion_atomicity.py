@@ -77,7 +77,7 @@ def test_persists_file_and_metadata_together(
     assert md is not None and md.estimated_time_s == 120
 
 
-def test_failed_thumbnail_does_not_leave_partial_model(
+def test_failed_thumbnail_preserves_artifact_without_derived_pointer(
     db_session: Session,
     storage,
     model: Model,
@@ -89,13 +89,19 @@ def test_failed_thumbnail_does_not_leave_partial_model(
 
     monkeypatch.setattr(thumbnail, "to_webp", _boom)
 
-    with pytest.raises(ValueError, match="corrupt image"):
-        _persist(db_session, model, _staged(tmp_path), thumb_bytes=b"not-an-image")
+    file_row = _persist(
+        db_session, model, _staged(tmp_path), thumb_bytes=b"not-an-image"
+    )
 
-    db_session.rollback()
-    assert db_session.exec(select(File).where(File.model_id == model.id)).all() == []
-    assert db_session.exec(select(Metadata)).all() == []
-    assert not Path(storage.blob_key(model.slug, 1, "bracket.stl")).exists()
+    db_session.refresh(model)
+    assert file_row.id is not None
+    assert Path(file_row.path).exists()
+    assert file_row.thumbnail_path is None
+    assert model.thumbnail_file_id is None
+    assert (
+        db_session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).first()
+        is not None
+    )
 
 
 def test_failed_metadata_does_not_leave_orphan_file_row(
@@ -137,7 +143,7 @@ def test_persist_never_overwrites_an_unclaimed_destination(
     assert Path(file_row.path).read_bytes() == b"solid bracket\nendsolid\n"
 
 
-def test_thumbnail_collision_preserves_existing_bytes_and_rolls_back_artifact(
+def test_thumbnail_collision_preserves_existing_bytes_and_commits_artifact(
     db_session: Session,
     storage,
     model: Model,
@@ -149,23 +155,21 @@ def test_thumbnail_collision_preserves_existing_bytes_and_rolls_back_artifact(
     occupied.write_bytes(b"user-owned thumbnail-shaped file")
     monkeypatch.setattr(storage, "thumbnail_key", lambda _file_id: str(occupied))
 
-    with pytest.raises(Exception, match="already exists|collision"):
-        _persist(
-            db_session,
-            model,
-            _staged(tmp_path),
-            thumb_bytes=(
-                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-                b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
-                b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
-                b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
-            ),
-        )
+    file_row = _persist(
+        db_session,
+        model,
+        _staged(tmp_path),
+        thumb_bytes=(
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+            b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        ),
+    )
 
-    db_session.rollback()
     assert occupied.read_bytes() == b"user-owned thumbnail-shaped file"
-    assert db_session.exec(select(File).where(File.model_id == model.id)).all() == []
-    assert not Path(storage.blob_key(model.slug, 1, "bracket.stl")).exists()
+    assert Path(file_row.path).exists()
+    assert file_row.thumbnail_path is None
 
 
 def test_version_numbers_increment_across_revisions(

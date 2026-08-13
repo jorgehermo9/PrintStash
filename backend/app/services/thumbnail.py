@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import io
 import re
+import warnings
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -12,6 +14,10 @@ from app.core.logging import get_logger
 from app.services import bgcode
 
 logger = get_logger(__name__)
+_MAX_IMAGE_PIXELS = 25_000_000
+_MAX_SCAN_BYTES = 16 * 1024 * 1024
+_MAX_LINE_BYTES = 1024 * 1024
+_MAX_BASE64_BYTES = 16 * 1024 * 1024
 
 
 def to_webp(data: bytes) -> bytes:
@@ -23,23 +29,27 @@ def to_webp(data: bytes) -> bytes:
     renders below the original PNG. ``exact=True`` preserves the RGB of fully
     transparent pixels so the encoder can't recolour hidden areas.
 
-    Returns the input unchanged when it is already WebP or when re-encoding
-    fails — a stored thumbnail in the original format beats no thumbnail.
+    Raises a stable error when validation or encoding fails. Callers treat the
+    thumbnail as a retryable derivative; hostile input is never stored raw.
     """
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return data
     try:
         from PIL import Image
 
-        with Image.open(io.BytesIO(data)) as img:
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGBA")
-            buf = io.BytesIO()
-            img.save(buf, format="WEBP", lossless=True, exact=True, method=6)
-            return buf.getvalue()
-    except Exception:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as img:
+                if img.width * img.height > _MAX_IMAGE_PIXELS:
+                    raise ValueError("thumbnail_too_large")
+                img.load()
+                if img.mode not in ("RGB", "RGBA"):
+                    img = img.convert("RGBA")
+                img.thumbnail((2048, 2048))
+                buf = io.BytesIO()
+                img.save(buf, format="WEBP", lossless=True, exact=True, method=6)
+                return buf.getvalue()
+    except Exception as exc:
         logger.warning("thumbnail: webp conversion failed", exc_info=True)
-        return data
+        raise ValueError("thumbnail_too_large") from exc
 
 
 _BEGIN_RE = re.compile(r";\s*thumbnail begin\s+(\d+)x(\d+)\s+(\d+)", re.IGNORECASE)
@@ -65,14 +75,31 @@ def _iter_blocks(path: Path):
     buf: List[str] = []
     command_lines = 0
 
-    with path.open("r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
+    scanned = 0
+    block_bytes = 0
+    with path.open("rb") as fh:
+        while scanned < _MAX_SCAN_BYTES:
+            raw_line = fh.readline(_MAX_LINE_BYTES + 1)
+            if not raw_line:
+                return
+            scanned += len(raw_line)
+            if len(raw_line) > _MAX_LINE_BYTES or not raw_line.endswith((b"\n", b"\r")):
+                logger.warning("thumbnail: line exceeds byte limit in %s", path.name)
+                return
+            line = raw_line.decode("utf-8", errors="replace")
             if not in_block:
                 m = _BEGIN_RE.search(line)
                 if m:
                     width = int(m.group(1))
                     height = int(m.group(2))
+                    declared = int(m.group(3))
+                    if (
+                        width * height > _MAX_IMAGE_PIXELS
+                        or declared > _MAX_BASE64_BYTES
+                    ):
+                        return
                     buf = []
+                    block_bytes = 0
                     in_block = True
                     continue
                 stripped = line.lstrip()
@@ -103,6 +130,9 @@ def _iter_blocks(path: Path):
             stripped = line.lstrip()
             if stripped.startswith(";"):
                 stripped = stripped[1:].strip()
+            block_bytes += len(stripped)
+            if block_bytes > _MAX_BASE64_BYTES:
+                return
             buf.append(stripped)
 
 
@@ -142,7 +172,8 @@ def extract(path: Path) -> Optional[bytes]:
         return None
 
     try:
-        return base64.b64decode(best[1], validate=False)
-    except (ValueError, base64.binascii.Error) as e:
+        decoded = base64.b64decode(best[1], validate=True)
+        return decoded if len(decoded) <= _MAX_BASE64_BYTES else None
+    except (ValueError, binascii.Error) as e:
         logger.warning("thumbnail extract: base64 decode failed: %s", e)
         return None

@@ -36,7 +36,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.migrate import run_migrations
-from app.db.models import OwnedStorageObject, User
+from app.db.models import OwnedStorageObject, StagingLease, User
 from app.db.session import get_engine, get_session_factory
 from app.services import audit
 from app.services.jobs import registry
@@ -1145,8 +1145,15 @@ def restore_backup(backup_id: str) -> dict:
             )
 
         time.sleep(_RESTORE_GRACE_PERIOD_S)
-        running = registry.snapshot_counts()["running"]
-        if running:
+        counts = registry.snapshot_counts()
+        active_jobs = counts["pending"] + counts["running"]
+        with get_session_factory().scoped_session() as lease_session:
+            active_leases = len(
+                lease_session.exec(
+                    select(StagingLease).where(StagingLease.expires_at > utcnow())
+                ).all()
+            )
+        if active_jobs or active_leases:
             with get_session_factory().session() as session:
                 audit.record(
                     session,
@@ -1155,11 +1162,13 @@ def restore_backup(backup_id: str) -> dict:
                     diff={
                         "backup_id": backup_id,
                         "reason": "jobs_running",
-                        "running": running,
+                        "running": counts["running"],
+                        "pending": counts["pending"],
+                        "staging_leases": active_leases,
                     },
                 )
             raise RestoreConflictError(
-                f"{running} ingestion job(s) still running; retry once they finish"
+                f"{active_jobs} ingestion job(s) and {active_leases} staging lease(s) active"
             )
 
         try:

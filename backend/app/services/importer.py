@@ -20,6 +20,7 @@ import os
 import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -165,6 +166,7 @@ def _content_disposition_name(resp) -> str | None:
 
 @dataclass
 class ArchiveEntry:
+    entry_id: str
     name: str
     size_bytes: int
     file_type: Optional[str]  # FileType value if importable, else None
@@ -205,15 +207,29 @@ def inspect_archive(path: Path) -> list[ArchiveEntry]:
     try:
         with zipfile.ZipFile(path) as zf:
             infos = zf.infolist()
-            # Count only files against the cap — directory records (which a
-            # deeply nested tree accumulates one per folder) aren't extracted
-            # and shouldn't count toward a limit meant to bound file count.
-            file_count = sum(1 for info in infos if not info.is_dir())
-            if file_count > max_entries:
+            if len(infos) > max_entries:
                 raise ImportError_("archive_too_many_entries")
+            central_size = max(path.stat().st_size - int(zf.start_dir), 0)
+            if central_size > settings.max_archive_central_directory_mb * 1024 * 1024:
+                raise ImportError_("archive_too_large")
             total = 0
-            for info in infos:
-                if info.is_dir() or not _safe_entry_name(info.filename):
+            normalized_names: set[str] = set()
+            for index, info in enumerate(infos):
+                normalized = unicodedata.normalize(
+                    "NFC", info.filename.replace("\\", "/")
+                )
+                if len(normalized.encode("utf-8")) > settings.max_archive_path_bytes:
+                    raise ImportError_("archive_path_too_deep")
+                parts = PurePosixPath(normalized).parts
+                if len(parts) > settings.max_archive_depth + 1:
+                    raise ImportError_("archive_path_too_deep")
+                folded = normalized.casefold()
+                if folded in normalized_names:
+                    raise ImportError_("archive_duplicate_entry")
+                normalized_names.add(folded)
+                if not info.is_dir() and not _safe_entry_name(info.filename):
+                    raise ImportError_("archive_unsafe_entry")
+                if info.is_dir():
                     continue
                 if info.file_size > max_entry:
                     raise ImportError_("archive_entry_too_large")
@@ -227,6 +243,7 @@ def inspect_archive(path: Path) -> list[ArchiveEntry]:
                     continue
                 out.append(
                     ArchiveEntry(
+                        entry_id=f"{index}:{info.CRC:08x}:{info.file_size}",
                         name=info.filename,
                         size_bytes=info.file_size,
                         file_type=ft.value if ft else None,
@@ -249,21 +266,26 @@ def extract_selected(path: Path, names: list[str]) -> list[tuple[Path, str]]:
     wanted = set(names)
     extracted: list[tuple[Path, str]] = []
     max_entry = settings.max_archive_entry_mb * 1024 * 1024
-    with zipfile.ZipFile(path) as zf:
-        for info in zf.infolist():
-            if info.filename not in wanted or info.is_dir():
-                continue
-            if not _safe_entry_name(info.filename):
-                raise ImportError_("archive_unsafe_entry")
-            if info.file_size > max_entry:
-                raise ImportError_("archive_entry_too_large")
-            suffix = Path(info.filename).suffix.lower()
-            if suffix not in _IMPORTABLE_SUFFIXES:
-                continue
-            staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
-            with zf.open(info) as src:
-                storage.stream_to_path(src, staged, max_bytes=max_entry)
-            extracted.append((staged, info.filename.replace("\\", "/")))
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for info in zf.infolist():
+                if info.filename not in wanted or info.is_dir():
+                    continue
+                if not _safe_entry_name(info.filename):
+                    raise ImportError_("archive_unsafe_entry")
+                if info.file_size > max_entry:
+                    raise ImportError_("archive_entry_too_large")
+                suffix = Path(info.filename).suffix.lower()
+                if suffix not in _IMPORTABLE_SUFFIXES:
+                    continue
+                staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
+                with zf.open(info) as src:
+                    storage.stream_to_path(src, staged, max_bytes=max_entry)
+                extracted.append((staged, info.filename.replace("\\", "/")))
+    except Exception:
+        for staged, _name in extracted:
+            staged.unlink(missing_ok=True)
+        raise
     return extracted
 
 
@@ -280,6 +302,7 @@ class _PendingArchive:
     entries: list[ArchiveEntry]
     source_url: Optional[str] = None
     created_at: float = field(default_factory=time.time)
+    claimed: bool = False
 
 
 class _ArchiveRegistry:
@@ -301,6 +324,14 @@ class _ArchiveRegistry:
     def get(self, archive_id: str) -> _PendingArchive | None:
         with self._lock:
             return self._items.get(archive_id)
+
+    def claim(self, archive_id: str) -> _PendingArchive | None:
+        with self._lock:
+            item = self._items.get(archive_id)
+            if item is None or item.claimed:
+                return None
+            item.claimed = True
+            return item
 
     def pop(self, archive_id: str) -> _PendingArchive | None:
         with self._lock:

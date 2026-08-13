@@ -9,7 +9,10 @@ import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import Field as PydanticField
 from sqlmodel import Session, select
 
 from app.core.time import utcnow
@@ -24,11 +27,13 @@ from app.db.models import (
     ModelTagLink,
     PrintJob,
     SavedView,
+    StagingLease,
     Tag,
     User,
 )
 from app.db.scopes import live
-from app.services import ingestion, model_views, taxonomy
+from app.services import ingestion, model_views, storage, taxonomy
+from app.services.jobs import registry
 from app.services.storage_backend import get_backend
 
 FORMAT = "printstash-library-v1"
@@ -38,7 +43,67 @@ FORMAT = "printstash-library-v1"
 # reference large-library target and preflight exports against the same limits.
 MAX_ENTRIES = 250_000
 MAX_UNCOMPRESSED = 100 * 1024 * 1024 * 1024
+MAX_MANIFEST_BYTES = 128 * 1024 * 1024
 _HASH_CHUNK_SIZE = 1024 * 1024
+
+
+class PortableArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source_id: int | None = None
+    entry: str = PydanticField(min_length=1, max_length=1024)
+    original_filename: str = PydanticField(min_length=1, max_length=255)
+    file_type: Literal["stl", "3mf", "gcode", "obj", "step"]
+    version: int = PydanticField(gt=0)
+    size_bytes: int = PydanticField(ge=0)
+    sha256: str = PydanticField(pattern=r"^[0-9a-fA-F]{64}$")
+    revision_label: str | None = PydanticField(default=None, max_length=128)
+    revision_status: (
+        Literal["known_good", "needs_test", "failed", "archived"] | None
+    ) = None
+    revision_notes: str | None = None
+    is_recommended: bool = False
+    metadata: dict[str, Any] = PydanticField(default_factory=dict)
+
+
+class PortableModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source_id: int
+    name: str = PydanticField(min_length=1, max_length=255)
+    slug: str | None = PydanticField(default=None, max_length=255)
+    hash: str = PydanticField(pattern=r"^[0-9a-fA-F]{64}$")
+    description: str | None = None
+    source_url: str | None = PydanticField(default=None, max_length=2048)
+    collection: str | None = PydanticField(default=None, max_length=512)
+    tags: list[str] = PydanticField(default_factory=list)
+    starred: bool = False
+    artifacts: list[PortableArtifact] = PydanticField(default_factory=list)
+
+
+class PortableManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    format: Literal[FORMAT]
+    exported_at: str | None = None
+    models: list[PortableModel]
+    print_jobs: list[dict[str, Any]] = PydanticField(default_factory=list)
+    saved_views: list[dict[str, Any]] = PydanticField(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_source_ids(self) -> "PortableManifest":
+        model_ids = [model.source_id for model in self.models]
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("duplicate model source_id")
+        artifact_ids = [
+            artifact.source_id
+            for model in self.models
+            for artifact in model.artifacts
+            if artifact.source_id is not None
+        ]
+        if len(artifact_ids) != len(set(artifact_ids)):
+            raise ValueError("duplicate artifact source_id")
+        return self
 
 
 def _json_value(value: object) -> object:
@@ -186,6 +251,8 @@ def create_archive(session: Session, user: User) -> Path:
         )
 
     manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
+    if len(manifest_bytes) > MAX_MANIFEST_BYTES:
+        raise ValueError("archive_too_large")
     expected_size = len(manifest_bytes) + sum(row.size_bytes for row, _ in file_entries)
     if len(file_entries) + 1 > MAX_ENTRIES or expected_size > MAX_UNCOMPRESSED:
         raise ValueError("archive_too_large")
@@ -273,9 +340,22 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
         if any(not _safe_entry(item.filename) for item in infos):
             raise ValueError("unsafe_archive_path")
         try:
-            manifest = json.loads(archive.read("manifest.json"))
-        except (KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("invalid_manifest") from exc
+            manifest_info = archive.getinfo("manifest.json")
+            if manifest_info.is_dir() or manifest_info.file_size > MAX_MANIFEST_BYTES:
+                raise ValueError("portable_manifest_invalid")
+            with archive.open(manifest_info) as manifest_file:
+                manifest_bytes = manifest_file.read(MAX_MANIFEST_BYTES + 1)
+            if len(manifest_bytes) > MAX_MANIFEST_BYTES:
+                raise ValueError("portable_manifest_invalid")
+            manifest = PortableManifest.model_validate_json(manifest_bytes).model_dump(
+                mode="json"
+            )
+        except ValueError as exc:
+            if str(exc) == "portable_manifest_invalid":
+                raise
+            raise ValueError("portable_manifest_invalid") from exc
+        except (KeyError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("portable_manifest_invalid") from exc
         if manifest.get("format") != FORMAT or not isinstance(
             manifest.get("models"), list
         ):
@@ -284,6 +364,12 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
         # Validate every blob before first database/storage write.
         for model_data in manifest["models"]:
             for artifact in model_data.get("artifacts", []):
+                try:
+                    artifact["original_filename"] = storage.validate_leaf_name(
+                        artifact["original_filename"]
+                    )
+                except (KeyError, TypeError, storage.UnsafeStorageComponent) as exc:
+                    raise ValueError("portable_manifest_invalid") from exc
                 _validate_artifact_member(archive, artifact)
 
         created_models = created_files = skipped_files = 0
@@ -302,9 +388,19 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
                         if model_data.get("collection")
                         else None
                     )
+                    base_slug = storage.slugify(str(model_data["name"]))
+                    generated_slug = storage.ensure_unique_slug(
+                        base_slug,
+                        lambda value: (
+                            session.exec(
+                                select(Model.id).where(Model.slug == value)
+                            ).first()
+                            is not None
+                        ),
+                    )
                     model = Model(
                         name=model_data["name"],
-                        slug=model_data["slug"],
+                        slug=generated_slug,
                         hash=model_data["hash"],
                         description=model_data.get("description"),
                         source_url=model_data.get("source_url"),
@@ -452,3 +548,35 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
             "skipped_files": skipped_files,
             "imported_jobs": imported_jobs,
         }
+
+
+def run_import_job(
+    *, job_id: str, archive_path: Path, user_id: int, session_factory
+) -> None:
+    """Durable job boundary for portable imports; partial progress remains visible."""
+    registry.update(job_id, state="running", stage="ingesting")
+    try:
+        with session_factory.scoped_session() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                raise ValueError("user_not_found")
+            result = import_archive(session, archive_path, user)
+            lease = session.exec(
+                select(StagingLease).where(StagingLease.background_job_id == job_id)
+            ).first()
+            if lease is not None:
+                session.delete(lease)
+                session.commit()
+        registry.finish(
+            job_id,
+            state="completed",
+            completion="complete",
+            result=result,
+            processed=result["created_files"] + result["skipped_files"],
+            total=result["created_files"] + result["skipped_files"],
+            succeeded=result["created_files"],
+            skipped=result["skipped_files"],
+        )
+        archive_path.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 - durable job boundary
+        registry.finish(job_id, state="failed", error=str(exc), retryable=True)

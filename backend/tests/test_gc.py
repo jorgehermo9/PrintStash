@@ -11,13 +11,22 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.core.time import utcnow
-from app.db.models import Collection, Document, DocumentKind, File, FileType, Model
+from app.db.models import (
+    Collection,
+    Document,
+    DocumentKind,
+    File,
+    FileType,
+    Model,
+    ShareLink,
+    StorageDeleteIntent,
+)
 from app.services.storage_backend import get_backend
-from app.services.storage_ownership import UnsafeStorageDeleteError, record_creation
+from app.services.storage_ownership import record_creation
 from app.services.trash import _cleanup_orphan_blobs, gc_soft_deleted
 
 
@@ -259,10 +268,9 @@ def test_hard_delete_aborts_when_owned_storage_is_suddenly_unmounted(
     mounted_root.rename(detached_root)
     mounted_root.mkdir()
 
-    with pytest.raises(UnsafeStorageDeleteError):
-        gc_soft_deleted(retention_days=0)
+    result = gc_soft_deleted(retention_days=0)
 
-    db_session.rollback()
+    assert result["resources_blocked"] == 1
     db_session.expire_all()
     assert db_session.get(File, artifact.id) is not None
     assert (detached_root / "unmounted" / "v1" / "unmounted.stl").exists()
@@ -287,16 +295,15 @@ def test_hard_delete_aborts_on_read_only_storage_and_preserves_row(
         return original_mkstemp(*args, **kwargs)
 
     monkeypatch.setattr("app.services.storage_backend.tempfile.mkstemp", denied)
-    with pytest.raises(UnsafeStorageDeleteError):
-        gc_soft_deleted(retention_days=0)
+    result = gc_soft_deleted(retention_days=0)
 
-    db_session.rollback()
+    assert result["resources_blocked"] == 1
     db_session.expire_all()
     assert db_session.get(File, artifact.id) is not None
     assert Path(artifact.path).exists()
 
 
-def test_gc_preflights_entire_batch_before_first_byte_delete(
+def test_gc_skips_legacy_candidate_without_blocking_verifiable_candidates(
     db_session: Session, storage
 ) -> None:
     first = _model_with_file(db_session, storage, "owned-first")
@@ -322,15 +329,16 @@ def test_gc_preflights_entire_batch_before_first_byte_delete(
     db_session.add(legacy)
     db_session.commit()
     db_session.refresh(legacy)
+    first_id = first.id
+    first_path = first.path
 
-    with pytest.raises(UnsafeStorageDeleteError):
-        gc_soft_deleted(retention_days=0)
+    result = gc_soft_deleted(retention_days=0)
 
-    db_session.rollback()
     db_session.expire_all()
-    assert Path(first.path).exists()
+    assert result["resources_blocked"] == 1
+    assert not Path(first_path).exists()
     assert Path(legacy_path).read_bytes() == b"legacy-user-bytes"
-    assert db_session.get(File, first.id) is not None
+    assert db_session.get(File, first_id) is None
     assert db_session.get(File, legacy.id) is not None
 
 
@@ -374,14 +382,87 @@ def test_hard_delete_late_storage_failure_leaks_remainder_without_db_rollback(
     monkeypatch.setattr(storage, "rollback_create", fail_second)
 
     hard_delete_model(db_session, model)
+    assert deletes == 0, "storage deletion must never happen before SQL commit"
     db_session.commit()
+
+    from app.services.storage_deletion import process_storage_delete_intents
+
+    result = process_storage_delete_intents()
 
     assert not Path(first.path).exists()
     assert Path(second_key).read_bytes() == b"second"
+    assert result.completed == 1
+    assert result.pending == 1
     db_session.expire_all()
     assert db_session.get(Model, model.id) is None
     assert db_session.get(File, first.id) is None
     assert db_session.get(File, second.id) is None
+
+
+def test_hard_delete_rollback_preserves_blob_and_discards_intent(
+    db_session: Session, storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.trash import hard_delete_model
+
+    artifact = _model_with_file(db_session, storage, "rollback-safe")
+    artifact_key = artifact.path
+    model = db_session.get(Model, artifact.model_id)
+    assert model is not None
+    calls = 0
+
+    def _unexpected_delete(_receipt):
+        nonlocal calls
+        calls += 1
+        return True
+
+    monkeypatch.setattr(storage, "rollback_create", _unexpected_delete)
+
+    hard_delete_model(db_session, model)
+    assert calls == 0
+    assert db_session.exec(select(StorageDeleteIntent)).all()
+    db_session.rollback()
+
+    assert calls == 0
+    assert Path(artifact.path).exists()
+    assert db_session.get(Model, model.id) is not None
+    assert (
+        db_session.exec(
+            select(StorageDeleteIntent).where(
+                StorageDeleteIntent.resource_kind == "file",
+                StorageDeleteIntent.key == artifact_key,
+            )
+        ).all()
+        == []
+    )
+
+
+def test_hard_delete_resolves_share_link_before_model_delete(
+    db_session: Session, storage
+) -> None:
+    from app.services.storage_deletion import process_storage_delete_intents
+    from app.services.trash import hard_delete_model
+
+    artifact = _model_with_file(db_session, storage, "shared-purge")
+    model = db_session.get(Model, artifact.model_id)
+    assert model is not None
+    model.deleted_at = utcnow()
+    db_session.add(model)
+    db_session.add(
+        ShareLink(
+            model_id=model.id,
+            token_hash="f" * 64,
+            expires_at=utcnow() + timedelta(days=1),
+        )
+    )
+    db_session.commit()
+
+    hard_delete_model(db_session, model)
+    assert Path(artifact.path).exists()
+    db_session.commit()
+    process_storage_delete_intents()
+
+    assert db_session.get(Model, model.id) is None
+    assert not Path(artifact.path).exists()
 
 
 def test_gc_preserves_shared_stl_cache_until_last_artifact_is_purged(
@@ -394,9 +475,7 @@ def test_gc_preserves_shared_stl_cache_until_last_artifact_is_purged(
     db_session.add(expired)
     db_session.add(survivor)
     db_session.commit()
-    cache_key = _owned_write(
-        db_session, storage, storage.stl_cache_key(expired.sha256)
-    )
+    cache_key = _owned_write(db_session, storage, storage.stl_cache_key(expired.sha256))
 
     gc_soft_deleted(retention_days=0)
 
@@ -475,9 +554,7 @@ def test_gc_hard_deletes_expired_collection_referenced_image(
     db_session.add(collection)
     db_session.commit()
     db_session.refresh(collection)
-    collection.readme = (
-        f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
-    )
+    collection.readme = f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
     db_session.add(collection)
     db_session.commit()
     key = _owned_write(

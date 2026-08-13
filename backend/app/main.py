@@ -22,12 +22,15 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.metrics import app_info as _app_info
 from app.core.metrics import (
+    background_job_depth,
     fleet_blocked_jobs,
     fleet_jobs,
     fleet_scheduler_last_tick,
     fleet_scheduler_running,
     observe_request,
     printer_status,
+    staging_bytes,
+    storage_delete_intents,
 )
 from app.core.metrics import registry as _metrics_registry
 from app.core.topology import acquire_process_lock, release_process_lock
@@ -453,6 +456,39 @@ def _refresh_fleet_gauges() -> None:
     fleet_scheduler_last_tick.set(last_tick.timestamp() if last_tick else 0)
 
 
+def _refresh_persistence_gauges() -> None:
+    from sqlalchemy import func
+
+    from app.db.models import BackgroundJob, StagingLease, StorageDeleteIntent
+
+    try:
+        with get_session_factory().session() as session:
+            jobs = session.exec(
+                select(BackgroundJob.state, func.count(BackgroundJob.id)).group_by(
+                    BackgroundJob.state
+                )
+            ).all()
+            staged = session.exec(
+                select(func.coalesce(func.sum(StagingLease.size_bytes), 0))
+            ).one()
+            intents = session.exec(
+                select(
+                    StorageDeleteIntent.status,
+                    func.count(StorageDeleteIntent.id),
+                ).group_by(StorageDeleteIntent.status)
+            ).all()
+    except Exception:
+        logger.exception("metrics: failed to refresh persistence gauges")
+        return
+    background_job_depth.clear()
+    for state, count in jobs:
+        background_job_depth.labels(state=str(state)).set(count)
+    staging_bytes.set(int(staged))
+    storage_delete_intents.clear()
+    for intent_state, count in intents:
+        storage_delete_intents.labels(state=intent_state).set(count)
+
+
 @app.get("/metrics", include_in_schema=False)
 def metrics_endpoint(request: Request) -> Response:
     """Prometheus exposition endpoint.
@@ -471,6 +507,7 @@ def metrics_endpoint(request: Request) -> Response:
             )
     _refresh_printer_gauge()
     _refresh_fleet_gauges()
+    _refresh_persistence_gauges()
     return Response(
         content=generate_latest(_metrics_registry), media_type=CONTENT_TYPE_LATEST
     )

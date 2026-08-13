@@ -145,8 +145,12 @@ async def test_export_from_instance_a_import_into_instance_b_preserves_everythin
         headers=headers_b,
         files={"file": ("printstash-library-v1.zip", archive_bytes, "application/zip")},
     )
-    assert imported.status_code == 200, imported.text
-    counts = imported.json()
+    assert imported.status_code == 202, imported.text
+    import_status = await api.get(
+        f"/api/v1/ingest/jobs/{imported.json()['job_id']}", headers=headers_b
+    )
+    assert import_status.json()["state"] == "completed", import_status.text
+    counts = import_status.json()["result"]
     assert counts["created_models"] == 1
     assert counts["created_files"] == 1
     assert counts["imported_jobs"] == 1
@@ -202,16 +206,22 @@ async def test_reimporting_the_same_archive_is_idempotent(api, tmp_path, e2e_db)
         headers=headers_b,
         files={"file": ("archive.zip", archive_bytes, "application/zip")},
     )
-    assert first.status_code == 200, first.text
-    assert first.json()["created_models"] == 1
+    assert first.status_code == 202, first.text
+    first_status = await api.get(
+        f"/api/v1/ingest/jobs/{first.json()['job_id']}", headers=headers_b
+    )
+    assert first_status.json()["result"]["created_models"] == 1
 
     second = await api.post(
         "/api/v1/models/library-import",
         headers=headers_b,
         files={"file": ("archive.zip", archive_bytes, "application/zip")},
     )
-    assert second.status_code == 200, second.text
-    assert second.json() == {
+    assert second.status_code == 202, second.text
+    second_status = await api.get(
+        f"/api/v1/ingest/jobs/{second.json()['job_id']}", headers=headers_b
+    )
+    assert second_status.json()["result"] == {
         "created_models": 0,
         "created_files": 0,
         "skipped_files": 1,

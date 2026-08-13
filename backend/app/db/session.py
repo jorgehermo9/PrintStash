@@ -37,8 +37,11 @@ def _set_sqlite_pragmas(dbapi_conn, _record) -> None:
     """
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
-    cursor.execute("PRAGMA busy_timeout=5000")
+    synchronous = str(settings.sqlite_synchronous).upper()
+    if synchronous not in {"NORMAL", "FULL"}:
+        synchronous = "NORMAL"
+    cursor.execute(f"PRAGMA synchronous={synchronous}")
+    cursor.execute(f"PRAGMA busy_timeout={int(settings.sqlite_busy_timeout_ms)}")
     cursor.execute("PRAGMA temp_store=MEMORY")
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()

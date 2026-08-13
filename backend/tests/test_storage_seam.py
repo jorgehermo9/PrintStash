@@ -12,6 +12,7 @@ from app.core.config import _overlay
 from app.db.models import Model
 from app.db.scopes import live, trashed
 from app.services.storage_backend import (
+    CreationReceipt,
     LocalStorageBackend,
     S3StorageBackend,
     StorageBackend,
@@ -209,6 +210,39 @@ def test_s3_object_info_exposes_remote_etag_and_size() -> None:
     assert info.etag == '"remote-etag"'
 
 
+def test_s3_lifecycle_audit_reports_expiration_covering_managed_prefix() -> None:
+    class _Client:
+        def get_bucket_lifecycle_configuration(self, **_kwargs):
+            return {
+                "Rules": [
+                    {
+                        "ID": "expire-vault",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": "vault-data/"},
+                        "Expiration": {"Days": 30},
+                    },
+                    {
+                        "ID": "safe-backups",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": "backups/"},
+                        "Expiration": {"Days": 30},
+                    },
+                ]
+            }
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "test-bucket"  # type: ignore[attr-defined]
+
+    assert backend.destructive_lifecycle_findings() == [
+        {
+            "rule_id": "expire-vault",
+            "prefix": "vault-data/",
+            "expiration": {"Days": 30},
+        }
+    ]
+
+
 def test_s3_create_is_conditional_and_rollback_requires_operation_token() -> None:
     import botocore.exceptions
 
@@ -267,6 +301,47 @@ def test_s3_create_is_conditional_and_rollback_requires_operation_token() -> Non
     )
     assert backend.rollback_create(receipt) is False
     assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
+
+
+def test_s3_rollback_deletes_exact_version_and_preserves_same_etag_replacement() -> (
+    None
+):
+    class _Client:
+        versions = {
+            "old": {
+                "ContentLength": 5,
+                "Metadata": {"printstash-create-token": "owned-token"},
+                "ETag": '"same-etag"',
+            },
+            "new": {
+                "ContentLength": 5,
+                "Metadata": {"printstash-create-token": "new-token"},
+                "ETag": '"same-etag"',
+            },
+        }
+
+        def head_object(self, **kwargs):
+            return self.versions[kwargs.get("VersionId", "new")]
+
+        def delete_object(self, **kwargs):
+            del self.versions[kwargs["VersionId"]]
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "vault"  # type: ignore[attr-defined]
+    receipt = CreationReceipt(
+        key="vault-data/files/part.stl",
+        size=5,
+        token="owned-token",
+        backend="s3",
+        namespace="vault/vault-data/",
+        etag='"same-etag"',
+        version_id="old",
+    )
+
+    assert backend.rollback_create(receipt) is True
+    assert "old" not in backend._client.versions  # type: ignore[attr-defined]
+    assert "new" in backend._client.versions  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

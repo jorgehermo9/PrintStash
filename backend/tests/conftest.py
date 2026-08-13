@@ -34,7 +34,9 @@ for _var, _path in (
 _db_dir = _TEST_STORAGE_ROOT / "db"
 _db_dir.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("VAULT_DB_URL", f"sqlite:///{_db_dir / 'printstash.sqlite'}")
-os.environ.setdefault("VAULT_SECRETS_KEY_FILE", str(_db_dir / ".printstash-secrets-key"))
+os.environ.setdefault(
+    "VAULT_SECRETS_KEY_FILE", str(_db_dir / ".printstash-secrets-key")
+)
 
 from app.core.config import _overlay, settings  # noqa: E402
 from app.db.session import (  # noqa: E402
@@ -85,7 +87,9 @@ _test_factory = SQLiteSessionFactory(_test_engine)
 # ``_use_threaded_db`` autouse fixture) instead of it being the suite-wide
 # default, since NullPool's real per-checkout connections add contention
 # under the full suite's much higher, non-threaded concurrency.
-THREADED_DB_URL = "sqlite:///file:printstash_threaded_test?mode=memory&cache=shared&uri=true"
+THREADED_DB_URL = (
+    "sqlite:///file:printstash_threaded_test?mode=memory&cache=shared&uri=true"
+)
 _threaded_engine = create_engine(
     THREADED_DB_URL,
     connect_args={"check_same_thread": False, "uri": True},
@@ -109,6 +113,8 @@ _init_test_db(_threaded_engine)
 
 
 _TRUNCATE_TABLES_ORDER = [
+    "storage_delete_intents",
+    "staging_leases",
     "owned_storage_objects",
     "vault_audit_findings",
     "vault_audit_runs",

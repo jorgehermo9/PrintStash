@@ -33,6 +33,7 @@ def record_creation(
         existing.token = receipt.token
         existing.size_bytes = receipt.size
         existing.etag = receipt.etag
+        existing.version_id = receipt.version_id
         existing.device = receipt.device
         existing.inode = receipt.inode
         existing.ctime_ns = receipt.ctime_ns
@@ -46,6 +47,7 @@ def record_creation(
         token=receipt.token,
         size_bytes=receipt.size,
         etag=receipt.etag,
+        version_id=receipt.version_id,
         device=receipt.device,
         inode=receipt.inode,
         ctime_ns=receipt.ctime_ns,
@@ -62,6 +64,7 @@ def _receipt(row: OwnedStorageObject) -> CreationReceipt:
         backend=row.backend,
         namespace=row.namespace,
         etag=row.etag,
+        version_id=row.version_id,
         device=row.device,
         inode=row.inode,
         ctime_ns=row.ctime_ns,
@@ -104,6 +107,7 @@ def replace_owned_bytes(
         row.token = replacement.token
         row.size_bytes = replacement.size
         row.etag = replacement.etag
+        row.version_id = replacement.version_id
         row.device = replacement.device
         row.inode = replacement.inode
         row.ctime_ns = replacement.ctime_ns

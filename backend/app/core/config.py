@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     s3_transition_storage_class: str = "STANDARD_IA"
 
     db_url: str = "sqlite:////data/db/printstash.sqlite"
+    sqlite_synchronous: str = "NORMAL"
+    sqlite_busy_timeout_ms: int = Field(default=30_000, ge=1)
 
     jwt_secret: str = DEFAULT_JWT_SECRET
     # First-run setup credential. When empty, a random process-local token is
@@ -95,6 +97,13 @@ class Settings(BaseSettings):
     cors_origins: str = ""
 
     max_upload_mb: int = Field(default=512, gt=0)
+    portable_manifest_max_mb: int = Field(default=128, gt=0)
+    staging_max_pending: int = Field(default=32, gt=0)
+    staging_max_active_per_user: int = Field(default=4, gt=0)
+    staging_max_gb: int = Field(default=4, gt=0)
+    staging_min_free_gb: int = Field(default=1, ge=0)
+    ingest_worker_count: int = Field(default=2, gt=0)
+    media_worker_timeout_seconds: int = Field(default=180, gt=0)
     log_level: str = "INFO"
 
     # Static ceiling on mesh density for geometry extraction + thumbnail
@@ -165,6 +174,9 @@ class Settings(BaseSettings):
     max_archive_entries: int = Field(default=500, gt=0)
     max_archive_entry_mb: int = Field(default=512, gt=0)
     max_archive_uncompressed_mb: int = Field(default=2048, gt=0)
+    max_archive_central_directory_mb: int = Field(default=32, gt=0)
+    max_archive_depth: int = Field(default=32, gt=0)
+    max_archive_path_bytes: int = Field(default=1024, gt=0)
 
     # Headless-browser fallback for Cloudflare-gated imports (MakerWorld). When
     # enabled, pages that return the bot challenge are re-fetched with Chromium
@@ -201,6 +213,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "max_archive_entry_mb must not exceed max_archive_uncompressed_mb"
             )
+        if self.sqlite_synchronous.upper() not in {"NORMAL", "FULL"}:
+            raise ValueError("sqlite_synchronous must be NORMAL or FULL")
         if (
             self.s3_lifecycle_expiration_days
             and self.s3_lifecycle_transition_days

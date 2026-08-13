@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
 from pathlib import Path
 
@@ -37,6 +38,19 @@ def test_stream_to_path_creates_parent_dirs_and_returns_byte_count(
 
     assert written == len(payload)
     assert dest.read_bytes() == payload
+
+
+def test_stream_to_path_hashes_the_same_single_pass_it_publishes(
+    tmp_path: Path,
+) -> None:
+    payload = b"one-pass-staging" * 1024
+    digest = hashlib.sha256()
+    dest = tmp_path / "staged.bin"
+
+    written = stream_to_path(BytesIO(payload), dest, digest=digest)
+
+    assert written == len(payload)
+    assert digest.hexdigest() == hashlib.sha256(payload).hexdigest()
 
 
 def test_stream_to_path_stops_and_removes_partial_file_at_limit(tmp_path: Path) -> None:

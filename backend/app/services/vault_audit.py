@@ -7,6 +7,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.models import (
@@ -65,7 +66,9 @@ def finding_read(row: VaultAuditFinding) -> VaultAuditFindingRead:
     )
 
 
-def read_run(session: Session, row: VaultAuditRun, *, findings: bool = True) -> VaultAuditRunRead:
+def read_run(
+    session: Session, row: VaultAuditRun, *, findings: bool = True
+) -> VaultAuditRunRead:
     finding_rows = []
     if findings and row.id is not None:
         finding_rows = list(
@@ -81,7 +84,9 @@ def read_run(session: Session, row: VaultAuditRun, *, findings: bool = True) -> 
     )
 
 
-def create_run(session: Session, requested_by: int, mode: VaultAuditMode) -> tuple[VaultAuditRun, bool]:
+def create_run(
+    session: Session, requested_by: int, mode: VaultAuditMode
+) -> tuple[VaultAuditRun, bool]:
     active = session.exec(
         select(VaultAuditRun)
         .where(VaultAuditRun.state.in_(_ACTIVE_STATES))  # type: ignore[attr-defined]
@@ -126,7 +131,9 @@ def request_cancel(session: Session, run_id: int) -> VaultAuditRun | None:
 def reconcile_interrupted_runs() -> int:
     with get_session_factory().scoped_session() as session:
         rows = session.exec(
-            select(VaultAuditRun).where(VaultAuditRun.state == VaultAuditRunState.RUNNING)
+            select(VaultAuditRun).where(
+                VaultAuditRun.state == VaultAuditRunState.RUNNING
+            )
         ).all()
         for row in rows:
             row.state = VaultAuditRunState.FAILED
@@ -186,7 +193,9 @@ def _hash_blob(key: str) -> str:
     return digest.hexdigest()
 
 
-def _check_primary(session: Session, run: VaultAuditRun, blobs: list[OwnedBlob]) -> bool:
+def _check_primary(
+    session: Session, run: VaultAuditRun, blobs: list[OwnedBlob]
+) -> bool:
     backend = get_backend()
     total = max(len(blobs), 1)
     for index, blob in enumerate(blobs):
@@ -215,7 +224,11 @@ def _check_primary(session: Session, run: VaultAuditRun, blobs: list[OwnedBlob])
                     severity=VaultAuditSeverity.CRITICAL,
                     resource_type=blob.resource_type,
                     identifier=name,
-                    details={**details, "expected_size": blob.expected_size, "actual_size": size},
+                    details={
+                        **details,
+                        "expected_size": blob.expected_size,
+                        "actual_size": size,
+                    },
                 )
             if run.mode == VaultAuditMode.FULL and blob.expected_sha256:
                 actual = _hash_blob(blob.key)
@@ -249,11 +262,23 @@ def _check_primary(session: Session, run: VaultAuditRun, blobs: list[OwnedBlob])
 def _check_database(session: Session, run: VaultAuditRun) -> None:
     backend = get_backend()
     run.current_phase = "database"
+    for lifecycle in backend.destructive_lifecycle_findings():
+        _add(
+            session,
+            run,
+            code="managed_storage_lifecycle_expiration",
+            severity=VaultAuditSeverity.CRITICAL,
+            resource_type="storage",
+            identifier=str(lifecycle.get("rule_id", "unnamed")),
+            details=lifecycle,
+        )
     models = session.exec(select(Model).where(live(Model))).all()
     for model in models:
         if _cancelled(session, run):
             return
-        files = session.exec(select(File).where(File.model_id == model.id, live(File))).all()
+        files = session.exec(
+            select(File).where(File.model_id == model.id, live(File))
+        ).all()
         if not files:
             _add(
                 session,
@@ -291,10 +316,30 @@ def _check_database(session: Session, run: VaultAuditRun) -> None:
             )
         metadata_ids = set(
             session.exec(
-                select(Metadata.file_id).where(Metadata.file_id.in_([item.id for item in files]))  # type: ignore[union-attr]
+                select(Metadata.file_id).where(
+                    Metadata.file_id.in_([item.id for item in files])
+                )  # type: ignore[union-attr]
             ).all()
         )
         for item in files:
+            if not item.is_external:
+                direct = backend.direct_path(item.path)
+                outside_managed = (
+                    direct is not None
+                    and not direct.resolve(strict=False).is_relative_to(
+                        Path(settings.data_dir).resolve(strict=False)
+                    )
+                ) or (direct is None and not item.path.startswith("vault-data/files/"))
+                if outside_managed:
+                    _add(
+                        session,
+                        run,
+                        code="managed_storage_namespace_escape",
+                        severity=VaultAuditSeverity.CRITICAL,
+                        resource_type="file",
+                        identifier=item.original_filename,
+                        details={"file_id": item.id},
+                    )
             if item.id not in metadata_ids:
                 _add(
                     session,
@@ -339,12 +384,17 @@ def _check_database(session: Session, run: VaultAuditRun) -> None:
                         severity=VaultAuditSeverity.WARNING,
                         resource_type="model",
                         identifier=model.name,
-                        details={"model_id": model.id, "file_id": model.thumbnail_file_id},
+                        details={
+                            "model_id": model.id,
+                            "file_id": model.thumbnail_file_id,
+                        },
                         repair_action="regenerate_thumbnail",
                     )
 
 
-def _check_external(session: Session, run: VaultAuditRun, blobs: list[OwnedBlob]) -> None:
+def _check_external(
+    session: Session, run: VaultAuditRun, blobs: list[OwnedBlob]
+) -> None:
     for library in session.exec(select(ExternalLibrary)).all():
         root = Path(library.root_path)
         if not root.exists() or not root.is_dir():
@@ -406,7 +456,9 @@ def _check_background_jobs(session: Session, run: VaultAuditRun) -> None:
     pending_imports = session.exec(
         select(InboxItem).where(
             (
-                InboxItem.state.in_((InboxItemState.RESOLVING, InboxItemState.IMPORTING))  # type: ignore[attr-defined]
+                InboxItem.state.in_(
+                    (InboxItemState.RESOLVING, InboxItemState.IMPORTING)
+                )  # type: ignore[attr-defined]
                 & (InboxItem.updated_at < cutoff)
             )
             | (
@@ -422,7 +474,9 @@ def _check_background_jobs(session: Session, run: VaultAuditRun) -> None:
             code="background_job_stuck",
             severity=VaultAuditSeverity.WARNING,
             resource_type="pending_import",
-            identifier=item.display_title or item.source_hostname or f"Pending Import {item.id}",
+            identifier=item.display_title
+            or item.source_hostname
+            or f"Pending Import {item.id}",
             details={"inbox_item_id": item.id, "state": item.state.value},
             repair_action="retry_pending_import",
         )
@@ -486,12 +540,18 @@ def execute_run(run_id: int) -> None:
                         severity=VaultAuditSeverity.WARNING,
                         resource_type=blob.resource_type,
                         identifier=_safe_name(blob),
-                        details={"resource_id": blob.resource_id, "name": _safe_name(blob)},
+                        details={
+                            "resource_id": blob.resource_id,
+                            "name": _safe_name(blob),
+                        },
                     )
             claimed = snapshot.claimed_keys
             for key in sorted(snapshot.discovered_keys - claimed):
                 normalized = key.replace("\\", "/")
-                if "/collection-images/" in normalized or "/document-images/" in normalized:
+                if (
+                    "/collection-images/" in normalized
+                    or "/document-images/" in normalized
+                ):
                     _add(
                         session,
                         run,
@@ -532,7 +592,9 @@ def execute_run(run_id: int) -> None:
                 session.commit()
 
 
-def ignore_finding(session: Session, finding_id: int, user_id: int) -> VaultAuditFinding | None:
+def ignore_finding(
+    session: Session, finding_id: int, user_id: int
+) -> VaultAuditFinding | None:
     row = session.get(VaultAuditFinding, finding_id)
     if row is None:
         return None
@@ -575,23 +637,34 @@ def _reparse_metadata(session: Session, file_id: int) -> bool:
     from app.services.ingestion import _gcode_strategy, _mesh_strategy
 
     row = session.get(File, file_id)
-    if row is None or row.deleted_at is not None or session.exec(
-        select(Metadata).where(Metadata.file_id == file_id)
-    ).first() is not None:
+    if (
+        row is None
+        or row.deleted_at is not None
+        or session.exec(select(Metadata).where(Metadata.file_id == file_id)).first()
+        is not None
+    ):
         return row is not None
     backend = get_backend()
     if not backend.exists(row.path):
         return False
     with backend.local_path(row.path) as path:
-        strategy = _gcode_strategy() if row.file_type == FileType.GCODE else _mesh_strategy(row.file_type)
+        strategy = (
+            _gcode_strategy()
+            if row.file_type == FileType.GCODE
+            else _mesh_strategy(row.file_type)
+        )
         values, _thumbnail = strategy.process(path)
-    fields = {key: value for key, value in values.items() if key in Metadata.model_fields}
+    fields = {
+        key: value for key, value in values.items() if key in Metadata.model_fields
+    }
     session.add(Metadata(file_id=file_id, **fields))
     session.commit()
     return True
 
 
-def repair_finding(session: Session, finding_id: int, user_id: int) -> VaultAuditFinding | None:
+def repair_finding(
+    session: Session, finding_id: int, user_id: int
+) -> VaultAuditFinding | None:
     row = session.get(VaultAuditFinding, finding_id)
     if row is None:
         return None
@@ -600,7 +673,9 @@ def repair_finding(session: Session, finding_id: int, user_id: int) -> VaultAudi
     details = _details(row)
     ok = False
     if row.repair_action == "regenerate_thumbnail":
-        ok = thumbnail_repair.regenerate_model_thumbnail(session, int(details["model_id"]))
+        ok = thumbnail_repair.regenerate_model_thumbnail(
+            session, int(details["model_id"])
+        )
     elif row.repair_action == "restore_recommended_revision":
         ok = _restore_recommended(session, int(details["model_id"]))
     elif row.repair_action == "reparse_metadata":
@@ -612,7 +687,11 @@ def repair_finding(session: Session, finding_id: int, user_id: int) -> VaultAudi
             InboxItemState.RESOLVING,
             InboxItemState.IMPORTING,
         }:
-            item.state = InboxItemState.REVIEW if item.manifest_json != "{}" else InboxItemState.CAPTURED
+            item.state = (
+                InboxItemState.REVIEW
+                if item.manifest_json != "{}"
+                else InboxItemState.CAPTURED
+            )
             item.error_code = None
             item.retryable = True
             item.updated_at = utcnow()

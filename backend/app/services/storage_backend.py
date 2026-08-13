@@ -18,6 +18,16 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes after create/rename/unlink."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _copy_stream_create_only(src: BinaryIO, dest: Path) -> Path:
     """Fully stage and fsync a stream, then publish *dest* atomically/no-replace."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +42,7 @@ def _copy_stream_create_only(src: BinaryIO, dest: Path) -> Path:
             os.link(temp, dest, follow_symlinks=False)
         except FileExistsError as exc:
             raise StorageCollisionError(str(dest)) from exc
+        _fsync_directory(dest.parent)
         return dest
     finally:
         try:
@@ -67,6 +78,7 @@ class CreationReceipt:
     backend: str
     namespace: str
     etag: str | None = None
+    version_id: str | None = None
     device: int | None = None
     inode: int | None = None
     ctime_ns: int | None = None
@@ -83,6 +95,12 @@ class StorageBackend(ABC):
     staged upload into the vault uses ``move_in()``; HTTP handlers deciding
     between file and streaming responses use ``direct_path()``.
     """
+
+    backend_name: str
+
+    def destructive_lifecycle_findings(self) -> list[dict[str, object]]:
+        """Read-only operator policy findings that may expire managed bytes."""
+        return []
 
     @abstractmethod
     def blob_key(self, slug: str, version: int, filename: str) -> str: ...
@@ -147,9 +165,7 @@ class StorageBackend(ABC):
         del src, receipt
         raise NotImplementedError("atomic_replace_not_supported")
 
-    def replace_bytes(
-        self, data: bytes, receipt: CreationReceipt
-    ) -> CreationReceipt:
+    def replace_bytes(self, data: bytes, receipt: CreationReceipt) -> CreationReceipt:
         from io import BytesIO
 
         return self.replace_stream(BytesIO(data), receipt)
@@ -276,6 +292,8 @@ class StorageBackend(ABC):
 
 
 class LocalStorageBackend(StorageBackend):
+    backend_name = "local"
+
     @staticmethod
     def _assert_no_managed_escape(path: Path) -> None:
         """Reject a key lexically inside a managed root that resolves outside it."""
@@ -315,9 +333,7 @@ class LocalStorageBackend(StorageBackend):
         return Path(key)
 
     @staticmethod
-    def _relocated_receipt(
-        receipt: CreationReceipt, path: Path
-    ) -> CreationReceipt:
+    def _relocated_receipt(receipt: CreationReceipt, path: Path) -> CreationReceipt:
         # rename(2) updates ctime on Linux. Device/inode/size still prove that
         # quarantine captured the same object selected by the preflight check.
         current = path.stat(follow_symlinks=False)
@@ -336,17 +352,13 @@ class LocalStorageBackend(StorageBackend):
         return str(settings.thumb_dir / "stl-cache" / f"{sha256}.stl")
 
     def collection_image_key(self, collection_id: int, name: str) -> str:
-        return str(
-            settings.thumb_dir / "collection-images" / str(collection_id) / name
-        )
+        return str(settings.thumb_dir / "collection-images" / str(collection_id) / name)
 
     def document_file_key(self, document_id: int, name: str) -> str:
         return str(settings.data_dir / "documents" / str(document_id) / name)
 
     def document_image_key(self, document_id: int, name: str) -> str:
-        return str(
-            settings.thumb_dir / "document-images" / str(document_id) / name
-        )
+        return str(settings.thumb_dir / "document-images" / str(document_id) / name)
 
     def exists(self, key: str) -> bool:
         return Path(key).exists()
@@ -389,6 +401,7 @@ class LocalStorageBackend(StorageBackend):
             # Dropping the temporary hard link changes ctime/link-count. Capture
             # the fingerprint only after the destination is the sole link.
             temp.unlink()
+            _fsync_directory(dest.parent)
             stat = dest.stat(follow_symlinks=False)
             return CreationReceipt(
                 key=str(dest),
@@ -405,7 +418,9 @@ class LocalStorageBackend(StorageBackend):
             try:
                 temp.unlink(missing_ok=True)
             except OSError:
-                logger.warning("storage create temp cleanup failed", extra={"path": str(temp)})
+                logger.warning(
+                    "storage create temp cleanup failed", extra={"path": str(temp)}
+                )
 
     def _quarantine_owned(self, receipt: CreationReceipt) -> Path | None:
         """Move the current exact inode aside before any unlink or replacement.
@@ -659,6 +674,8 @@ class LocalStorageBackend(StorageBackend):
 
 class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-compatible
     # endpoint; verified against SeaweedFS in the storage-s3 CI job (see docs).
+    backend_name = "s3"
+
     def __init__(self) -> None:
         import boto3
         from botocore.config import Config as BotoConfig
@@ -683,6 +700,39 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         self._bucket = settings.s3_bucket
 
         self._ensure_bucket()
+
+    def destructive_lifecycle_findings(self) -> list[dict[str, object]]:
+        import botocore.exceptions
+
+        try:
+            response = self._client.get_bucket_lifecycle_configuration(
+                Bucket=self._bucket
+            )
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {
+                "404",
+                "NoSuchLifecycleConfiguration",
+                "NoSuchLifecycle",
+            }:
+                return []
+            logger.warning("S3 lifecycle audit failed", exc_info=True)
+            return []
+        managed_prefix = self._prefix()
+        findings: list[dict[str, object]] = []
+        for rule in response.get("Rules", []):
+            if rule.get("Status") != "Enabled" or "Expiration" not in rule:
+                continue
+            filter_value = rule.get("Filter") or {}
+            prefix = str(filter_value.get("Prefix", rule.get("Prefix", "")))
+            if managed_prefix.startswith(prefix) or prefix.startswith(managed_prefix):
+                findings.append(
+                    {
+                        "rule_id": str(rule.get("ID", "unnamed")),
+                        "prefix": prefix,
+                        "expiration": rule["Expiration"],
+                    }
+                )
+        return findings
 
     def _ensure_bucket(self) -> None:
         import botocore.exceptions
@@ -793,20 +843,44 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         import botocore.exceptions
 
         token = uuid.uuid4().hex
+        threshold = int(settings.s3_multipart_threshold_mb) * 1024 * 1024
+        spool = tempfile.SpooledTemporaryFile(max_size=threshold)
+        shutil.copyfileobj(src, spool, length=1024 * 1024)
+        size = spool.tell()
+        spool.seek(0)
         try:
-            response = self._client.put_object(
-                Bucket=self._bucket,
-                Key=key,
-                Body=src,
-                IfNoneMatch="*",
-                Metadata={"printstash-create-token": token},
-            )
+            if size > threshold:
+                try:
+                    response = self._multipart_create(spool, key=key, token=token)
+                except botocore.exceptions.ParamValidationError:
+                    spool.seek(0)
+                    response = self._client.put_object(
+                        Bucket=self._bucket,
+                        Key=key,
+                        Body=spool,
+                        IfNoneMatch="*",
+                        Metadata={"printstash-create-token": token},
+                    )
+            else:
+                response = self._client.put_object(
+                    Bucket=self._bucket,
+                    Key=key,
+                    Body=spool,
+                    IfNoneMatch="*",
+                    Metadata={"printstash-create-token": token},
+                )
         except botocore.exceptions.ClientError as exc:
             code = str(exc.response.get("Error", {}).get("Code", ""))
             status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            if code in {"412", "PreconditionFailed", "ConditionalRequestConflict"} or status in {409, 412}:
+            if code in {
+                "412",
+                "PreconditionFailed",
+                "ConditionalRequestConflict",
+            } or status in {409, 412}:
                 raise StorageCollisionError(key) from exc
             raise
+        finally:
+            spool.close()
         info = self.object_info(key)
         if info is None:
             raise RuntimeError(f"storage create could not verify destination: {key}")
@@ -818,14 +892,81 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
             backend="s3",
             namespace=f"{self._bucket}/{self._prefix()}",
             etag=str(etag) if etag else None,
+            version_id=(
+                str(response["VersionId"]) if response.get("VersionId") else None
+            ),
         )
 
+    def _multipart_create(self, src: BinaryIO, *, key: str, token: str) -> dict:
+        """Publish multipart data create-only, aborting every incomplete upload."""
+        created = self._client.create_multipart_upload(
+            Bucket=self._bucket,
+            Key=key,
+            Metadata={"printstash-create-token": token},
+        )
+        upload_id = created["UploadId"]
+        parts: list[dict[str, object]] = []
+        try:
+            part_number = 1
+            while chunk := src.read(8 * 1024 * 1024):
+                uploaded = self._client.upload_part(
+                    Bucket=self._bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                    PartNumber=part_number,
+                    Body=chunk,
+                )
+                parts.append({"ETag": uploaded["ETag"], "PartNumber": part_number})
+                part_number += 1
+            return self._client.complete_multipart_upload(
+                Bucket=self._bucket,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": parts},
+                IfNoneMatch="*",
+            )
+        except Exception:
+            try:
+                self._client.abort_multipart_upload(
+                    Bucket=self._bucket, Key=key, UploadId=upload_id
+                )
+            except Exception:
+                logger.exception("S3 multipart abort failed", extra={"key": key})
+            raise
+
     def rollback_create(self, receipt: CreationReceipt) -> bool:
+        if not receipt.version_id:
+            if self.object_info(receipt.key) is None:
+                return True
+            logger.warning(
+                "storage delete blocked: S3 object has no immutable version identity",
+                extra={"key": receipt.key},
+            )
+            return False
+        import botocore.exceptions
+
+        try:
+            self._client.head_object(
+                Bucket=self._bucket,
+                Key=receipt.key,
+                VersionId=receipt.version_id,
+            )
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {
+                "404",
+                "NoSuchKey",
+                "NoSuchVersion",
+                "NotFound",
+            }:
+                return True
+            raise
         if not self.creation_matches(receipt):
             return False
-        kwargs = {"Bucket": self._bucket, "Key": receipt.key}
-        if receipt.etag:
-            kwargs["IfMatch"] = receipt.etag
+        kwargs = {
+            "Bucket": self._bucket,
+            "Key": receipt.key,
+            "VersionId": receipt.version_id,
+        }
         self._client.delete_object(**kwargs)
         return True
 
@@ -847,10 +988,12 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
             )
         except botocore.exceptions.ClientError as exc:
             code = str(exc.response.get("Error", {}).get("Code", ""))
-            status_code = exc.response.get("ResponseMetadata", {}).get(
-                "HTTPStatusCode"
-            )
-            if code in {"412", "PreconditionFailed", "ConditionalRequestConflict"} or status_code in {
+            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in {
+                "412",
+                "PreconditionFailed",
+                "ConditionalRequestConflict",
+            } or status_code in {
                 409,
                 412,
             }:
@@ -867,6 +1010,9 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
             backend="s3",
             namespace=receipt.namespace,
             etag=str(etag) if etag else None,
+            version_id=(
+                str(response["VersionId"]) if response.get("VersionId") else None
+            ),
         )
 
     def creation_matches(self, receipt: CreationReceipt) -> bool:
@@ -876,7 +1022,10 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         ):
             return False
         try:
-            response = self._client.head_object(Bucket=self._bucket, Key=receipt.key)
+            kwargs = {"Bucket": self._bucket, "Key": receipt.key}
+            if receipt.version_id:
+                kwargs["VersionId"] = receipt.version_id
+            response = self._client.head_object(**kwargs)
         except Exception:
             raise
         metadata = response.get("Metadata", {})

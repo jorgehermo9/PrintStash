@@ -53,6 +53,26 @@ ingestion_stuck_jobs = Gauge(
     registry=registry,
 )
 
+background_job_depth = Gauge(
+    "printstash_background_job_depth",
+    "Persisted background jobs by state.",
+    labelnames=("state",),
+    registry=registry,
+)
+
+staging_bytes = Gauge(
+    "printstash_staging_bytes",
+    "Bytes protected by active durable staging leases.",
+    registry=registry,
+)
+
+storage_delete_intents = Gauge(
+    "printstash_storage_delete_intents",
+    "Durable storage delete intents by state.",
+    labelnames=("state",),
+    registry=registry,
+)
+
 printer_status = Gauge(
     "printstash_printer_status",
     "Number of configured printers by provider and coarse status.",

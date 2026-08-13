@@ -16,13 +16,15 @@ from __future__ import annotations
 import json
 import os
 import stat
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Literal, Optional
 
 from croniter import croniter
+from sqlalchemy import or_, update
 from sqlmodel import Session, select
 
 from app.core.logging import get_logger
@@ -88,6 +90,7 @@ class _ScanProgressCoalescer:
             self.last_flush_at = current
             return True
         return False
+
 
 FsKind = Literal["local", "network", "unknown"]
 
@@ -345,6 +348,17 @@ def _reindex_changed(
     file_row.source_mtime = mtime
     file_row.uploaded_at = utcnow()
     session.add(file_row)
+
+    md = session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).first()
+    md_fields = {k: v for k, v in meta.items() if k in Metadata.model_fields}
+    if md is None:
+        session.add(Metadata(file_id=file_row.id, **md_fields))
+    else:
+        for k, v in md_fields.items():
+            setattr(md, k, v)
+        session.add(md)
+    # Signature and parsed metadata are one logical observation of the NAS
+    # source. A failed commit leaves both old so the next scan retries parsing.
     session.commit()
     session.refresh(file_row)
 
@@ -356,7 +370,8 @@ def _reindex_changed(
                 thumbnail.to_webp(thumb_bytes), backend.thumbnail_key(file_row.id)
             )
             record_creation(session, receipt, object_kind="thumbnail")
-        except StorageCollisionError:
+            session.commit()
+        except (StorageCollisionError, ValueError):
             # Existing thumbnails are never replaced without a separate,
             # receipt-validated replacement primitive. Metadata reindexing can
             # still succeed; preserving a stale derived image is safe.
@@ -365,15 +380,6 @@ def _reindex_changed(
                 file_row.id,
             )
 
-    md = session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).first()
-    md_fields = {k: v for k, v in meta.items() if k in Metadata.model_fields}
-    if md is None:
-        session.add(Metadata(file_id=file_row.id, **md_fields))
-    else:
-        for k, v in md_fields.items():
-            setattr(md, k, v)
-        session.add(md)
-    session.commit()
     upsert_detected_profiles(session, meta)
     return True
 
@@ -403,10 +409,22 @@ def _finish(
     library: ExternalLibrary,
     status: ExternalLibraryScanStatus,
     summary: ScanSummary,
+    *,
+    claim_token: str,
 ) -> None:
+    session.refresh(library)
+    if library.scan_claim_token != claim_token:
+        logger.warning(
+            "scan[lib=%s] lost claim before terminal update; preserving newer claim",
+            library.id,
+        )
+        return
     library.last_scanned_at = utcnow()
     library.last_scan_status = status
     library.last_scan_summary = json.dumps(summary.as_dict())
+    library.scan_claim_token = None
+    library.scan_claim_expires_at = None
+    library.scan_job_id = None
     library.updated_at = utcnow()
     session.add(library)
     session.commit()
@@ -425,6 +443,34 @@ def scan_library(
 
     summary = ScanSummary()
     with session_factory.scoped_session() as session:
+        claim_token = uuid.uuid4().hex
+        now = utcnow()
+        claimed = session.execute(
+            update(ExternalLibrary)
+            .where(
+                ExternalLibrary.id == library_id,
+                or_(
+                    ExternalLibrary.scan_claim_token == None,  # noqa: E711
+                    ExternalLibrary.scan_claim_expires_at <= now,
+                ),
+            )
+            .values(
+                scan_claim_token=claim_token,
+                scan_claim_expires_at=now + timedelta(hours=1),
+                scan_job_id=job_id,
+            )
+            .returning(ExternalLibrary.id)
+        ).scalar_one_or_none()
+        session.commit()
+        if claimed is None:
+            current = session.get(ExternalLibrary, library_id)
+            result = {
+                "coalesced": True,
+                "job_id": current.scan_job_id if current is not None else None,
+            }
+            if job_id:
+                registry.update(job_id, state="completed", result=result)
+            return result
         library = session.get(ExternalLibrary, library_id)
         if library is None:
             raise ValueError(f"external library {library_id} not found")
@@ -447,7 +493,13 @@ def scan_library(
             if not root.exists() or not root.is_dir() or not os.access(root, os.R_OK):
                 summary.error = "root_path_missing_or_unreadable"
                 summary.aborted = True
-                _finish(session, library, ExternalLibraryScanStatus.ERROR, summary)
+                _finish(
+                    session,
+                    library,
+                    ExternalLibraryScanStatus.ERROR,
+                    summary,
+                    claim_token=claim_token,
+                )
                 logger.warning(
                     "scan[lib=%s] aborted: root %s missing/unreadable",
                     library_id,
@@ -492,7 +544,13 @@ def scan_library(
             if not disk and db_by_path:
                 summary.error = "root_empty_aborted"
                 summary.aborted = True
-                _finish(session, library, ExternalLibraryScanStatus.ERROR, summary)
+                _finish(
+                    session,
+                    library,
+                    ExternalLibraryScanStatus.ERROR,
+                    summary,
+                    claim_token=claim_token,
+                )
                 logger.warning(
                     "scan[lib=%s] aborted: root %s empty but %d indexed files exist",
                     library_id,
@@ -557,7 +615,13 @@ def scan_library(
                 if summary.errors
                 else ExternalLibraryScanStatus.OK
             )
-            _finish(session, library, final_status, summary)
+            _finish(
+                session,
+                library,
+                final_status,
+                summary,
+                claim_token=claim_token,
+            )
             logger.info(
                 "scan[lib=%s] done added=%d updated=%d removed=%d skipped=%d errors=%d",
                 library_id,
@@ -581,7 +645,11 @@ def scan_library(
                     failed=len(summary.errors),
                     retryable=bool(summary.errors),
                     failed_items=[
-                        {"name": item.split(":", 1)[0], "reason": item.split(":", 1)[-1], "retryable": True}
+                        {
+                            "name": item.split(":", 1)[0],
+                            "reason": item.split(":", 1)[-1],
+                            "retryable": True,
+                        }
                         for item in summary.errors
                     ],
                 )
@@ -591,7 +659,13 @@ def scan_library(
             summary.aborted = True
             # _finish stamps last_scanned_at so the scheduler doesn't immediately
             # re-fire the same failing scan; ERROR is terminal so it's due again.
-            _finish(session, library, ExternalLibraryScanStatus.ERROR, summary)
+            _finish(
+                session,
+                library,
+                ExternalLibraryScanStatus.ERROR,
+                summary,
+                claim_token=claim_token,
+            )
             if job_id:
                 registry.update(job_id, state="failed", error=summary.error)
 

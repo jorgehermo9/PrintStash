@@ -158,7 +158,7 @@ export async function downloadLibraryArchive(): Promise<void> {
   document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
 }
 
-export function importLibraryArchive(file: File): Promise<{ created_models: number; created_files: number; skipped_files: number; imported_jobs: number }> {
+export function importLibraryArchive(file: File): Promise<IngestResponse> {
   const form = new FormData(); form.append("file", file);
   return sendForm("/api/v1/models/library-import", form);
 }

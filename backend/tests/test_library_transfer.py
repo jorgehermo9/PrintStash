@@ -191,7 +191,10 @@ def test_library_archive_api_downloads_zip(
     downloaded = tmp_path / "download.zip"
     downloaded.write_bytes(response.content)
     with zipfile.ZipFile(downloaded) as archive:
-        assert json.loads(archive.read("manifest.json"))["format"] == "printstash-library-v1"
+        assert (
+            json.loads(archive.read("manifest.json"))["format"]
+            == "printstash-library-v1"
+        )
 
 
 @pytest.mark.parametrize(
@@ -224,9 +227,10 @@ def _rewrite_manifest(archive_path: Path, mutate) -> Path:
     is what routes ``import_archive`` down the "model not found" branch.
     """
     rewritten = archive_path.with_suffix(".rewritten.zip")
-    with zipfile.ZipFile(archive_path) as src, zipfile.ZipFile(
-        rewritten, "w", compression=zipfile.ZIP_DEFLATED
-    ) as dst:
+    with (
+        zipfile.ZipFile(archive_path) as src,
+        zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_DEFLATED) as dst,
+    ):
         for info in src.infolist():
             data = src.read(info.filename)
             if info.filename == "manifest.json":
@@ -277,9 +281,7 @@ def test_library_import_creates_new_model_star_and_print_job(
         assert result["skipped_files"] == 0
         assert result["imported_jobs"] == 1
 
-        new_model = db_session.exec(
-            select(Model).where(Model.hash == "f" * 64)
-        ).one()
+        new_model = db_session.exec(select(Model).where(Model.hash == "f" * 64)).one()
         assert (
             db_session.exec(
                 select(ModelStar).where(
@@ -308,6 +310,7 @@ def test_library_import_creates_collection_from_manifest_path(
     user, model, _file_row = _seed(db_session, tmp_path)
     archive_path = library_transfer.create_archive(db_session, user)
     try:
+
         def _new_identity_with_collection(manifest: dict) -> None:
             manifest["models"][0]["hash"] = "e" * 64
             manifest["models"][0]["slug"] = "calibration-cube-vases"
@@ -349,7 +352,10 @@ def test_library_import_skips_existing_saved_view_by_name(
 
 
 def test_library_import_rejects_archive_too_large(
-    db_session: Session, auth_headers: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db_session: Session,
+    auth_headers: dict[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user, _, _ = _seed(db_session, tmp_path)
     archive_path = library_transfer.create_archive(db_session, user)
@@ -367,11 +373,86 @@ def test_library_import_rejects_unsafe_archive_path(
     user, _, _ = _seed(db_session, tmp_path)
     malicious = tmp_path / "malicious.zip"
     with zipfile.ZipFile(malicious, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": library_transfer.FORMAT, "models": []}))
+        archive.writestr(
+            "manifest.json",
+            json.dumps({"format": library_transfer.FORMAT, "models": []}),
+        )
         archive.writestr("../../etc/evil.txt", b"pwned")
 
     with pytest.raises(ValueError, match="unsafe_archive_path"):
         library_transfer.import_archive(db_session, malicious, user)
+
+
+def test_library_import_ignores_absolute_manifest_slug(
+    db_session: Session, auth_headers: dict[str, str], tmp_path: Path
+) -> None:
+    user, _, _ = _seed(db_session, tmp_path)
+    archive_path = library_transfer.create_archive(db_session, user)
+    escaped = tmp_path / "outside-vault"
+    try:
+
+        def _absolute_slug(manifest: dict) -> None:
+            manifest["models"][0]["hash"] = "d" * 64
+            manifest["models"][0]["slug"] = str(escaped)
+
+        _rewrite_manifest(archive_path, _absolute_slug)
+        result = library_transfer.import_archive(db_session, archive_path, user)
+
+        assert result["created_files"] == 1
+        assert not escaped.exists()
+        imported = db_session.exec(select(Model).where(Model.hash == "d" * 64)).one()
+        assert imported.slug != str(escaped)
+        artifact = db_session.exec(
+            select(File).where(File.model_id == imported.id)
+        ).one()
+        assert Path(artifact.path).is_relative_to(tmp_path / "files")
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_library_import_rejects_absolute_original_filename_before_writes(
+    db_session: Session, auth_headers: dict[str, str], tmp_path: Path
+) -> None:
+    user, _, _ = _seed(db_session, tmp_path)
+    archive_path = library_transfer.create_archive(db_session, user)
+    escaped = tmp_path / "outside.stl"
+    try:
+
+        def _absolute_filename(manifest: dict) -> None:
+            manifest["models"][0]["hash"] = "c" * 64
+            manifest["models"][0]["artifacts"][0]["original_filename"] = str(escaped)
+
+        _rewrite_manifest(archive_path, _absolute_filename)
+        with pytest.raises(ValueError, match="portable_manifest_invalid"):
+            library_transfer.import_archive(db_session, archive_path, user)
+
+        assert not escaped.exists()
+        assert (
+            db_session.exec(select(Model).where(Model.hash == "c" * 64)).first() is None
+        )
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_library_import_caps_manifest_before_materializing_it(
+    db_session: Session,
+    auth_headers: dict[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user, _, _ = _seed(db_session, tmp_path)
+    archive_path = tmp_path / "large-manifest.zip"
+    manifest = json.dumps(
+        {"format": library_transfer.FORMAT, "models": [], "padding": "x" * 4096}
+    )
+    with zipfile.ZipFile(
+        archive_path, "w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
+        archive.writestr("manifest.json", manifest)
+    monkeypatch.setattr(library_transfer, "MAX_MANIFEST_BYTES", 1024)
+
+    with pytest.raises(ValueError, match="portable_manifest_invalid"):
+        library_transfer.import_archive(db_session, archive_path, user)
 
 
 def test_library_import_rejects_missing_manifest(
@@ -382,7 +463,7 @@ def test_library_import_rejects_missing_manifest(
     with zipfile.ZipFile(no_manifest, "w") as archive:
         archive.writestr("readme.txt", b"nothing to see here")
 
-    with pytest.raises(ValueError, match="invalid_manifest"):
+    with pytest.raises(ValueError, match="portable_manifest_invalid"):
         library_transfer.import_archive(db_session, no_manifest, user)
 
 
@@ -392,7 +473,10 @@ def test_library_import_rejects_wrong_format(
     user, _, _ = _seed(db_session, tmp_path)
     wrong_format = tmp_path / "wrong-format.zip"
     with zipfile.ZipFile(wrong_format, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": "some-other-format-v9", "models": []}))
+        archive.writestr(
+            "manifest.json",
+            json.dumps({"format": "some-other-format-v9", "models": []}),
+        )
 
-    with pytest.raises(ValueError, match="unsupported_archive_format"):
+    with pytest.raises(ValueError, match="portable_manifest_invalid"):
         library_transfer.import_archive(db_session, wrong_format, user)

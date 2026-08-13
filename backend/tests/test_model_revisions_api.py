@@ -1347,8 +1347,11 @@ def test_library_archive_export_and_import_round_trip(
             "file": ("printstash-library-v1.zip", export.content, "application/zip")
         },
     )
-    assert import_resp.status_code == 200
-    assert "created_models" in import_resp.json() or import_resp.json() != {}
+    assert import_resp.status_code == 202
+    imported_job = client.get(
+        f"/api/v1/ingest/jobs/{import_resp.json()['job_id']}", headers=auth_headers
+    )
+    assert imported_job.json()["state"] == "completed"
 
 
 def test_library_import_rejects_non_zip(

@@ -12,13 +12,16 @@ from pathlib import Path
 
 import pytest
 
+from app.services import thumbnail
 from app.services.mesh_processing import _PNG_MAGIC, extract_embedded_3mf_thumbnail
 
 _PNG_SMALL = _PNG_MAGIC + b"small"
 _PNG_BIG = _PNG_MAGIC + b"x" * 500
 
 
-def _make_3mf(tmp_path: Path, entries: dict[str, bytes], *, suffix: str = ".3mf") -> Path:
+def _make_3mf(
+    tmp_path: Path, entries: dict[str, bytes], *, suffix: str = ".3mf"
+) -> Path:
     path = tmp_path / f"model{suffix}"
     with zipfile.ZipFile(path, "w") as zf:
         for name, data in entries.items():
@@ -64,3 +67,26 @@ def test_returns_none_for_corrupt_archive(tmp_path: Path) -> None:
 def test_returns_none_when_no_png_present(tmp_path: Path) -> None:
     p = _make_3mf(tmp_path, {"3D/model.model": b"<xml/>"})
     assert extract_embedded_3mf_thumbnail(p) is None
+
+
+def test_invalid_thumbnail_is_never_returned_as_raw_storage_payload() -> None:
+    with pytest.raises(ValueError, match="thumbnail_too_large"):
+        thumbnail.to_webp(b"not-an-image")
+
+
+def test_rejects_thumbnail_declared_over_limit_without_reading_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = _make_3mf(tmp_path, {"Metadata/thumbnail.png": _PNG_BIG})
+    monkeypatch.setattr("app.services.mesh_processing._MAX_3MF_THUMBNAIL_BYTES", 64)
+
+    original_read = zipfile.ZipFile.read
+
+    def _never_read(self, *args, **kwargs):
+        raise AssertionError("oversized preview must not be materialized")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", _never_read)
+    try:
+        assert extract_embedded_3mf_thumbnail(p) is None
+    finally:
+        monkeypatch.setattr(zipfile.ZipFile, "read", original_read)

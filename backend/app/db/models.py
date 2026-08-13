@@ -310,10 +310,15 @@ class File(SQLModel, table=True):
         default=None, foreign_key="external_libraries.id", index=True
     )
     source_mtime: Optional[float] = None
+    ingestion_key: Optional[str] = Field(
+        default=None, max_length=64, unique=True, index=True
+    )
+    thumbnail_path: Optional[str] = Field(default=None, max_length=2048)
 
     uploaded_at: datetime = Field(default_factory=utcnow, index=True)
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
 
     model: Optional["Model"] = Relationship(
         back_populates="files",
@@ -353,6 +358,7 @@ class Collection(SQLModel, table=True):
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
@@ -461,6 +467,7 @@ class Model(SQLModel, table=True):
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
@@ -512,6 +519,7 @@ class Document(SQLModel, table=True):
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
@@ -831,6 +839,7 @@ class OwnedStorageObject(SQLModel, table=True):
     token: str = Field(max_length=64)
     size_bytes: int
     etag: Optional[str] = Field(default=None, max_length=255)
+    version_id: Optional[str] = Field(default=None, max_length=1024)
     device: Optional[int] = Field(
         default=None, sa_column=Column(BigInteger, nullable=True)
     )
@@ -841,6 +850,49 @@ class OwnedStorageObject(SQLModel, table=True):
         default=None, sa_column=Column(BigInteger, nullable=True)
     )
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class StorageDeleteIntent(SQLModel, table=True):
+    """Durable, immutable authorization to delete one exact owned object."""
+
+    __tablename__ = "storage_delete_intents"
+    __table_args__ = (
+        UniqueConstraint(
+            "backend",
+            "namespace",
+            "key",
+            "token",
+            name="uq_storage_delete_intent_receipt",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    backend: str = Field(max_length=32, index=True)
+    namespace: str = Field(max_length=1024)
+    key: str = Field(max_length=2048)
+    object_kind: str = Field(max_length=64, index=True)
+    token: str = Field(max_length=64)
+    size_bytes: int
+    etag: Optional[str] = Field(default=None, max_length=255)
+    version_id: Optional[str] = Field(default=None, max_length=1024)
+    device: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    inode: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    ctime_ns: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    resource_kind: Optional[str] = Field(default=None, max_length=64, index=True)
+    resource_id: Optional[str] = Field(default=None, max_length=64, index=True)
+    status: str = Field(default="pending", max_length=16, index=True)
+    attempts: int = Field(default=0)
+    next_attempt_at: Optional[datetime] = Field(default=None, index=True)
+    last_error: Optional[str] = Field(default=None, max_length=255)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow)
+    completed_at: Optional[datetime] = None
 
 
 class ExternalLibraryCollectionMode(str, Enum):
@@ -918,6 +970,9 @@ class ExternalLibrary(SQLModel, table=True):
     # JSON blob: {"added": n, "updated": n, "removed": n, "skipped": n,
     #             "errors": [..], "error": "..."}
     last_scan_summary: Optional[str] = Field(default=None, sa_column=Column(Text))
+    scan_claim_token: Optional[str] = Field(default=None, max_length=64, index=True)
+    scan_claim_expires_at: Optional[datetime] = Field(default=None, index=True)
+    scan_job_id: Optional[str] = Field(default=None, max_length=64, index=True)
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -1060,9 +1115,43 @@ class BackgroundJob(SQLModel, table=True):
     status_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     payload_json: Optional[str] = Field(default=None, sa_column=Column(Text))
     replay_safe: bool = Field(default=False, index=True)
+    claim_token: Optional[str] = Field(default=None, max_length=64, index=True)
+    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
+    attempts: int = Field(default=0)
+    next_attempt_at: Optional[datetime] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow, index=True)
     updated_at: datetime = Field(default_factory=utcnow, index=True)
     finished_at: Optional[datetime] = Field(default=None, index=True)
+
+
+class StagingLease(SQLModel, table=True):
+    """Exact durable ownership record for one staged ingestion object."""
+
+    __tablename__ = "staging_leases"
+
+    id: str = Field(primary_key=True, max_length=64)
+    path: str = Field(unique=True, max_length=2048)
+    owner_user_id: Optional[int] = Field(
+        default=None, foreign_key="users.id", index=True
+    )
+    background_job_id: str = Field(
+        foreign_key="background_jobs.id", unique=True, index=True
+    )
+    size_bytes: int
+    sha256: str = Field(max_length=64, index=True)
+    device: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    inode: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    ctime_ns: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    destination_key: Optional[str] = Field(default=None, max_length=2048)
+    receipt_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class VaultAuditRun(SQLModel, table=True):

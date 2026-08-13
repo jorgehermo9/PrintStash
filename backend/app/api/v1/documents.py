@@ -46,6 +46,7 @@ from app.schemas.documents import (
 )
 from app.services import rbac
 from app.services.storage_backend import StorageCollisionError, get_backend
+from app.services.storage_deletion import process_storage_delete_intents
 from app.services.storage_ownership import UnsafeStorageDeleteError, record_creation
 from app.services.trash import hard_delete_document, restore_document
 
@@ -253,6 +254,7 @@ def permanently_delete_document(
             detail="storage_ownership_unverified",
         ) from exc
     session.commit()
+    process_storage_delete_intents()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

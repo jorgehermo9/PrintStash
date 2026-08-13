@@ -251,6 +251,10 @@ class TrashedModelRead(BaseModel):
 class TrashPurgeRead(BaseModel):
     purged_model_ids: List[int] = []
     purged_count: int = 0
+    storage_completed: int = 0
+    storage_pending: int = 0
+    storage_blocked: int = 0
+    resources_blocked: int = 0
 
 
 class ModelBatchFailure(BaseModel):

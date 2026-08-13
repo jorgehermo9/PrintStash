@@ -28,6 +28,7 @@ from app.services import mesh_render, stl_fallback
 logger = get_logger(__name__)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_MAX_3MF_THUMBNAIL_BYTES = 32 * 1024 * 1024
 
 
 class FallbackThumbnail(bytes):
@@ -415,8 +416,21 @@ def extract_embedded_3mf_thumbnail(path: Path) -> Optional[bytes]:
             if not candidates:
                 return None
             best = max(candidates, key=lambda info: info.file_size)
-            data = zf.read(best)
+            if best.file_size > _MAX_3MF_THUMBNAIL_BYTES:
+                logger.warning(
+                    "mesh_processing: embedded 3MF thumbnail exceeds limit",
+                    extra={"entry": best.filename, "size": best.file_size},
+                )
+                return None
+            with zf.open(best) as source:
+                data = source.read(_MAX_3MF_THUMBNAIL_BYTES + 1)
+            if len(data) > _MAX_3MF_THUMBNAIL_BYTES:
+                return None
             if data.startswith(_PNG_MAGIC):
+                if len(data) >= 24 and data[12:16] == b"IHDR":
+                    png_width, png_height = struct.unpack(">II", data[16:24])
+                    if png_width * png_height > 25_000_000:
+                        return None
                 logger.info(
                     "mesh_processing: using embedded 3MF thumbnail %s (%d bytes)",
                     best.filename,

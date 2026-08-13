@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from sqlmodel import Session, select
 
 from app.core.config import _overlay
+from app.core.time import utcnow
 from app.db.models import (
     ExternalLibrary,
     ExternalLibraryCollectionMode,
     ExternalLibraryScanStatus,
     File,
+    Metadata,
     Model,
 )
 from app.db.scopes import live
@@ -96,6 +100,25 @@ def test_rescan_is_idempotent(tmp_path: Path, db_session: Session) -> None:
     assert summary["updated"] == 0
 
 
+def test_scan_coalesces_while_another_claim_is_active(
+    tmp_path: Path, db_session: Session
+) -> None:
+    _configure_storage(tmp_path)
+    nas = tmp_path / "nas"
+    _drop_gcode(nas, "a.gcode")
+    lib = _make_library(db_session, nas)
+    lib.scan_claim_token = "active-claim"
+    lib.scan_claim_expires_at = utcnow() + timedelta(minutes=5)
+    lib.scan_job_id = "existing-job"
+    db_session.add(lib)
+    db_session.commit()
+
+    result = external_library.scan_library(lib.id, job_id="duplicate-job")
+
+    assert result == {"coalesced": True, "job_id": "existing-job"}
+    assert db_session.exec(select(File).where(File.is_external == True)).first() is None  # noqa: E712
+
+
 def test_changed_content_reindexes_same_row(
     tmp_path: Path, db_session: Session
 ) -> None:
@@ -122,6 +145,44 @@ def test_changed_content_reindexes_same_row(
     assert len(after) == 1  # same row, no duplicate / new version
     db_session.refresh(after[0])
     assert after[0].sha256 != old_sha
+
+
+def test_reindex_metadata_failure_does_not_confirm_new_signature(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+    nas = tmp_path / "nas"
+    path = _drop_gcode(nas, "atomic.gcode")
+    lib = _make_library(db_session, nas)
+    external_library.scan_library(lib.id)
+    file_row = db_session.exec(
+        select(File).where(File.original_filename == "atomic.gcode")
+    ).one()
+    old_hash = file_row.sha256
+    old_size = file_row.size_bytes
+    with path.open("ab") as handle:
+        handle.write(b"\n; changed for atomicity test\n")
+    stat = path.stat()
+
+    real_add = db_session.add
+
+    def fail_metadata_add(instance, *args, **kwargs):
+        if isinstance(instance, Metadata):
+            raise RuntimeError("metadata_write_failed")
+        return real_add(instance, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "add", fail_metadata_add)
+    with pytest.raises(RuntimeError, match="metadata_write_failed"):
+        external_library._reindex_changed(
+            db_session, file_row, path, stat.st_size, stat.st_mtime
+        )
+    db_session.rollback()
+    db_session.refresh(file_row)
+
+    assert file_row.sha256 == old_hash
+    assert file_row.size_bytes == old_size
 
 
 def test_removed_file_is_trashed_and_model_soft_deleted(

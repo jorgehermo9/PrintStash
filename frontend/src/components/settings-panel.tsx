@@ -550,7 +550,7 @@ export function SettingsPanel() {
     setArchiveBusy("import");
     try {
       const result = await importLibraryArchive(file);
-      toast.success(`Imported ${result.created_models} models and ${result.created_files} artifacts`);
+      toast.success(`Library import queued (${result.job_id.slice(0, 8)}). Follow it in activity.`);
     } catch (e) { toast.error(e); }
     finally { setArchiveBusy(null); }
   }
