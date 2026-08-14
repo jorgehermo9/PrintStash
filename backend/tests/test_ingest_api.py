@@ -652,6 +652,8 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
+    from PIL import Image
+
     _configure_storage(tmp_path)
 
     payload = _completed_job(
@@ -665,7 +667,11 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
     )
     file_id = payload["file_id"]
     model_id = payload["model_id"]
-    replacement = PNG_MAGIC + b"forced-thumbnail"
+    replacement_buffer = io.BytesIO()
+    Image.new("RGB", (12, 10), (220, 30, 20)).save(
+        replacement_buffer, format="PNG"
+    )
+    replacement = replacement_buffer.getvalue()
 
     monkeypatch.setattr(
         "app.services.mesh_processing.render_thumbnail",
@@ -683,11 +689,16 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
     assert job.status_code == 200, job.text
     payload = job.json()
     assert payload["state"] == "completed", payload
+    assert payload["completion"] == "complete"
+    assert payload["thumbnail_status"] == "generated"
+    assert payload["succeeded"] == 1
     assert payload["result"]["rebuilt"] == [model_id]
 
     thumbnail = client.get(f"/api/v1/files/{file_id}/thumbnail", headers=auth_headers)
     assert thumbnail.status_code == 200, thumbnail.text
-    assert thumbnail.content == replacement
+    assert thumbnail.content.startswith(WEBP_MAGIC)
+    with Image.open(io.BytesIO(thumbnail.content)) as refreshed:
+        assert refreshed.convert("RGB").getpixel((0, 0)) == (220, 30, 20)
 
 
 # --------------------------------------------------------------------------- #

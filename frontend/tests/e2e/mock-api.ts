@@ -198,11 +198,13 @@ const modelList = [
 const state = {
   externalLibrariesEnabled: false,
   ingestJobQueued: false,
+  thumbnailRebuildQueued: false,
 };
 
 export function resetMockApiState(): void {
   state.externalLibrariesEnabled = false;
   state.ingestJobQueued = false;
+  state.thumbnailRebuildQueued = false;
 }
 
 export function setExternalLibrariesEnabled(value: boolean): void {
@@ -233,6 +235,7 @@ function vaultConfig() {
     has_backup_s3: false,
     auto_mark_known_good: true,
     external_libraries_enabled: state.externalLibrariesEnabled,
+    model_thumbnail_width: 640,
   };
 }
 
@@ -567,6 +570,17 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     drainRequest(req, () => {
       state.ingestJobQueued = true;
       sendJson(res, { job_id: "gcode-job-1", state: "pending", message: "ingestion queued" }, 202);
+    });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/v1/files/thumbnails/rebuild") {
+    drainRequest(req, () => {
+      state.thumbnailRebuildQueued = true;
+      sendJson(
+        res,
+        { job_id: "thumbnail-job-1", state: "pending", message: "thumbnail rebuild queued" },
+        202,
+      );
     });
     return;
   }

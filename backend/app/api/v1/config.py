@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,6 +46,7 @@ class VaultConfigRead(BaseModel):
     auto_mark_known_good: bool = True
     external_libraries_enabled: bool = False
     currency: str = "USD"
+    model_thumbnail_width: int = 640
     oidc_enabled: bool = False
     oidc_issuer_url: str = ""
     oidc_client_id: str = ""
@@ -65,6 +66,7 @@ class VaultConfigUpdate(BaseModel):
     auto_mark_known_good: Optional[bool] = None
     external_libraries_enabled: Optional[bool] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    model_thumbnail_width: Optional[Literal[320, 640, 1280]] = None
     oidc_enabled: Optional[bool] = None
     oidc_issuer_url: Optional[str] = Field(default=None, max_length=512)
     oidc_client_id: Optional[str] = Field(default=None, max_length=255)
@@ -333,6 +335,7 @@ def update_config(
         s3_secret_key=body.s3_secret_key,
         backup_retention_days=body.backup_retention_days,
         trash_retention_days=body.trash_retention_days,
+        model_thumbnail_width=body.model_thumbnail_width,
         backup_s3_bucket=body.backup_s3_bucket,
         backup_s3_endpoint_url=body.backup_s3_endpoint_url,
         backup_s3_region=body.backup_s3_region,

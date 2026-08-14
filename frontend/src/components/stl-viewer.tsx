@@ -8,6 +8,11 @@ import { STLLoader } from "three-stdlib";
 import { AlertTriangle, Loader2 } from "lucide-react";
 
 import { authHeaders } from "@/lib/api/request";
+import {
+  previewPixelRatio,
+  usePreviewPreferences,
+  type ScreenshotScale,
+} from "@/lib/preview-preferences";
 
 export type ViewerDisplayMode = "solid" | "xray" | "wireframe";
 
@@ -102,9 +107,11 @@ function Scene({
   displayMode,
   showGrid,
   screenshotName,
+  screenshotScale,
 }: Required<Omit<STLViewerProps, "onControlsReady">> & {
   onControlsReady?: (api: STLViewerControls) => void;
   onLoadedChange?: (loaded: boolean) => void;
+  screenshotScale: ScreenshotScale;
 }) {
   const orbitRef = useRef<any>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
@@ -162,8 +169,24 @@ function Scene({
       orbitRef.current?.update();
     },
     screenshot: () => {
-      gl.render(scene, camera);
-      const dataUrl = gl.domElement.toDataURL("image/png");
+      const previousPixelRatio = gl.getPixelRatio();
+      const renderSize = gl.getSize(new THREE.Vector2());
+      const maxDimension = Math.max(renderSize.x, renderSize.y, 1);
+      const targetPixelRatio = Math.max(
+        1,
+        Math.min(screenshotScale, gl.capabilities.maxTextureSize / maxDimension),
+      );
+      let dataUrl: string;
+      try {
+        gl.setPixelRatio(targetPixelRatio);
+        gl.setSize(renderSize.x, renderSize.y, false);
+        gl.render(scene, camera);
+        dataUrl = gl.domElement.toDataURL("image/png");
+      } finally {
+        gl.setPixelRatio(previousPixelRatio);
+        gl.setSize(renderSize.x, renderSize.y, false);
+        gl.render(scene, camera);
+      }
       const link = document.createElement("a");
       link.href = dataUrl;
       link.download = `${screenshotName || "model"}.png`;
@@ -255,6 +278,7 @@ export function STLViewer({
   screenshotName = "model",
 }: STLViewerProps) {
   const [meshLoaded, setMeshLoaded] = useState(false);
+  const previewPreferences = usePreviewPreferences();
 
   useEffect(() => {
     setMeshLoaded(false);
@@ -263,7 +287,11 @@ export function STLViewer({
   return (
     <div className="relative h-full w-full">
       <MeshErrorBoundary>
-        <Canvas className="h-full w-full" gl={{ preserveDrawingBuffer: true }}>
+        <Canvas
+          className="h-full w-full"
+          dpr={previewPixelRatio(previewPreferences.previewQuality)}
+          gl={{ preserveDrawingBuffer: true }}
+        >
           <Scene
             url={url}
             onControlsReady={onControlsReady}
@@ -271,6 +299,7 @@ export function STLViewer({
             displayMode={displayMode}
             showGrid={showGrid}
             screenshotName={screenshotName}
+            screenshotScale={previewPreferences.screenshotScale}
           />
         </Canvas>
         {/* Overlay while the mesh downloads/parses — the canvas mounts

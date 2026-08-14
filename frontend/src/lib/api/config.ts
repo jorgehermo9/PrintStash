@@ -10,6 +10,7 @@ import {
   SetupStatus,
   VaultConfigRead,
   VaultConfigUpdate,
+  IngestResponse,
 } from "@/types";
 
 export function getSetupStatus(): Promise<SetupStatus> {
@@ -45,6 +46,14 @@ export function getLatestRelease(refresh = false): Promise<ReleaseStatus> {
 
 export function updateVaultConfig(body: VaultConfigUpdate): Promise<VaultConfigRead> {
   return sendJson<VaultConfigRead>("/api/v1/config", "PUT", body);
+}
+
+export function rebuildModelThumbnails(): Promise<IngestResponse> {
+  return sendJson<IngestResponse>(
+    "/api/v1/files/thumbnails/rebuild?force=true",
+    "POST",
+    {},
+  );
 }
 
 export function getMakerWorldStatus(): Promise<MakerWorldStatus> {

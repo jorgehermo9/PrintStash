@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     # on tiny containers; raise it for marginally less Python-loop overhead.
     mesh_render_face_chunk_size: int = Field(default=200_000, gt=0)
 
+    # Width of generated Model preview images. Height keeps the renderer's 4:3
+    # aspect ratio. The Settings UI offers bounded presets so higher fidelity is
+    # an explicit CPU/RAM/storage tradeoff on self-hosted machines.
+    model_thumbnail_width: int = Field(default=640, ge=320, le=1280)
+
     # For large 3MF files, prefer the slicer-embedded preview before handing the
     # archive to trimesh, whose XML loader is the dominant memory cost. When on
     # (default), a 3MF whose estimate exceeds the adaptive cap uses its embedded

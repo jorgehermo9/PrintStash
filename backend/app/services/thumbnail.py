@@ -10,6 +10,7 @@ import warnings
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.services import bgcode
 
@@ -43,7 +44,8 @@ def to_webp(data: bytes) -> bytes:
                 img.load()
                 if img.mode not in ("RGB", "RGBA"):
                     img = img.convert("RGBA")
-                img.thumbnail((2048, 2048))
+                width = int(settings.model_thumbnail_width)
+                img.thumbnail((width, round(width * 3 / 4)))
                 buf = io.BytesIO()
                 img.save(buf, format="WEBP", lossless=True, exact=True, method=6)
                 return buf.getvalue()

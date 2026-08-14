@@ -449,8 +449,8 @@ def extract_embedded_3mf_thumbnail(path: Path) -> Optional[bytes]:
 def analyze_mesh(
     path: Path,
     *,
-    width: int = 640,
-    height: int = 480,
+    width: int | None = None,
+    height: int | None = None,
     report: Callable[[str], None] | None = None,
 ) -> Tuple[Dict[str, Optional[float]], Optional[bytes]]:
     """Extract geometry and render a thumbnail with a single mesh load.
@@ -458,6 +458,9 @@ def analyze_mesh(
     Returns ``(geometry_dict, png_bytes_or_None)``. *report* receives progress
     labels as the stages run (see ingestion progress hints).
     """
+
+    width = int(width or settings.model_thumbnail_width)
+    height = int(height or round(width * 3 / 4))
 
     def _report(label: str) -> None:
         if report is not None:
@@ -554,9 +557,11 @@ def extract_geometry(path: Path) -> Dict[str, Optional[float]]:
 
 
 def render_thumbnail(
-    path: Path, width: int = 640, height: int = 480
+    path: Path, width: int | None = None, height: int | None = None
 ) -> Optional[bytes]:
     """Render a PNG thumbnail of *path*. Returns PNG bytes or None on failure."""
+    width = int(width or settings.model_thumbnail_width)
+    height = int(height or round(width * 3 / 4))
     cap = settings.mesh_max_render_triangles
     over_cap = _exceeds_cap(path)
     with _render_semaphore():

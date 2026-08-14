@@ -49,6 +49,32 @@ def test_currency_rejects_bad_length(
     assert resp.status_code == 422
 
 
+def test_model_thumbnail_quality_round_trips_and_rejects_unknown_presets(
+    client: TestClient, auth_headers: dict[str, str], tmp_path: Path
+) -> None:
+    _configure_storage(tmp_path)
+    response = client.put(
+        "/api/v1/config",
+        json={"model_thumbnail_width": 1280},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["model_thumbnail_width"] == 1280
+    assert (
+        client.get("/api/v1/config", headers=auth_headers).json()[
+            "model_thumbnail_width"
+        ]
+        == 1280
+    )
+
+    invalid = client.put(
+        "/api/v1/config",
+        json={"model_thumbnail_width": 900},
+        headers=auth_headers,
+    )
+    assert invalid.status_code == 422
+
+
 def test_update_rejects_invalid_storage_backend(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:

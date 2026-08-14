@@ -102,6 +102,7 @@ backend/
 | `VAULT_JWT_SECRET` | Signing key for auth tokens | anything random |
 | `VAULT_ACCESS_TOKEN_EXPIRE_MINUTES` | Token lifetime | `60` |
 | `VAULT_MAX_UPLOAD_MB` | Upload size limit | `512` |
+| `VAULT_MODEL_THUMBNAIL_WIDTH` | Generated Model preview width (320–1280; Settings offers 320/640/1280 presets) | `640` |
 | `VAULT_LOG_LEVEL` | Python log level | `INFO` |
 
 > The first admin user is created via the web-based first-run wizard at

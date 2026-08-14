@@ -7,11 +7,13 @@ where the PNG lives, validate the magic bytes, and never crash on a junk file.
 
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path
 
 import pytest
 
+from app.core.config import _overlay
 from app.services import thumbnail
 from app.services.mesh_processing import _PNG_MAGIC, extract_embedded_3mf_thumbnail
 
@@ -72,6 +74,19 @@ def test_returns_none_when_no_png_present(tmp_path: Path) -> None:
 def test_invalid_thumbnail_is_never_returned_as_raw_storage_payload() -> None:
     with pytest.raises(ValueError, match="thumbnail_too_large"):
         thumbnail.to_webp(b"not-an-image")
+
+
+def test_webp_conversion_honours_configured_model_preview_size(monkeypatch) -> None:
+    from PIL import Image
+
+    source = io.BytesIO()
+    Image.new("RGB", (800, 600), "white").save(source, format="PNG")
+    monkeypatch.setitem(_overlay, "model_thumbnail_width", 320)
+
+    encoded = thumbnail.to_webp(source.getvalue())
+
+    with Image.open(io.BytesIO(encoded)) as result:
+        assert result.size == (320, 240)
 
 
 def test_rejects_thumbnail_declared_over_limit_without_reading_member(

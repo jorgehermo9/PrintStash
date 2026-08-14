@@ -366,6 +366,13 @@ def _run_thumbnail_rebuild(
             if not force:
                 stmt = stmt.where(Model.thumbnail_file_id.is_(None))  # type: ignore[union-attr]
             models = session.exec(stmt).all()
+            registry.update(
+                job_id,
+                stage="thumbnailing",
+                processed=0,
+                total=len(models),
+                total_steps=len(models),
+            )
 
             rebuilt: list[int] = []
             skipped: list[int] = []
@@ -379,6 +386,9 @@ def _run_thumbnail_rebuild(
                     total_steps=len(models),
                     label=f"rendering model {m.id}",
                     progress=index / len(models) * 100,
+                    stage="thumbnailing",
+                    processed=index,
+                    total=len(models),
                 )
                 mesh_file = session.exec(
                     select(File)
@@ -410,6 +420,21 @@ def _run_thumbnail_rebuild(
             registry.update(
                 job_id,
                 state="completed",
+                stage="completed",
+                processed=len(models),
+                total=len(models),
+                succeeded=len(rebuilt),
+                skipped=len(skipped),
+                failed=len(failed),
+                completion="partial" if failed else "complete",
+                thumbnail_status=(
+                    "failed" if failed else "generated" if rebuilt else "skipped"
+                ),
+                thumbnail_reason=(
+                    "renderer_no_output"
+                    if failed
+                    else "no_mesh" if skipped and not rebuilt else None
+                ),
                 result={
                     "scanned": len(models),
                     "rebuilt": rebuilt,

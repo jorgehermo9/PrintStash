@@ -6,6 +6,10 @@ import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import { AlertTriangle, Layers, Loader2 } from "lucide-react";
 import { authHeaders, getUrl } from "@/lib/api/request";
+import {
+  previewPixelRatio,
+  usePreviewPreferences,
+} from "@/lib/preview-preferences";
 
 // ---- Types ----
 
@@ -336,6 +340,7 @@ export interface GcodeViewerProps {
 }
 
 export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
+  const previewPreferences = usePreviewPreferences();
   const [data, setData] = useState<ToolpathData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -402,7 +407,11 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
   return (
     <div className="relative h-full w-full">
       <GcodeErrorBoundary>
-        <Canvas className="h-full w-full" gl={{ preserveDrawingBuffer: true }}>
+        <Canvas
+          className="h-full w-full"
+          dpr={previewPixelRatio(previewPreferences.previewQuality)}
+          gl={{ preserveDrawingBuffer: true }}
+        >
           <GcodeScene
             data={data}
             currentLayer={currentLayer}

@@ -775,6 +775,10 @@ class SystemConfig(SQLModel, table=True):
     # cost). ``None`` falls back to the default "USD".
     currency: Optional[str] = Field(default=None, max_length=3)
 
+    # Generated Model preview width. Null falls back to
+    # VAULT_MODEL_THUMBNAIL_WIDTH (640 by default).
+    model_thumbnail_width: Optional[int] = Field(default=None)
+
     # Opt-in master switch for the Spoolman filament-inventory integration. Off
     # by default: while disabled the Spoolman API/UI are idle and no consumption
     # is written. Spoolman stays the source of truth for spools and remaining

@@ -6,6 +6,7 @@
 
 ### Added
 
+- Preview settings now control interactive 3D/G-code render sharpness, downloaded screenshot resolution, and generated Model image resolution, with a background action to recreate existing Model previews.
 - Import jobs now publish durable completion metadata, explicit complete/partial outcomes, thumbnail status and stable reasons, restart recovery, monotonic progress, structured metrics/logs, and no-store polling.
 - A memory-bounded streaming STL fallback generates 640×480 WebP thumbnails for oversized or otherwise unrasterizable meshes, including Vault Maintenance repair and Bulk upload flows ([#67](https://github.com/xiao-villamor/PrintStash/issues/67)).
 - Separate `printstash-api` full and `printstash-api-lite` images expose browser, STEP, and thumbnail capabilities through authenticated health details; lite retains NumPy/Pillow/Trimesh thumbnailing without Chromium or OpenCASCADE.
