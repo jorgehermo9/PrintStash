@@ -1621,7 +1621,7 @@ def test_restore_backup_endpoint_conflict_while_job_running(
         registry.update(job_id, state="completed")
 
     assert resp.status_code == 409
-    assert "retry" in resp.json()["detail"]
+    assert resp.json()["detail"] == "1 ingestion job(s) and 0 staging lease(s) active"
 
 
 def test_restore_backup_endpoint_500_on_unexpected_error(

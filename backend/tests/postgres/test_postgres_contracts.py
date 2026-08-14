@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 from typing import Iterator
 
 import pytest
+from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,10 +67,12 @@ def clean_postgres(postgres_engine) -> None:
 
 
 def test_fresh_bootstrap_is_at_head_with_partial_default_index(postgres_engine) -> None:
+    alembic_config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
     with postgres_engine.connect() as connection:
         assert (
             MigrationContext.configure(connection).get_current_revision()
-            == "d8f5b2c9a1e7"
+            == expected_head
         )
 
     index = next(
