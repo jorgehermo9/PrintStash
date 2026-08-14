@@ -1366,7 +1366,7 @@ def test_library_import_rejects_non_zip(
     assert resp.json()["detail"] == "archive_zip_required"
 
 
-def test_library_import_rejects_invalid_archive(
+def test_library_import_reports_invalid_archive_in_job(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     buf = io.BytesIO()
@@ -1378,7 +1378,13 @@ def test_library_import_rejects_invalid_archive(
         headers=auth_headers,
         files={"file": ("bad.zip", buf.getvalue(), "application/zip")},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 202
+    status = client.get(
+        f"/api/v1/ingest/jobs/{resp.json()['job_id']}", headers=auth_headers
+    )
+    assert status.status_code == 200
+    assert status.json()["state"] == "failed"
+    assert status.json()["error"] == "portable_manifest_invalid"
 
 
 def test_star_unknown_model_returns_404(

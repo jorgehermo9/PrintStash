@@ -300,8 +300,20 @@ async def test_resolve_direct_download_archive_manifest(
         importer,
         "inspect_archive",
         lambda _path: [
-            importer.ArchiveEntry(name="a.stl", size_bytes=1, file_type="stl", is_image=False),
-            importer.ArchiveEntry(name="readme.txt", size_bytes=1, file_type=None, is_image=False),
+            importer.ArchiveEntry(
+                entry_id="0:00000000:1",
+                name="a.stl",
+                size_bytes=1,
+                file_type="stl",
+                is_image=False,
+            ),
+            importer.ArchiveEntry(
+                entry_id="1:00000000:1",
+                name="readme.txt",
+                size_bytes=1,
+                file_type=None,
+                is_image=False,
+            ),
         ],
     )
 

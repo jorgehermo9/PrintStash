@@ -563,7 +563,14 @@ def test_trash_can_restore_and_purge_model(
     assert delete.status_code == 204
     purged = client.delete(f"/api/v1/models/{model_id}/purge", headers=auth_headers)
     assert purged.status_code == 200, purged.text
-    assert purged.json() == {"purged_model_ids": [model_id], "purged_count": 1}
+    assert purged.json() == {
+        "purged_model_ids": [model_id],
+        "purged_count": 1,
+        "storage_completed": 2,
+        "storage_pending": 0,
+        "storage_blocked": 0,
+        "resources_blocked": 0,
+    }
     db_session.expire_all()
     assert db_session.get(Model, model_id) is None
     assert db_session.get(File, payload["file_id"]) is None
@@ -638,7 +645,14 @@ def test_purge_expired_trash_uses_retention_setting(
     purged = client.delete("/api/v1/models/trash/expired", headers=auth_headers)
 
     assert purged.status_code == 200, purged.text
-    assert purged.json() == {"purged_model_ids": [old_model_id], "purged_count": 1}
+    assert purged.json() == {
+        "purged_model_ids": [old_model_id],
+        "purged_count": 1,
+        "storage_completed": 1,
+        "storage_pending": 0,
+        "storage_blocked": 0,
+        "resources_blocked": 0,
+    }
     db_session.expire_all()
     assert db_session.get(Model, old_model_id) is None
     assert db_session.get(Model, fresh_model_id) is not None

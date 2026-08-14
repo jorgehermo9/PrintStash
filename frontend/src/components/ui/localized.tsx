@@ -20,6 +20,7 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Compact · 320 × 240", "Compacta · 320 × 240"],
   ["Standard · 640 × 480", "Estándar · 640 × 480"],
   ["High · 1280 × 960", "Alta · 1280 × 960"],
+  ["Custom", "Personalizada"],
   ["Recreate all images", "Recrear todas las imágenes"],
   ["Quality changes apply to new images. Recreate all images to update existing Models in the background.", "Los cambios de calidad se aplican a las imágenes nuevas. Recrea todas las imágenes para actualizar los modelos existentes en segundo plano."],
   ["Preview settings saved for this browser.", "Los ajustes de vista previa se guardaron para este navegador."],

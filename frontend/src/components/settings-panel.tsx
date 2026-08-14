@@ -38,7 +38,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { TabBar } from "@/components/ui/tabs";
 import { inputClasses } from "@/components/ui/input";
-import { Localized } from "@/components/ui/localized";
+import { Localized, translateUiText } from "@/components/ui/localized";
 import { cn } from "@/lib/utils";
 import { useRouter, useSearchParams } from "@/lib/navigation";
 import { CURRENCY_OPTIONS } from "@/lib/currency";
@@ -249,7 +249,7 @@ function SettingsCard({
 
 export function SettingsPanel() {
   const { user } = useAuth();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
   const latestRelease = CHANGELOG[0];
@@ -2165,7 +2165,8 @@ export function SettingsPanel() {
                     modelThumbnailWidth !== 640 &&
                     modelThumbnailWidth !== 1280 && (
                       <option value={modelThumbnailWidth}>
-                        Custom · {modelThumbnailWidth} × {Math.round(modelThumbnailWidth * 3 / 4)}
+                        {translateUiText(locale, "Custom")} · {modelThumbnailWidth} ×{" "}
+                        {Math.round(modelThumbnailWidth * 3 / 4)}
                       </option>
                     )}
                   <option value={320}>Compact · 320 × 240</option>
