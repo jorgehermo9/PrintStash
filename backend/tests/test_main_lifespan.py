@@ -51,6 +51,13 @@ def test_lifespan_starts_background_tasks_and_shuts_down_cleanly(
     _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.main import app
+    from app.services import printer_jobs
+    from app.services.task_queue import LocalTaskQueue
+
+    # The production queue is process-wide and may already be bound to an
+    # event loop used by an earlier scheduler test. Give this real lifespan a
+    # fresh local queue so its scheduler can bind and shut down on this loop.
+    monkeypatch.setattr(printer_jobs, "task_queue", LocalTaskQueue())
 
     user = User(
         username="lifespan-admin",
@@ -421,6 +428,30 @@ async def test_gc_loop_logs_and_continues_past_each_task_failure(
 
 
 @pytest.mark.asyncio
+async def test_gc_loop_never_runs_storage_maintenance_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+    real_sleep = asyncio.sleep
+
+    def gc() -> None:
+        nonlocal called
+        called = True
+
+    async def stop_after_first_tick(_seconds: float) -> None:
+        await real_sleep(0)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(app_main, "gc_soft_deleted", gc)
+    monkeypatch.setattr(app_main.asyncio, "sleep", stop_after_first_tick)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app_main._gc_loop(storage_maintenance_enabled=False)
+
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_external_scan_loop_skips_during_restore_then_logs_scan_failure(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -434,12 +465,20 @@ async def test_external_scan_loop_skips_during_restore_then_logs_scan_failure(
     # Collapse the loop's per-tick 60s sleep so several iterations happen fast.
     monkeypatch.setattr(app_main.asyncio, "sleep", lambda _s: _real_sleep(0))
 
-    calls = {"admission_checks": 0, "scan_calls": 0, "mutation_ends": 0}
+    calls = {
+        "admission_checks": 0,
+        "admitted": 0,
+        "scan_calls": 0,
+        "mutation_ends": 0,
+    }
 
     def _begin_mutating_operation() -> bool:
         calls["admission_checks"] += 1
         # First tick: restore in progress (must skip). Second+ tick: clear.
-        return calls["admission_checks"] > 1
+        admitted = calls["admission_checks"] > 1
+        if admitted:
+            calls["admitted"] += 1
+        return admitted
 
     def _end_mutating_operation() -> None:
         calls["mutation_ends"] += 1
@@ -463,7 +502,9 @@ async def test_external_scan_loop_skips_during_restore_then_logs_scan_failure(
     # Skipped on the first tick (restore in progress): scan must not have run then.
     assert calls["admission_checks"] >= 2
     assert calls["scan_calls"] >= 1
-    assert calls["mutation_ends"] == calls["scan_calls"]
+    # Cancellation may land after admission but before the worker thread starts;
+    # every admitted slot must still be released exactly once.
+    assert calls["mutation_ends"] == calls["admitted"]
     assert any(
         "external library scan tick failed" in r.getMessage() for r in caplog.records
     )

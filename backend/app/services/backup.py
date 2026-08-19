@@ -28,17 +28,29 @@ from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator, ParamSpec, TypeVar
 
+from sqlalchemy.engine import URL
 from sqlalchemy.engine.url import make_url
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, create_engine, select
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import utcnow
-from app.db.models import User
+from app.db.migrate import run_migrations
+from app.db.models import OwnedStorageObject, StagingLease, User
 from app.db.session import get_engine, get_session_factory
 from app.services import audit
 from app.services.jobs import registry
-from app.services.storage_backend import get_backend
+from app.services.storage_backend import (
+    CreationReceipt,
+    LocalStorageBackend,
+    get_backend,
+)
+from app.services.storage_ownership import (
+    delete_owned_key,
+    record_creation,
+    require_owned_key,
+)
+from app.services.storage_paths import canonical_path
 from app.services.storage_utils import ownership_snapshot
 
 logger = get_logger(__name__)
@@ -62,6 +74,10 @@ class RestoreConflictError(Exception):
 
 class DatabaseBackupNotSupportedError(RuntimeError):
     """Raised when the configured database has no integrated snapshot adapter."""
+
+
+class BackupOwnershipError(RuntimeError):
+    """A backup target lacks current operation-level ownership proof."""
 
 
 @dataclass(frozen=True)
@@ -280,7 +296,7 @@ def _backup_sqlite_copy() -> bytes:
 
 
 def _find_blobs(session: Session | None = None) -> list[tuple[str, int]]:
-    """Return ``(key, size_bytes)`` for every vault-owned primary blob.
+    """Return ``(key, size_bytes)`` for every irreplaceable vault-owned blob.
 
     One ``stat_size`` per key doubles as the existence check (it raises when the
     key is gone), and surfacing the size lets ``create_backup`` build the
@@ -292,12 +308,12 @@ def _find_blobs(session: Session | None = None) -> list[tuple[str, int]]:
         with get_session_factory().session() as owned_session:
             return _find_blobs(owned_session)
 
-    keys = sorted(
-        {blob.key for blob in ownership_snapshot(session, discover=False).primary}
-    )
+    snapshot = ownership_snapshot(session, discover=False)
+    keys = sorted({blob.key for blob in [*snapshot.primary, *snapshot.embedded]})
     backend = get_backend()
     out: list[tuple[str, int]] = []
     for key in keys:
+        _validate_restore_key(key)
         # A backup cannot be called complete if a DB-owned blob is absent or
         # unreadable. Surface failure instead of silently shrinking archive.
         out.append((key, backend.stat_size(key)))
@@ -372,31 +388,39 @@ def create_backup() -> BackupMeta:
         }
         manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
 
+        settings.backup_dir.mkdir(parents=True, exist_ok=True)
+        fd, raw_archive_temp = tempfile.mkstemp(
+            prefix=".printstash-backup-build-", dir=settings.backup_dir
+        )
+        archive_temp = Path(raw_archive_temp)
         try:
-            with gzip.open(archive_path, "wb") as gz:
-                with tarfile.open(fileobj=gz, mode="w|") as tar:
-                    man_info = tarfile.TarInfo(name="manifest.json")
-                    man_info.size = len(manifest_bytes)
-                    tar.addfile(man_info, io.BytesIO(manifest_bytes))
+            with os.fdopen(fd, "wb") as archive_file:
+                with gzip.GzipFile(fileobj=archive_file, mode="wb") as gz:
+                    with tarfile.open(fileobj=gz, mode="w|") as tar:
+                        man_info = tarfile.TarInfo(name="manifest.json")
+                        man_info.size = len(manifest_bytes)
+                        tar.addfile(man_info, io.BytesIO(manifest_bytes))
 
-                    # tarfile streams this file; the database is never loaded as
-                    # one in-memory bytes object.
-                    tar.add(db_snapshot, arcname="db.sqlite3", recursive=False)
+                        # tarfile streams this file; the database is never loaded
+                        # as one in-memory bytes object.
+                        tar.add(db_snapshot, arcname="db.sqlite3", recursive=False)
 
-                    for entry in file_entries:
-                        key = str(entry["key"])
-                        arc = str(entry["arc"])
-                        written = _add_file_to_tar(tar, key, arc)
-                        expected = int(entry["size"])
-                        if written != expected:
-                            raise RuntimeError("backup_blob_size_changed")
-                        written_files += 1
+                        for entry in file_entries:
+                            key = str(entry["key"])
+                            arc = str(entry["arc"])
+                            written = _add_file_to_tar(tar, key, arc)
+                            expected = int(entry["size"])
+                            if written != expected:
+                                raise RuntimeError("backup_blob_size_changed")
+                            written_files += 1
+            local_receipt = LocalStorageBackend().move_in(archive_temp, str(archive_path))
         except Exception:
-            archive_path.unlink(missing_ok=True)
+            archive_temp.unlink(missing_ok=True)
             logger.exception("backup %s failed while streaming owned blobs", backup_id)
             raise
 
-    final_size = archive_path.stat().st_size
+    final_size = local_receipt.size
+    backup_receipts = [local_receipt]
 
     logger.info(
         "backup %s created locally: %d files, %.1f MiB",
@@ -410,12 +434,34 @@ def create_backup() -> BackupMeta:
     if s3:  # pragma: no cover — see _get_backup_s3
         try:
             s3_key = _backup_s3_key(archive_name)
-            s3.upload_file(str(archive_path), settings.backup_s3_bucket, s3_key)
+            token = uuid.uuid4().hex
+            with archive_path.open("rb") as source:
+                response = s3.put_object(
+                    Bucket=settings.backup_s3_bucket,
+                    Key=s3_key,
+                    Body=source,
+                    IfNoneMatch="*",
+                    Metadata={"printstash-create-token": token},
+                )
+            backup_receipts.append(
+                CreationReceipt(
+                    key=s3_key,
+                    size=final_size,
+                    token=token,
+                    backend="backup-s3",
+                    namespace=(
+                        f"{settings.backup_s3_bucket}/{_BACKUP_S3_PREFIX}"
+                    ),
+                    etag=str(response.get("ETag")) if response.get("ETag") else None,
+                )
+            )
             logger.info("backup %s uploaded to S3: %s", backup_id, s3_key)
         except Exception:
             logger.warning("backup %s: S3 upload failed", backup_id, exc_info=True)
 
     with get_session_factory().session() as session:
+        for receipt in backup_receipts:
+            record_creation(session, receipt, object_kind="backup")
         audit.record(
             session,
             action="backup.create",
@@ -589,6 +635,49 @@ def get_backup_archive_path(backup_id: str) -> Path:
     return _download_backup_to_local(meta)
 
 
+def _require_backup_archive_owned(meta: BackupMeta) -> OwnedStorageObject:
+    """Require current proof for the archive selected by restore/delete."""
+    with get_session_factory().session() as session:
+        if meta.location == "local":
+            backend = LocalStorageBackend()
+            try:
+                require_owned_key(session, backend, meta.path)
+            except Exception as exc:
+                raise BackupOwnershipError(
+                    "backup_storage_ownership_unverified"
+                ) from exc
+            row = session.exec(
+                select(OwnedStorageObject).where(OwnedStorageObject.key == meta.path)
+            ).first()
+            assert row is not None
+            return row
+
+        s3 = _get_backup_s3()
+        if not s3:
+            raise BackupOwnershipError("backup_storage_ownership_unverified")
+        namespace = f"{settings.backup_s3_bucket}/{_BACKUP_S3_PREFIX}"
+        candidates = session.exec(
+            select(OwnedStorageObject).where(
+                OwnedStorageObject.backend == "backup-s3",
+                OwnedStorageObject.namespace == namespace,
+                OwnedStorageObject.key == meta.path,
+            )
+        ).all()
+        response = s3.head_object(Bucket=settings.backup_s3_bucket, Key=meta.path)
+        for candidate in candidates:
+            if (
+                response.get("Metadata", {}).get("printstash-create-token")
+                == candidate.token
+                and int(response.get("ContentLength", -1)) == candidate.size_bytes
+                and (
+                    not candidate.etag
+                    or str(response.get("ETag", "")) == candidate.etag
+                )
+            ):
+                return candidate
+    raise BackupOwnershipError("backup_storage_ownership_unverified")
+
+
 def _unsafe_member_name(name: str) -> bool:
     path = PurePosixPath(name)
     return path.is_absolute() or ".." in path.parts or not name or "\\" in name
@@ -709,28 +798,70 @@ def delete_backup(backup_id: str) -> bool:
     if meta is None:
         return False
 
-    deleted = False
-
-    # Delete local copy
-    if meta.location == "local":
-        try:
-            Path(meta.path).unlink(missing_ok=True)
-            deleted = True
-        except OSError:
-            logger.exception("backup: failed to delete local %s", backup_id)
-
-    # Delete S3 copy
+    local_key = meta.path if meta.location == "local" else None
     s3 = _get_backup_s3()
-    if s3:  # pragma: no cover — see _get_backup_s3
-        # Look up S3 key from the listing
-        for sm in _list_s3_backups():
-            if sm.id == backup_id:
-                try:
-                    s3.delete_object(Bucket=settings.backup_s3_bucket, Key=sm.path)
-                    deleted = True
-                except Exception:
-                    logger.exception("backup: failed to delete S3 %s", backup_id)
-                break
+    s3_key = next(
+        (candidate.path for candidate in _list_s3_backups() if candidate.id == backup_id),
+        None,
+    )
+
+    deleted = False
+    with get_session_factory().session() as session:
+        local_backend = LocalStorageBackend()
+        if local_key is not None:
+            try:
+                local_backend.verify_destructive_access([local_key])
+                require_owned_key(session, local_backend, local_key)
+            except Exception as exc:
+                raise BackupOwnershipError(
+                    "backup_storage_ownership_unverified"
+                ) from exc
+
+        s3_owned: OwnedStorageObject | None = None
+        if s3 and s3_key:  # pragma: no cover — requires real backup S3
+            namespace = f"{settings.backup_s3_bucket}/{_BACKUP_S3_PREFIX}"
+            candidates = session.exec(
+                select(OwnedStorageObject).where(
+                    OwnedStorageObject.backend == "backup-s3",
+                    OwnedStorageObject.namespace == namespace,
+                    OwnedStorageObject.key == s3_key,
+                )
+            ).all()
+            for candidate in candidates:
+                response = s3.head_object(
+                    Bucket=settings.backup_s3_bucket, Key=s3_key
+                )
+                if (
+                    response.get("Metadata", {}).get("printstash-create-token")
+                    == candidate.token
+                    and int(response.get("ContentLength", -1))
+                    == candidate.size_bytes
+                    and (
+                        not candidate.etag
+                        or str(response.get("ETag", "")) == candidate.etag
+                    )
+                ):
+                    s3_owned = candidate
+                    break
+            if s3_owned is None:
+                raise BackupOwnershipError("backup_storage_ownership_unverified")
+
+        # Every target was preflighted before the first delete. Late failures
+        # leak the uncertain backup and retain its ledger row.
+        if local_key is not None:
+            deleted = delete_owned_key(session, local_backend, local_key) or deleted
+        if s3 and s3_key and s3_owned is not None:  # pragma: no cover
+            try:
+                kwargs = {"Bucket": settings.backup_s3_bucket, "Key": s3_key}
+                if s3_owned.etag:
+                    kwargs["IfMatch"] = s3_owned.etag
+                s3.delete_object(**kwargs)
+            except Exception:
+                logger.exception("backup: failed to delete S3 %s", backup_id)
+            else:
+                session.delete(s3_owned)
+                deleted = True
+        session.commit()
 
     if deleted:
         logger.info("backup %s deleted", backup_id)
@@ -755,11 +886,32 @@ def _download_backup_to_local(meta: BackupMeta) -> Path:
         if not s3:
             raise RuntimeError("backup is in S3 but no S3 client is available")
 
+        owned = _require_backup_archive_owned(meta)
         archive_name = meta.path.rsplit("/", 1)[-1]
         local_path = settings.backup_dir / archive_name
         settings.backup_dir.mkdir(parents=True, exist_ok=True)
 
-        s3.download_file(settings.backup_s3_bucket, meta.path, str(local_path))
+        fd, raw_temp = tempfile.mkstemp(
+            prefix=".printstash-backup-download-", dir=settings.backup_dir
+        )
+        os.close(fd)
+        download_temp = Path(raw_temp)
+        try:
+            kwargs = {"Bucket": settings.backup_s3_bucket, "Key": meta.path}
+            if owned.etag:
+                kwargs["IfMatch"] = owned.etag
+            response = s3.get_object(**kwargs)
+            with download_temp.open("wb") as destination:
+                shutil.copyfileobj(response["Body"], destination)
+            if download_temp.stat().st_size != owned.size_bytes:
+                raise RuntimeError("backup_download_size_mismatch")
+            receipt = LocalStorageBackend().move_in(download_temp, str(local_path))
+        except Exception:
+            download_temp.unlink(missing_ok=True)
+            raise
+        with get_session_factory().session() as session:
+            record_creation(session, receipt, object_kind="backup")
+            session.commit()
         logger.info("backup %s downloaded from S3 to %s", meta.id, local_path)
         return local_path
 
@@ -805,8 +957,7 @@ class _StagedBlob:
 @dataclass(frozen=True)
 class _AppliedBlob:
     key: str
-    existed: bool
-    rollback_path: Path | None
+    receipt: CreationReceipt
 
 
 def _stage_restore_archive(
@@ -849,50 +1000,115 @@ def _stage_restore_archive(
 
 def _write_staged_blob(staged_path: Path, key: str) -> int:
     with staged_path.open("rb") as source:
-        return get_backend().write_stream(source, key)
+        return get_backend().create_stream(source, key).size
 
 
 def _rollback_applied_blobs(applied: list[_AppliedBlob]) -> None:
     backend = get_backend()
     for item in reversed(applied):
         try:
-            if item.existed:
-                assert item.rollback_path is not None
-                with item.rollback_path.open("rb") as source:
-                    backend.write_stream(source, item.key)
-            else:
-                backend.delete(item.key)
+            if not backend.rollback_create(item.receipt):
+                logger.error(
+                    "restore rollback preserved uncertain storage key %s", item.key
+                )
         except Exception:
             logger.exception("restore rollback failed for storage key %s", item.key)
+
+
+def _sync_restored_ownership(
+    database_path: Path, applied: list[_AppliedBlob]
+) -> None:
+    """Replace archived fingerprints with proof from this restore operation."""
+    with sqlite3.connect(database_path) as connection:
+        for item in applied:
+            receipt = item.receipt
+            existing = connection.execute(
+                "SELECT object_kind FROM owned_storage_objects WHERE key = ? LIMIT 1",
+                (item.key,),
+            ).fetchone()
+            object_kind = str(existing[0]) if existing else "restored"
+            # Archived inode/ETag values prove an old object, not the one just
+            # created. Replace them with this operation's current receipt.
+            connection.execute(
+                "DELETE FROM owned_storage_objects WHERE key = ?", (item.key,)
+            )
+            connection.execute(
+                """
+                INSERT INTO owned_storage_objects (
+                    backend, namespace, key, object_kind, token, size_bytes,
+                    etag, device, inode, ctime_ns, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt.backend,
+                    receipt.namespace,
+                    receipt.key,
+                    object_kind,
+                    receipt.token,
+                    receipt.size,
+                    receipt.etag,
+                    receipt.device,
+                    receipt.inode,
+                    receipt.ctime_ns,
+                    utcnow().isoformat(sep=" "),
+                ),
+            )
+        connection.commit()
 
 
 def _apply_staged_blobs(
     blobs: list[_StagedBlob], rollback_dir: Path
 ) -> list[_AppliedBlob]:
+    """Publish a restore only into empty, in-bound destinations.
+
+    Restore used to overwrite every manifest key and then attempt a best-effort
+    rollback. A malicious/stale manifest or remapped root could therefore
+    clobber unrelated bytes. Colliding restores now fail before the first write;
+    operators must restore into dedicated empty storage.
+    """
+    del rollback_dir
     backend = get_backend()
     applied: list[_AppliedBlob] = []
+
+    seen: set[str] = set()
+    for blob in blobs:
+        _validate_restore_key(blob.key)
+        if blob.key in seen:
+            raise RestoreConflictError("restore_duplicate_destination")
+        seen.add(blob.key)
+        if backend.exists(blob.key):
+            raise RestoreConflictError("restore_destination_exists")
+
     try:
-        for index, blob in enumerate(blobs):
-            existed = backend.exists(blob.key)
-            rollback_path = rollback_dir / f"original-{index:08d}" if existed else None
-            if rollback_path is not None:
-                with backend.local_path(blob.key) as current:
-                    shutil.copyfile(current, rollback_path)
-            # Record the target before writing so a partial write is rolled back.
-            applied.append(
-                _AppliedBlob(
-                    key=blob.key,
-                    existed=existed,
-                    rollback_path=rollback_path,
-                )
-            )
-            written = _write_staged_blob(blob.path, blob.key)
-            if written != blob.path.stat().st_size:
+        for blob in blobs:
+            with blob.path.open("rb") as source:
+                receipt = backend.create_stream(source, blob.key)
+            applied.append(_AppliedBlob(key=blob.key, receipt=receipt))
+            if receipt.size != blob.path.stat().st_size:
                 raise RuntimeError("restore_blob_size_mismatch")
     except Exception:
         _rollback_applied_blobs(applied)
         raise
     return applied
+
+
+def _validate_restore_key(key: str) -> None:
+    """Reject manifest destinations outside the active private storage roots."""
+    backend = get_backend()
+    direct = backend.direct_path(key)
+    if direct is None:
+        path = PurePosixPath(key)
+        if path.is_absolute() or ".." in path.parts or not key.startswith("vault-data/"):
+            raise RuntimeError("backup_restore_key_outside_storage")
+        return
+
+    target = canonical_path(direct)
+    roots = (
+        canonical_path(settings.data_dir),
+        canonical_path(settings.thumb_dir),
+    )
+    if not any(target != root and target.is_relative_to(root) for root in roots):
+        raise RuntimeError("backup_restore_key_outside_storage")
 
 
 @_exclusive_backup_operation
@@ -929,8 +1145,15 @@ def restore_backup(backup_id: str) -> dict:
             )
 
         time.sleep(_RESTORE_GRACE_PERIOD_S)
-        running = registry.snapshot_counts()["running"]
-        if running:
+        counts = registry.snapshot_counts()
+        active_jobs = counts["pending"] + counts["running"]
+        with get_session_factory().scoped_session() as lease_session:
+            active_leases = len(
+                lease_session.exec(
+                    select(StagingLease).where(StagingLease.expires_at > utcnow())
+                ).all()
+            )
+        if active_jobs or active_leases:
             with get_session_factory().session() as session:
                 audit.record(
                     session,
@@ -939,11 +1162,13 @@ def restore_backup(backup_id: str) -> dict:
                     diff={
                         "backup_id": backup_id,
                         "reason": "jobs_running",
-                        "running": running,
+                        "running": counts["running"],
+                        "pending": counts["pending"],
+                        "staging_leases": active_leases,
                     },
                 )
             raise RestoreConflictError(
-                f"{running} ingestion job(s) still running; retry once they finish"
+                f"{active_jobs} ingestion job(s) and {active_leases} staging lease(s) active"
             )
 
         try:
@@ -956,10 +1181,20 @@ def restore_backup(backup_id: str) -> dict:
                 database_path, staged_blobs = _stage_restore_archive(
                     archive_path, staging_dir
                 )
+                # Detect replacement/in-place mutation while the archive was
+                # being staged, before any live blob or database mutation.
+                _require_backup_archive_owned(meta)
+                # Upgrade the private staged copy before touching live bytes.
+                # This keeps old backups restorable and guarantees the
+                # ownership ledger exists for this operation's receipts.
+                run_migrations(
+                    str(URL.create("sqlite", database=str(database_path)))
+                )
                 rollback_dir = staging_dir / "rollback"
                 rollback_dir.mkdir()
                 applied = _apply_staged_blobs(staged_blobs, rollback_dir)
                 try:
+                    _sync_restored_ownership(database_path, applied)
                     # Restore the DB last. Until this succeeds, rollback can put
                     # every touched blob back under the still-current database.
                     _restore_database_from_path(database_path)

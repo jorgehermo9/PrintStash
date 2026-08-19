@@ -99,6 +99,10 @@ export interface ModelPrintJobRead {
   printer_id: number | null;
   printer_name: string;
   file_id: number;
+  remote_filename: string;
+  source: string;
+  external_display_name: string | null;
+  artifact_evidence: string;
   gcode_revision_number: number | null;
   revision_label: string | null;
   state: PrintJobState;
@@ -308,12 +312,15 @@ export interface IngestResponse {
 
 export interface IngestJobStatus {
   job_id: string;
+  kind?: string;
   state: "pending" | "running" | "completed" | "failed";
   model_id: number | null;
   file_id: number | null;
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  committed_at?: string | null;
+  updated_at?: string | null;
   // Progress hints (additive; absent on older backends)
   step?: number | null;
   total_steps?: number | null;
@@ -328,7 +335,9 @@ export interface IngestJobStatus {
   deduplicated?: number;
   skipped?: number;
   failed?: number;
-  completion?: "completed" | "completed_with_warnings" | "failed_before_import" | null;
+  completion?: "complete" | "partial" | null;
+  thumbnail_status?: "generated" | "fallback_generated" | "skipped" | "failed" | null;
+  thumbnail_reason?: string | null;
   retryable?: boolean;
   failed_items?: Array<{ name: string; reason: string; retryable: boolean }>;
 }

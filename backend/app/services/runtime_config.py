@@ -74,6 +74,8 @@ def _merge_config_overlay(config: SystemConfig) -> None:
         _overlay["backup_retention_days"] = config.backup_retention_days
     if config.trash_retention_days is not None:
         _overlay["trash_retention_days"] = config.trash_retention_days
+    if config.model_thumbnail_width is not None:
+        _overlay["model_thumbnail_width"] = config.model_thumbnail_width
     _set("backup_s3_bucket", config.backup_s3_bucket)
     _set("backup_s3_endpoint_url", config.backup_s3_endpoint_url)
     _set("backup_s3_region", config.backup_s3_region)
@@ -216,6 +218,7 @@ def update_config(
     oidc_display_name: Optional[str] = None,
     oidc_redirect_uri: Optional[str] = None,
     oidc_allow_insecure_http: Optional[bool] = None,
+    model_thumbnail_width: Optional[int] = None,
     commit: bool = True,
     apply_runtime: bool = True,
 ) -> SystemConfig:
@@ -269,6 +272,7 @@ def update_config(
     _apply_str("s3_secret_key", s3_secret_key)
     _apply_int("backup_retention_days", backup_retention_days)
     _apply_int("trash_retention_days", trash_retention_days)
+    _apply_int("model_thumbnail_width", model_thumbnail_width)
     _apply_str("backup_s3_bucket", backup_s3_bucket)
     _apply_str("backup_s3_endpoint_url", backup_s3_endpoint_url)
     _apply_str("backup_s3_region", backup_s3_region)
@@ -516,6 +520,7 @@ def get_effective_config(session: Session) -> dict:
         "has_s3_secret_key": bool(settings.s3_secret_key),
         "backup_retention_days": int(settings.backup_retention_days),
         "trash_retention_days": int(settings.trash_retention_days),
+        "model_thumbnail_width": int(settings.model_thumbnail_width),
         "backup_s3_bucket": str(settings.backup_s3_bucket),
         "backup_s3_endpoint_url": str(settings.backup_s3_endpoint_url),
         "backup_s3_region": str(settings.backup_s3_region),

@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     s3_transition_storage_class: str = "STANDARD_IA"
 
     db_url: str = "sqlite:////data/db/printstash.sqlite"
+    sqlite_synchronous: str = "NORMAL"
+    sqlite_busy_timeout_ms: int = Field(default=30_000, ge=1)
 
     jwt_secret: str = DEFAULT_JWT_SECRET
     # First-run setup credential. When empty, a random process-local token is
@@ -95,12 +97,23 @@ class Settings(BaseSettings):
     cors_origins: str = ""
 
     max_upload_mb: int = Field(default=512, gt=0)
+    portable_manifest_max_mb: int = Field(default=128, gt=0)
+    staging_max_pending: int = Field(default=32, gt=0)
+    staging_max_active_per_user: int = Field(default=4, gt=0)
+    staging_max_gb: int = Field(default=4, gt=0)
+    staging_min_free_gb: int = Field(default=1, ge=0)
+    fleet_batch_max_quantity: int = Field(default=100, gt=0)
+    ingest_worker_count: int = Field(default=2, gt=0)
+    media_worker_timeout_seconds: int = Field(default=180, gt=0)
+    # Best-effort archive ceiling for files recovered from a Bambu printer's
+    # short-lived FTPS cache. Zero disables automatic external-job capture.
+    bambu_external_capture_max_mb: int = Field(default=256, ge=0)
     log_level: str = "INFO"
 
     # Static ceiling on mesh density for geometry extraction + thumbnail
     # rendering. Loading + rasterising a mesh peaks (measured) at ~0.8–2 GB of RSS
     # per million triangles for STL/PLY/OBJ and ~3–4 GB/M for 3MF (its XML loader
-    # is far heavier) — paid mostly inside trimesh.load and our rasteriser, so a
+    # is far heavier) — paid mostly inside trimesh.load_mesh and our rasteriser, so a
     # dense model can OOM-kill a library scan (issues #24/#29). Above this estimate
     # the mesh is not loaded; the file is still indexed, and 3MF still gets its
     # embedded slicer preview. This is the hard ceiling; the RAM-aware cap below
@@ -138,6 +151,11 @@ class Settings(BaseSettings):
     # on tiny containers; raise it for marginally less Python-loop overhead.
     mesh_render_face_chunk_size: int = Field(default=200_000, gt=0)
 
+    # Width of generated Model preview images. Height keeps the renderer's 4:3
+    # aspect ratio. The Settings UI offers bounded presets so higher fidelity is
+    # an explicit CPU/RAM/storage tradeoff on self-hosted machines.
+    model_thumbnail_width: int = Field(default=640, ge=320, le=1280)
+
     # For large 3MF files, prefer the slicer-embedded preview before handing the
     # archive to trimesh, whose XML loader is the dominant memory cost. When on
     # (default), a 3MF whose estimate exceeds the adaptive cap uses its embedded
@@ -150,11 +168,17 @@ class Settings(BaseSettings):
     # 3MF with no parseable <triangle>/.model parts, an unfamiliar header, a
     # compressed container whose mesh lives somewhere the estimator doesn't sum.
     # When it can't estimate, the old code loaded the file anyway, and the OOM is
-    # paid *inside* trimesh.load: a ~900 MB 3MF decompresses into tens of GB of
+    # paid *inside* trimesh.load_mesh: a ~900 MB 3MF decompresses into tens of GB of
     # mesh and OOM-kills the scan (issue #29). This byte cap is the format-blind
     # backstop: above it the mesh is never loaded — the file is still indexed and
     # a 3MF still gets its embedded slicer preview. 0 disables the size guard.
     mesh_max_load_mb: int = Field(default=200, ge=0)
+
+    # STEP tessellation runs in a disposable child process because its triangle
+    # count is unknowable before Cascadio loads it. The child is killed on this
+    # deadline; its RSS budget is derived from mesh_memory_budget_fraction and
+    # the detected cgroup/host limit, just like other mesh work.
+    mesh_step_timeout_seconds: int = Field(default=90, gt=0)
 
     # Optional static bearer token guarding the Prometheus /metrics endpoint.
     # Empty = open on the trusted internal network (see docs/known-limitations).
@@ -165,6 +189,9 @@ class Settings(BaseSettings):
     max_archive_entries: int = Field(default=500, gt=0)
     max_archive_entry_mb: int = Field(default=512, gt=0)
     max_archive_uncompressed_mb: int = Field(default=2048, gt=0)
+    max_archive_central_directory_mb: int = Field(default=32, gt=0)
+    max_archive_depth: int = Field(default=32, gt=0)
+    max_archive_path_bytes: int = Field(default=1024, gt=0)
 
     # Headless-browser fallback for Cloudflare-gated imports (MakerWorld). When
     # enabled, pages that return the bot challenge are re-fetched with Chromium
@@ -193,7 +220,7 @@ class Settings(BaseSettings):
     backup_s3_secret_key: str = ""
 
     app_name: str = "PrintStash"
-    app_version: str = "0.11.4"
+    app_version: str = "0.12.0"
 
     @model_validator(mode="after")
     def validate_numeric_relationships(self) -> Settings:
@@ -201,6 +228,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "max_archive_entry_mb must not exceed max_archive_uncompressed_mb"
             )
+        if self.sqlite_synchronous.upper() not in {"NORMAL", "FULL"}:
+            raise ValueError("sqlite_synchronous must be NORMAL or FULL")
         if (
             self.s3_lifecycle_expiration_days
             and self.s3_lifecycle_transition_days

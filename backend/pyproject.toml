@@ -1,52 +1,58 @@
 [project]
 name = "printstash"
-version = "0.11.4"
+version = "0.12.0"
 description = "PrintStash — self-hosted 3D printing asset manager"
 requires-python = ">=3.11"
 dependencies = [
-    "cryptography>=44.0.0",
-    "alembic>=1.14",
-    "aiosqlite>=0.20",
-    "asyncpg>=0.29",
-    "bcrypt>=5.0.0",
-    "boto3>=1.35",
-    # STEP/STP tessellation (OpenCASCADE). Wheel-only with no Linux aarch64
-    # build, so it is excluded there; STEP preview/thumbnails degrade gracefully
-    # on ARM Linux while the rest of the app builds and runs. See
-    # docs/known-limitations.md.
-    "cascadio>=0.0.14; sys_platform != 'linux' or platform_machine != 'aarch64'",
-    "croniter>=3.0",
-    "fastapi>=0.115",
-    "httpx>=0.27",
-    "lxml>=5.3",
-    "networkx>=3.2",
-    "numpy>=1.26,<2",
-    "orjson>=3.10",
-    "paho-mqtt>=2.1",
-    # Stealth-patched Playwright: renders Cloudflare-gated pages (MakerWorld)
-    # server-side so collection/model imports work without a pasted cookie. The
-    # Chromium binary is installed in the Dockerfile, not via pip. See
-    # services/browser_fetch.py.
-    "patchright>=1.49",
-    "pillow>=10.4",
-    "prometheus-client>=0.20",
-    "pydantic>=2.9",
-    "pydantic-settings>=2.5",
-    "PyJWT>=2.10",
-    "python-multipart>=0.0.12",
-    "psycopg2-binary>=2.9",
-    "sqlmodel>=0.0.22",
-    "trimesh>=4.4",
-    "uvicorn[standard]>=0.30",
-    "watchfiles>=0.24",
-    "websockets>=13",
+    "printstash-core[printers-all]",
+    "cryptography>=50,<51",
+    "alembic>=1.19,<2",
+    "boto3>=1.43,<2",
+    "botocore>=1.43,<2",
+    "croniter>=6.2,<7",
+    "fastapi>=0.141,<1",
+    "httpcore>=1,<2",
+    "httpx>=0.28,<0.29",
+    "lxml>=6.1,<7",
+    "networkx>=3.6,<4",
+    "numpy>=2,<3",
+    "orjson>=3.11,<4",
+    "pillow>=12.3,<13",
+    "prometheus-client>=0.26,<1",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.15,<3",
+    "pwdlib[argon2,bcrypt]>=0.3,<1",
+    "PyJWT>=2.13,<3",
+    "python-multipart>=0.0.32,<0.1",
+    "psycopg[binary]>=3.3,<4",
+    "SQLAlchemy>=2.0.52,<2.1",
+    "sqlmodel>=0.0.39,<0.1",
+    "starlette>=1.6,<2",
+    "trimesh>=5,<6",
+    "uvicorn[standard]>=0.52,<1",
+    "watchfiles>=1.2,<2",
     "pycentauri==0.9.1",
 ]
 
 [project.optional-dependencies]
+async-db = [
+    "aiosqlite>=0.22,<1",
+]
+browser = [
+    # Stealth-patched Chromium automation for Cloudflare-gated imports.
+    "patchright>=1.49",
+]
+step = [
+    # OpenCASCADE tessellation; 0.1.1 ships amd64 and arm64 Linux wheels.
+    "cascadio>=0.1.1,<0.2",
+]
+full = [
+    "cascadio>=0.1.1,<0.2",
+    "patchright>=1.49",
+]
 dev = [
     "bandit>=1.8",
-    "httpx-ws>=0.7",
+    "deptry>=0.23,<1",
     "pip-audit>=2.7",
     "pytest>=8",
     "pytest-asyncio>=0.24",
@@ -54,6 +60,7 @@ dev = [
     "pytest-randomly>=3.15",
     "pyright>=1.1.403",
     "ruff>=0.8",
+    "wsproto>=1.3,<2",
 ]
 
 [tool.pytest.ini_options]
@@ -65,3 +72,27 @@ markers = [
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B"]
 ignore = ["B008"]  # FastAPI Depends() in argument defaults is the standard pattern
+
+[tool.deptry]
+extend_exclude = ["tests"]
+known_first_party = ["app"]
+optional_dependencies_dev_groups = ["dev"]
+
+[tool.deptry.per_rule_ignores]
+# Runtime plugins/drivers are imported by their owning frameworks rather than
+# directly by application modules. Keep this allow-list narrow and auditable.
+DEP002 = [
+    "aiosqlite",
+    "cascadio",
+    "lxml",
+    "networkx",
+    "psycopg",
+    "python-multipart",
+    "uvicorn",
+]
+
+[tool.uv.sources]
+printstash-core = { workspace = true }
+
+[tool.uv.workspace]
+members = ["packages/printstash-core"]

@@ -1,7 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import type { Server } from "node:http";
 
-import { setExternalLibrariesEnabled, startMockApi } from "./mock-api";
+import {
+  resetMockApiState,
+  setExternalLibrariesEnabled,
+  startMockApi,
+} from "./mock-api";
 
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? 4210);
 
@@ -22,6 +26,7 @@ test.afterAll(async () => {
 // returns this same superuser, so the auth bootstrap resolves and the app
 // renders the requested route instead of the login screen.
 test.beforeEach(async ({ page }) => {
+  resetMockApiState();
   await page.addInitScript(() => {
     localStorage.setItem("printstash.token", "test-token");
     localStorage.setItem(
@@ -236,6 +241,34 @@ test("settings sections are deep-linkable and preserve navigation state", async 
   await page.getByRole("button", { name: "About" }).click();
   await expect(page).toHaveURL(/\/settings\?section=about$/);
   await expect(page.getByRole("heading", { name: "Latest changes" })).toBeVisible();
+});
+
+test("preview settings persist quality choices and queue image recreation", async ({ page }) => {
+  await page.goto("/settings?section=previews");
+
+  await page.getByLabel("Preview quality").selectOption("detail");
+  await page.getByLabel("Screenshot resolution").selectOption("3");
+  await expect.poll(() =>
+    page.evaluate(() => localStorage.getItem("printstash.preview.preferences:v1")),
+  ).toContain('"previewQuality":"detail"');
+
+  await Promise.all([
+    page.waitForRequest(
+      (request) =>
+        request.url().includes("/api/v1/config") && request.method() === "PUT",
+    ),
+    page.getByLabel("Model image quality").selectOption("1280"),
+  ]);
+
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/v1/files/thumbnails/rebuild?force=true") &&
+        response.request().method() === "POST",
+    ),
+    page.getByRole("button", { name: "Recreate all images" }).click(),
+  ]);
+  await expect(page.getByText("Model preview recreation queued.")).toBeVisible();
 });
 
 test("settings warns administrators when a newer release is available", async ({ page }) => {

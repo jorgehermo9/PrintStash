@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 from sqlmodel import Session
 
+from app.core.config import _overlay, settings
 from app.core.time import utcnow
 from app.db.models import (
     Collection,
@@ -299,8 +300,20 @@ async def test_resolve_direct_download_archive_manifest(
         importer,
         "inspect_archive",
         lambda _path: [
-            importer.ArchiveEntry(name="a.stl", size_bytes=1, file_type="stl", is_image=False),
-            importer.ArchiveEntry(name="readme.txt", size_bytes=1, file_type=None, is_image=False),
+            importer.ArchiveEntry(
+                entry_id="0:00000000:1",
+                name="a.stl",
+                size_bytes=1,
+                file_type="stl",
+                is_image=False,
+            ),
+            importer.ArchiveEntry(
+                entry_id="1:00000000:1",
+                name="readme.txt",
+                size_bytes=1,
+                file_type=None,
+                is_image=False,
+            ),
         ],
     )
 
@@ -449,7 +462,9 @@ async def test_run_import_archive_completes(
     db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     owner = _make_user(db_session, "run-import-archive-ok")
-    staged_archive = tmp_path / "bundle.zip"
+    _overlay["staging_dir"] = tmp_path / "staging"
+    settings.incoming_dir.mkdir(parents=True)
+    staged_archive = settings.incoming_dir / "bundle.zip"
     staged_archive.write_bytes(b"pk-zip-stub")
     row = _make_item(
         db_session,
@@ -681,8 +696,9 @@ def test_dismiss_rejects_importing_item(db_session: Session) -> None:
 
 def test_dismiss_cleans_up_staging_directory(db_session: Session, tmp_path: Path) -> None:
     owner = _make_user(db_session, "dismiss-owner2")
-    staging_dir = tmp_path / "inbox-item"
-    staging_dir.mkdir()
+    _overlay["staging_dir"] = tmp_path / "staging"
+    staging_dir = settings.incoming_dir / "inbox-item"
+    staging_dir.mkdir(parents=True)
     staged_file = staging_dir / "source.stl"
     staged_file.write_bytes(b"solid x endsolid")
     row = _make_item(db_session, owner, state=InboxItemState.REVIEW, staging_key=str(staged_file))

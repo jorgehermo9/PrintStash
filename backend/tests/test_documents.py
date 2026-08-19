@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.db.models import CollectionPermission, CollectionRole, Document, User
@@ -116,6 +117,61 @@ def test_pdf_upload_serves_blob(
     assert served.content == b"%PDF-1.4 hi"
 
 
+def test_binary_document_upload_never_overwrites_destination_collision(
+    db_session: Session, client: TestClient, tmp_path: Path
+) -> None:
+    _overlay["thumb_dir"] = tmp_path / "thumbs"
+    _overlay["data_dir"] = tmp_path / "files"
+    editor = _user(db_session, "pdf-collision", superuser=True)
+    headers = _headers(editor)
+    from app.services.storage_backend import get_backend
+
+    backend = get_backend()
+    occupied = Path(backend.document_file_key(1, "manual.pdf"))
+    occupied.parent.mkdir(parents=True, exist_ok=True)
+    occupied.write_bytes(b"pre-existing user data")
+
+    response = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("manual.pdf", b"%PDF incoming", "application/pdf")},
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "storage_destination_exists"
+    assert occupied.read_bytes() == b"pre-existing user data"
+    assert db_session.exec(select(Document)).all() == []
+
+
+def test_document_image_collision_is_reported_without_overwrite(
+    db_session: Session, client: TestClient, tmp_path: Path
+) -> None:
+    _overlay["thumb_dir"] = tmp_path / "thumbs"
+    editor = _user(db_session, "doc-image-collision", superuser=True)
+    headers = _headers(editor)
+    created = client.post(
+        "/api/v1/documents",
+        json={"name": "Collision", "body": ""},
+        headers=headers,
+    ).json()
+    from app.services.storage_backend import get_backend
+
+    name = f"{hashlib.sha256(_PNG).hexdigest()}.png"
+    occupied = Path(get_backend().document_image_key(created["id"], name))
+    occupied.parent.mkdir(parents=True, exist_ok=True)
+    occupied.write_bytes(b"not the uploaded image")
+
+    response = client.post(
+        f"/api/v1/documents/{created['id']}/images",
+        files={"file": ("p.png", _PNG, "image/png")},
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "storage_destination_exists"
+    assert occupied.read_bytes() == b"not the uploaded image"
+
+
 def test_binary_document_trash_restore_and_permanent_delete_removes_blobs(
     db_session: Session, client: TestClient, tmp_path: Path
 ) -> None:
@@ -136,7 +192,13 @@ def test_binary_document_trash_restore_and_permanent_delete_removes_blobs(
     file_key = backend.document_file_key(document_id, uploaded["filename"])
     image_name = f"{'a' * 64}.png"
     image_key = backend.document_image_key(document_id, image_name)
-    backend.write_bytes(_PNG, image_key)
+    from app.services.storage_ownership import record_creation
+
+    # This test models an image created by PrintStash. Legacy/unreceipted
+    # lookalikes are covered separately and must be preserved.
+    receipt = backend.create_bytes(_PNG, image_key)
+    record_creation(db_session, receipt, object_kind="document_image")
+    db_session.commit()
     document = db_session.get(Document, document_id)
     document.body = f"![image](/api/v1/documents/{document_id}/images/{image_name})"
     db_session.add(document)
@@ -390,7 +452,9 @@ def test_get_document_file_missing_blob_returns_404(
 
     backend = get_backend()
     key = backend.document_file_key(doc_id, up.json()["filename"])
-    backend.delete(key)
+    direct = backend.direct_path(key)
+    assert direct is not None
+    direct.unlink()  # Simulate loss outside PrintStash; unchecked delete is disabled.
 
     resp = client.get(f"/api/v1/documents/{doc_id}/file", headers=h)
     assert resp.status_code == 404

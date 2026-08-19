@@ -64,11 +64,22 @@ manufacturing platform.
 - There is no default admin account. If setup cannot complete, fix setup rather
   than looking for bundled credentials.
 - Images are published for `linux/amd64` and `linux/arm64` (Raspberry Pi 4/5,
-  ARM NAS, Apple-silicon VMs). On `linux/arm64`, STEP/STP preview and
-  thumbnailing are unavailable because the OpenCASCADE tessellation dependency
-  (`cascadio`) ships no Linux ARM wheel; STEP files still upload and store, they
-  just don't get a generated mesh preview. Every other file type and feature is
-  identical across architectures.
+  ARM NAS, Apple-silicon VMs). Cascadio 0.1.1 provides OpenCASCADE wheels for
+  both targets, so the full image can preview and thumbnail STEP/STP files on
+  either architecture. CI now tessellates a real STEP fixture in an ARM64 image
+  under QEMU. Native Raspberry Pi and representative 1 GB hardware validation
+  are still outstanding, so this is runtime compatibility evidence rather than
+  a physical-device performance claim.
+- STEP tessellation runs in a disposable child process. Its resident-memory
+  ceiling uses the existing cgroup-aware mesh memory budget and it has a 90 s
+  timeout; an over-budget or overly complex file is stored without geometry or
+  a generated preview instead of risking the API process. The generic 200 MiB
+  mesh input cap still applies first and is format-blind. Operators can adjust
+  the deadline with `VAULT_MESH_STEP_TIMEOUT_SECONDS`; memory continues to use
+  `VAULT_MESH_MEMORY_BUDGET_FRACTION` rather than a STEP-only byte guess.
+- The lite image intentionally omits browser-assisted imports and STEP/STP
+  tessellation. It still includes NumPy, Pillow, and Trimesh, so STL/OBJ/3MF
+  thumbnail generation does not depend on Chromium, OpenGL, or Cascadio.
 
 ## Data And Metadata
 
@@ -76,6 +87,9 @@ manufacturing platform.
   PrusaSlicer, Bambu Studio, Cura, and Klipper/Orca-style profiles.
 - Slicer metadata comments vary by slicer and profile; missing fields are
   expected and should be reported with safe sample files.
+- Externally-started Bambu jobs preserve only fields supplied by printer MQTT.
+  Exact G-code/project recovery is best-effort while the FTPS cache entry is
+  available; cloud-only, evicted, or ambiguous jobs remain metadata-only.
 - Metadata export is intentionally metadata-only. It does not include raw
   STL/3MF/G-code blobs, secrets, API keys, or printer credentials.
 - Full backup/restore is available separately for moving or recovering an
@@ -190,3 +204,14 @@ manufacturing platform.
 - Advanced organization administration, approval workflows, and external
   business-system integrations.
 - Cost analytics and advanced production traceability.
+## Material-aware routing
+
+- Material comparison trims whitespace and ignores case, but deliberately does
+  not guess aliases such as `PLA+` and `PLA`.
+- Bambu AMS state depends on the fields exposed by the installed firmware.
+  Moonraker's active Spoolman spool is tracked configuration, not physical
+  detection. Other providers require manual feed state.
+- Color differences are advisory. PrintStash does not slice files, purchase
+  material, or account for consumption across multiple spools in one print.
+- Multi-material G-code without a complete tool-to-feed mapping remains
+  `unknown` rather than being declared compatible or mismatched.

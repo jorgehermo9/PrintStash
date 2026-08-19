@@ -105,7 +105,16 @@ class TestProfileParsers:
 
     @pytest.mark.parametrize(
         "value, expected",
-        [("3.5", 3.5), ("0", 0.0), ("-3", None), ("abc", None), (None, None)],
+        [
+            ("3.5", 3.5),
+            ("0", 0.0),
+            ("-3", None),
+            ("nan", None),
+            ("inf", None),
+            ("-inf", None),
+            ("abc", None),
+            (None, None),
+        ],
     )
     def test_to_float_rejects_negative_and_garbage(self, value, expected) -> None:
         assert pd._to_float(value) == expected

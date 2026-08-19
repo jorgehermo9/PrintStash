@@ -3,6 +3,28 @@
 PrintStash is Moonraker/Klipper-first. Other printer providers can exist, but
 they must make unsupported actions explicit in the API and UI.
 
+## Material and tool state
+
+Every provider supports operator-managed tools and material feeds in PrintStash.
+Printer groups remain stable routing/location labels and are never treated as
+loaded-filament state. Unknown material state remains schedulable for backward
+compatibility; a proven material or nozzle mismatch requires confirmation for a
+direct/manual print and is excluded from safe automatic routing. Color is shown
+as an advisory only.
+
+- Bambu LAN reports AMS trays, empty trays, the external spool feed, colors, and
+  the installed nozzle when firmware includes it. Incremental MQTT reports are
+  merged with the last full state. Provider state becomes stale while offline.
+- Moonraker reports the single active Spoolman spool ID configured through its
+  integration. PrintStash resolves material/color only when the same spool is
+  available from PrintStash's configured Spoolman inventory. This state is
+  labelled externally tracked because it is operator/macro managed, not a
+  physical filament sensor.
+- PrusaLink, OctoPrint, and Elegoo feeds are manual in this release.
+
+Provider synchronization can be disabled per printer. Manual state is never
+deleted by a provider failure and remains valid until an operator changes it.
+
 ## Moonraker / Klipper
 
 Support level: stable.
@@ -35,6 +57,11 @@ Current behavior:
 - upload plain-text Vault G-code over LAN FTPS
 - explicitly start a just-uploaded G-code file; upload alone never starts it
 - pause, resume, and cancel controls
+- record externally-started jobs with the task, subtask, project, profile,
+  plate, layer, nozzle, and G-code identity fields the printer actually reports
+- best-effort archive of an external G-code or project 3MF while it remains in
+  the printer's FTPS cache; the history labels whether the exact artifact was
+  archived or only printer-reported metadata is available
 
 Safety rules:
 
@@ -50,6 +77,16 @@ Not supported:
 - raw G-code controls
 - measured filament consumption
 - cloud printer control
+
+External-job recovery is deliberately evidence-based. MQTT does not provide a
+complete slicer profile, so PrintStash never invents scale, orientation, wall,
+infill, or support settings. Cache entries can disappear before retrieval, and
+cloud-originated jobs may not expose a LAN path at all; those jobs remain useful
+metadata-only history. FTPS cache capture is bounded by
+`VAULT_BAMBU_EXTERNAL_CAPTURE_MAX_MB` (256 MiB by default; `0` disables it). Bambu's
+FTPS endpoint uses a device-local self-signed certificate, so the stored SHA-256
+proves the captured bytes stay unchanged after ingestion, not the authenticity
+of their transport.
 
 The API exposes this through provider capabilities and diagnostics. The UI labels
 Bambu LAN as beta and disables unsupported actions.
@@ -150,6 +187,9 @@ Before tagging a release that touches a provider, either add a row here from
 a real test or carry forward the "still needs real-world hardware
 validation" note in `docs/known-limitations.md` — don't leave it silently
 implied as done.
+
+The issue #69 MQTT fixes and issue #70 external-artifact capture still need a
+real Bambu firmware validation entry before either can be described as stable.
 
 ## Diagnostics
 

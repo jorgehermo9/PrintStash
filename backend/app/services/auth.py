@@ -5,10 +5,13 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import bcrypt
 import jwt
 from fastapi import Request, Response
 from jwt import InvalidTokenError
+from pwdlib import PasswordHash
+from pwdlib.exceptions import PwdlibError
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
 from sqlmodel import Session, delete, select, update
 
 from app.core.config import settings
@@ -20,6 +23,8 @@ from app.db.session import get_session_factory
 logger = get_logger(__name__)
 ACCESS_BLOCKLIST: set[str] = set()
 SESSION_COOKIE_NAME = "printstash_session"
+_PASSWORD_HASH = PasswordHash((Argon2Hasher(), BcryptHasher()))
+_BCRYPT_HASHER = BcryptHasher()
 
 
 def extract_access_token(
@@ -63,11 +68,32 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    """Hash new credentials with the current Argon2 policy."""
+    return _PASSWORD_HASH.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    """Verify a credential without allowing malformed hashes to escape."""
+    try:
+        if hashed.startswith("$2"):
+            # Existing bcrypt credentials used bcrypt's historical 72-byte
+            # input. Keep that behavior only while validating a legacy hash.
+            return _BCRYPT_HASHER.verify(plain.encode("utf-8")[:72], hashed)
+        return _PASSWORD_HASH.verify(plain, hashed)
+    except (PwdlibError, TypeError, ValueError):
+        return False
+
+
+def _verify_password_and_update(plain: str, hashed: str) -> tuple[bool, str | None]:
+    if hashed.startswith("$2"):
+        if not verify_password(plain, hashed):
+            return False, None
+        # Hash the original password, never its legacy-truncated byte string.
+        return True, hash_password(plain)
+    try:
+        return _PASSWORD_HASH.verify_and_update(plain, hashed)
+    except (PwdlibError, TypeError, ValueError):
+        return False, None
 
 
 def _token_hash(raw_token: str) -> str:
@@ -292,9 +318,16 @@ def authenticate_user(session: Session, username: str, password: str) -> Optiona
     if user.oidc_managed:
         logger.info("local login rejected for oidc-managed user: user=%s", username)
         return None
-    if not verify_password(password, user.hashed_password):
+    valid, updated_hash = _verify_password_and_update(password, user.hashed_password)
+    if not valid:
         logger.info("login failed: user=%s bad password", username)
         return None
+    if updated_hash is not None:
+        user.hashed_password = updated_hash
+        session.add(user)
+        # The credential upgrade must be durable before a token can be issued.
+        session.commit()
+        session.refresh(user)
     logger.info("login success: user=%s", username)
     return user
 

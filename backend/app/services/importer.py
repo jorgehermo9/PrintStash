@@ -16,8 +16,11 @@ count + per-entry + total uncompressed size caps).
 
 from __future__ import annotations
 
+import os
+import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -101,9 +104,7 @@ async def download_to_staging(url: str) -> tuple[Path, str]:
         async with httpx.AsyncClient(
             transport=pinned_transport(target), timeout=60.0
         ) as client:
-            async with client.stream(
-                "GET", current, follow_redirects=False
-            ) as resp:
+            async with client.stream("GET", current, follow_redirects=False) as resp:
                 if resp.is_redirect:
                     location = resp.headers.get("location")
                     if not location:
@@ -117,17 +118,28 @@ async def download_to_staging(url: str) -> tuple[Path, str]:
                 suffix = Path(original_filename).suffix.lower() or ".bin"
                 staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
                 staged.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_name = tempfile.mkstemp(
+                    prefix=".printstash-url-", dir=staged.parent
+                )
+                temp = Path(temp_name)
                 written = 0
                 limit = settings.max_upload_bytes
-                with staged.open("wb") as out:
-                    async for chunk in resp.aiter_bytes(1024 * 1024):
-                        written += len(chunk)
-                        if written > limit:
-                            out.close()
-                            staged.unlink(missing_ok=True)
-                            raise ImportError_("download_too_large")
-                        out.write(chunk)
-                return staged, original_filename
+                try:
+                    with os.fdopen(fd, "wb") as out:
+                        async for chunk in resp.aiter_bytes(1024 * 1024):
+                            written += len(chunk)
+                            if written > limit:
+                                raise ImportError_("download_too_large")
+                            out.write(chunk)
+                        out.flush()
+                        os.fsync(out.fileno())
+                    os.link(temp, staged, follow_symlinks=False)
+                    return staged, original_filename
+                finally:
+                    try:
+                        temp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
     raise ImportError_("url_too_many_redirects")
 
 
@@ -154,6 +166,7 @@ def _content_disposition_name(resp) -> str | None:
 
 @dataclass
 class ArchiveEntry:
+    entry_id: str
     name: str
     size_bytes: int
     file_type: Optional[str]  # FileType value if importable, else None
@@ -194,15 +207,29 @@ def inspect_archive(path: Path) -> list[ArchiveEntry]:
     try:
         with zipfile.ZipFile(path) as zf:
             infos = zf.infolist()
-            # Count only files against the cap — directory records (which a
-            # deeply nested tree accumulates one per folder) aren't extracted
-            # and shouldn't count toward a limit meant to bound file count.
-            file_count = sum(1 for info in infos if not info.is_dir())
-            if file_count > max_entries:
+            if len(infos) > max_entries:
                 raise ImportError_("archive_too_many_entries")
+            central_size = max(path.stat().st_size - int(zf.start_dir), 0)
+            if central_size > settings.max_archive_central_directory_mb * 1024 * 1024:
+                raise ImportError_("archive_too_large")
             total = 0
-            for info in infos:
-                if info.is_dir() or not _safe_entry_name(info.filename):
+            normalized_names: set[str] = set()
+            for index, info in enumerate(infos):
+                normalized = unicodedata.normalize(
+                    "NFC", info.filename.replace("\\", "/")
+                )
+                if len(normalized.encode("utf-8")) > settings.max_archive_path_bytes:
+                    raise ImportError_("archive_path_too_deep")
+                parts = PurePosixPath(normalized).parts
+                if len(parts) > settings.max_archive_depth + 1:
+                    raise ImportError_("archive_path_too_deep")
+                folded = normalized.casefold()
+                if folded in normalized_names:
+                    raise ImportError_("archive_duplicate_entry")
+                normalized_names.add(folded)
+                if not info.is_dir() and not _safe_entry_name(info.filename):
+                    raise ImportError_("archive_unsafe_entry")
+                if info.is_dir():
                     continue
                 if info.file_size > max_entry:
                     raise ImportError_("archive_entry_too_large")
@@ -216,6 +243,7 @@ def inspect_archive(path: Path) -> list[ArchiveEntry]:
                     continue
                 out.append(
                     ArchiveEntry(
+                        entry_id=f"{index}:{info.CRC:08x}:{info.file_size}",
                         name=info.filename,
                         size_bytes=info.file_size,
                         file_type=ft.value if ft else None,
@@ -238,21 +266,26 @@ def extract_selected(path: Path, names: list[str]) -> list[tuple[Path, str]]:
     wanted = set(names)
     extracted: list[tuple[Path, str]] = []
     max_entry = settings.max_archive_entry_mb * 1024 * 1024
-    with zipfile.ZipFile(path) as zf:
-        for info in zf.infolist():
-            if info.filename not in wanted or info.is_dir():
-                continue
-            if not _safe_entry_name(info.filename):
-                raise ImportError_("archive_unsafe_entry")
-            if info.file_size > max_entry:
-                raise ImportError_("archive_entry_too_large")
-            suffix = Path(info.filename).suffix.lower()
-            if suffix not in _IMPORTABLE_SUFFIXES:
-                continue
-            staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
-            with zf.open(info) as src:
-                storage.stream_to_path(src, staged, max_bytes=max_entry)
-            extracted.append((staged, info.filename.replace("\\", "/")))
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for info in zf.infolist():
+                if info.filename not in wanted or info.is_dir():
+                    continue
+                if not _safe_entry_name(info.filename):
+                    raise ImportError_("archive_unsafe_entry")
+                if info.file_size > max_entry:
+                    raise ImportError_("archive_entry_too_large")
+                suffix = Path(info.filename).suffix.lower()
+                if suffix not in _IMPORTABLE_SUFFIXES:
+                    continue
+                staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
+                with zf.open(info) as src:
+                    storage.stream_to_path(src, staged, max_bytes=max_entry)
+                extracted.append((staged, info.filename.replace("\\", "/")))
+    except Exception:
+        for staged, _name in extracted:
+            staged.unlink(missing_ok=True)
+        raise
     return extracted
 
 
@@ -269,6 +302,7 @@ class _PendingArchive:
     entries: list[ArchiveEntry]
     source_url: Optional[str] = None
     created_at: float = field(default_factory=time.time)
+    claimed: bool = False
 
 
 class _ArchiveRegistry:
@@ -290,6 +324,14 @@ class _ArchiveRegistry:
     def get(self, archive_id: str) -> _PendingArchive | None:
         with self._lock:
             return self._items.get(archive_id)
+
+    def claim(self, archive_id: str) -> _PendingArchive | None:
+        with self._lock:
+            item = self._items.get(archive_id)
+            if item is None or item.claimed:
+                return None
+            item.claimed = True
+            return item
 
     def pop(self, archive_id: str) -> _PendingArchive | None:
         with self._lock:
@@ -344,7 +386,7 @@ def _ingest_one_file(
     original_filename = PurePosixPath(original_filename.replace("\\", "/")).name
     suffix = Path(original_filename).suffix.lower()
     resolved_name = model_name or Path(original_filename).stem
-    child = registry.create(owner_user_id=actor_user_id, visible=False)
+    child = registry.create(owner_user_id=actor_user_id, visible=False, kind="artifact")
     try:
         if suffix in _GCODE_SUFFIXES:
             ingest_orca_gcode(
@@ -423,7 +465,9 @@ def import_assets(
         registry.update(job_id, state="failed", error="no_importable_files")
         return
     override = model_name.strip() if model_name and total == 1 else None
-    registry.update(job_id, state="running", total_steps=total, total=total, stage="ingesting")
+    registry.update(
+        job_id, state="running", total_steps=total, total=total, stage="ingesting"
+    )
     results: list[dict] = []
     done = 0
     for staged, rel_name in staged_files:
@@ -466,7 +510,11 @@ def import_assets(
         error="import_failed" if not imported else None,
         retryable=bool(failures),
         failed_items=[
-            {"name": r.get("name", "item"), "reason": r.get("error", "import_failed"), "retryable": True}
+            {
+                "name": r.get("name", "item"),
+                "reason": r.get("error", "import_failed"),
+                "retryable": True,
+            }
             for r in failures
         ],
     )
@@ -498,12 +546,20 @@ def import_resolved_groups(
     """Ingest many already-staged groups (e.g. collection members) into one
     collection, recording each group's own ``source_url`` on its models."""
     total = sum(len(g.staged_files) for g in groups)
-    registry.update(job_id, state="running", total_steps=max(total, 1), total=total, stage="ingesting")
+    registry.update(
+        job_id,
+        state="running",
+        total_steps=max(total, 1),
+        total=total,
+        stage="ingesting",
+    )
     results: list[dict] = []
     done = 0
     for group in groups:
         if not group.staged_files:
-            results.append({"name": group.title, "error": group.error or "no_importable_files"})
+            results.append(
+                {"name": group.title, "error": group.error or "no_importable_files"}
+            )
             continue
         for staged, original_filename in group.staged_files:
             res = _ingest_one_file(
@@ -540,7 +596,11 @@ def import_resolved_groups(
     # the UI shows e.g. the MakerWorld login message rather than a generic one).
     if not imported:
         member_errors = {r["error"] for r in results if r.get("error")}
-        error = member_errors.pop() if len(member_errors) == 1 else "collection_import_failed"
+        error = (
+            member_errors.pop()
+            if len(member_errors) == 1
+            else "collection_import_failed"
+        )
         registry.update(
             job_id,
             state="failed",
@@ -551,7 +611,11 @@ def import_resolved_groups(
             failed=len(failures),
             retryable=True,
             failed_items=[
-                {"name": r.get("name", "item"), "reason": r.get("error", error), "retryable": True}
+                {
+                    "name": r.get("name", "item"),
+                    "reason": r.get("error", error),
+                    "retryable": True,
+                }
                 for r in failures
             ],
         )
@@ -570,7 +634,11 @@ def import_resolved_groups(
         failed=len(failures),
         retryable=bool(failures),
         failed_items=[
-            {"name": r.get("name", "item"), "reason": r.get("error", "import_failed"), "retryable": True}
+            {
+                "name": r.get("name", "item"),
+                "reason": r.get("error", "import_failed"),
+                "retryable": True,
+            }
             for r in failures
         ],
     )

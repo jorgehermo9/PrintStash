@@ -40,7 +40,9 @@ def s3_backend() -> Iterator[S3StorageBackend]:
             "s3_bucket": bucket,
             "s3_endpoint_url": _ENDPOINT,
             "s3_region": "us-east-1",
-            "s3_access_key": os.environ.get("PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"),
+            "s3_access_key": os.environ.get(
+                "PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"
+            ),
             "s3_secret_key": os.environ.get(
                 "PRINTSTASH_TEST_S3_SECRET_KEY", "printstash-secret"
             ),
@@ -51,7 +53,7 @@ def s3_backend() -> Iterator[S3StorageBackend]:
         yield backend
     finally:
         for key in backend.list_keys():
-            backend.delete(key)
+            backend._client.delete_object(Bucket=bucket, Key=key)
         for field in (
             "s3_bucket",
             "s3_endpoint_url",
@@ -77,7 +79,9 @@ def test_round_trips_bytes(s3_backend: S3StorageBackend):
     assert info.etag
 
 
-def test_upload_file_then_download_to_path(s3_backend: S3StorageBackend, tmp_path: Path):
+def test_upload_file_then_download_to_path(
+    s3_backend: S3StorageBackend, tmp_path: Path
+):
     src = tmp_path / "source.bin"
     src.write_bytes(b"payload bytes")
     key = "models/uploaded.bin"
@@ -106,12 +110,17 @@ def test_move_in_uploads_and_removes_staged_file(
 
 def test_delete_removes_object(s3_backend: S3StorageBackend):
     key = "models/to-delete.txt"
-    s3_backend.write_bytes(b"gone soon", key)
+    receipt = s3_backend.create_bytes(b"gone soon", key)
     assert s3_backend.exists(key)
 
-    s3_backend.delete(key)
-
-    assert not s3_backend.exists(key)
+    if receipt.version_id:
+        assert s3_backend.rollback_create(receipt) is True
+        assert not s3_backend.exists(key)
+    else:
+        # Compatible stores without immutable VersionId cannot authorize an
+        # exact delete. Preserve the bytes and leave the outbox intent blocked.
+        assert s3_backend.rollback_create(receipt) is False
+        assert s3_backend.exists(key)
 
 
 def test_exists_false_on_missing_key(s3_backend: S3StorageBackend):
@@ -156,13 +165,14 @@ def test_upload_file_above_multipart_threshold_round_trips(
         _overlay.pop("s3_multipart_threshold_mb", None)
 
 
-def test_move_copies_and_deletes_source(s3_backend: S3StorageBackend):
+def test_unchecked_move_is_disabled_and_preserves_source(s3_backend: S3StorageBackend):
     s3_backend.write_bytes(b"move me", "models/move-src.txt")
 
-    s3_backend.move("models/move-src.txt", "models/move-dest.txt")
+    with pytest.raises(RuntimeError, match="unchecked_storage_move_disabled"):
+        s3_backend.move("models/move-src.txt", "models/move-dest.txt")
 
-    assert not s3_backend.exists("models/move-src.txt")
-    assert s3_backend.read_bytes("models/move-dest.txt") == b"move me"
+    assert s3_backend.read_bytes("models/move-src.txt") == b"move me"
+    assert not s3_backend.exists("models/move-dest.txt")
 
 
 def test_stream_chunks_reassembles_full_content(s3_backend: S3StorageBackend):
@@ -228,28 +238,25 @@ def test_health_probe_reports_error_for_missing_bucket(s3_backend: S3StorageBack
         s3_backend._bucket = real_bucket
 
 
-def test_ensure_setup_applies_lifecycle_policy_when_configured(
+def test_ensure_setup_never_mutates_bucket_lifecycle_automatically(
     s3_backend: S3StorageBackend,
 ):
     _overlay["s3_lifecycle_expiration_days"] = 30
     try:
         s3_backend.ensure_setup()  # must not raise against a real S3-compatible bucket
 
-        lifecycle = s3_backend._client.get_bucket_lifecycle_configuration(
-            Bucket=s3_backend._bucket
-        )
-        rules = lifecycle["Rules"]
-        assert any(rule.get("Expiration", {}).get("Days") == 30 for rule in rules)
+        import botocore.exceptions
+
+        with pytest.raises(botocore.exceptions.ClientError):
+            s3_backend._client.get_bucket_lifecycle_configuration(
+                Bucket=s3_backend._bucket
+            )
     finally:
         _overlay.pop("s3_lifecycle_expiration_days", None)
 
 
 def test_exists_raises_on_non_404_client_error(s3_backend: S3StorageBackend):
-    """A credential/permission failure must surface, not be swallowed as 'missing'.
-
-    Swallowing it would tell the orphan-blob GC every blob is gone and delete
-    the bucket — see the docstring on ``S3StorageBackend.exists``.
-    """
+    """A credential/permission failure must surface, not be swallowed as 'missing'."""
     import botocore.exceptions
 
     original_head_object = s3_backend._client.head_object
@@ -267,6 +274,6 @@ def test_exists_raises_on_non_404_client_error(s3_backend: S3StorageBackend):
         s3_backend._client.head_object = original_head_object
 
 
-def test_delete_swallows_errors_for_already_missing_key(s3_backend: S3StorageBackend):
-    # delete() is called during cleanup/GC; a missing key must not raise.
-    s3_backend.delete("models/never-existed.txt")
+def test_unchecked_delete_is_disabled(s3_backend: S3StorageBackend):
+    with pytest.raises(RuntimeError, match="unchecked_storage_delete_disabled"):
+        s3_backend.delete("models/never-existed.txt")

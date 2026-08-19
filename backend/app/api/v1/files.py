@@ -26,7 +26,8 @@ from app.db.session import SessionFactory, get_session, get_session_factory
 from app.schemas.ingest import IngestResponse
 from app.services import auth, rbac
 from app.services.jobs import registry
-from app.services.storage_backend import get_backend
+from app.services.storage_backend import StorageCollisionError, get_backend
+from app.services.storage_ownership import record_creation
 
 logger = get_logger(__name__)
 
@@ -222,7 +223,9 @@ def _etag_matches(request: Request | None, etag: str) -> bool:
     if request is None:
         return False
     candidates = request.headers.get("if-none-match", "").split(",")
-    return any(candidate.strip().removeprefix("W/") in ("*", etag) for candidate in candidates)
+    return any(
+        candidate.strip().removeprefix("W/") in ("*", etag) for candidate in candidates
+    )
 
 
 def thumbnail_response(file_id: int, request: Request | None = None):
@@ -321,9 +324,21 @@ def stl_response(f: File, request: Request):
     if data is None:
         raise HTTPException(status_code=500, detail="stl_conversion_failed")
 
+    receipt = None
     try:
-        backend.write_bytes(data, cache_key)
+        receipt = backend.create_bytes(data, cache_key)
+        with get_session_factory().scoped_session() as ownership_session:
+            record_creation(
+                ownership_session, receipt, object_kind="derived_stl_cache"
+            )
+            ownership_session.commit()
+    except StorageCollisionError:
+        # Another request won the create-only race. Serve our in-memory result;
+        # subsequent requests will use the already-published cache object.
+        pass
     except Exception:
+        if receipt is not None:
+            backend.rollback_create(receipt)
         logger.warning("stl cache write failed for file %s", f.id, exc_info=True)
 
     # Freshly converted bytes are already in memory (and bounded by the render
@@ -351,6 +366,13 @@ def _run_thumbnail_rebuild(
             if not force:
                 stmt = stmt.where(Model.thumbnail_file_id.is_(None))  # type: ignore[union-attr]
             models = session.exec(stmt).all()
+            registry.update(
+                job_id,
+                stage="thumbnailing",
+                processed=0,
+                total=len(models),
+                total_steps=len(models),
+            )
 
             rebuilt: list[int] = []
             skipped: list[int] = []
@@ -364,6 +386,9 @@ def _run_thumbnail_rebuild(
                     total_steps=len(models),
                     label=f"rendering model {m.id}",
                     progress=index / len(models) * 100,
+                    stage="thumbnailing",
+                    processed=index,
+                    total=len(models),
                 )
                 mesh_file = session.exec(
                     select(File)
@@ -395,6 +420,21 @@ def _run_thumbnail_rebuild(
             registry.update(
                 job_id,
                 state="completed",
+                stage="completed",
+                processed=len(models),
+                total=len(models),
+                succeeded=len(rebuilt),
+                skipped=len(skipped),
+                failed=len(failed),
+                completion="partial" if failed else "complete",
+                thumbnail_status=(
+                    "failed" if failed else "generated" if rebuilt else "skipped"
+                ),
+                thumbnail_reason=(
+                    "renderer_no_output"
+                    if failed
+                    else "no_mesh" if skipped and not rebuilt else None
+                ),
                 result={
                     "scanned": len(models),
                     "rebuilt": rebuilt,
@@ -428,7 +468,7 @@ def rebuild_missing_thumbnails(
     current_user: User = Depends(require_superuser),
     session_factory: SessionFactory = Depends(get_session_factory),
 ) -> IngestResponse:
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="thumbnail_rebuild")
     background_tasks.add_task(_run_thumbnail_rebuild, job_id, force, session_factory)
     return IngestResponse(
         job_id=job_id, state="pending", message="thumbnail rebuild queued"

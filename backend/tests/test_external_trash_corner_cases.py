@@ -27,6 +27,7 @@ from app.db.scopes import live
 from app.services import external_library, runtime_config, trash
 from app.services.ingestion import ingest_orca_gcode
 from app.services.storage_backend import get_backend
+from app.services.storage_deletion import process_storage_delete_intents
 
 FIXTURE_GCODE = Path(__file__).parent / "fixtures" / "sample.gcode"
 
@@ -144,11 +145,15 @@ def test_hard_delete_mixed_model_deletes_vault_blob_keeps_nas_bytes(
     trash.soft_delete_model(db_session, model)
     trash.hard_delete_model(db_session, model)
     db_session.commit()
+    storage_result = process_storage_delete_intents()
 
     db_session.expire_all()
     assert db_session.get(Model, model.id) is None
     assert db_session.get(File, vault_file.id) is None
     assert db_session.get(File, ext_file.id) is None
+    assert storage_result.completed >= 1
+    assert storage_result.pending == 0
+    assert storage_result.blocked == 0
     # Vault blob purged...
     assert not backend.exists(vault_file.path)
     # ...NAS bytes preserved, byte-for-byte.

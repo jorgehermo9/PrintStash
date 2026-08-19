@@ -8,12 +8,15 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
+from app.core.config import _overlay
 from app.db.models import Model
 from app.db.scopes import live, trashed
 from app.services.storage_backend import (
+    CreationReceipt,
     LocalStorageBackend,
     S3StorageBackend,
     StorageBackend,
+    StorageCollisionError,
 )
 from app.services.trash import restore_model, soft_delete_model
 
@@ -41,6 +44,9 @@ class _FakeRemoteBackend(LocalStorageBackend):
         dest = self._resolve(key)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(src.read_bytes())
+
+    def create_stream(self, src, key: str):
+        return LocalStorageBackend().create_stream(src, str(self._resolve(key)))
 
 
 def test_local_backend_local_path_yields_real_path(tmp_path: Path) -> None:
@@ -80,6 +86,21 @@ def test_local_backend_move_in_renames(tmp_path: Path) -> None:
     assert dest.read_bytes() == b"data"
 
 
+def test_local_backend_move_in_never_overwrites_existing_file(tmp_path: Path) -> None:
+    backend = LocalStorageBackend()
+    staged = tmp_path / "staged.bin"
+    staged.write_bytes(b"new data")
+    dest = tmp_path / "vault" / "v1" / "staged.bin"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"existing data")
+
+    with pytest.raises(FileExistsError):
+        backend.move_in(staged, str(dest))
+
+    assert staged.read_bytes() == b"new data"
+    assert dest.read_bytes() == b"existing data"
+
+
 def test_remote_backend_move_in_uploads_and_removes_staged(tmp_path: Path) -> None:
     backend = _FakeRemoteBackend(tmp_path / "store")
     staged = tmp_path / "staged.bin"
@@ -89,6 +110,33 @@ def test_remote_backend_move_in_uploads_and_removes_staged(tmp_path: Path) -> No
 
     assert not staged.exists()
     assert (tmp_path / "store" / "blobs" / "staged.bin").read_bytes() == b"data"
+
+
+def test_move_in_returns_creation_proof_when_staged_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(_overlay, "data_dir", tmp_path / "vault")
+    monkeypatch.setitem(_overlay, "thumb_dir", tmp_path / "thumbs")
+    monkeypatch.setitem(_overlay, "backup_dir", tmp_path / "backups")
+    backend = LocalStorageBackend()
+    staged = tmp_path / "staged.bin"
+    staged.write_bytes(b"data")
+    destination = tmp_path / "vault" / "staged.bin"
+    original_unlink = Path.unlink
+
+    def fail_only_source(self: Path, *args, **kwargs):
+        if self == staged:
+            raise PermissionError("staged source became read-only")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_only_source)
+
+    receipt = backend.move_in(staged, str(destination))
+
+    assert receipt.key == str(destination)
+    assert backend.creation_matches(receipt)
+    assert staged.read_bytes() == b"data"
+    assert destination.read_bytes() == b"data"
 
 
 def test_live_and_trashed_scopes(db_session: Session) -> None:
@@ -139,8 +187,7 @@ def test_s3_exists_false_on_missing_key(code: str) -> None:
 
 @pytest.mark.parametrize("code", ["403", "AccessDenied", "InvalidAccessKeyId"])
 def test_s3_exists_raises_on_auth_error(code: str) -> None:
-    """A credential failure must never read as 'the blob is gone' — that is how
-    the orphan-blob GC talks itself into deleting the whole bucket."""
+    """A credential failure must never be reported as 'the blob is gone'."""
     import botocore.exceptions
 
     with pytest.raises(botocore.exceptions.ClientError):
@@ -161,6 +208,140 @@ def test_s3_object_info_exposes_remote_etag_and_size() -> None:
     assert info is not None
     assert info.size == 42
     assert info.etag == '"remote-etag"'
+
+
+def test_s3_lifecycle_audit_reports_expiration_covering_managed_prefix() -> None:
+    class _Client:
+        def get_bucket_lifecycle_configuration(self, **_kwargs):
+            return {
+                "Rules": [
+                    {
+                        "ID": "expire-vault",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": "vault-data/"},
+                        "Expiration": {"Days": 30},
+                    },
+                    {
+                        "ID": "safe-backups",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": "backups/"},
+                        "Expiration": {"Days": 30},
+                    },
+                ]
+            }
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "test-bucket"  # type: ignore[attr-defined]
+
+    assert backend.destructive_lifecycle_findings() == [
+        {
+            "rule_id": "expire-vault",
+            "prefix": "vault-data/",
+            "expiration": {"Days": 30},
+        }
+    ]
+
+
+def test_s3_create_is_conditional_and_rollback_requires_operation_token() -> None:
+    import botocore.exceptions
+
+    class _Client:
+        def __init__(self) -> None:
+            self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
+
+        def put_object(self, **kwargs):
+            key = kwargs["Key"]
+            assert kwargs["IfNoneMatch"] == "*"
+            if key in self.objects:
+                raise botocore.exceptions.ClientError(
+                    {
+                        "Error": {"Code": "PreconditionFailed"},
+                        "ResponseMetadata": {"HTTPStatusCode": 412},
+                    },
+                    "PutObject",
+                )
+            body = kwargs["Body"]
+            data = body.read() if hasattr(body, "read") else bytes(body)
+            etag = '"etag-1"'
+            self.objects[key] = (data, kwargs["Metadata"], etag)
+            return {"ETag": etag}
+
+        def head_object(self, **kwargs):
+            data, metadata, etag = self.objects[kwargs["Key"]]
+            return {"ContentLength": len(data), "Metadata": metadata, "ETag": etag}
+
+        def delete_object(self, **kwargs):
+            assert kwargs["IfMatch"] == self.objects[kwargs["Key"]][2]
+            del self.objects[kwargs["Key"]]
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "vault"  # type: ignore[attr-defined]
+
+    receipt = backend.create_bytes(b"owned", "vault-data/files/part.stl")
+    with pytest.raises(StorageCollisionError):
+        backend.create_bytes(b"replacement", receipt.key)
+
+    data, _metadata, etag = backend._client.objects[receipt.key]  # type: ignore[attr-defined]
+    backend._client.objects[receipt.key] = (  # type: ignore[attr-defined]
+        data,
+        {"printstash-create-token": "another-operation"},
+        etag,
+    )
+    assert backend.rollback_create(receipt) is False
+    assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
+
+    # Copying PrintStash metadata onto different bytes is still not proof that
+    # the current object is the exact create operation in the receipt.
+    backend._client.objects[receipt.key] = (  # type: ignore[attr-defined]
+        b"changed",
+        {"printstash-create-token": receipt.token},
+        '"etag-2"',
+    )
+    assert backend.rollback_create(receipt) is False
+    assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
+
+
+def test_s3_rollback_deletes_exact_version_and_preserves_same_etag_replacement() -> (
+    None
+):
+    class _Client:
+        versions = {
+            "old": {
+                "ContentLength": 5,
+                "Metadata": {"printstash-create-token": "owned-token"},
+                "ETag": '"same-etag"',
+            },
+            "new": {
+                "ContentLength": 5,
+                "Metadata": {"printstash-create-token": "new-token"},
+                "ETag": '"same-etag"',
+            },
+        }
+
+        def head_object(self, **kwargs):
+            return self.versions[kwargs.get("VersionId", "new")]
+
+        def delete_object(self, **kwargs):
+            del self.versions[kwargs["VersionId"]]
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "vault"  # type: ignore[attr-defined]
+    receipt = CreationReceipt(
+        key="vault-data/files/part.stl",
+        size=5,
+        token="owned-token",
+        backend="s3",
+        namespace="vault/vault-data/",
+        etag='"same-etag"',
+        version_id="old",
+    )
+
+    assert backend.rollback_create(receipt) is True
+    assert "old" not in backend._client.versions  # type: ignore[attr-defined]
+    assert "new" in backend._client.versions  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

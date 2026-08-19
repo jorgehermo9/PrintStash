@@ -54,6 +54,7 @@ const messages = {
     "settings.sso": "SSO",
     "settings.spoolman": "Spoolman",
     "settings.design": "Design",
+    "settings.previews": "Previews",
     "settings.trash": "Trash",
     "settings.about": "About",
   },
@@ -109,6 +110,7 @@ const messages = {
     "settings.sso": "SSO",
     "settings.spoolman": "Spoolman",
     "settings.design": "Diseño",
+    "settings.previews": "Vistas previas",
     "settings.trash": "Papelera",
     "settings.about": "Acerca de",
   },
@@ -136,10 +138,7 @@ function initialLocale(): Locale {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (SUPPORTED_LOCALES.includes(stored as Locale)) return stored as Locale;
   } catch { /* Storage can be unavailable in hardened/private contexts. */ }
-  const browserLocale = SUPPORTED_LOCALES.find((candidate) =>
-    navigator.language.toLowerCase().startsWith(candidate),
-  );
-  return browserLocale ?? "en";
+  return "en";
 }
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {

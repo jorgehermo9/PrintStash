@@ -107,6 +107,10 @@ class ModelPrintJobRead(BaseModel):
     printer_id: Optional[int] = None
     printer_name: str
     file_id: int
+    remote_filename: str
+    source: str = "vault"
+    external_display_name: Optional[str] = None
+    artifact_evidence: str = "vault"
     gcode_revision_number: Optional[int] = None
     revision_label: Optional[str] = None
     state: PrintJobState
@@ -251,6 +255,10 @@ class TrashedModelRead(BaseModel):
 class TrashPurgeRead(BaseModel):
     purged_model_ids: List[int] = []
     purged_count: int = 0
+    storage_completed: int = 0
+    storage_pending: int = 0
+    storage_blocked: int = 0
+    resources_blocked: int = 0
 
 
 class ModelBatchFailure(BaseModel):

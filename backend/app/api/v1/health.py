@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from importlib.util import find_spec
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -25,6 +27,18 @@ from app.services.release_check import get_release_status
 from app.services.storage_backend import get_backend
 
 router = APIRouter(tags=["health"])
+
+
+def _runtime_capabilities() -> dict[str, bool | str]:
+    """Report optional image capabilities without importing heavy modules."""
+    return {
+        "image_variant": os.environ.get("PRINTSTASH_IMAGE_VARIANT", "source"),
+        "browser": find_spec("patchright") is not None,
+        "step": find_spec("cascadio") is not None,
+        "thumbnails": all(
+            find_spec(module) is not None for module in ("numpy", "PIL", "trimesh")
+        ),
+    }
 
 
 def _mark_degraded(out: dict) -> None:
@@ -252,6 +266,7 @@ def health_details() -> dict:
             "processes": 1,
             "distributed_coordination": False,
         },
+        "capabilities": _runtime_capabilities(),
     }
     components = {
         "database": _database_probe(),

@@ -22,6 +22,30 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.12.0",
+    date: "Aug 2026",
+    changes: [
+      "Material-aware fleet dispatch now tracks source-labelled printer tools and feeds, synchronizes Bambu AMS and Moonraker active-Spoolman state, checks G-code material and nozzle compatibility, and adds multi-copy batches, groups, priority lanes, audited overrides, release gates, and a fleet board",
+      "Preview settings now control interactive 3D and G-code sharpness, downloaded screenshot resolution, and generated Model image resolution, with background regeneration for existing previews",
+      "Import jobs now expose durable complete or partial outcomes, verified output and thumbnail details, restart recovery, monotonic progress, structured metrics and logs, and no-store polling",
+      "Oversized or otherwise unrasterizable STL files now receive memory-bounded 640×480 WebP thumbnails across normal upload, Bulk upload, and Vault Maintenance repair flows",
+      "Bambu LAN beta now records externally started prints from printer-reported evidence and makes a best-effort capture of exact cached G-code or project files without inventing missing slicer metadata",
+      "Full and lite API images now advertise their browser, STEP, and thumbnail capabilities; lite remains substantially smaller while retaining STL, OBJ, and 3MF thumbnail generation",
+      "A non-destructive MinIO-to-SeaweedFS migration helper copies and verifies objects, while external MinIO endpoints remain supported",
+      "New password hashes use Argon2, and successful login transparently upgrades legacy bcrypt hashes while preserving controlled handling for long, Unicode, malformed, or damaged inputs",
+      "Mesh and database dependencies now use NumPy 2, Trimesh 5, Cascadio 0.1.1, and Psycopg 3, including STEP support in full amd64 and arm64 images",
+      "STEP tessellation now runs in an isolated, memory-budgeted child process with a timeout so overly complex files cannot take down the API process",
+      "Vault Maintenance now reports finding totals from the findings it returns and ignores missing-file checks for trashed Models, Artifacts, Documents, Collection images, and external links",
+      "Printer-card image visibility now reloads and synchronizes from its saved browser preference, while browsers without a saved language start in English",
+      "Confirmation dialogs now translate every control consistently, have an accessible dialog name, remove empty header spacing, and stack long actions on narrow screens",
+      "Storage cleanup now requires positive ownership before deletion, protects user-owned external files, refuses occupied destinations, and cleans failed uploads only at their exact paths",
+      "Task Center now owns import-job transitions, rejects stale polling responses, resumes active work after reloads or connectivity changes, and emits one terminal event per job",
+      "Import completion is not published until Model, Artifact, Metadata, storage, and expected thumbnail outputs are visible from a fresh session",
+      "OIDC login now accepts issuer URLs that differ only by a trailing slash, fixing affected Authentik configurations without weakening issuer validation",
+      "Dependency ownership, vulnerability auditing, weekly lock updates, and multi-architecture full/lite image checks are now explicit CI gates",
+    ],
+  },
+  {
     version: "0.11.4",
     date: "Aug 2026",
     changes: [

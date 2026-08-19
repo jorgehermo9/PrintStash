@@ -57,7 +57,8 @@ Developed features in the current app:
 - Elegoo Centauri Carbon and Carbon 2 Vault upload, with capability limits and hardware-validation status kept explicit
 - Durable session invalidation, atomic refresh-token rotation, final-superuser protection, and atomic first-run setup
 - One supported API process per vault, enforced at startup and reported through detailed health
-- SeaweedFS as the bundled local S3 service, with existing MinIO volumes retained under a legacy migration profile
+- SeaweedFS as the bundled local S3 service, with a non-destructive transitional
+  helper for migrating existing Compose-managed MinIO volumes
 
 The releases below are intentionally small: each is meant to be a single,
 shippable step rather than a multi-month epic. Versions are indicative, not
@@ -209,6 +210,26 @@ queue manager.
 - One enforced API process per vault with topology health reporting
 - Real PostgreSQL contract tests and explicit SQLite-only built-in backup capability
 - SeaweedFS as the bundled local S3 service, with a legacy MinIO migration profile
+
+## 0.12 — Dependency and Ingestion Reliability (in development)
+
+- Source-labelled printer tools and material feeds, with manual state for every
+  provider, Bambu AMS synchronization, and Moonraker active-Spoolman tracking
+- Material and nozzle compatibility preflight for direct sends and automatic
+  routing, including audited mismatch overrides and advisory color comparison
+- Atomic multi-copy batches, exact printer-group constraints, priority lanes,
+  optional operator release gates, and an at-a-glance fleet board
+- Argon2 password hashing with transparent, successful-login migration from
+  legacy bcrypt hashes
+- NumPy 2, Trimesh 5, Cascadio 0.1.1, Psycopg 3, and explicit optional async
+  database/browser/STEP extras
+- Durable import-job terminal postconditions, complete/partial outcomes,
+  restart recovery, one frontend completion event, and per-PR contract coverage
+- Memory-bounded oversized-STL thumbnails and Bulk upload refresh reliability
+  ([#67](https://github.com/xiao-villamor/PrintStash/issues/67))
+- Full and lite multi-architecture API images with runtime capability reporting
+- A verified, non-destructive MinIO-to-SeaweedFS migration helper, with MinIO
+  removed from the normal Compose stack
 
 ## Auth and Platform (folded into 0.11.0)
 

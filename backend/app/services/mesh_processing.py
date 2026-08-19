@@ -15,19 +15,30 @@ import ctypes
 import ctypes.util
 import gc
 import io
+import os
 import struct
+import subprocess  # nosec B404 - fixed interpreter/module invocation only
+import sys
+import tempfile
 import threading
+import time
 import zipfile
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import mesh_render
+from app.services import mesh_render, stl_fallback
 
 logger = get_logger(__name__)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_MAX_3MF_THUMBNAIL_BYTES = 32 * 1024 * 1024
+
+
+class FallbackThumbnail(bytes):
+    """PNG bytes produced by the bounded STL fallback."""
+
 
 # Resolved once: the glibc handle used by _reclaim_memory, or False on a libc
 # without malloc_trim (musl/Alpine, non-Linux). None means "not looked up yet".
@@ -94,7 +105,7 @@ def _render_semaphore() -> "threading.BoundedSemaphore":
 def _estimate_triangle_count(path: Path) -> Optional[int]:
     """Best-effort triangle count *without* loading the mesh into memory.
 
-    Loading is itself the memory blow-up (trimesh.load of a 5M-triangle mesh
+    Loading is itself the memory blow-up (trimesh.load_mesh of a 5M-triangle mesh
     peaks at ~3.5 GB), so the only way to keep a dense lattice/gyroid model from
     OOM-killing the process is to estimate before we load and bail out (#24).
 
@@ -163,7 +174,7 @@ def _estimate_triangle_count(path: Path) -> Optional[int]:
             # an n-gon face into (n - 2) triangles, so summing that keeps the
             # estimate a conservative upper bound (tris/quads dominate real files,
             # where it's already exact). A full text scan is cheap — no float
-            # parsing, no mesh build — versus the trimesh.load it guards against.
+            # parsing, no mesh build — versus the trimesh.load_mesh it guards against.
             faces = 0
             with path.open("rb") as fh:
                 for line in fh:
@@ -195,6 +206,7 @@ def _estimate_triangle_count(path: Path) -> Optional[int]:
         return None
     return None
 
+
 # Measured peak RSS per triangle for a full load + thumbnail render, rounded up
 # for safety margin. 3MF's XML loader plus the crease-aware rasteriser cost far
 # more than a raw STL of the same geometry (~4.5x), so it gets its own factor.
@@ -223,7 +235,9 @@ def _detect_memory_limit_bytes() -> int | None:
     except (OSError, ValueError):
         pass
     try:  # cgroup v1
-        v1 = int(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes").read_text().strip())
+        v1 = int(
+            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes").read_text().strip()
+        )
         if 0 < v1 < (1 << 62):  # v1 uses a huge sentinel for "unlimited"
             limits.append(v1)
     except (OSError, ValueError):
@@ -323,17 +337,113 @@ def _exceeds_cap(path: Path) -> bool:
 _3MF_THUMBNAIL_DIRS = ("metadata/", "3d/thumbnails/", "thumbnails/")
 
 
+def _process_rss_bytes(pid: int) -> int | None:
+    """Read one Linux process's resident set; unavailable platforms return None."""
+
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _step_memory_budget_bytes() -> int | None:
+    limit = _detect_memory_limit_bytes()
+    fraction = settings.mesh_memory_budget_fraction
+    if limit is None or fraction <= 0:
+        return None
+    return max(int(limit * fraction / _render_jobs_limit()), 1)
+
+
+def _load_step_mesh_isolated(path: Path):
+    """Tessellate unknown-complexity STEP in a monitored child process (#72)."""
+
+    import trimesh
+
+    with tempfile.TemporaryDirectory(prefix="printstash-step-") as tmp:
+        output = Path(tmp) / "mesh.glb"
+        env = os.environ.copy()
+        static_cap = int(settings.mesh_max_render_triangles)
+        ram_cap = _ram_triangle_cap(path.suffix.lower())
+        env["PRINTSTASH_STEP_TRIANGLE_LIMIT"] = str(
+            min(static_cap, ram_cap) if ram_cap is not None else static_cap
+        )
+        command = [
+            sys.executable,
+            "-m",
+            "app.services.step_worker",
+            str(path),
+            str(output),
+        ]
+        process = subprocess.Popen(  # nosec B603 - argv is fixed; no shell
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+        deadline = time.monotonic() + settings.mesh_step_timeout_seconds
+        memory_budget = _step_memory_budget_bytes()
+        failure = ""
+        while process.poll() is None:
+            if time.monotonic() >= deadline:
+                failure = "timeout"
+                process.kill()
+                break
+            rss = _process_rss_bytes(process.pid)
+            if memory_budget is not None and rss is not None and rss > memory_budget:
+                failure = "memory budget"
+                process.kill()
+                break
+            time.sleep(0.05)
+        _stdout, stderr = process.communicate()
+        if failure or process.returncode != 0 or not output.is_file():
+            logger.warning(
+                "mesh_processing: isolated STEP tessellation failed for %s (%s%s)",
+                path.name,
+                failure or f"exit {process.returncode}",
+                f": {stderr.decode(errors='replace')[-300:]}" if stderr else "",
+            )
+            return None
+        try:
+            loaded = trimesh.load_mesh(str(output), process=False)
+        except Exception:
+            logger.warning(
+                "mesh_processing: failed to load isolated STEP result for %s",
+                path.name,
+                exc_info=True,
+            )
+            return None
+        if isinstance(loaded, trimesh.Trimesh):
+            return loaded
+        if isinstance(loaded, trimesh.Scene):
+            meshes = [
+                geometry
+                for geometry in loaded.geometry.values()
+                if isinstance(geometry, trimesh.Trimesh)
+            ]
+            return trimesh.util.concatenate(meshes) if meshes else None
+        return None
+
+
 def _load_mesh(path: Path):
     """Return a single `trimesh.Trimesh` for *path*, or None on failure."""
     import trimesh
 
+    if path.suffix.lower() in (".step", ".stp"):
+        return _load_step_mesh_isolated(path)
+
     try:
         # process=False skips trimesh's vertex-merge + adjacency build, which we
         # don't need for bbox/volume/render and which adds ~15% peak memory.
-        loaded = trimesh.load(str(path), force="mesh", process=False)
+        loaded = trimesh.load_mesh(str(path), process=False)
     except Exception:
         logger.warning(
-            "mesh_processing: trimesh.load failed for %s", path.name, exc_info=True
+            "mesh_processing: trimesh.load_mesh failed for %s",
+            path.name,
+            exc_info=True,
         )
         return None
 
@@ -405,8 +515,21 @@ def extract_embedded_3mf_thumbnail(path: Path) -> Optional[bytes]:
             if not candidates:
                 return None
             best = max(candidates, key=lambda info: info.file_size)
-            data = zf.read(best)
+            if best.file_size > _MAX_3MF_THUMBNAIL_BYTES:
+                logger.warning(
+                    "mesh_processing: embedded 3MF thumbnail exceeds limit",
+                    extra={"entry": best.filename, "size": best.file_size},
+                )
+                return None
+            with zf.open(best) as source:
+                data = source.read(_MAX_3MF_THUMBNAIL_BYTES + 1)
+            if len(data) > _MAX_3MF_THUMBNAIL_BYTES:
+                return None
             if data.startswith(_PNG_MAGIC):
+                if len(data) >= 24 and data[12:16] == b"IHDR":
+                    png_width, png_height = struct.unpack(">II", data[16:24])
+                    if png_width * png_height > 25_000_000:
+                        return None
                 logger.info(
                     "mesh_processing: using embedded 3MF thumbnail %s (%d bytes)",
                     best.filename,
@@ -425,8 +548,8 @@ def extract_embedded_3mf_thumbnail(path: Path) -> Optional[bytes]:
 def analyze_mesh(
     path: Path,
     *,
-    width: int = 640,
-    height: int = 480,
+    width: int | None = None,
+    height: int | None = None,
     report: Callable[[str], None] | None = None,
 ) -> Tuple[Dict[str, Optional[float]], Optional[bytes]]:
     """Extract geometry and render a thumbnail with a single mesh load.
@@ -434,6 +557,9 @@ def analyze_mesh(
     Returns ``(geometry_dict, png_bytes_or_None)``. *report* receives progress
     labels as the stages run (see ingestion progress hints).
     """
+
+    width = int(width or settings.model_thumbnail_width)
+    height = int(height or round(width * 3 / 4))
 
     def _report(label: str) -> None:
         if report is not None:
@@ -482,6 +608,27 @@ def analyze_mesh(
             # source — and for a large 3MF it lets us avoid trimesh's costly XML
             # parse entirely — so that path is gated on the large-3MF flag.
             thumb = extract_embedded_3mf_thumbnail(path)
+        if thumb is None and path.suffix.lower() == ".stl":
+            fallback = stl_fallback.render_stl_thumbnail(
+                path, width=width, height=height
+            )
+            if fallback is not None:
+                thumb = FallbackThumbnail(fallback.png)
+                if geometry["triangle_count"] is None:
+                    geometry.update(
+                        {
+                            "bbox_x_mm": round(
+                                fallback.bounds_max[0] - fallback.bounds_min[0], 2
+                            ),
+                            "bbox_y_mm": round(
+                                fallback.bounds_max[1] - fallback.bounds_min[1], 2
+                            ),
+                            "bbox_z_mm": round(
+                                fallback.bounds_max[2] - fallback.bounds_min[2], 2
+                            ),
+                            "triangle_count": fallback.triangle_count,
+                        }
+                    )
         if mesh is not None:
             # Free the mesh (and its NumPy arrays) before returning so a library
             # scan reclaims the memory between files instead of letting RSS climb.
@@ -509,9 +656,11 @@ def extract_geometry(path: Path) -> Dict[str, Optional[float]]:
 
 
 def render_thumbnail(
-    path: Path, width: int = 640, height: int = 480
+    path: Path, width: int | None = None, height: int | None = None
 ) -> Optional[bytes]:
     """Render a PNG thumbnail of *path*. Returns PNG bytes or None on failure."""
+    width = int(width or settings.model_thumbnail_width)
+    height = int(height or round(width * 3 / 4))
     cap = settings.mesh_max_render_triangles
     over_cap = _exceeds_cap(path)
     with _render_semaphore():
@@ -528,7 +677,15 @@ def render_thumbnail(
                 if thumb is not None:
                     return thumb
             if not over_cap or settings.use_embedded_3mf_preview_for_large_files:
-                return extract_embedded_3mf_thumbnail(path)
+                embedded = extract_embedded_3mf_thumbnail(path)
+                if embedded is not None:
+                    return embedded
+            if path.suffix.lower() == ".stl":
+                fallback = stl_fallback.render_stl_thumbnail(
+                    path, width=width, height=height
+                )
+                if fallback is not None:
+                    return FallbackThumbnail(fallback.png)
             return None
         finally:
             if mesh is not None:
@@ -548,7 +705,7 @@ def to_stl_bytes(path: Path) -> Optional[bytes]:
         except OSError:
             return None
 
-    # Converting means a full trimesh.load + export; an over-cap mesh would OOM
+    # Converting means a full trimesh.load_mesh + export; an over-cap mesh would OOM
     # the process and take every request down with it (#24). Refuse it cleanly —
     # the caller surfaces a 500 instead, which is far better than a crash-loop.
     if _exceeds_cap(path):

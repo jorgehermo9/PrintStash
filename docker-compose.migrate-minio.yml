@@ -1,0 +1,67 @@
+# One-release compatibility stack for copying an existing Compose-backed
+# MinIO bucket into the bundled SeaweedFS service. This file and its helper are
+# scheduled for removal in 1.0. The source volume is intentionally retained.
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    container_name: ${MINIO_MIGRATION_CONTAINER_NAME:-printstash-minio-migration}
+    restart: unless-stopped
+    profiles:
+      - minio-migration
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_MIGRATION_API_PORT:-19000}:9000"
+      - "${MINIO_MIGRATION_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - printstash_minio:/data
+    networks:
+      - printstash_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  minio-migrate:
+    image: rclone/rclone:1.74.2@sha256:9ce0d49b611d3781233e25334e9e23d7af01e5546da7087f90d55f034ef13637
+    profiles:
+      - minio-migration
+    depends_on:
+      minio:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/scripts/rclone_minio_to_seaweedfs.sh"]
+    environment:
+      MINIO_MIGRATION_SOURCE_BUCKET: ${MINIO_MIGRATION_SOURCE_BUCKET:-printstash-vault}
+      SEAWEEDFS_MIGRATION_TARGET_BUCKET: ${SEAWEEDFS_MIGRATION_TARGET_BUCKET:-printstash-vault}
+      RCLONE_CONFIG_MINIO_TYPE: s3
+      RCLONE_CONFIG_MINIO_PROVIDER: Minio
+      RCLONE_CONFIG_MINIO_ENV_AUTH: "false"
+      RCLONE_CONFIG_MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      RCLONE_CONFIG_MINIO_ENDPOINT: http://minio:9000
+      RCLONE_CONFIG_MINIO_REGION: us-east-1
+      RCLONE_CONFIG_MINIO_FORCE_PATH_STYLE: "true"
+      RCLONE_CONFIG_SEAWEEDFS_TYPE: s3
+      RCLONE_CONFIG_SEAWEEDFS_PROVIDER: Other
+      RCLONE_CONFIG_SEAWEEDFS_ENV_AUTH: "false"
+      RCLONE_CONFIG_SEAWEEDFS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-printstash}
+      RCLONE_CONFIG_SEAWEEDFS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-printstash-secret}
+      RCLONE_CONFIG_SEAWEEDFS_ENDPOINT: http://seaweedfs:8333
+      RCLONE_CONFIG_SEAWEEDFS_REGION: us-east-1
+      RCLONE_CONFIG_SEAWEEDFS_FORCE_PATH_STYLE: "true"
+    volumes:
+      - ./scripts/rclone_minio_to_seaweedfs.sh:/scripts/rclone_minio_to_seaweedfs.sh:ro
+    networks:
+      - printstash_net
+    restart: "no"
+
+volumes:
+  # Same Compose volume key used by releases that bundled MinIO. Moving the
+  # declaration here preserves the existing project-scoped source volume.
+  printstash_minio:

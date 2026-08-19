@@ -6,16 +6,19 @@ Read-model assembly lives in ``services/model_views``; trash lifecycle in
 
 from __future__ import annotations
 
+import hashlib
+import os
 import shutil
 import tempfile
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Literal, Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     Form,
     HTTPException,
@@ -27,6 +30,7 @@ from fastapi import (
     File as UploadFileParam,
 )
 from fastapi.responses import FileResponse, Response
+from sqlalchemy import func
 from sqlmodel import Session, delete, select
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -49,11 +53,13 @@ from app.db.models import (
     PrinterFile,
     PrintJob,
     PrintJobState,
+    StagingLease,
     Tag,
     User,
 )
 from app.db.scopes import live
-from app.db.session import get_session
+from app.db.session import get_session, get_session_factory
+from app.schemas.ingest import IngestResponse
 from app.schemas.models import (
     ArtifactOutcomeRead,
     FileRevisionUpdate,
@@ -92,7 +98,10 @@ from app.services import (
     taxonomy,
 )
 from app.services.ingestion import add_gcode_revision_to_model
+from app.services.jobs import registry
 from app.services.moonraker import MoonrakerError
+from app.services.storage_deletion import process_storage_delete_intents
+from app.services.storage_ownership import UnsafeStorageDeleteError
 from app.services.trash import (
     hard_delete_expired_models,
     hard_delete_model,
@@ -517,26 +526,106 @@ def export_library_archive(
 
 @router.post(
     "/library-import",
+    response_model=IngestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_superuser)],
     summary="Import a portable full-library archive",
 )
 def import_library_archive(
+    background_tasks: BackgroundTasks,
     file: UploadFile = UploadFileParam(...),
     current_user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
-) -> dict[str, int]:
+    session_factory=Depends(get_session_factory),
+) -> IngestResponse:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix != ".zip":
         raise HTTPException(status_code=400, detail="archive_zip_required")
-    fd, name = tempfile.mkstemp(suffix=".zip")
+    settings.incoming_dir.mkdir(parents=True, exist_ok=True)
+    lease_count, staged_bytes = session.exec(
+        select(
+            func.count(StagingLease.id),
+            func.coalesce(func.sum(StagingLease.size_bytes), 0),
+        )
+    ).one()
+    if int(lease_count) >= settings.staging_max_pending:
+        raise HTTPException(status_code=503, detail="staging_capacity_exceeded")
+    assert current_user.id is not None
+    user_leases = session.exec(
+        select(func.count(StagingLease.id)).where(
+            StagingLease.owner_user_id == current_user.id
+        )
+    ).one()
+    if int(user_leases) >= settings.staging_max_active_per_user:
+        raise HTTPException(status_code=429, detail="staging_capacity_exceeded")
+    quota_remaining = max(
+        0,
+        settings.staging_max_gb * 1024**3 - int(staged_bytes),
+    )
+    disk_free = shutil.disk_usage(settings.incoming_dir).free
+    writable_bytes = min(
+        quota_remaining,
+        max(0, disk_free - settings.staging_min_free_gb * 1024**3),
+    )
+    if writable_bytes <= 0:
+        raise HTTPException(status_code=507, detail="staging_capacity_exceeded")
+    fd, name = tempfile.mkstemp(suffix=".zip", dir=settings.incoming_dir)
+    job_id: str | None = None
     try:
+        digest = hashlib.sha256()
+        written = 0
         with open(fd, "wb", closefd=True) as target:
-            shutil.copyfileobj(file.file, target)
-        return library_transfer.import_archive(session, Path(name), current_user)
+            while chunk := file.file.read(1024 * 1024):
+                written += len(chunk)
+                if written > writable_bytes:
+                    raise ValueError("staging_capacity_exceeded")
+                target.write(chunk)
+                digest.update(chunk)
+            target.flush()
+            os.fsync(target.fileno())
+        job_id = registry.create(owner_user_id=current_user.id, kind="library_import")
+        staged = Path(name)
+        stat = staged.stat(follow_symlinks=False)
+        session.add(
+            StagingLease(
+                id=uuid.uuid4().hex,
+                path=name,
+                owner_user_id=current_user.id,
+                background_job_id=job_id,
+                size_bytes=written,
+                sha256=digest.hexdigest(),
+                device=stat.st_dev,
+                inode=stat.st_ino,
+                ctime_ns=stat.st_ctime_ns,
+                expires_at=utcnow() + timedelta(hours=24),
+            )
+        )
+        session.commit()
+        background_tasks.add_task(
+            library_transfer.run_import_job,
+            job_id=job_id,
+            archive_path=Path(name),
+            user_id=current_user.id,
+            session_factory=session_factory,
+        )
+        return IngestResponse(job_id=job_id, state="pending")
     except (ValueError, zipfile.BadZipFile) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    finally:
         Path(name).unlink(missing_ok=True)
+        if job_id is not None:
+            registry.finish(job_id, state="failed", error=str(exc), retryable=True)
+        code = str(exc)
+        status_code = 507 if code == "staging_capacity_exceeded" else 400
+        raise HTTPException(status_code=status_code, detail=code) from exc
+    except Exception:
+        Path(name).unlink(missing_ok=True)
+        if job_id is not None:
+            registry.finish(
+                job_id,
+                state="failed",
+                error="staging_lease_failed",
+                retryable=True,
+            )
+        raise
 
 
 @router.get(
@@ -605,14 +694,25 @@ def list_trash(
     summary="Permanently delete expired trash items",
 )
 def purge_expired_trash(session: Session = Depends(get_session)) -> TrashPurgeRead:
-    purged_model_ids = hard_delete_expired_models(
-        session,
-        retention_days=int(settings.trash_retention_days),
-    )
+    try:
+        purged_model_ids = hard_delete_expired_models(
+            session,
+            retention_days=int(settings.trash_retention_days),
+        )
+    except UnsafeStorageDeleteError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_ownership_unverified",
+        ) from exc
     session.commit()
+    storage_result = process_storage_delete_intents()
     return TrashPurgeRead(
         purged_model_ids=purged_model_ids,
         purged_count=len(purged_model_ids),
+        storage_completed=storage_result.completed,
+        storage_pending=storage_result.pending,
+        storage_blocked=storage_result.blocked,
     )
 
 
@@ -763,6 +863,10 @@ def get_model_print_jobs(
                 else (job.printer_name or "Unknown printer")
             ),
             file_id=job.file_id,
+            remote_filename=job.remote_filename,
+            source=job.source,
+            external_display_name=job.external_display_name,
+            artifact_evidence=job.artifact_evidence,
             gcode_revision_number=revision_numbers.get(job.file_id),
             revision_label=file.revision_label,
             state=job.state,
@@ -870,6 +974,10 @@ def create_manual_print_job(
             printer.name if printer is not None else (printer_name or "Unknown printer")
         ),
         file_id=job.file_id,
+        remote_filename=job.remote_filename,
+        source=job.source,
+        external_display_name=job.external_display_name,
+        artifact_evidence=job.artifact_evidence,
         gcode_revision_number=revision_numbers.get(job.file_id),
         revision_label=file_row.revision_label,
         state=job.state,
@@ -1420,9 +1528,23 @@ def purge_model(
         m.collection_id,
         CollectionRole.EDIT,
     )
-    hard_delete_model(session, m)
+    try:
+        hard_delete_model(session, m)
+    except UnsafeStorageDeleteError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_ownership_unverified",
+        ) from exc
     session.commit()
-    return TrashPurgeRead(purged_model_ids=[model_id], purged_count=1)
+    storage_result = process_storage_delete_intents()
+    return TrashPurgeRead(
+        purged_model_ids=[model_id],
+        purged_count=1,
+        storage_completed=storage_result.completed,
+        storage_pending=storage_result.pending,
+        storage_blocked=storage_result.blocked,
+    )
 
 
 @router.delete(

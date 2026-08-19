@@ -3,10 +3,319 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlmodel import select
 
-from app.db.models import Printer, PrinterStatus, PrintJob, PrintJobState
+from app.db.models import (
+    MaterialSlotState,
+    MaterialSource,
+    Printer,
+    PrinterMaterialSlot,
+    PrinterProvider,
+    PrinterStatus,
+    PrinterTool,
+    PrintJob,
+    PrintJobState,
+)
+from app.services import printer_hub as printer_hub_module
+from app.services.printer_hub import PrinterHub
+from app.services.spoolman import SpoolmanError
+from tests.test_fleet_api import _gcode
+
+
+def test_provider_material_state_sync_creates_updates_and_removes_rows(
+    hub: PrinterHub, db_session
+) -> None:
+    printer = Printer(
+        name="AMS",
+        provider=PrinterProvider.BAMBU_LAN,
+        host="192.0.2.50",
+        serial="TEST-SERIAL",
+        access_code="test-code",
+    )
+    db_session.add(printer)
+    db_session.commit()
+    db_session.refresh(printer)
+    assert printer.id is not None
+
+    hub._sync_material_state_db(
+        printer.id,
+        [
+            {},
+            {
+                "slot_key": "ams:0:0",
+                "label": "Tray 1",
+                "tool_key": "tool0",
+                "state": "loaded",
+                "material_type": " PLA ",
+                "material_brand": " Brand ",
+                "color_hex": "aabbccdd",
+                "spool_id": 11,
+                "spool_name": "PLA spool",
+                "spool_filament_id": 22,
+            },
+            {
+                "slot_key": "ams:0:1",
+                "state": "invalid",
+                "color_hex": "not-a-color",
+                "spool_id": "not-an-int",
+                "spool_filament_id": False,
+            },
+        ],
+        tools=[
+            None,
+            {},
+            {"tool_key": "tool0", "label": "Nozzle", "nozzle_diameter_mm": 0.4},
+            {"tool_key": "tool1", "nozzle_diameter_mm": True},
+        ],
+    )
+
+    db_session.expire_all()
+    slots = db_session.exec(
+        select(PrinterMaterialSlot).where(
+            PrinterMaterialSlot.printer_id == printer.id,
+            PrinterMaterialSlot.source == MaterialSource.BAMBU_AMS,
+        )
+    ).all()
+    assert [(row.slot_key, row.state) for row in slots] == [
+        ("ams:0:0", MaterialSlotState.LOADED),
+        ("ams:0:1", MaterialSlotState.UNKNOWN),
+    ]
+    assert slots[0].material_type == "PLA"
+    assert slots[0].material_brand == "Brand"
+    assert slots[0].color_hex == "#AABBCC"
+    assert slots[1].color_hex is None
+    assert slots[1].spool_id is None
+    tools = db_session.exec(
+        select(PrinterTool).where(
+            PrinterTool.printer_id == printer.id,
+            PrinterTool.source == MaterialSource.BAMBU_AMS,
+        )
+    ).all()
+    assert [row.nozzle_diameter_mm for row in tools] == [0.4, None]
+
+    hub._sync_material_state_db(
+        printer.id,
+        [{"slot_key": "ams:0:0", "label": "Updated", "state": "empty"}],
+        tools=[{"tool_key": "tool0", "label": "Updated", "nozzle_diameter_mm": -1}],
+    )
+    db_session.expire_all()
+    slots = db_session.exec(
+        select(PrinterMaterialSlot).where(
+            PrinterMaterialSlot.printer_id == printer.id,
+            PrinterMaterialSlot.source == MaterialSource.BAMBU_AMS,
+        )
+    ).all()
+    assert len(slots) == 1
+    assert slots[0].label == "Updated"
+    assert slots[0].state == MaterialSlotState.EMPTY
+    tools = db_session.exec(
+        select(PrinterTool).where(
+            PrinterTool.printer_id == printer.id,
+            PrinterTool.source == MaterialSource.BAMBU_AMS,
+        )
+    ).all()
+    assert len(tools) == 1
+    assert tools[0].nozzle_diameter_mm is None
+
+    printer.provider_material_sync_enabled = False
+    db_session.add(printer)
+    db_session.commit()
+    hub._sync_material_state_db(printer.id, [{"slot_key": "ignored"}])
+    hub._sync_material_state_db(999_999, [{"slot_key": "ignored"}])
+
+
+def test_material_slot_enrichment_resolves_inventory_and_degrades_cleanly(
+    hub: PrinterHub,
+) -> None:
+    slots = [
+        {"slot_key": "tool0", "external_spool_id": 7},
+        {"slot_key": "tool1", "external_spool_id": 8},
+        {"slot_key": "manual"},
+    ]
+    resolved = {
+        "name": "Red PLA",
+        "filament": {
+            "id": 70,
+            "material": "PLA",
+            "color_hex": "FF0000",
+            "vendor": {"name": "Example"},
+        },
+    }
+
+    async def run() -> list[dict[str, object]]:
+        async def get_spool(spool_id: int) -> dict[str, object]:
+            if spool_id == 7:
+                return resolved
+            raise SpoolmanError("missing")
+
+        with (
+            patch.object(hub, "_spoolman_config", return_value=("http://spoolman", None)),
+            patch(
+                "app.services.printer_hub.SpoolmanClient.get_spool",
+                new=AsyncMock(side_effect=get_spool),
+            ),
+        ):
+            return await hub._enrich_material_slots(1, slots)
+
+    enriched = asyncio.run(run())
+    assert enriched[0] == {
+        "slot_key": "tool0",
+        "external_spool_id": 7,
+        "material_type": "PLA",
+        "material_brand": "Example",
+        "color_hex": "FF0000",
+        "spool_id": 7,
+        "spool_name": "Red PLA",
+        "spool_filament_id": 70,
+    }
+    assert "material_type" not in enriched[1]
+
+    with patch.object(hub, "_spoolman_config", return_value=None):
+        assert asyncio.run(hub._enrich_material_slots(1, slots)) == slots
+    assert asyncio.run(hub._enrich_material_slots(1, [{"slot_key": "manual"}])) == [
+        {"slot_key": "manual"}
+    ]
+
+
+def test_hub_material_config_helpers_and_snapshot_attach(hub: PrinterHub) -> None:
+    assert printer_hub_module._reported_int("bad") is None
+    assert printer_hub_module._reported_float(object()) is None
+
+    with patch.object(
+        printer_hub_module.runtime_config, "spoolman_enabled", return_value=False
+    ):
+        assert hub._spoolman_config() is None
+    with (
+        patch.object(
+            printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
+        ),
+        patch.object(
+            printer_hub_module.runtime_config,
+            "spoolman_config",
+            return_value={"base_url": "", "api_key": None},
+        ),
+    ):
+        assert hub._spoolman_config() is None
+    with (
+        patch.object(
+            printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
+        ),
+        patch.object(
+            printer_hub_module.runtime_config,
+            "spoolman_config",
+            return_value={"base_url": "http://spoolman", "api_key": "secret"},
+        ),
+    ):
+        assert hub._spoolman_config() == ("http://spoolman", "secret")
+
+    websocket = MagicMock()
+    websocket.send_json = AsyncMock()
+    hub.snapshots[3] = {"print_stats": {"state": "ready"}}
+    asyncio.run(hub.attach(3, websocket))
+    websocket.send_json.assert_awaited_once()
+    websocket.send_json.side_effect = RuntimeError("disconnected")
+    asyncio.run(hub.attach(3, websocket))
+    asyncio.run(hub.detach(3, websocket))
+
+
+def test_external_capture_failure_paths_are_persistent(
+    hub: PrinterHub, db_session
+) -> None:
+    artifact = _gcode(db_session)
+    job = PrintJob(
+        file_id=artifact.id,
+        model_id=artifact.model_id,
+        remote_filename="external.gcode",
+        source="external",
+        state=PrintJobState.PRINTING,
+        artifact_evidence="capture_pending",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    assert job.id is not None
+
+    with patch.object(
+        printer_hub_module,
+        "settings",
+        SimpleNamespace(bambu_external_capture_max_mb=0),
+    ):
+        asyncio.run(
+            hub._capture_external_artifact(
+                1, job.id, "/cache/external.gcode", MagicMock()
+            )
+        )
+    db_session.expire_all()
+    failed = db_session.get(PrintJob, job.id)
+    assert failed is not None
+    assert failed.artifact_capture_error == "external_artifact_capture_disabled"
+
+    failed.artifact_evidence = "capture_pending"
+    db_session.add(failed)
+    db_session.commit()
+
+    class DownloadError(RuntimeError):
+        code = "download_failed"
+
+    client = MagicMock()
+    client.download_artifact = AsyncMock(side_effect=DownloadError())
+    with patch.object(
+        printer_hub_module,
+        "settings",
+        SimpleNamespace(bambu_external_capture_max_mb=1),
+    ):
+        asyncio.run(
+            hub._capture_external_artifact(
+                1, job.id, "/cache/external.gcode", client
+            )
+        )
+    db_session.expire_all()
+    failed = db_session.get(PrintJob, job.id)
+    assert failed is not None
+    assert failed.artifact_capture_error == "download_failed"
+
+    hub._mark_capture_failed(999_999, "ignored")
+    failed.artifact_evidence = "metadata_only"
+    db_session.add(failed)
+    db_session.commit()
+    hub._mark_capture_failed(job.id, "ignored")
+
+
+def test_external_capture_success_and_cancellation_paths(hub: PrinterHub) -> None:
+    client = MagicMock()
+
+    async def download(_remote: str, staged, *, max_bytes: int) -> None:
+        assert max_bytes > 0
+        staged.write_bytes(b"; generated")
+
+    client.download_artifact = AsyncMock(side_effect=download)
+    with (
+        patch.object(
+            printer_hub_module,
+            "settings",
+            SimpleNamespace(bambu_external_capture_max_mb=1),
+        ),
+        patch.object(hub, "_persist_external_artifact") as persist,
+    ):
+        asyncio.run(
+            hub._capture_external_artifact(1, 2, "/cache/external.gcode", client)
+        )
+        persist.assert_called_once()
+
+    client.download_artifact = AsyncMock(side_effect=asyncio.CancelledError())
+    with (
+        patch.object(
+            printer_hub_module,
+            "settings",
+            SimpleNamespace(bambu_external_capture_max_mb=1),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        asyncio.run(hub._capture_external_artifact(1, 2, "/cache/external.gcode", client))
 
 
 class TestPrinterHubLifecycle:
@@ -163,7 +472,9 @@ class TestPrinterHubChaosReconnect:
         jobs = db_session.exec(
             select(PrintJob).where(PrintJob.remote_filename == "chaos.gcode")
         ).all()
-        assert len(jobs) == 1, "reconnect after a mid-print drop must not duplicate the job"
+        assert len(jobs) == 1, (
+            "reconnect after a mid-print drop must not duplicate the job"
+        )
 
 
 class TestPrinterHubMarkStatus:
@@ -302,9 +613,7 @@ class TestPrinterHubSyncActiveJob:
             calls += 1
             raise RuntimeError("database unavailable")
 
-        monkeypatch.setattr(
-            "app.services.printer_hub.asyncio.to_thread", failing_sync
-        )
+        monkeypatch.setattr("app.services.printer_hub.asyncio.to_thread", failing_sync)
 
         async def _run():
             for _ in range(4):
@@ -437,6 +746,83 @@ class TestPrinterHubSyncActiveJob:
             assert job is not None
             assert job.source == "external"
             assert job.state == PrintJobState.PRINTING
+            assert job.artifact_evidence == "metadata_only"
+
+    def test_external_bambu_job_preserves_reported_identity(self, hub):
+        from sqlmodel import select
+
+        from app.db.session import get_session_factory
+
+        stats = {
+            "state": "printing",
+            "filename": "plate_1.gcode",
+            "external_display_name": "Benchy",
+            "external_task_id": "task-42",
+            "external_subtask_id": "subtask-7",
+            "external_project_id": "project-3",
+            "external_profile_id": "profile-2",
+            "external_gcode_file": "plate_1.gcode",
+            "external_plate_index": 1,
+            "external_current_layer": 8,
+            "external_total_layers": 120,
+            "external_nozzle_diameter": 0.4,
+        }
+
+        asyncio.run(hub._sync_active_job(1, "printing", "plate_1.gcode", 0.1, stats))
+
+        with get_session_factory().session() as session:
+            job = session.exec(
+                select(PrintJob).where(PrintJob.provider_job_id == "task-42")
+            ).one()
+            assert job.remote_filename == "plate_1.gcode"
+            assert job.external_display_name == "Benchy"
+            assert job.external_subtask_id == "subtask-7"
+            assert job.external_project_id == "project-3"
+            assert job.external_profile_id == "profile-2"
+            assert job.external_current_layer == 8
+            assert job.external_total_layers == 120
+            assert job.external_nozzle_diameter == pytest.approx(0.4)
+
+    def test_external_bambu_gcode_is_archived_when_cache_is_available(self, hub):
+        from sqlmodel import select
+
+        from app.db.models import SENTINEL_MODEL_HASH, Model
+        from app.db.session import get_session_factory
+
+        class CaptureClient:
+            async def download_artifact(self, remote_path, local_path, *, max_bytes):
+                assert remote_path == "/cache/benchy.gcode"
+                assert max_bytes > 0
+                local_path.write_bytes(b"; generated by Bambu Studio\nG28\n")
+
+        async def _run():
+            await hub._handle_status(
+                1,
+                {
+                    "print_stats": {
+                        "state": "printing",
+                        "filename": "benchy.gcode",
+                        "external_display_name": "Benchy",
+                        "external_task_id": "capture-task",
+                        "external_gcode_file": "/cache/benchy.gcode",
+                    },
+                    "virtual_sdcard": {"progress": 0.2},
+                },
+                client=CaptureClient(),
+            )
+            await asyncio.gather(*list(hub._capture_tasks.values()))
+
+        asyncio.run(_run())
+
+        with get_session_factory().session() as session:
+            job = session.exec(
+                select(PrintJob).where(PrintJob.provider_job_id == "capture-task")
+            ).one()
+            model = session.get(Model, job.model_id)
+            assert job.artifact_evidence == "gcode_archived"
+            assert job.artifact_capture_error is None
+            assert model is not None
+            assert model.hash != SENTINEL_MODEL_HASH
 
     def test_sentinel_rows_are_created_lazily(self, db_session):
         from sqlmodel import select

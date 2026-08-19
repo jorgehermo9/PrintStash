@@ -11,11 +11,12 @@ from sqlmodel import SQLModel
 
 from app.core.config import settings
 from app.db import models  # noqa: F401
+from app.db.url import normalize_database_url
 
 config = context.config
 default_url = "sqlite:///./dev.sqlite"
 if config.get_main_option("sqlalchemy.url") == default_url:
-    config.set_main_option("sqlalchemy.url", settings.db_url)
+    config.set_main_option("sqlalchemy.url", normalize_database_url(settings.db_url))
 
 if config.config_file_name is not None:
     # disable_existing_loggers defaults to True, which would set .disabled on

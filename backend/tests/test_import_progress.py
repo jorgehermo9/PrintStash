@@ -74,7 +74,7 @@ def test_partial_success_has_summary_and_safe_retry_details() -> None:
     )
     status = jobs.get(job_id)
     assert status is not None
-    assert status.completion == "completed_with_warnings"
+    assert status.completion == "partial"
     assert status.failed_items[0].name == "broken.stl"
     assert "/srv/private" not in status.failed_items[0].reason
     assert "secret" not in status.failed_items[0].reason
@@ -88,7 +88,7 @@ def test_complete_failure_is_distinct_from_partial_success() -> None:
     jobs.update(job_id, state="failed", error="download_failed", retryable=True)
     status = jobs.get(job_id)
     assert status is not None
-    assert status.completion == "failed_before_import"
+    assert status.completion is None
     assert status.succeeded == 0
 
 
@@ -199,6 +199,7 @@ def test_uploaded_zip_inspection_runs_as_reconnectable_job(
     assert payload["stage"] == "completed"
     assert payload["result"]["kind"] == "archive_manifest"
     assert payload["result"]["entries"][0]["name"] == "models/cube.stl"
+    assert status.headers["cache-control"] == "no-store"
 
 
 # --------------------------------------------------------------------------- #

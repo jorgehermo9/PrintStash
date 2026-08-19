@@ -78,7 +78,9 @@ async def _run_hub(printer_id: int, body) -> None:
             pass
 
 
-async def _wait_job_state(job_id: int, *states: PrintJobState, timeout: float = 20.0) -> None:
+async def _wait_job_state(
+    job_id: int, *states: PrintJobState, timeout: float = 20.0
+) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         with get_session_factory().session() as s:
@@ -106,8 +108,12 @@ def test_dispatch_to_two_emulated_printers_both_complete(
     running_a = start_server(app_a)
     running_b = start_server(app_b)
     try:
-        printer_a = Printer(name="Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY)
-        printer_b = Printer(name="Emu B", moonraker_url=running_b.base_url, status=PrinterStatus.READY)
+        printer_a = Printer(
+            name="Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY
+        )
+        printer_b = Printer(
+            name="Emu B", moonraker_url=running_b.base_url, status=PrinterStatus.READY
+        )
         db_session.add(printer_a)
         db_session.add(printer_b)
         db_session.commit()
@@ -119,60 +125,63 @@ def test_dispatch_to_two_emulated_printers_both_complete(
         job1 = client.post(
             "/api/v1/fleet/queue",
             headers=auth_headers,
-            json={"file_id": artifact_1.id, "strategy": "manual", "printer_id": printer_a.id},
+            json={
+                "file_id": artifact_1.id,
+                "strategy": "manual",
+                "printer_id": printer_a.id,
+            },
         ).json()
         job2 = client.post(
             "/api/v1/fleet/queue",
             headers=auth_headers,
-            json={"file_id": artifact_2.id, "strategy": "manual", "printer_id": printer_b.id},
+            json={
+                "file_id": artifact_2.id,
+                "strategy": "manual",
+                "printer_id": printer_b.id,
+            },
         ).json()
 
         with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
             from app.services.printer_jobs import dispatch_next
 
-            async def _dispatch_both() -> tuple[int | None, int | None]:
-                # Single event loop: the pooled http client (app.core.http_client)
-                # is cached across calls and bound to whichever loop created it,
-                # so two separate asyncio.run()s would hand it a closed loop.
+            async def _dispatch_and_drive_both() -> tuple[int | None, int | None]:
+                # Keep the pooled HTTP client and both printer hubs on the event
+                # loop that created them. Splitting this flow across separate
+                # asyncio.run() calls can reuse a client bound to a closed loop.
                 first = await dispatch_next()
                 second = await dispatch_next()
+
+                with get_session_factory().session() as s:
+                    row1 = s.get(PrintJob, job1["id"])
+                    row2 = s.get(PrintJob, job2["id"])
+                    assert row1.printer_id == printer_a.id
+                    assert row2.printer_id == printer_b.id
+
+                hub = PrinterHub()
+                stop = asyncio.Event()
+                tasks = [
+                    asyncio.create_task(hub._run_printer(printer_a.id, stop)),
+                    asyncio.create_task(hub._run_printer(printer_b.id, stop)),
+                ]
+                try:
+                    await asyncio.gather(
+                        _wait_job_state(job1["id"], PrintJobState.COMPLETED),
+                        _wait_job_state(job2["id"], PrintJobState.COMPLETED),
+                    )
+                finally:
+                    stop.set()
+                    for task in tasks:
+                        task.cancel()
+                    for task in tasks:
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+
                 return first, second
 
-            dispatched_1, dispatched_2 = asyncio.run(_dispatch_both())
+            dispatched_1, dispatched_2 = asyncio.run(_dispatch_and_drive_both())
             assert {dispatched_1, dispatched_2} == {job1["id"], job2["id"]}
-
-        with get_session_factory().session() as s:
-            row1 = s.get(PrintJob, job1["id"])
-            row2 = s.get(PrintJob, job2["id"])
-            assert row1.printer_id == printer_a.id
-            assert row2.printer_id == printer_b.id
-
-        async def _drive_both() -> None:
-            async def body() -> None:
-                await asyncio.gather(
-                    _wait_job_state(job1["id"], PrintJobState.COMPLETED),
-                    _wait_job_state(job2["id"], PrintJobState.COMPLETED),
-                )
-
-            hub = PrinterHub()
-            stop = asyncio.Event()
-            tasks = [
-                asyncio.create_task(hub._run_printer(printer_a.id, stop)),
-                asyncio.create_task(hub._run_printer(printer_b.id, stop)),
-            ]
-            try:
-                await body()
-            finally:
-                stop.set()
-                for t in tasks:
-                    t.cancel()
-                for t in tasks:
-                    try:
-                        await t
-                    except asyncio.CancelledError:
-                        pass
-
-        asyncio.run(_drive_both())
 
         with get_session_factory().session() as s:
             for job in (job1, job2):
@@ -186,7 +195,9 @@ def test_dispatch_to_two_emulated_printers_both_complete(
 def test_draining_printer_is_skipped_by_least_busy_routing(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    app_available, _sim = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
+    app_available, _sim = create_app(
+        total_mm=500.0, total_seconds=6.0, print_seconds=1.0
+    )
     running_available = start_server(app_available)
     try:
         draining = Printer(
@@ -197,7 +208,9 @@ def test_draining_printer_is_skipped_by_least_busy_routing(
             drain_reason="Maintenance",
         )
         available = Printer(
-            name="Available", moonraker_url=running_available.base_url, status=PrinterStatus.READY
+            name="Available",
+            moonraker_url=running_available.base_url,
+            status=PrinterStatus.READY,
         )
         db_session.add(draining)
         db_session.add(available)

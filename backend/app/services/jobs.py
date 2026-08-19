@@ -7,6 +7,7 @@ so the swap is mechanical.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import uuid
@@ -26,6 +27,7 @@ from app.schemas.ingest import (
     ImportStage,
     IngestJobStatus,
     JobState,
+    ThumbnailStatus,
 )
 
 # Finished jobs are kept around long enough for clients to poll the terminal
@@ -34,12 +36,26 @@ _FINISHED_TTL = timedelta(hours=1)
 _MAX_JOBS = 1000
 _DEFAULT_TERMINAL_HISTORY = 20
 _PERSISTED_PRUNE_INTERVAL_S = 60.0
+_STUCK_AFTER = timedelta(minutes=15)
 _ACTIVE_STATES = ("pending", "running")
 _TERMINAL_STATES = ("completed", "failed")
 _SECRET_QUERY = re.compile(
     r"(?i)(token|key|secret|password|cookie|signature|credential)=([^&\s]+)"
 )
 _ABS_PATH = re.compile(r"(?<![\w.-])(?:[A-Za-z]:[\\/]|/)[^\s:]+")
+logger = logging.getLogger(__name__)
+
+
+def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Read statuses written before the 0.12 terminal-result contract."""
+    completion = payload.get("completion")
+    if completion == "completed":
+        payload["completion"] = "complete"
+    elif completion == "completed_with_warnings":
+        payload["completion"] = "partial"
+    elif completion == "failed_before_import":
+        payload["completion"] = None
+    return payload
 
 
 def safe_item(value: str | None) -> str | None:
@@ -94,7 +110,7 @@ class JobRegistry:
         return json.dumps(
             job.model_dump(
                 mode="json",
-                exclude={"job_id", "owner_user_id", "visible"},
+                exclude={"job_id", "owner_user_id", "visible", "kind", "updated_at"},
             ),
             separators=(",", ":"),
         )
@@ -107,13 +123,16 @@ class JobRegistry:
                     id=job.job_id,
                     owner_user_id=job.owner_user_id,
                     visible=job.visible,
+                    kind=job.kind,
                     created_at=utcnow(),
                 )
             row.owner_user_id = job.owner_user_id
             row.visible = job.visible
+            row.kind = job.kind
             row.state = job.state
+            job.updated_at = utcnow()
             row.status_json = self._status_payload(job)
-            row.updated_at = utcnow()
+            row.updated_at = job.updated_at
             row.finished_at = job.finished_at
             session.add(row)
             session.commit()
@@ -123,11 +142,13 @@ class JobRegistry:
             row = session.get(BackgroundJob, job_id)
             if row is None:
                 return None
-            payload = json.loads(row.status_json or "{}")
+            payload = _normalize_payload(json.loads(row.status_json or "{}"))
             return IngestJobStatus(
                 job_id=row.id,
                 owner_user_id=row.owner_user_id,
                 visible=row.visible,
+                kind=row.kind,
+                updated_at=row.updated_at,
                 **payload,
             )
 
@@ -145,7 +166,7 @@ class JobRegistry:
                 scope.append(
                     or_(
                         BackgroundJob.owner_user_id.is_(None),  # type: ignore[union-attr]
-                        BackgroundJob.owner_user_id == user_id,
+                        BackgroundJob.owner_user_id == user_id,  # pyright: ignore[reportArgumentType]
                     )
                 )
             active = session.exec(
@@ -161,7 +182,7 @@ class JobRegistry:
                     BackgroundJob.state.in_(_TERMINAL_STATES),  # type: ignore[union-attr]
                     or_(
                         BackgroundJob.finished_at.is_(None),  # type: ignore[union-attr]
-                        BackgroundJob.finished_at >= terminal_cutoff,
+                        BackgroundJob.finished_at >= terminal_cutoff,  # pyright: ignore[reportOptionalOperand, reportArgumentType]
                     ),
                 )
                 .order_by(BackgroundJob.updated_at.desc())  # type: ignore[attr-defined]
@@ -175,7 +196,9 @@ class JobRegistry:
                     job_id=row.id,
                     owner_user_id=row.owner_user_id,
                     visible=row.visible,
-                    **json.loads(row.status_json or "{}"),
+                    kind=row.kind,
+                    updated_at=row.updated_at,
+                    **_normalize_payload(json.loads(row.status_json or "{}")),
                 )
                 for row in rows
             ]
@@ -183,9 +206,10 @@ class JobRegistry:
     def _persisted_counts(self) -> dict[str, int]:
         with get_session_factory().scoped_session() as session:
             rows = session.exec(
-                select(BackgroundJob.state, func.count(BackgroundJob.id)).group_by(
-                    BackgroundJob.state
-                )
+                select(  # pyright: ignore[reportArgumentType]
+                    BackgroundJob.state,  # pyright: ignore[reportArgumentType]
+                    func.count(BackgroundJob.id),  # pyright: ignore[reportArgumentType]
+                ).group_by(BackgroundJob.state)  # pyright: ignore[reportArgumentType]
             ).all()
         counts = {str(state): int(count) for state, count in rows}
         counts["total"] = sum(counts.values())
@@ -224,7 +248,13 @@ class JobRegistry:
             for job_id in finished[: len(self._jobs) - _MAX_JOBS]:
                 del self._jobs[job_id]
 
-    def create(self, owner_user_id: int | None = None, *, visible: bool = True) -> str:
+    def create(
+        self,
+        owner_user_id: int | None = None,
+        *,
+        visible: bool = True,
+        kind: str = "ingest",
+    ) -> str:
         job_id = uuid.uuid4().hex
         with self._lock:
             self._prune_locked()
@@ -233,6 +263,7 @@ class JobRegistry:
                 owner_user_id=owner_user_id,
                 visible=visible,
                 state="pending",
+                kind=kind[:64] or "ingest",
             )
             self._persist(self._jobs[job_id])
         return job_id
@@ -261,24 +292,25 @@ class JobRegistry:
         completion: Optional[ImportCompletion] = None,
         retryable: Optional[bool] = None,
         failed_items: Optional[list[dict[str, Any] | ImportFailedItem]] = None,
+        committed_at=None,
+        thumbnail_status: Optional[ThumbnailStatus] = None,
+        thumbnail_reason: Optional[str] = None,
     ) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
+                job = self._load_one(job_id)
+                if job is None:
+                    return
+                self._jobs[job_id] = job
+            # A persisted terminal result is immutable. This rejects late or
+            # out-of-order worker updates and makes terminal publication idempotent.
+            if job.state in _TERMINAL_STATES:
                 return
-            if state is not None:
-                previously_terminal = job.state in ("completed", "failed")
-                job.state = state
-                if state == "running" and job.started_at is None:
-                    job.started_at = utcnow()
-                if state in ("completed", "failed"):
-                    job.finished_at = utcnow()
-                    job.progress = 100.0
-                    job.stage = "completed"
-                    if not previously_terminal:
-                        from app.core.metrics import record_ingestion_terminal
-
-                        record_ingestion_terminal(state)
+            if state == "pending" and job.state != "pending":
+                return
+            if state == "running" and job.started_at is None:
+                job.started_at = utcnow()
             if model_id is not None:
                 job.model_id = model_id
             if file_id is not None:
@@ -292,7 +324,8 @@ class JobRegistry:
             if label is not None:
                 job.label = label
             if progress is not None:
-                job.progress = max(0.0, min(100.0, float(progress)))
+                proposed = max(0.0, min(99.0, float(progress)))
+                job.progress = max(job.progress or 0.0, proposed)
             if result is not None:
                 job.result = _safe_result(result)
             if stage is not None:
@@ -313,14 +346,12 @@ class JobRegistry:
                 job.failed = max(0, failed)
             if completion is not None:
                 job.completion = completion
-            elif state == "completed":
-                job.completion = (
-                    "completed_with_warnings"
-                    if job.failed or job.skipped
-                    else "completed"
-                )
-            elif state == "failed" and not job.succeeded:
-                job.completion = "failed_before_import"
+            if committed_at is not None:
+                job.committed_at = committed_at
+            if thumbnail_status is not None:
+                job.thumbnail_status = thumbnail_status
+            if thumbnail_reason is not None:
+                job.thumbnail_reason = safe_error(thumbnail_reason)
             if retryable is not None:
                 job.retryable = retryable
             if failed_items is not None:
@@ -346,7 +377,48 @@ class JobRegistry:
                     )
                     for item in failed_items[:100]
                 ]
+            if state is not None:
+                job.state = state
+            if state in _TERMINAL_STATES:
+                if job.started_at is None:
+                    # Even failures before useful work preserve the only valid
+                    # state sequence: pending -> running -> terminal.
+                    job.started_at = utcnow()
+                job.finished_at = utcnow()
+                job.progress = 100.0
+                job.stage = "completed"
+                if state == "completed" and job.completion is None:
+                    job.completion = (
+                        "partial"
+                        if job.failed or job.skipped or job.thumbnail_status == "failed"
+                        else "complete"
+                    )
+                if state == "failed":
+                    job.completion = None
+                from app.core.metrics import record_ingestion_terminal
+
+                result_label = job.completion or "failed"
+                duration = (job.finished_at - job.started_at).total_seconds()
+                record_ingestion_terminal(job.kind, result_label, duration)
+                logger.info(
+                    "ingestion_job_terminal job_id=%s stage=completed duration_s=%.3f result=%s",
+                    job.job_id,
+                    duration,
+                    result_label,
+                )
             self._persist(job)
+
+    def finish(
+        self,
+        job_id: str,
+        *,
+        state: JobState,
+        **fields: Any,
+    ) -> None:
+        """The single terminal transition for every ingestion/import job."""
+        if state not in _TERMINAL_STATES:
+            raise ValueError("terminal_state_required")
+        self.update(job_id, state=state, **fields)
 
     def get(self, job_id: str) -> Optional[IngestJobStatus]:
         with self._lock:
@@ -354,9 +426,8 @@ class JobRegistry:
             if persisted is None:
                 self._jobs.pop(job_id, None)
                 return None
-            cached = self._jobs.get(job_id)
-            if cached is not None:
-                return cached
+            # The database is authoritative; never return a stale process-local
+            # copy after another worker has committed a newer status.
             self._jobs[job_id] = persisted
             return persisted
 
@@ -394,15 +465,25 @@ class JobRegistry:
             self._prune_locked()
             persisted = self._persisted_counts()
             counts.update(persisted)
+            with get_session_factory().scoped_session() as session:
+                stuck = session.exec(
+                    select(func.count(BackgroundJob.id)).where(  # pyright: ignore[reportArgumentType]
+                        BackgroundJob.state.in_(_ACTIVE_STATES),  # type: ignore[union-attr]
+                        BackgroundJob.updated_at < utcnow() - _STUCK_AFTER,
+                    )
+                ).one()
+            from app.core.metrics import set_ingestion_stuck_jobs
+
+            set_ingestion_stuck_jobs(int(stuck))
         return counts
 
 
 def reconcile_interrupted_jobs() -> int:
-    """Resolve work stranded in RUNNING by an unclean process shutdown."""
+    """Fail pending/running work orphaned by an unclean process shutdown."""
     with get_session_factory().scoped_session() as session:
         rows = list(
             session.exec(
-                select(BackgroundJob).where(BackgroundJob.state == "running")
+                select(BackgroundJob).where(BackgroundJob.state.in_(_ACTIVE_STATES))  # type: ignore[union-attr]
             ).all()
         )
     for row in rows:
@@ -410,18 +491,12 @@ def reconcile_interrupted_jobs() -> int:
         status = jobs.get(row.id)
         if status is None:
             continue
-        if row.replay_safe:
-            status.state = "pending"
-            status.started_at = None
-            status.error = None
-            jobs._persist(status)
-        else:
-            jobs.update(
-                row.id,
-                state="failed",
-                error="interrupted_by_restart",
-                retryable=True,
-            )
+        jobs.finish(
+            row.id,
+            state="failed",
+            error="interrupted_by_restart",
+            retryable=True,
+        )
     return len(rows)
 
 

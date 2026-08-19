@@ -18,6 +18,7 @@ import {
   HardDrive,
   HeartPulse,
   Info,
+  Images,
   KeyRound,
   Copy,
   Loader2,
@@ -37,7 +38,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { TabBar } from "@/components/ui/tabs";
 import { inputClasses } from "@/components/ui/input";
-import { Localized } from "@/components/ui/localized";
+import { Localized, translateUiText } from "@/components/ui/localized";
 import { cn } from "@/lib/utils";
 import { useRouter, useSearchParams } from "@/lib/navigation";
 import { CURRENCY_OPTIONS } from "@/lib/currency";
@@ -60,6 +61,7 @@ import {
   downloadModelExport,
   downloadLibraryArchive,
   importLibraryArchive,
+  rebuildModelThumbnails,
   getHealthDetails,
   getLatestRelease,
   getVaultConfig,
@@ -103,10 +105,19 @@ import {
 import { toast } from "@/lib/toast";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import {
-  readPrinterCardImagePreference,
+  usePrinterCardImagePreference,
   writePrinterCardImagePreference,
 } from "@/lib/printer-card-display";
 import { CHANGELOG, GITHUB_REPO } from "@/lib/changelog";
+import {
+  DEFAULT_PREVIEW_PREFERENCES,
+  readPreviewPreferences,
+  writePreviewPreferences,
+  type PreviewPreferences,
+  type PreviewQuality,
+  type ScreenshotScale,
+} from "@/lib/preview-preferences";
+import { trackImportJob } from "@/lib/task-center";
 import type {
   ApiKeyRead,
   CollectionPermissionRead,
@@ -136,6 +147,7 @@ type SettingsSection =
   | "sso"
   | "spoolman"
   | "design"
+  | "previews"
   | "trash"
   | "about";
 
@@ -154,6 +166,7 @@ const SETTINGS_SECTIONS: {
   { id: "sso", labelKey: "settings.sso", icon: ShieldCheck },
   { id: "spoolman", labelKey: "settings.spoolman", icon: Boxes },
   { id: "design", labelKey: "settings.design", icon: Palette },
+  { id: "previews", labelKey: "settings.previews", icon: Images },
   { id: "trash", labelKey: "settings.trash", icon: Trash2 },
   { id: "about", labelKey: "settings.about", icon: Info },
 ];
@@ -236,7 +249,7 @@ function SettingsCard({
 
 export function SettingsPanel() {
   const { user } = useAuth();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
   const latestRelease = CHANGELOG[0];
@@ -279,6 +292,11 @@ export function SettingsPanel() {
   const [autoMarkBusy, setAutoMarkBusy] = useState(false);
   const [currency, setCurrency] = useState("USD");
   const [currencyBusy, setCurrencyBusy] = useState(false);
+  const [previewPreferences, setPreviewPreferences] = useState<PreviewPreferences>(
+    DEFAULT_PREVIEW_PREFERENCES,
+  );
+  const [modelThumbnailWidth, setModelThumbnailWidth] = useState(640);
+  const [previewBusy, setPreviewBusy] = useState<"quality" | "rebuild" | null>(null);
   const [purgeTarget, setPurgeTarget] = useState<number | null>(null);
   const [backingUp, setBackingUp] = useState(false);
   const [backups, setBackups] = useState<BackupMeta[]>([]);
@@ -291,7 +309,7 @@ export function SettingsPanel() {
     DEFAULT_METADATA_PREFERENCES,
   );
   const [cardMetrics, setCardMetrics] = useState<CardMetrics>(DEFAULT_CARD_METRICS);
-  const [showPrinterCardImage, setShowPrinterCardImage] = useState(false);
+  const showPrinterCardImage = usePrinterCardImagePreference();
   const [printerImageWarningOpen, setPrinterImageWarningOpen] = useState(false);
   const visibleSettingsSections = SETTINGS_SECTIONS.filter(
     (section) => !["sso", "maintenance"].includes(section.id) || user?.is_superuser,
@@ -352,7 +370,7 @@ export function SettingsPanel() {
   useEffect(() => {
     setMetadataPrefs(readMetadataPreferences());
     setCardMetrics(readCardMetrics());
-    setShowPrinterCardImage(readPrinterCardImagePreference());
+    setPreviewPreferences(readPreviewPreferences());
   }, []);
 
   useEffect(() => {
@@ -452,6 +470,20 @@ export function SettingsPanel() {
     };
   }, [activeSection, user]);
 
+  useEffect(() => {
+    if (activeSection !== "previews" || !user?.is_superuser) return;
+    let cancelled = false;
+    getVaultConfig()
+      .then((cfg) => {
+        if (cancelled) return;
+        setModelThumbnailWidth(cfg.model_thumbnail_width);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, user]);
+
   async function saveAutoMarkKnownGood(next: boolean) {
     setAutoMarkKnownGood(next);
     setAutoMarkBusy(true);
@@ -480,6 +512,41 @@ export function SettingsPanel() {
       toast.error(e);
     } finally {
       setCurrencyBusy(false);
+    }
+  }
+
+  function savePreviewPreference(patch: Partial<PreviewPreferences>) {
+    const next = { ...previewPreferences, ...patch };
+    setPreviewPreferences(next);
+    writePreviewPreferences(next);
+    toast.success("Preview settings saved for this browser.");
+  }
+
+  async function saveModelThumbnailWidth(next: 320 | 640 | 1280) {
+    const previous = modelThumbnailWidth;
+    setModelThumbnailWidth(next);
+    setPreviewBusy("quality");
+    try {
+      await updateVaultConfig({ model_thumbnail_width: next });
+      toast.success("Model image quality updated for new previews.");
+    } catch (e) {
+      setModelThumbnailWidth(previous);
+      toast.error(e);
+    } finally {
+      setPreviewBusy(null);
+    }
+  }
+
+  async function recreateModelImages() {
+    setPreviewBusy("rebuild");
+    try {
+      const response = await rebuildModelThumbnails();
+      trackImportJob(response.job_id, "Recreate Model preview images");
+      toast.success("Model preview recreation queued. Follow it in Tasks.");
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setPreviewBusy(null);
     }
   }
 
@@ -550,7 +617,7 @@ export function SettingsPanel() {
     setArchiveBusy("import");
     try {
       const result = await importLibraryArchive(file);
-      toast.success(`Imported ${result.created_models} models and ${result.created_files} artifacts`);
+      toast.success(`Library import queued (${result.job_id.slice(0, 8)}). Follow it in activity.`);
     } catch (e) { toast.error(e); }
     finally { setArchiveBusy(null); }
   }
@@ -791,7 +858,6 @@ export function SettingsPanel() {
   }
 
   function updatePrinterCardImagePreference(next: boolean) {
-    setShowPrinterCardImage(next);
     writePrinterCardImagePreference(next);
     toast.success(next ? "Printer card images enabled." : "Printer card images hidden.");
   }
@@ -2018,6 +2084,112 @@ export function SettingsPanel() {
                   );
                 })}
               </div>
+            </div>
+          </SettingsCard>
+        </div>
+      )}
+
+      {activeSection === "previews" && (
+        <div className="space-y-6 animate-panel-in">
+          <SettingsCard
+            icon={Eye}
+            title="Interactive previews"
+            description="Balance sharpness against GPU use in the 3D Model and G-code viewers. This preference is saved in this browser."
+          >
+            <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
+              <label className="block space-y-1">
+                <span className="block font-mono text-3xs uppercase tracking-wider text-muted-foreground">
+                  Preview quality
+                </span>
+                <select
+                  aria-label="Preview quality"
+                  value={previewPreferences.previewQuality}
+                  onChange={(event) =>
+                    savePreviewPreference({
+                      previewQuality: event.target.value as PreviewQuality,
+                    })
+                  }
+                  className={INPUT}
+                >
+                  <option value="performance">Performance · 1×</option>
+                  <option value="balanced">Balanced · 1.5×</option>
+                  <option value="detail">High detail · 2×</option>
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="block font-mono text-3xs uppercase tracking-wider text-muted-foreground">
+                  Screenshot resolution
+                </span>
+                <select
+                  aria-label="Screenshot resolution"
+                  value={previewPreferences.screenshotScale}
+                  onChange={(event) =>
+                    savePreviewPreference({
+                      screenshotScale: Number(event.target.value) as ScreenshotScale,
+                    })
+                  }
+                  className={INPUT}
+                >
+                  <option value={1}>Standard · 1×</option>
+                  <option value={2}>Sharp · 2×</option>
+                  <option value={3}>Print-ready · 3×</option>
+                </select>
+              </label>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard
+            icon={Images}
+            title="Model preview images"
+            description="Choose the resolution of generated Model card images. Higher settings take longer to render and use more memory and storage."
+          >
+            <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-5">
+              <label className="block space-y-1">
+                <span className="block font-mono text-3xs uppercase tracking-wider text-muted-foreground">
+                  Model image quality
+                </span>
+                <select
+                  aria-label="Model image quality"
+                  value={modelThumbnailWidth}
+                  onChange={(event) =>
+                    saveModelThumbnailWidth(
+                      Number(event.target.value) as 320 | 640 | 1280,
+                    )
+                  }
+                  disabled={!user?.is_superuser || previewBusy !== null}
+                  className={INPUT}
+                >
+                  {modelThumbnailWidth !== 320 &&
+                    modelThumbnailWidth !== 640 &&
+                    modelThumbnailWidth !== 1280 && (
+                      <option value={modelThumbnailWidth}>
+                        {translateUiText(locale, "Custom")} · {modelThumbnailWidth} ×{" "}
+                        {Math.round(modelThumbnailWidth * 3 / 4)}
+                      </option>
+                    )}
+                  <option value={320}>Compact · 320 × 240</option>
+                  <option value={640}>Standard · 640 × 480</option>
+                  <option value={1280}>High · 1280 × 960</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={recreateModelImages}
+                disabled={!user?.is_superuser || previewBusy !== null}
+                className={BTN_PRIMARY}
+              >
+                {previewBusy === "rebuild" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Recreate all images
+              </button>
+            </div>
+            <div className="border-t border-border px-4 py-3 sm:px-5">
+              <p className="text-xs text-muted-foreground">
+                Quality changes apply to new images. Recreate all images to update existing Models in the background.
+              </p>
             </div>
           </SettingsCard>
         </div>

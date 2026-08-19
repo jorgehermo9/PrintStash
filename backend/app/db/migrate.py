@@ -30,6 +30,7 @@ from sqlmodel import SQLModel
 from alembic import command
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.db.url import normalize_database_url
 
 logger = get_logger(__name__)
 
@@ -51,7 +52,7 @@ def _alembic_config(url: str) -> Config:
     """
     cfg = Config()
     cfg.set_main_option("script_location", str(_SCRIPT_LOCATION))
-    cfg.set_main_option("sqlalchemy.url", url)
+    cfg.set_main_option("sqlalchemy.url", normalize_database_url(url))
     return cfg
 
 
@@ -253,7 +254,7 @@ def run_migrations(database_url: str | None = None) -> None:
       data backfills are no-ops, so ``create_all`` + ``stamp head`` yields an
       equivalent, head-stamped schema on every supported engine.
     """
-    url = database_url or settings.db_url
+    url = normalize_database_url(database_url or settings.db_url)
 
     engine = create_engine(url)
     try:

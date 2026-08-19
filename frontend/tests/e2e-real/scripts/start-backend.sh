@@ -18,7 +18,7 @@ export VAULT_DATA_DIR="$DATA_ROOT/files"
 export VAULT_THUMB_DIR="$DATA_ROOT/thumbs"
 export VAULT_STAGING_DIR="$DATA_ROOT/staging"
 export VAULT_BACKUP_DIR="$DATA_ROOT/backups"
-export VAULT_JWT_SECRET="e2e-real-secret"
+export VAULT_JWT_SECRET="e2e-real-secret-at-least-32-bytes"
 export VAULT_SECRETS_KEY="e2e-real-secrets-key"
 
 cd "$BACKEND_DIR"

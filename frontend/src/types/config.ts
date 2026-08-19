@@ -73,6 +73,7 @@ export interface VaultConfigRead {
   auto_mark_known_good: boolean;
   external_libraries_enabled: boolean;
   currency: string;
+  model_thumbnail_width: number;
   oidc_enabled: boolean;
   oidc_issuer_url: string;
   oidc_client_id: string;
@@ -105,6 +106,7 @@ export interface VaultConfigUpdate {
   auto_mark_known_good?: boolean;
   external_libraries_enabled?: boolean;
   currency?: string;
+  model_thumbnail_width?: 320 | 640 | 1280;
   oidc_enabled?: boolean;
   oidc_issuer_url?: string;
   oidc_client_id?: string;

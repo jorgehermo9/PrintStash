@@ -195,7 +195,17 @@ const modelList = [
 ];
 
 // Mutable server state a test can flip before navigating (workers: 1, serial).
-const state = { externalLibrariesEnabled: false };
+const state = {
+  externalLibrariesEnabled: false,
+  ingestJobQueued: false,
+  thumbnailRebuildQueued: false,
+};
+
+export function resetMockApiState(): void {
+  state.externalLibrariesEnabled = false;
+  state.ingestJobQueued = false;
+  state.thumbnailRebuildQueued = false;
+}
 
 export function setExternalLibrariesEnabled(value: boolean): void {
   state.externalLibrariesEnabled = value;
@@ -225,6 +235,7 @@ function vaultConfig() {
     has_backup_s3: false,
     auto_mark_known_good: true,
     external_libraries_enabled: state.externalLibrariesEnabled,
+    model_thumbnail_width: 640,
   };
 }
 
@@ -557,12 +568,46 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
   }
   if (req.method === "POST" && url.pathname === "/api/v1/ingest/orca") {
     drainRequest(req, () => {
+      state.ingestJobQueued = true;
       sendJson(res, { job_id: "gcode-job-1", state: "pending", message: "ingestion queued" }, 202);
     });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/api/v1/files/thumbnails/rebuild") {
+    drainRequest(req, () => {
+      state.thumbnailRebuildQueued = true;
+      sendJson(
+        res,
+        { job_id: "thumbnail-job-1", state: "pending", message: "thumbnail rebuild queued" },
+        202,
+      );
+    });
+    return;
+  }
   if (url.pathname === "/api/v1/ingest/jobs") {
-    sendJson(res, []);
+    sendJson(res, state.ingestJobQueued ? [{
+      job_id: "gcode-job-1",
+      state: "completed",
+      stage: "completed",
+      completion: "complete",
+      progress: 100,
+      processed: 1,
+      total: 1,
+      succeeded: 1,
+      deduplicated: 0,
+      skipped: 0,
+      failed: 0,
+      model_id: model.id,
+      file_id: 2,
+      error: null,
+      retryable: false,
+      thumbnail_status: "skipped",
+      thumbnail_reason: "not_mesh",
+      committed_at: now,
+      started_at: now,
+      finished_at: now,
+      updated_at: now,
+    }] : []);
     return;
   }
 

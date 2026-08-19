@@ -71,7 +71,12 @@ From the `printstash-api` template:
   openssl rand -hex 32
   ```
 - Leave the volume paths at their defaults (`/mnt/user/appdata/printstash/...`)
-  or point them wherever you keep app data.
+  or point them at dedicated empty app-data directories.
+
+> **Never map an existing model, NAS, or Nextcloud folder to `/data/files`.**
+> This is PrintStash's private blob store, not an import path. Finish setup with
+> the default dedicated directory, then add existing folders under **Settings →
+> External Libraries** to index their files safely in place.
 
 The template already:
 - relies on the API image, which runs database migrations on every start
@@ -106,16 +111,20 @@ That's it — you're in your vault.
 ## Alternative: Docker Compose Manager plugin
 
 PrintStash ships an official `docker-compose.yml` that already wires both
-services, the network, volumes, and the migration command. If you have the
+services, the network, and volumes. Migrations run from the image entrypoint on
+every start, so there is no command to wire up. If you have the
 **Compose Manager** plugin (from Community Applications), this is the simplest
 path:
 
 1. Install the *Docker Compose Manager* plugin.
 2. Add a new stack and paste the repo's
    [`docker-compose.yml`](https://github.com/xiao-villamor/PrintStash/blob/main/docker-compose.yml).
-3. Set `VAULT_JWT_SECRET` and adjust volume paths to
-   `/mnt/user/appdata/printstash/...` if you like.
-4. Compose up, then open `http://<server-ip>:3000`.
+3. Adjust volume paths to `/mnt/user/appdata/printstash/...` if you like. You do
+   not need to set `VAULT_JWT_SECRET`; the API generates and persists one on first
+   boot.
+4. Compose up, then read the first-run setup token out of the API log
+   (`docker logs printstash-api | grep "setup token"`) and open
+   `http://<server-ip>:3000`.
 
 ---
 
@@ -127,7 +136,8 @@ container variables are mainly bootstrap defaults:
 
 | Variable | Container | Required | Notes |
 |----------|-----------|----------|-------|
-| `VAULT_JWT_SECRET` | API | ✅ | Signs auth tokens. Use `openssl rand -hex 32`. |
+| `VAULT_JWT_SECRET` | API | – | Signs auth tokens. Generated and persisted on first boot if you leave it alone; set it (`openssl rand -hex 32`) only to own the value. Do not add it as an empty template variable, which is read as a deliberate choice and skips the generated secret. |
+| `VAULT_SETUP_TOKEN` | API | – | First-run credential for the setup wizard. Unset means the API logs a random one per process while the vault is unconfigured; set it for a token that survives a container restart. |
 | `VAULT_MAX_UPLOAD_MB` | API | – | Max upload size in MB (default `512`). |
 | `NGINX_CLIENT_MAX_BODY_SIZE` | Frontend | – | Keep in sync with the above, e.g. `512m`. |
 | `VAULT_BACKUP_RETENTION_DAYS` | API | – | `0` keeps backups forever. |
@@ -139,8 +149,8 @@ container variables are mainly bootstrap defaults:
 
 | Path | Holds |
 |------|-------|
-| `/data/files` | Uploaded models and G-code |
-| `/data/thumbs` | Generated thumbnails |
+| `/data/files` | Private PrintStash model/G-code storage; must be a dedicated directory, never an existing library |
+| `/data/thumbs` | Private generated-thumbnail storage; use a dedicated directory |
 | `/data/db` | SQLite database |
 | `/data/staging` | Temporary upload/import staging |
 | `/data/backups` | Local backup archives |

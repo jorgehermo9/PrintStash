@@ -13,6 +13,20 @@ from sqlmodel import Session
 import app.api.v1.health as health_mod
 from app.db.models import Printer, PrinterStatus
 
+
+def test_runtime_capabilities_are_explicit(monkeypatch) -> None:
+    installed = {"numpy", "PIL", "trimesh", "cascadio"}
+    monkeypatch.setattr(
+        health_mod,
+        "find_spec",
+        lambda module: object() if module in installed else None,
+    )
+    capabilities = health_mod._runtime_capabilities()
+    assert capabilities["browser"] is False
+    assert capabilities["step"] is True
+    assert capabilities["thumbnails"] is True
+
+
 # --------------------------------------------------------------------------- #
 # _database_probe
 # --------------------------------------------------------------------------- #

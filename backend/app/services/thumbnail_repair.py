@@ -6,6 +6,7 @@ from app.db.models import File, FileType, Model
 from app.db.scopes import live
 from app.services import mesh_processing, thumbnail
 from app.services.storage_backend import get_backend
+from app.services.storage_ownership import record_creation, replace_owned_bytes
 
 _MESH_TYPES = (FileType.STL, FileType.THREE_MF, FileType.OBJ, FileType.STEP)
 
@@ -34,8 +35,17 @@ def regenerate_model_thumbnail(session: Session, model_id: int) -> bool:
     if not data:
         return False
     key = backend.thumbnail_key(mesh.id)
-    backend.write_bytes(thumbnail.to_webp(data), key)
-    backend.delete(backend.legacy_thumbnail_key(mesh.id))
+    # Do not replace an ID-shaped file without persisted object-level proof.
+    # A collision leaves the existing bytes untouched; the repair can be
+    # retried after an operator resolves the audit finding.
+    encoded = thumbnail.to_webp(data)
+    if backend.exists(key):
+        replace_owned_bytes(
+            session, backend, key, encoded, object_kind="thumbnail"
+        )
+    else:
+        receipt = backend.create_bytes(encoded, key)
+        record_creation(session, receipt, object_kind="thumbnail")
     model.thumbnail_file_id = mesh.id
     model.thumbnail_path = key
     session.add(model)

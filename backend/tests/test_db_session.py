@@ -10,6 +10,7 @@ across tests or collide with the suite's own in-memory test engine.
 from __future__ import annotations
 
 import asyncio
+from importlib.util import find_spec
 
 import pytest
 from sqlalchemy import event, inspect, text
@@ -19,16 +20,25 @@ from sqlmodel import Session, SQLModel, create_engine, select
 import app.db.session as db_session_mod
 from app.core.config import _overlay
 from app.db.session import (
+    AsyncDatabaseCapabilityError,
+    AsyncSessionFactory,
+    SessionFactory,
+    SQLAlchemyAsyncSessionFactory,
     SQLiteSessionFactory,
     _is_alembic_managed,
     _set_sqlite_pragmas,
     create_async_engine_for_db,
+    create_async_session_factory,
+    get_async_session_factory,
     get_engine,
     get_session,
     get_session_factory,
     init_db,
     override_session_factory,
 )
+from app.db.url import normalize_async_database_url, normalize_database_url
+
+_HAS_AIOSQLITE = find_spec("aiosqlite") is not None
 
 # --------------------------------------------------------------------------- #
 # SQLite pragmas
@@ -55,6 +65,7 @@ def test_set_sqlite_pragmas_configures_connection(tmp_path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
 def test_create_async_engine_for_db_sqlite() -> None:
     engine = create_async_engine_for_db("sqlite:///:memory:")
     try:
@@ -66,38 +77,76 @@ def test_create_async_engine_for_db_sqlite() -> None:
 
 @pytest.mark.parametrize(
     "db_url",
-    ["postgresql://u:p@localhost/db", "postgres://u:p@localhost/db"],
+    [
+        "postgresql://u:p@localhost/db",
+        "postgres://u:p@localhost/db",
+        "postgresql+psycopg2://u:p@localhost/db",
+        "postgresql+asyncpg://u:p@localhost/db",
+        "postgresql+psycopg://u:p@localhost/db",
+    ],
 )
 def test_create_async_engine_for_db_postgres_variants(db_url: str) -> None:
     engine = create_async_engine_for_db(db_url)
     try:
         assert isinstance(engine, AsyncEngine)
-        assert engine.url.drivername == "postgresql+asyncpg"
+        assert engine.url.drivername == "postgresql+psycopg"
     finally:
         asyncio.run(engine.dispose())
 
 
 def test_create_async_engine_for_db_passthrough_for_other_scheme() -> None:
-    # An already-async-flavoured URL falls through unchanged.
-    engine = create_async_engine_for_db("postgresql+asyncpg://u:p@localhost/db")
-    try:
-        assert engine.url.drivername == "postgresql+asyncpg"
-    finally:
-        asyncio.run(engine.dispose())
+    assert (
+        normalize_async_database_url("mysql+aiomysql://u:p@localhost/db")
+        == "mysql+aiomysql://u:p@localhost/db"
+    )
 
 
+@pytest.mark.parametrize(
+    "db_url",
+    [
+        "postgres://u:p@localhost/db?sslmode=require",
+        "postgresql://u:p@localhost/db?sslmode=require",
+        "postgresql+psycopg2://u:p@localhost/db?sslmode=require",
+        "postgresql+asyncpg://u:p@localhost/db?sslmode=require",
+        "postgresql+psycopg://u:p@localhost/db?sslmode=require",
+    ],
+)
+def test_postgres_urls_normalize_to_psycopg_for_sync_and_async(db_url: str) -> None:
+    expected = "postgresql+psycopg://u:p@localhost/db?sslmode=require"
+
+    assert normalize_database_url(db_url) == expected
+    assert normalize_async_database_url(db_url) == expected
+
+
+def test_sqlite_url_normalization() -> None:
+    assert normalize_database_url("sqlite:///vault.db") == "sqlite:///vault.db"
+    assert (
+        normalize_async_database_url("sqlite:///vault.db")
+        == "sqlite+aiosqlite:///vault.db"
+    )
+
+
+def test_sqlite_async_without_extra_raises_explicit_capability_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(db_session_mod, "find_spec", lambda _module: None)
+
+    with pytest.raises(AsyncDatabaseCapabilityError, match="async-db"):
+        create_async_engine_for_db("sqlite:///:memory:")
+
+
+@pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
 def test_async_session_factory_is_a_lazy_singleton(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(db_session_mod, "_async_engine", None)
-    monkeypatch.setattr(db_session_mod, "_async_session_maker", None)
+    monkeypatch.setattr(db_session_mod, "_default_async_factory", None)
     monkeypatch.setitem(_overlay, "db_url", "sqlite:///:memory:")
 
-    first = db_session_mod._async_session_factory()
-    second = db_session_mod._async_session_factory()
+    first = get_async_session_factory()
+    second = get_async_session_factory()
     assert first is second  # built once, cached thereafter
 
-    asyncio.run(db_session_mod._async_engine.dispose())
+    asyncio.run(first.dispose())
 
 
 # --------------------------------------------------------------------------- #
@@ -117,6 +166,17 @@ def test_sqlite_session_factory_session_executes_queries(tmp_path) -> None:
         engine.dispose()
 
 
+def test_sync_factory_does_not_implicitly_expose_async_sessions(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
+    factory = SQLiteSessionFactory(engine)
+    try:
+        assert isinstance(factory, SessionFactory)
+        assert not isinstance(factory, AsyncSessionFactory)
+        assert not hasattr(factory, "async_session")
+    finally:
+        engine.dispose()
+
+
 def test_sqlite_session_factory_scoped_session_closes_on_exit(tmp_path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
     SQLModel.metadata.create_all(engine)
@@ -132,22 +192,18 @@ def test_sqlite_session_factory_scoped_session_closes_on_exit(tmp_path) -> None:
     engine.dispose()
 
 
-def test_sqlite_session_factory_async_session(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    monkeypatch.setattr(db_session_mod, "_async_engine", None)
-    monkeypatch.setattr(db_session_mod, "_async_session_maker", None)
-    monkeypatch.setitem(_overlay, "db_url", "sqlite:///:memory:")
-
-    engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
-    factory = SQLiteSessionFactory(engine)
+@pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
+@pytest.mark.asyncio
+async def test_optional_sqlite_async_factory_executes_query(tmp_path) -> None:
+    factory = create_async_session_factory(f"sqlite:///{tmp_path / 'async.sqlite'}")
+    assert isinstance(factory, SQLAlchemyAsyncSessionFactory)
     async_session = factory.async_session()
     try:
-        assert async_session is not None
+        result = await async_session.execute(text("SELECT 1"))
+        assert result.scalar_one() == 1
     finally:
-        asyncio.run(async_session.close())
-        asyncio.run(db_session_mod._async_engine.dispose())
-        engine.dispose()
+        await async_session.close()
+        await factory.dispose()
 
 
 # --------------------------------------------------------------------------- #
@@ -287,8 +343,9 @@ def test_get_session_dependency_yields_and_closes(tmp_path) -> None:
 async def test_get_async_session_dependency_yields_and_closes(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    monkeypatch.setattr(db_session_mod, "_async_engine", None)
-    monkeypatch.setattr(db_session_mod, "_async_session_maker", None)
+    if not _HAS_AIOSQLITE:
+        pytest.skip("requires the async-db extra")
+    monkeypatch.setattr(db_session_mod, "_default_async_factory", None)
     monkeypatch.setitem(_overlay, "db_url", "sqlite:///:memory:")
 
     engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
@@ -302,6 +359,6 @@ async def test_get_async_session_dependency_yields_and_closes(
             await agen.__anext__()
     finally:
         override_session_factory(original)
-        if db_session_mod._async_engine is not None:
-            await db_session_mod._async_engine.dispose()
+        if db_session_mod._default_async_factory is not None:
+            await db_session_mod._default_async_factory.dispose()
         engine.dispose()

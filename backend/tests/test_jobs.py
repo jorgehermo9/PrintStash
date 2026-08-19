@@ -28,15 +28,15 @@ def test_progress_hints_round_trip() -> None:
     assert job.started_at is not None
 
 
-def test_progress_clamped_and_completed_forces_100() -> None:
+def test_progress_is_monotonic_below_terminal_and_completed_forces_100() -> None:
     registry = JobRegistry()
     job_id = registry.create()
 
     registry.update(job_id, progress=250.0)
-    assert registry.get(job_id).progress == 100.0
+    assert registry.get(job_id).progress == 99.0
 
     registry.update(job_id, progress=-3.0)
-    assert registry.get(job_id).progress == 0.0
+    assert registry.get(job_id).progress == 99.0
 
     registry.update(job_id, state="completed")
     job = registry.get(job_id)
@@ -111,3 +111,35 @@ def test_restart_marks_interrupted_non_replayable_job_retryable() -> None:
     assert restored.state == "failed"
     assert restored.error == "interrupted_by_restart"
     assert restored.retryable is True
+
+
+def test_restart_fails_pending_job_even_when_replay_safe() -> None:
+    registry = JobRegistry()
+    job_id = registry.create(owner_user_id=7)
+    with get_session_factory().scoped_session() as session:
+        row = session.get(BackgroundJob, job_id)
+        assert row is not None
+        row.replay_safe = True
+        session.add(row)
+        session.commit()
+
+    assert reconcile_interrupted_jobs() == 1
+    restored = JobRegistry().get(job_id)
+    assert restored is not None
+    assert restored.state == "failed"
+    assert restored.retryable is True
+
+
+def test_terminal_state_cannot_regress_or_be_overwritten() -> None:
+    registry = JobRegistry()
+    job_id = registry.create()
+    registry.update(job_id, state="running", progress=20)
+    registry.finish(job_id, state="completed", result={"winner": "first"})
+    registry.update(job_id, state="running", progress=30)
+    registry.finish(job_id, state="failed", result={"winner": "late"})
+
+    restored = JobRegistry().get(job_id)
+    assert restored is not None
+    assert restored.state == "completed"
+    assert restored.result == {"winner": "first"}
+    assert restored.progress == 100

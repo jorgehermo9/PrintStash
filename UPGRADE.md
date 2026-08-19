@@ -1,91 +1,112 @@
-# PrintStash 0.1 Upgrade Guide
+# PrintStash Upgrade Guide
 
-This guide covers upgrading an existing self-hosted install to the 0.1 initial
-release. SQLite and local disk remain the recommended default path.
+This guide covers supported self-hosted upgrades. SQLite plus local filesystem
+storage remains the default. Always upgrade from a fresh backup and retain the
+previous application image until validation is complete.
 
-## Before You Upgrade
+## Pending 0.12.0 notes
 
-- Confirm you know where your Docker volumes or local data directories live.
-- Create a fresh backup from the UI or API.
-- Stop slicer hooks or scheduled jobs briefly so no uploads arrive during the
-  migration window.
-- Keep the previous image/tag available until the upgraded app has passed smoke
-  checks.
+The `0.12.0` branch is not a published release yet. Its upgrade-relevant
+changes are documented here so the pull request can be reviewed without
+implying that an image or tag already exists.
 
-## Docker Compose Upgrade
+- Existing bcrypt password hashes remain valid. A successful login verifies
+  the legacy hash and replaces it with Argon2; no offline password migration is
+  required.
+- PostgreSQL URLs using `postgres://`, `postgresql://`, or the legacy
+  `postgresql+psycopg2://` form are normalized to the Psycopg 3 dialect.
+  Custom images or scripts that import `psycopg2` or `asyncpg` directly must be
+  updated to `psycopg`.
+- `aiosqlite` is no longer installed by default. Local development that
+  explicitly creates an async SQLite engine must install `--extra async-db`.
+- The default `printstash-api` image remains the full image. The light Compose
+  file now pulls `printstash-api-lite`, which omits browser-assisted imports and
+  STEP tessellation while retaining normal mesh thumbnails.
+- Compose-managed MinIO moved to the transitional migration file. If the
+  installation owns a `printstash_minio` volume, follow
+  [the MinIO migration guide](./docs/minio-migration.md) before changing storage
+  settings. The helper does not delete the source and will be removed in 1.0.
+- Pending/running import jobs left by a restart are marked failed/retryable.
+  Completed and partial states now reflect outputs verified after commit.
+- Database/API changes are additive. The new import-job fields are applied by
+  the normal startup migration path.
+
+## Before upgrading
+
+- Record the currently deployed image tag and Compose project name.
+- Create and download a fresh PrintStash backup.
+- If using SQLite, separately preserve the database volume/file and secrets
+  key. If using S3-compatible storage, preserve its credentials and bucket.
+- Stop slicer hooks, scheduled imports, and other writers during the upgrade.
+- Read the target version's changelog entry and its known limitations.
+
+## Docker Compose
+
+The API image runs database migrations before serving requests. Do not add a
+manual Alembic command or override the image entrypoint.
 
 ```bash
-docker compose down
 docker compose pull
-docker compose run --rm api uv run alembic upgrade head
-docker compose up -d
+docker compose up -d --wait
+docker compose ps
+curl -fsS http://localhost:3000/api/v1/health
 ```
 
-If you build locally instead of pulling an image:
+For the lite deployment:
 
 ```bash
-docker compose down
-docker compose build --pull
-docker compose run --rm api uv run alembic upgrade head
-docker compose up -d
+docker compose -f docker-compose.light.yml pull
+docker compose -f docker-compose.light.yml up -d --wait
 ```
 
-Tagged release images are published as:
+If building locally:
 
-- `ghcr.io/xiao-villamor/printstash-api:<version>`
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.build.yml \
+  up -d --build --wait
+```
+
+Published release images are:
+
+- `ghcr.io/xiao-villamor/printstash-api:<version>` (browser + STEP)
+- `ghcr.io/xiao-villamor/printstash-api-lite:<version>` (compact core)
 - `ghcr.io/xiao-villamor/printstash-frontend:<version>`
 
-Pin those images in a Compose override when you want repeatable upgrades without
-building from source.
+Pin `PRINTSTASH_VERSION` in `.env` for reproducible deployments.
 
-## Local Development Upgrade
+## Local development
 
 ```bash
 cd backend
-uv sync --extra dev
+uv sync --extra dev --extra full
 uv run alembic upgrade head
 ```
 
-Then restart the backend and frontend development servers.
+Add `--extra async-db` only when exercising SQLite through
+`create_async_engine`.
 
-## SQLite Notes
+## Validation after upgrade
 
-- New 0.1 Compose installs use `sqlite:////data/db/printstash.sqlite`.
-- Early development installs may still have `sqlite:////data/db/nexus3d.sqlite`;
-  keep that `VAULT_DB_URL` if you are upgrading an existing volume rather than
-  starting fresh.
-- Always back up the SQLite file before running migrations.
-- Do not edit the SQLite file directly while the API container is running.
+- Sign in and confirm setup/users, models, collections, tags, and statistics.
+- Upload a mesh and verify its authenticated WebP thumbnail appears without a
+  manual reload.
+- Upload/import representative G-code and archive inputs; wait for Task Center
+  to report a durable terminal state.
+- Open authenticated health details and verify the image capabilities match
+  the selected full/lite variant.
+- For PostgreSQL or S3-compatible deployments, verify database/storage health
+  and download representative Artifacts and thumbnails.
+- If migrating MinIO, run Vault Maintenance/audit after switching to SeaweedFS
+  and keep the source volume for the rollback window.
 
-## Troubleshooting Migrations
+## Rollback
 
-- **`No module named alembic.__main__`** — run migrations with the `alembic`
-  console script (`docker compose run --rm api uv run alembic upgrade head`), not
-  `python -m alembic`. Don't hand-edit the Compose `command:` to call
-  `python -m alembic …`; the shipped command is already correct.
-- **`table … already exists` on upgrade** — the app was started once without
-  running migrations (e.g. the Compose `command:` was removed), so it built the
-  schema itself without recording a migration version. Your data is fine. Back up,
-  then run `docker compose run --rm api uv run alembic stamp head` once to record
-  the current version (it touches no data), after which `alembic upgrade head`
-  works normally.
+Stop the upgraded containers before rollback. Restore the pre-upgrade database,
+files/object storage, thumbnails, and secrets key together, then start the
+previous image tag. Schema downgrades against live upgraded data are not the
+supported rollback path.
 
-## Rollback Expectations
-
-- Stop the upgraded containers before attempting rollback.
-- Restore the backup created before upgrade.
-- Start the previous application tag against the restored database/files.
-- Schema downgrades are not the supported rollback path; backup restore is.
-
-## Smoke Checks
-
-After the upgrade:
-
-- Open `http://localhost:3000` and sign in.
-- Check `http://localhost:8000/api/v1/health`; database, storage, backup, and
-  printer provider components should be visible.
-- Upload a small G-code fixture.
-- Confirm the model appears in search with parsed metadata.
-- If using Moonraker/Klipper, open the printer detail page and verify live status.
-
-For recovery details, see [docs/disaster-recovery.md](./docs/disaster-recovery.md).
+For recovery details, see
+[Disaster recovery](./docs/disaster-recovery.md).

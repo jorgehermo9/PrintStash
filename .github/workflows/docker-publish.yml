@@ -21,9 +21,15 @@ jobs:
           - image: printstash-api
             context: ./backend
             dockerfile: ./backend/Dockerfile
+            build-args: PRINTSTASH_VARIANT=full
+          - image: printstash-api-lite
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            build-args: PRINTSTASH_VARIANT=lite
           - image: printstash-frontend
             context: ./frontend
             dockerfile: ./frontend/Dockerfile
+            build-args: ""
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -64,3 +70,4 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build-args }}

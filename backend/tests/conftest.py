@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Iterator
 
@@ -33,7 +34,9 @@ for _var, _path in (
 _db_dir = _TEST_STORAGE_ROOT / "db"
 _db_dir.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("VAULT_DB_URL", f"sqlite:///{_db_dir / 'printstash.sqlite'}")
-os.environ.setdefault("VAULT_SECRETS_KEY_FILE", str(_db_dir / ".printstash-secrets-key"))
+os.environ.setdefault(
+    "VAULT_SECRETS_KEY_FILE", str(_db_dir / ".printstash-secrets-key")
+)
 
 from app.core.config import _overlay, settings  # noqa: E402
 from app.db.session import (  # noqa: E402
@@ -84,7 +87,9 @@ _test_factory = SQLiteSessionFactory(_test_engine)
 # ``_use_threaded_db`` autouse fixture) instead of it being the suite-wide
 # default, since NullPool's real per-checkout connections add contention
 # under the full suite's much higher, non-threaded concurrency.
-THREADED_DB_URL = "sqlite:///file:printstash_threaded_test?mode=memory&cache=shared&uri=true"
+THREADED_DB_URL = (
+    "sqlite:///file:printstash_threaded_test?mode=memory&cache=shared&uri=true"
+)
 _threaded_engine = create_engine(
     THREADED_DB_URL,
     connect_args={"check_same_thread": False, "uri": True},
@@ -108,6 +113,9 @@ _init_test_db(_threaded_engine)
 
 
 _TRUNCATE_TABLES_ORDER = [
+    "storage_delete_intents",
+    "staging_leases",
+    "owned_storage_objects",
     "vault_audit_findings",
     "vault_audit_runs",
     "inbox_items",
@@ -121,10 +129,14 @@ _TRUNCATE_TABLES_ORDER = [
     "printer_maintenance_logs",
     "printer_maintenance_windows",
     "print_jobs",
+    "print_batches",
+    "printer_material_slots",
+    "printer_tools",
     "printers",
     "printer_profiles",
     "filament_profiles",
     "share_links",
+    "artifact_material_requirements",
     "files",
     "model_tags",
     "tags",
@@ -197,6 +209,22 @@ def _ensure_test_sentinels(engine: Engine = _test_engine) -> None:
             session.commit()
 
 
+def _reset_test_storage() -> None:
+    """Keep the shared default test roots isolated between test cases."""
+    for root in (
+        _TEST_STORAGE_ROOT / "files",
+        _TEST_STORAGE_ROOT / "thumbs",
+        _TEST_STORAGE_ROOT / "staging",
+        _TEST_STORAGE_ROOT / "backups",
+    ):
+        root.mkdir(parents=True, exist_ok=True)
+        for child in root.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
+
+
 @pytest.fixture(autouse=True)
 def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Override the session factory ContextVar to use the in-memory test engine.
@@ -209,6 +237,7 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     _overlay.clear()
     _overlay["db_url"] = TEST_DB_URL
     _overlay["secrets_key"] = "printstash-test-secrets-key"
+    _reset_test_storage()
     _truncate_all()
     # Drop the process-wide httpx client so a test that drives async egress in
     # its own asyncio.run() loop doesn't inherit one bound to a prior (closed)

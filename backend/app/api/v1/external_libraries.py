@@ -16,6 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.http import get_or_404
 from app.core.security import require_superuser
 from app.core.time import utcnow
@@ -29,6 +30,12 @@ from app.db.session import SessionFactory, get_session, get_session_factory
 from app.schemas.ingest import IngestResponse
 from app.services import external_library, runtime_config
 from app.services.jobs import registry
+from app.services.storage_paths import (
+    StoragePathOverlapError,
+    sqlite_database_path,
+    validate_file_outside_roots,
+    validate_path_outside_roots,
+)
 
 router = APIRouter(prefix="/libraries", tags=["external-libraries"])
 
@@ -88,12 +95,36 @@ class LibraryPathScan(BaseModel):
     path: str = Field(default="", max_length=1024)
 
 
-def _validate_root_path(root_path: str) -> None:
-    root = Path(root_path)
+def _validate_root_path(
+    root_path: str, session: Session, *, exclude_library_id: int | None = None
+) -> None:
+    root = Path(root_path).expanduser().resolve(strict=False)
     if not root.exists() or not root.is_dir():
         raise HTTPException(status_code=400, detail="root_path_not_a_directory")
     if not os.access(root, os.R_OK):
         raise HTTPException(status_code=400, detail="root_path_unreadable")
+    protected: dict[str, str | Path] = {
+        "data_dir": settings.data_dir,
+        "thumb_dir": settings.thumb_dir,
+        "staging_dir": settings.staging_dir,
+        "backup_dir": settings.backup_dir,
+    }
+    for library in session.exec(select(ExternalLibrary)).all():
+        if library.id != exclude_library_id:
+            protected[f"external_library_{library.id}"] = library.root_path
+    try:
+        validate_path_outside_roots(root, protected)
+        database_path = sqlite_database_path(str(settings.db_url))
+        if database_path is not None:
+            validate_file_outside_roots(database_path, {"external_library": root})
+        validate_file_outside_roots(
+            settings.secrets_key_file, {"external_library": root}
+        )
+    except (OSError, RuntimeError, StoragePathOverlapError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="root_path_overlaps_managed_storage",
+        ) from exc
 
 
 def _validate_schedule(schedule: str) -> None:
@@ -168,7 +199,7 @@ def create_library(
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> LibraryRead:
-    _validate_root_path(body.root_path)
+    _validate_root_path(body.root_path, session)
     _validate_schedule(body.scan_schedule)
     lib = ExternalLibrary(
         name=body.name.strip(),
@@ -202,7 +233,7 @@ def update_library(
 ) -> LibraryRead:
     lib = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
     if body.root_path is not None and body.root_path != lib.root_path:
-        _validate_root_path(body.root_path)
+        _validate_root_path(body.root_path, session, exclude_library_id=lib.id)
         lib.root_path = body.root_path
         lib.fs_kind = external_library.detect_fs_kind(body.root_path)
     if body.name is not None:
@@ -264,8 +295,19 @@ def scan_now(
     session: Session = Depends(get_session),
     session_factory: SessionFactory = Depends(get_session_factory),
 ) -> IngestResponse:
-    get_or_404(session, ExternalLibrary, library_id, "library_not_found")
-    job_id = registry.create(owner_user_id=current_user.id)
+    library = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
+    if (
+        library.scan_claim_token
+        and library.scan_claim_expires_at
+        and library.scan_claim_expires_at > utcnow()
+        and library.scan_job_id
+    ):
+        return IngestResponse(
+            job_id=library.scan_job_id,
+            state="pending",
+            message="library scan already queued",
+        )
+    job_id = registry.create(owner_user_id=current_user.id, kind="external_scan")
     background_tasks.add_task(
         external_library.scan_library,
         library_id,
@@ -297,7 +339,7 @@ def scan_path(
         raise HTTPException(status_code=400, detail="path_outside_library_root")
     if not candidate.is_dir() or not os.access(candidate, os.R_OK):
         raise HTTPException(status_code=400, detail="path_missing_or_unreadable")
-    job_id = registry.create(owner_user_id=current_user.id)
+    job_id = registry.create(owner_user_id=current_user.id, kind="external_scan")
     background_tasks.add_task(
         external_library.scan_library,
         library_id,

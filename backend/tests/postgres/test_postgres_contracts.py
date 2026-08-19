@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 from typing import Iterator
 
 import pytest
+from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import inspect
+from alembic.script import ScriptDirectory
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session, create_engine
 
 from app.db.migrate import run_migrations
@@ -27,6 +31,8 @@ from app.db.models import (
     PrinterRole,
     User,
 )
+from app.db.session import create_async_engine_for_db
+from app.db.url import normalize_database_url
 from app.services.auth import create_refresh_token, rotate_refresh_token
 from app.services.printer_rbac import effective_printer_role
 from app.services.rbac import effective_collection_role
@@ -39,7 +45,7 @@ def postgres_engine() -> Iterator:
     if not _POSTGRES_URL:
         pytest.skip("PRINTSTASH_TEST_POSTGRES_URL is not configured")
     run_migrations(_POSTGRES_URL)
-    engine = create_engine(_POSTGRES_URL, pool_pre_ping=True)
+    engine = create_engine(normalize_database_url(_POSTGRES_URL), pool_pre_ping=True)
     try:
         yield engine
     finally:
@@ -61,8 +67,13 @@ def clean_postgres(postgres_engine) -> None:
 
 
 def test_fresh_bootstrap_is_at_head_with_partial_default_index(postgres_engine) -> None:
+    alembic_config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
     with postgres_engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == "d8f5b2c9a1e7"
+        assert (
+            MigrationContext.configure(connection).get_current_revision()
+            == expected_head
+        )
 
     index = next(
         item
@@ -101,7 +112,10 @@ def test_postgres_crud_enums_rbac_and_default_uniqueness(postgres_engine) -> Non
         )
         session.commit()
 
-        assert effective_collection_role(session, user, collection.id) == CollectionRole.EDIT
+        assert (
+            effective_collection_role(session, user, collection.id)
+            == CollectionRole.EDIT
+        )
         assert effective_printer_role(session, user, printer.id) == PrinterRole.PRINT
 
         session.add(Printer(name="Conflicting default", is_default=True))
@@ -130,3 +144,16 @@ def test_refresh_token_is_consumed_exactly_once_concurrently(postgres_engine) ->
 
     assert results.count(user_id) == 1
     assert results.count(None) == 1
+
+
+@pytest.mark.asyncio
+async def test_psycopg_async_engine_executes_against_real_postgres() -> None:
+    if not _POSTGRES_URL:
+        pytest.skip("PRINTSTASH_TEST_POSTGRES_URL is not configured")
+    engine = create_async_engine_for_db(_POSTGRES_URL)
+    try:
+        async with AsyncSession(engine) as session:
+            result = await session.execute(text("SELECT 1"))
+            assert result.scalar_one() == 1
+    finally:
+        await engine.dispose()

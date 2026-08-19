@@ -2,7 +2,7 @@
 process during a library scan (issue #24).
 
 Loading + rasterising a mesh costs ~700 MB of peak RSS per million triangles,
-and the cost is paid inside ``trimesh.load`` — so the only safe defence is to
+and the cost is paid inside ``trimesh.load_mesh`` — so the only safe defence is to
 estimate the triangle count *before* loading and skip the monster. The file is
 still indexed; a 3MF still yields its embedded slicer preview.
 """
@@ -41,6 +41,35 @@ def _write_binary_stl(path: Path, n_triangles: int) -> None:
         fh.write(b"\x00" * 80)  # header
         fh.write(struct.pack("<I", n_triangles))
         fh.write(b"\x00" * (50 * n_triangles))  # 50 bytes per facet
+
+
+def _write_renderable_binary_stl(path: Path, n_triangles: int) -> None:
+    """Valid non-degenerate facets spread across the model bounds."""
+    record = struct.Struct("<12fH")
+    with path.open("wb") as fh:
+        fh.write(b"fallback-regression".ljust(80, b"\x00"))
+        fh.write(struct.pack("<I", n_triangles))
+        for index in range(n_triangles):
+            x = float(index % 100)
+            y = float((index // 100) % 100)
+            z = float(index % 7) * 0.1
+            fh.write(
+                record.pack(
+                    0.0,
+                    0.0,
+                    1.0,
+                    x,
+                    y,
+                    z,
+                    x + 0.8,
+                    y,
+                    z,
+                    x,
+                    y + 0.8,
+                    z,
+                    0,
+                )
+            )
 
 
 def _fake_mesh(num_faces: int):
@@ -82,6 +111,43 @@ def test_over_cap_mesh_is_never_loaded(tmp_path: Path, monkeypatch) -> None:
     # Indexed, but with no geometry/thumbnail — and crucially, no load attempt.
     assert geometry["triangle_count"] is None
     assert thumb is None
+
+
+def test_over_cap_valid_stl_uses_streaming_thumbnail_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+    path = tmp_path / "issue-67-over-limit.stl"
+    _write_renderable_binary_stl(path, 1_001)
+    monkeypatch.setattr(
+        mesh_processing,
+        "_load_mesh",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("fallback must not load through trimesh")
+        ),
+    )
+
+    geometry, thumb = mesh_processing.analyze_mesh(path)
+
+    assert isinstance(thumb, mesh_processing.FallbackThumbnail)
+    assert thumb.startswith(mesh_processing._PNG_MAGIC)
+    assert geometry["triangle_count"] == 1_001
+    assert geometry["bbox_x_mm"] == 99.8
+    assert geometry["bbox_y_mm"] == 10.8
+
+
+def test_stl_fallback_uniformly_caps_sample_to_100k(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "sampled.stl"
+    _write_renderable_binary_stl(path, 101)
+    result = stl_fallback.render_stl_thumbnail(path, max_triangles=10)
+
+    assert result is not None
+    assert result.triangle_count == 101
+    assert result.sampled_triangles == 10
 
 
 def test_over_cap_3mf_still_gets_embedded_preview(tmp_path: Path, monkeypatch) -> None:
@@ -509,7 +575,7 @@ def test_render_thumbnail_respects_cap_and_falls_back_to_embedded(
 
 def test_to_stl_bytes_refuses_over_cap_mesh(tmp_path: Path, monkeypatch) -> None:
     # A download-as-STL click on a monster 3MF/OBJ must not run an unbounded
-    # trimesh.load (which would OOM the process for every user). Refuse cleanly.
+    # trimesh.load_mesh (which would OOM the process for every user). Refuse cleanly.
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
     p = tmp_path / "dense.3mf"
     with zipfile.ZipFile(p, "w") as zf:
@@ -866,9 +932,68 @@ def test_load_mesh_returns_trimesh_for_real_stl(tmp_path: Path) -> None:
     assert len(mesh.faces) > 0
 
 
+def test_load_mesh_renders_real_step_fixture() -> None:
+    path = Path(__file__).parent / "fixtures" / "cascadio_material.stp"
+
+    mesh = mesh_processing._load_mesh(path)
+    geometry, thumbnail = mesh_processing.analyze_mesh(path)
+
+    assert mesh is not None
+    assert len(mesh.faces) > 0
+    assert geometry["triangle_count"] == len(mesh.faces)
+    assert thumbnail is not None
+    assert thumbnail.startswith(mesh_processing._PNG_MAGIC)
+
+
+def test_step_tessellation_is_killed_when_child_exceeds_rss_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "complex.step"
+    path.write_text("ISO-10303-21;")
+
+    class MemoryHungryProcess:
+        pid = 4242
+        returncode = None
+        killed = False
+
+        def poll(self):
+            return -9 if self.killed else None
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def communicate(self):
+            return b"", b""
+
+    process = MemoryHungryProcess()
+    monkeypatch.setattr(mesh_processing.subprocess, "Popen", lambda *a, **k: process)
+    monkeypatch.setattr(mesh_processing, "_step_memory_budget_bytes", lambda: 1024)
+    monkeypatch.setattr(mesh_processing, "_process_rss_bytes", lambda _pid: 2048)
+
+    assert mesh_processing._load_step_mesh_isolated(path) is None
+    assert process.killed is True
+
+
+def test_step_worker_rejects_tessellation_above_triangle_cap(monkeypatch) -> None:
+    from app.services import step_worker
+
+    path = Path(__file__).parent / "fixtures" / "cascadio_material.stp"
+    output = path.parent / ".step-worker-over-cap.glb"
+    monkeypatch.setenv("PRINTSTASH_STEP_TRIANGLE_LIMIT", "1")
+    monkeypatch.setattr(
+        step_worker.sys, "argv", ["step_worker", str(path), str(output)]
+    )
+    try:
+        assert step_worker.main() == 3
+        assert not output.exists()
+    finally:
+        output.unlink(missing_ok=True)
+
+
 def test_load_mesh_returns_none_for_unrecognised_extension(tmp_path: Path) -> None:
     # trimesh can't even pick a loader for an unknown extension, so this raises
-    # inside trimesh.load — exercising _load_mesh's broad except-and-log path.
+    # inside trimesh.load_mesh — exercising _load_mesh's broad except-and-log path.
     p = tmp_path / "garbage.foobar"
     p.write_bytes(b"this is not a mesh at all \x00\x01\x02")
     assert mesh_processing._load_mesh(p) is None
@@ -877,9 +1002,9 @@ def test_load_mesh_returns_none_for_unrecognised_extension(tmp_path: Path) -> No
 def test_load_mesh_flattens_scene_with_multiple_geometries(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # trimesh.load(..., force="mesh") already concatenates a multi-geometry
+    # trimesh.load_mesh(...) already concatenates a multi-geometry
     # Scene into one Trimesh internally, so _load_mesh's own Scene-flattening
-    # branch is normally unreachable through that call. Stub trimesh.load to
+    # branch is normally unreachable through that call. Stub trimesh.load_mesh to
     # return a real Scene so this (still-real) fallback path is exercised —
     # it's a legitimate defensive path for a future/edge-case trimesh return.
     import trimesh
@@ -893,7 +1018,7 @@ def test_load_mesh_flattens_scene_with_multiple_geometries(
     p = tmp_path / "scene.3mf"
     scene.export(p, file_type="3mf")
 
-    monkeypatch.setattr(trimesh, "load", lambda *a, **k: scene)
+    monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: scene)
     mesh = mesh_processing._load_mesh(p)
     assert mesh is not None
     # Concatenated geometry from both boxes.
@@ -908,7 +1033,7 @@ def test_load_mesh_scene_with_no_trimesh_geometry_returns_none(
     empty_scene = trimesh.Scene()  # no geometry at all
     p = tmp_path / "empty.3mf"
     p.write_bytes(b"placeholder")
-    monkeypatch.setattr(trimesh, "load", lambda *a, **k: empty_scene)
+    monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: empty_scene)
     assert mesh_processing._load_mesh(p) is None
 
 
@@ -922,7 +1047,7 @@ def test_load_mesh_scene_with_single_geometry_returns_it_directly(
     scene.add_geometry(box, node_name="a")
     p = tmp_path / "single.3mf"
     p.write_bytes(b"placeholder")
-    monkeypatch.setattr(trimesh, "load", lambda *a, **k: scene)
+    monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: scene)
     mesh = mesh_processing._load_mesh(p)
     assert mesh is not None
     assert len(mesh.faces) == 12
@@ -935,12 +1060,34 @@ def test_load_mesh_returns_none_for_unsupported_loaded_type(
 
     p = tmp_path / "cloud.stl"
     p.write_bytes(b"placeholder")
-    # trimesh.load can return a PointCloud (or other non-mesh geometry) for
+    # A defensive loader may return a PointCloud (or other non-mesh geometry) for
     # some inputs; _load_mesh must decline rather than mishandle it.
     monkeypatch.setattr(
-        trimesh, "load", lambda *a, **k: trimesh.points.PointCloud([[0, 0, 0]])
+        trimesh,
+        "load_mesh",
+        lambda *a, **k: trimesh.points.PointCloud([[0, 0, 0]]),
     )
     assert mesh_processing._load_mesh(p) is None
+
+
+def test_load_mesh_uses_typed_loader_without_processing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import trimesh
+
+    expected = trimesh.creation.box(extents=[1, 1, 1])
+    calls: list[tuple[tuple, dict]] = []
+
+    def typed_loader(*args, **kwargs):
+        calls.append((args, kwargs))
+        return expected
+
+    monkeypatch.setattr(trimesh, "load_mesh", typed_loader)
+    path = tmp_path / "typed.stl"
+    path.write_bytes(b"placeholder")
+
+    assert mesh_processing._load_mesh(path) is expected
+    assert calls == [((str(path),), {"process": False})]
 
 
 def test_geometry_from_mesh_handles_non_watertight_volume_error(monkeypatch) -> None:

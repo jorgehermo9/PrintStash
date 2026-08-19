@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from sqlalchemy import func
@@ -25,7 +26,7 @@ def _to_float(value: object) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed >= 0 else None
+    return parsed if math.isfinite(parsed) and parsed >= 0 else None
 
 
 def _infer_cost_per_kg(meta: dict[str, Any]) -> float | None:

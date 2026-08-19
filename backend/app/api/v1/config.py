@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlmodel import Session
+from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.security import require_superuser
+from app.db.models import Collection, Document, File, Model
 from app.db.session import get_session
 from app.services import runtime_config
 from app.services.makerworld_auth import (
@@ -44,6 +46,7 @@ class VaultConfigRead(BaseModel):
     auto_mark_known_good: bool = True
     external_libraries_enabled: bool = False
     currency: str = "USD"
+    model_thumbnail_width: int = 640
     oidc_enabled: bool = False
     oidc_issuer_url: str = ""
     oidc_client_id: str = ""
@@ -63,6 +66,7 @@ class VaultConfigUpdate(BaseModel):
     auto_mark_known_good: Optional[bool] = None
     external_libraries_enabled: Optional[bool] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    model_thumbnail_width: Optional[Literal[320, 640, 1280]] = None
     oidc_enabled: Optional[bool] = None
     oidc_issuer_url: Optional[str] = Field(default=None, max_length=512)
     oidc_client_id: Optional[str] = Field(default=None, max_length=255)
@@ -269,6 +273,45 @@ def update_config(
             detail="storage_backend must be 'local' or 's3'",
         )
 
+    def changed(value: str | None, current: object, *, path: bool = False) -> bool:
+        if value is None:
+            return False
+        if value == "":
+            # Clearing an override can expose a different environment default;
+            # treat it as a namespace change unless it is already empty.
+            return str(current) != ""
+        if path:
+            from pathlib import Path
+
+            return Path(value).expanduser().resolve(strict=False) != Path(
+                str(current)
+            ).expanduser().resolve(strict=False)
+        return value != str(current)
+
+    namespace_change = any(
+        (
+            changed(body.storage_backend, settings.storage_backend),
+            changed(body.data_dir, settings.data_dir, path=True),
+            changed(body.thumb_dir, settings.thumb_dir, path=True),
+            changed(body.s3_bucket, settings.s3_bucket),
+            changed(body.s3_endpoint_url, settings.s3_endpoint_url),
+            changed(body.s3_region, settings.s3_region),
+        )
+    )
+    if namespace_change:
+        # Runtime remapping would make row-derived keys point at a new root or
+        # bucket. There is intentionally no in-place shortcut: a future storage
+        # migration must copy, verify, and atomically switch every exact object.
+        owned_state_exists = any(
+            session.exec(select(table.id).limit(1)).first() is not None
+            for table in (File, Document, Model, Collection)
+        )
+        if runtime_config.is_configured(session) or owned_state_exists:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="storage_migration_required",
+            )
+
     if body.auto_mark_known_good is not None:
         runtime_config.set_auto_mark_known_good(session, body.auto_mark_known_good)
 
@@ -292,6 +335,7 @@ def update_config(
         s3_secret_key=body.s3_secret_key,
         backup_retention_days=body.backup_retention_days,
         trash_retention_days=body.trash_retention_days,
+        model_thumbnail_width=body.model_thumbnail_width,
         backup_s3_bucket=body.backup_s3_bucket,
         backup_s3_endpoint_url=body.backup_s3_endpoint_url,
         backup_s3_region=body.backup_s3_region,

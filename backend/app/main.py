@@ -5,6 +5,7 @@ import hmac
 import time
 import uuid
 from contextlib import asynccontextmanager
+from functools import partial
 
 from fastapi import FastAPI, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -22,12 +23,15 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.metrics import app_info as _app_info
 from app.core.metrics import (
+    background_job_depth,
     fleet_blocked_jobs,
     fleet_jobs,
     fleet_scheduler_last_tick,
     fleet_scheduler_running,
     observe_request,
     printer_status,
+    staging_bytes,
+    storage_delete_intents,
 )
 from app.core.metrics import registry as _metrics_registry
 from app.core.topology import acquire_process_lock, release_process_lock
@@ -45,6 +49,7 @@ from app.services.library_watcher import LibraryWatcher
 from app.services.notifications import run_dispatcher_loop
 from app.services.printer_hub import PrinterHub
 from app.services.printer_jobs import reconcile_stranded_dispatches, run_fleet_scheduler
+from app.services.printer_provider import build_provider_registry, get_provider_client
 from app.services.runtime_config import apply_overlay, ensure_jwt_secret, is_configured
 from app.services.setup_token import current_setup_token
 from app.services.storage_backend import init_backend
@@ -69,6 +74,11 @@ def _safe_db_url(value: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.services.storage_paths import validate_runtime_storage_paths
+
+    # Validate environment-time paths before even creating the process-lock
+    # rendezvous beside the database.
+    validate_runtime_storage_paths()
     process_lock = acquire_process_lock()
     app.state.process_lock = process_lock
     logger.info("starting %s v%s", settings.app_name, settings.app_version)
@@ -77,6 +87,9 @@ async def lifespan(app: FastAPI):
     init_db()
     with get_session_factory().scoped_session() as session:
         apply_overlay(session)
+        # Persisted runtime configuration can differ from environment
+        # defaults, so revalidate before creating the secrets key.
+        validate_runtime_storage_paths()
         # Must run after apply_overlay: that call clears the overlay dict.
         ensure_jwt_secret(session)
         configured = is_configured(session)
@@ -124,11 +137,19 @@ async def lifespan(app: FastAPI):
         _safe_db_url(settings.db_url),
     )
     install_audit_listeners()
-    hub = PrinterHub()
+    printer_provider_registry = build_provider_registry()
+    app.state.printer_provider_registry = printer_provider_registry
+    hub = PrinterHub(
+        provider_builder=partial(
+            get_provider_client, registry=printer_provider_registry
+        )
+    )
     app.state.printer_hub = hub
     watcher = LibraryWatcher()
     app.state.library_watcher = watcher
-    app.state.gc_task = asyncio.create_task(_gc_loop())
+    app.state.gc_task = asyncio.create_task(
+        _gc_loop(storage_maintenance_enabled=configured)
+    )
     app.state.external_scan_task = asyncio.create_task(_external_scan_loop())
     app.state.notification_task = asyncio.create_task(run_dispatcher_loop())
     app.state.fleet_scheduler_task = asyncio.create_task(run_fleet_scheduler())
@@ -157,11 +178,14 @@ async def lifespan(app: FastAPI):
     logger.info("shutting down")
 
 
-async def _gc_loop() -> None:
+async def _gc_loop(*, storage_maintenance_enabled: bool = True) -> None:
     # Run once at startup (not sleep-first): a container that lives less than
     # an hour — frequent redeploys, dev — would otherwise never GC expired
     # trash or prune old notification deliveries.
     while True:
+        if not storage_maintenance_enabled:
+            await asyncio.sleep(3600)
+            continue
         if not begin_mutating_operation():
             await asyncio.sleep(1)
             continue
@@ -440,6 +464,39 @@ def _refresh_fleet_gauges() -> None:
     fleet_scheduler_last_tick.set(last_tick.timestamp() if last_tick else 0)
 
 
+def _refresh_persistence_gauges() -> None:
+    from sqlalchemy import func
+
+    from app.db.models import BackgroundJob, StagingLease, StorageDeleteIntent
+
+    try:
+        with get_session_factory().session() as session:
+            jobs = session.exec(
+                select(BackgroundJob.state, func.count(BackgroundJob.id)).group_by(
+                    BackgroundJob.state
+                )
+            ).all()
+            staged = session.exec(
+                select(func.coalesce(func.sum(StagingLease.size_bytes), 0))
+            ).one()
+            intents = session.exec(
+                select(
+                    StorageDeleteIntent.status,
+                    func.count(StorageDeleteIntent.id),
+                ).group_by(StorageDeleteIntent.status)
+            ).all()
+    except Exception:
+        logger.exception("metrics: failed to refresh persistence gauges")
+        return
+    background_job_depth.clear()
+    for state, count in jobs:
+        background_job_depth.labels(state=str(state)).set(count)
+    staging_bytes.set(int(staged))
+    storage_delete_intents.clear()
+    for intent_state, count in intents:
+        storage_delete_intents.labels(state=intent_state).set(count)
+
+
 @app.get("/metrics", include_in_schema=False)
 def metrics_endpoint(request: Request) -> Response:
     """Prometheus exposition endpoint.
@@ -458,6 +515,7 @@ def metrics_endpoint(request: Request) -> Response:
             )
     _refresh_printer_gauge()
     _refresh_fleet_gauges()
+    _refresh_persistence_gauges()
     return Response(
         content=generate_latest(_metrics_registry), media_type=CONTENT_TYPE_LATEST
     )

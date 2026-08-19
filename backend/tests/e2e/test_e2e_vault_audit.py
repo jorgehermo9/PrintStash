@@ -8,6 +8,7 @@ audit again.  It deliberately never mutates the primary Artifact bytes.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from sqlmodel import select
@@ -75,7 +76,8 @@ async def test_quick_audit_finds_and_repairs_missing_thumbnail(api, tmp_path, e2
     assert model.thumbnail_path is not None
     backend = get_backend()
     assert backend.exists(model.thumbnail_path)
-    backend.delete(model.thumbnail_path)
+    # Simulate out-of-band loss; unchecked application deletes are disabled.
+    Path(model.thumbnail_path).unlink()
 
     started = await api.post(
         "/api/v1/maintenance/audits", json={"mode": "quick"}, headers=headers

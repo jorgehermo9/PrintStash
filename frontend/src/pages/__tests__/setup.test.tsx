@@ -113,6 +113,20 @@ describe("first-run setup", () => {
     await waitFor(() => expect(mocks.completeSetup).toHaveBeenCalledTimes(2));
   });
 
+  it("explains that an existing library cannot be used as private vault storage", async () => {
+    mocks.completeSetup.mockRejectedValueOnce(
+      new Error('HTTP 400: {"detail":"data_dir_not_empty"}'),
+    );
+    const user = await reachStorage();
+
+    await user.click(screen.getByRole("button", { name: "Complete setup" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "dedicated empty directory",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("External Libraries");
+  });
+
   it("blocks duplicate completion submissions while request is active", async () => {
     let resolve!: (value: unknown) => void;
     mocks.completeSetup.mockReturnValue(new Promise((done) => { resolve = done; }));

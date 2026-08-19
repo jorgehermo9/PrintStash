@@ -115,6 +115,26 @@ describe("import reconnect", () => {
     tc = await import("@/lib/task-center");
     expect(tc.listTasks()[0]).toMatchObject({ jobId: "server-job-1", status: "pending" });
   });
+
+  it("does not let terminal history evict browser-local upload tasks", async () => {
+    const localTitles = ["Upload part-0.stl", "Upload part-1.stl", "Upload part-2.stl"];
+    localTitles.forEach((title) => tc.createTask({ title }));
+    listIngestJobs.mockResolvedValue(
+      Array.from({ length: 20 }, (_, index) => ({
+        job_id: `historical-job-${index}`,
+        state: "completed",
+        model_id: index + 1,
+        file_id: index + 1,
+        error: null,
+        started_at: null,
+        finished_at: "2026-06-14T11:00:00Z",
+      })),
+    );
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks().map((task) => task.title).sort()).toEqual(localTitles.sort());
+  });
 });
 
 describe("clearCompletedTasks", () => {
@@ -214,6 +234,70 @@ describe("subscribeTasks", () => {
   });
 });
 
+describe("terminal import contract", () => {
+  it("emits one completion event per job id and never regresses terminal state", async () => {
+    const completed = vi.fn();
+    const unsubscribe = tc.subscribeImportJobCompletions(completed);
+    tc.trackImportJob("terminal-job", "Import archive");
+    listIngestJobs.mockResolvedValue([
+      {
+        job_id: "terminal-job",
+        state: "completed",
+        model_id: 7,
+        file_id: 9,
+        error: null,
+        started_at: null,
+        finished_at: "2026-06-14T12:00:01Z",
+        updated_at: "2026-06-14T12:00:01Z",
+        completion: "partial",
+        thumbnail_status: "failed",
+        thumbnail_reason: "renderer_no_output",
+      },
+    ]);
+    await tc.syncImportJobs();
+    await tc.syncImportJobs();
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(tc.listTasks()[0]).toMatchObject({
+      status: "completed",
+      completion: "partial",
+      thumbnailReason: "renderer_no_output",
+    });
+
+    listIngestJobs.mockResolvedValue([
+      {
+        job_id: "terminal-job",
+        state: "running",
+        model_id: 7,
+        file_id: 9,
+        error: null,
+        started_at: null,
+        finished_at: null,
+        updated_at: "2026-06-14T11:59:59Z",
+      },
+    ]);
+    await tc.syncImportJobs();
+    expect(tc.listTasks()[0].status).toBe("completed");
+    unsubscribe();
+  });
+
+  it("waits through Task Center instead of creating a competing poller", async () => {
+    listIngestJobs.mockResolvedValue([
+      {
+        job_id: "awaited-job",
+        state: "completed",
+        model_id: 3,
+        file_id: 4,
+        error: null,
+        started_at: null,
+        finished_at: "2026-06-14T12:00:01Z",
+      },
+    ]);
+    const status = await tc.waitForImportJob("awaited-job", "Await import");
+    expect(status.state).toBe("completed");
+    expect(listIngestJobs).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("adaptive import-job synchronization", () => {
   it("stops polling after the initial sync when the server is idle", async () => {
     const stop = tc.startImportJobSync();
@@ -268,6 +352,15 @@ describe("adaptive import-job synchronization", () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(listIngestJobs).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
+    expect(listIngestJobs).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("wakes immediately when connectivity returns", async () => {
+    const stop = tc.startImportJobSync();
+    await vi.advanceTimersByTimeAsync(0);
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
     expect(listIngestJobs).toHaveBeenCalledTimes(2);
     stop();
   });

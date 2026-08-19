@@ -14,6 +14,13 @@ from app.services.jobs import registry
 from app.services.storage_backend import LocalStorageBackend, get_backend
 
 
+def _remove_local_fixture(key: str) -> None:
+    """Simulate an absent/out-of-band object without using production delete."""
+    direct = get_backend().direct_path(key)
+    assert direct is not None
+    direct.unlink(missing_ok=True)
+
+
 def _make_model(db_session: Session, *, name="M", slug="m", hash_="h" * 64) -> Model:
     m = Model(name=name, slug=slug, hash=hash_)
     db_session.add(m)
@@ -177,7 +184,9 @@ class TestThumbnail:
         assert cached.status_code == 304
         assert cached.content == b""
 
-        backend.write_bytes(b"second-thumbnail-is-different", key)
+        direct = backend.direct_path(key)
+        assert direct is not None
+        direct.write_bytes(b"second-thumbnail-is-different")
         rebuilt = client.get(
             f"/api/v1/files/{f.id}/thumbnail",
             headers={**auth_headers, "if-none-match": etag},
@@ -237,8 +246,8 @@ class TestThumbnail:
         backend = get_backend()
         # File IDs are reused across tests (DB is truncated, not the storage
         # backend singleton) — clear any blob a prior test left at this key.
-        backend.delete(backend.thumbnail_key(f.id))
-        backend.delete(backend.legacy_thumbnail_key(f.id))
+        _remove_local_fixture(backend.thumbnail_key(f.id))
+        _remove_local_fixture(backend.legacy_thumbnail_key(f.id))
         backend.write_bytes(b"legacy-png-bytes", backend.legacy_thumbnail_key(f.id))
 
         resp = client.get(f"/api/v1/files/{f.id}/thumbnail", headers=auth_headers)
@@ -251,8 +260,8 @@ class TestThumbnail:
         model = _make_model(db_session, slug="no-thumb-2", hash_="9" * 64)
         f = _make_file(db_session, model)
         backend = get_backend()
-        backend.delete(backend.thumbnail_key(f.id))
-        backend.delete(backend.legacy_thumbnail_key(f.id))
+        _remove_local_fixture(backend.thumbnail_key(f.id))
+        _remove_local_fixture(backend.legacy_thumbnail_key(f.id))
 
         resp = client.get(f"/api/v1/files/{f.id}/thumbnail", headers=auth_headers)
         assert resp.status_code == 404
@@ -308,7 +317,7 @@ class TestFileAsStl:
         # The STL conversion cache is content-addressed by sha256 and lives on
         # the storage backend's disk, which isn't reset between test runs (only
         # the DB is truncated) — clear any stale cache entry from a prior run.
-        backend.delete(backend.stl_cache_key(sha))
+        _remove_local_fixture(backend.stl_cache_key(sha))
 
         calls = {"n": 0}
 

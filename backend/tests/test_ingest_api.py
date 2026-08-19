@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import struct
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -21,8 +23,10 @@ from app.db.models import (
     PrinterProfile,
     User,
 )
+from app.services import ingestion as ingestion_service
 from app.services.auth import create_access_token, hash_password
 from app.services.storage_backend import get_backend
+from app.services.storage_ownership import record_creation
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 WEBP_MAGIC = b"RIFF"
@@ -129,6 +133,34 @@ def _large_cube_stl(min_bytes: int = 1_200_000) -> bytes:
     body = b"\n".join(lines[1:-1]) + b"\n"
     repeat_count = min_bytes // len(body) + 1
     return b"solid large-cube\n" + body * repeat_count + b"endsolid large-cube\n"
+
+
+def _over_cap_binary_stl(n_triangles: int = 1_001) -> bytes:
+    output = io.BytesIO()
+    output.write(b"issue-67".ljust(80, b"\x00"))
+    output.write(struct.pack("<I", n_triangles))
+    record = struct.Struct("<12fH")
+    for index in range(n_triangles):
+        x = float(index % 100)
+        y = float((index // 100) % 100)
+        output.write(
+            record.pack(
+                0,
+                0,
+                1,
+                x,
+                y,
+                0,
+                x + 0.8,
+                y,
+                0,
+                x,
+                y + 0.8,
+                0,
+                0,
+            )
+        )
+    return output.getvalue()
 
 
 def _configure_storage(tmp_path: Path) -> None:
@@ -299,6 +331,83 @@ def test_ingest_stl_creates_db_blob_and_thumbnail(
     assert thumbnail.content.startswith(WEBP_MAGIC)
 
 
+def test_ingest_publishes_terminal_only_after_fresh_durability_check(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+    checkpoints: list[str] = []
+    observed_job_ids: list[str] = []
+    original_verify = ingestion_service.verify_durable_artifact
+
+    def observe_checkpoint(stage: str, current_job_id: str) -> None:
+        if stage == "after_commit":
+            observed_job_ids.append(current_job_id)
+
+    def observed_verify(*args, **kwargs) -> None:
+        status = ingestion_service.registry.get(observed_job_ids[-1])
+        assert status is not None
+        assert status.state == "running"
+        assert status.progress is None or status.progress < 100
+        assert status.committed_at is not None
+        checkpoints.append("fresh_session_and_storage")
+        original_verify(*args, **kwargs)
+
+    monkeypatch.setattr(
+        ingestion_service, "_fault_injection_checkpoint", observe_checkpoint
+    )
+    monkeypatch.setattr(ingestion_service, "verify_durable_artifact", observed_verify)
+    response = client.post(
+        "/api/v1/ingest/model",
+        headers=auth_headers,
+        files={"file": ("durable.stl", _cube_stl(), "application/sla")},
+        data={"model_name": "Durable Cube"},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers).json()
+    assert checkpoints == ["fresh_session_and_storage"]
+    assert status["state"] == "completed"
+    assert status["completion"] == "complete"
+    assert status["thumbnail_status"] == "generated"
+    assert status["committed_at"] is not None
+
+
+def test_exception_after_commit_is_a_durable_partial_result(
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+
+    def inject(stage: str, _job_id: str) -> None:
+        if stage == "after_commit":
+            raise RuntimeError("injected_after_commit")
+
+    monkeypatch.setattr(ingestion_service, "_fault_injection_checkpoint", inject)
+    response = client.post(
+        "/api/v1/ingest/model",
+        headers=auth_headers,
+        files={"file": ("post-commit.stl", _cube_stl(), "application/sla")},
+        data={"model_name": "Post Commit Cube"},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers).json()
+
+    assert status["state"] == "completed"
+    assert status["completion"] == "partial"
+    assert status["thumbnail_reason"] == "post_commit_exception"
+    assert status["retryable"] is True
+    assert db_session.get(Model, status["model_id"]) is not None
+    assert db_session.get(File, status["file_id"]) is not None
+
+
 def test_ingest_model_accepts_payload_over_nginx_default_limit(
     tmp_path: Path,
     client: TestClient,
@@ -331,6 +440,41 @@ def test_ingest_model_accepts_payload_over_nginx_default_limit(
         select(Metadata).where(Metadata.file_id == file_row.id)
     ).one()
     assert metadata.bbox_x_mm == 1.0
+
+
+def test_issue_67_over_cap_stl_persists_authenticated_webp_fallback(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+
+    payload = _completed_job(
+        client,
+        client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={
+                "file": (
+                    "issue-67-over-limit.stl",
+                    _over_cap_binary_stl(),
+                    "application/sla",
+                )
+            },
+            data={"model_name": "Issue 67 Fallback"},
+        ),
+    )
+
+    assert payload["completion"] == "complete"
+    assert payload["thumbnail_status"] == "fallback_generated"
+    thumbnail = client.get(
+        f"/api/v1/files/{payload['file_id']}/thumbnail", headers=auth_headers
+    )
+    assert thumbnail.status_code == 200
+    assert thumbnail.headers["content-type"] == "image/webp"
+    assert thumbnail.content.startswith(WEBP_MAGIC)
 
 
 def test_reuploading_deleted_model_restores_it(
@@ -419,7 +563,14 @@ def test_trash_can_restore_and_purge_model(
     assert delete.status_code == 204
     purged = client.delete(f"/api/v1/models/{model_id}/purge", headers=auth_headers)
     assert purged.status_code == 200, purged.text
-    assert purged.json() == {"purged_model_ids": [model_id], "purged_count": 1}
+    assert purged.json() == {
+        "purged_model_ids": [model_id],
+        "purged_count": 1,
+        "storage_completed": 2,
+        "storage_pending": 0,
+        "storage_blocked": 0,
+        "resources_blocked": 0,
+    }
     db_session.expire_all()
     assert db_session.get(Model, model_id) is None
     assert db_session.get(File, payload["file_id"]) is None
@@ -478,14 +629,30 @@ def test_purge_expired_trash_uses_retention_setting(
     fresh_model_id = fresh_model.id
     old_file_path = old_file.path
     fresh_file_path = fresh_file.path
-    Path(old_file.path).parent.mkdir(parents=True, exist_ok=True)
-    Path(old_file.path).write_bytes(b"old")
-    Path(fresh_file.path).write_bytes(b"new")
+    backend = get_backend()
+    record_creation(
+        db_session,
+        backend.create_bytes(b"old", old_file.path),
+        object_kind="artifact",
+    )
+    record_creation(
+        db_session,
+        backend.create_bytes(b"new", fresh_file.path),
+        object_kind="artifact",
+    )
+    db_session.commit()
 
     purged = client.delete("/api/v1/models/trash/expired", headers=auth_headers)
 
     assert purged.status_code == 200, purged.text
-    assert purged.json() == {"purged_model_ids": [old_model_id], "purged_count": 1}
+    assert purged.json() == {
+        "purged_model_ids": [old_model_id],
+        "purged_count": 1,
+        "storage_completed": 1,
+        "storage_pending": 0,
+        "storage_blocked": 0,
+        "resources_blocked": 0,
+    }
     db_session.expire_all()
     assert db_session.get(Model, old_model_id) is None
     assert db_session.get(Model, fresh_model_id) is not None
@@ -499,6 +666,8 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
+    from PIL import Image
+
     _configure_storage(tmp_path)
 
     payload = _completed_job(
@@ -512,7 +681,11 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
     )
     file_id = payload["file_id"]
     model_id = payload["model_id"]
-    replacement = PNG_MAGIC + b"forced-thumbnail"
+    replacement_buffer = io.BytesIO()
+    Image.new("RGB", (12, 10), (220, 30, 20)).save(
+        replacement_buffer, format="PNG"
+    )
+    replacement = replacement_buffer.getvalue()
 
     monkeypatch.setattr(
         "app.services.mesh_processing.render_thumbnail",
@@ -530,11 +703,16 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
     assert job.status_code == 200, job.text
     payload = job.json()
     assert payload["state"] == "completed", payload
+    assert payload["completion"] == "complete"
+    assert payload["thumbnail_status"] == "generated"
+    assert payload["succeeded"] == 1
     assert payload["result"]["rebuilt"] == [model_id]
 
     thumbnail = client.get(f"/api/v1/files/{file_id}/thumbnail", headers=auth_headers)
     assert thumbnail.status_code == 200, thumbnail.text
-    assert thumbnail.content == replacement
+    assert thumbnail.content.startswith(WEBP_MAGIC)
+    with Image.open(io.BytesIO(thumbnail.content)) as refreshed:
+        assert refreshed.convert("RGB").getpixel((0, 0)) == (220, 30, 20)
 
 
 # --------------------------------------------------------------------------- #

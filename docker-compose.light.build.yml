@@ -1,0 +1,15 @@
+# Build-from-source overlay for docker-compose.light.yml.
+# Usage: docker compose -f docker-compose.light.yml \
+#          -f docker-compose.light.build.yml up -d --build
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        PRINTSTASH_VARIANT: lite

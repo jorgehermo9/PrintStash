@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
@@ -17,10 +18,70 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes after create/rename/unlink."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _copy_stream_create_only(src: BinaryIO, dest: Path) -> Path:
+    """Fully stage and fsync a stream, then publish *dest* atomically/no-replace."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".printstash-download-", dir=dest.parent)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as destination:
+            shutil.copyfileobj(src, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        try:
+            os.link(temp, dest, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise StorageCollisionError(str(dest)) from exc
+        _fsync_directory(dest.parent)
+        return dest
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            logger.warning(
+                "storage download temp cleanup failed", extra={"path": str(temp)}
+            )
+
+
 @dataclass(frozen=True)
 class StorageObjectInfo:
     size: int
     etag: str | None = None
+
+
+class StorageCollisionError(FileExistsError):
+    """A create-only write found an object already present at its exact key."""
+
+
+@dataclass(frozen=True)
+class CreationReceipt:
+    """Positive evidence that one storage operation created one exact object.
+
+    The local fingerprint prevents rollback cleanup from unlinking a file that
+    replaced our object after creation. Remote stores use a per-operation token
+    written into object metadata for the same purpose.
+    """
+
+    key: str
+    size: int
+    token: str
+    backend: str
+    namespace: str
+    etag: str | None = None
+    version_id: str | None = None
+    device: int | None = None
+    inode: int | None = None
+    ctime_ns: int | None = None
 
 
 class StorageBackend(ABC):
@@ -35,6 +96,12 @@ class StorageBackend(ABC):
     between file and streaming responses use ``direct_path()``.
     """
 
+    backend_name: str
+
+    def destructive_lifecycle_findings(self) -> list[dict[str, object]]:
+        """Read-only operator policy findings that may expire managed bytes."""
+        return []
+
     @abstractmethod
     def blob_key(self, slug: str, version: int, filename: str) -> str: ...
 
@@ -48,8 +115,7 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def stl_cache_key(self, sha256: str) -> str:
-        """Key for a derived-STL preview cached by source sha256. Lives outside
-        the blob tree so it is never treated as an orphan blob by the GC."""
+        """Key for a derived-STL preview cached by source sha256."""
 
     @abstractmethod
     def collection_image_key(self, collection_id: int, name: str) -> str:
@@ -69,11 +135,59 @@ class StorageBackend(ABC):
     @abstractmethod
     def exists(self, key: str) -> bool: ...
 
-    @abstractmethod
-    def write_stream(self, src: BinaryIO, key: str) -> int: ...
+    def write_stream(self, src: BinaryIO, key: str) -> int:
+        """Compatibility create-only write; callers needing proof use create_*()."""
+        return self.create_stream(src, key).size
 
-    @abstractmethod
-    def write_bytes(self, data: bytes, key: str) -> int: ...
+    def write_bytes(self, data: bytes, key: str) -> int:
+        """Compatibility create-only write; never replaces an existing key."""
+        return self.create_bytes(data, key).size
+
+    def create_stream(self, src: BinaryIO, key: str) -> CreationReceipt:
+        """Create *key* without replacement.
+
+        Adapters must provide a backend-native atomic conditional create. A
+        check-then-upload compatibility fallback would silently reintroduce the
+        overwrite race this contract exists to prevent.
+        """
+        del src, key
+        raise NotImplementedError("atomic_create_not_supported")
+
+    def create_bytes(self, data: bytes, key: str) -> CreationReceipt:
+        from io import BytesIO
+
+        return self.create_stream(BytesIO(data), key)
+
+    def replace_stream(
+        self, src: BinaryIO, receipt: CreationReceipt
+    ) -> CreationReceipt:
+        """Atomically replace an object only while positive proof still matches."""
+        del src, receipt
+        raise NotImplementedError("atomic_replace_not_supported")
+
+    def replace_bytes(self, data: bytes, receipt: CreationReceipt) -> CreationReceipt:
+        from io import BytesIO
+
+        return self.replace_stream(BytesIO(data), receipt)
+
+    def rollback_create(self, receipt: CreationReceipt) -> bool:
+        """Remove a just-created object only when its receipt still matches.
+
+        Compatibility adapters cannot positively verify their random token, so
+        they fail closed and leak the uncertain object.
+        """
+        del receipt
+        return False
+
+    def creation_matches(self, receipt: CreationReceipt) -> bool:
+        """Return whether the exact object still matches positive proof."""
+        del receipt
+        return False
+
+    def verify_destructive_access(self, keys: list[str]) -> None:
+        """Prove delete capability without touching any pre-existing object."""
+        del keys
+        raise NotImplementedError("destructive_access_probe_not_supported")
 
     @abstractmethod
     def move(self, src_key: str, dest_key: str) -> None: ...
@@ -143,26 +257,33 @@ class StorageBackend(ABC):
         fd, name = tempfile.mkstemp(suffix=Path(key).suffix)
         os.close(fd)
         tmp = Path(name)
+        tmp.unlink()
         try:
             self.download_to_path(key, tmp)
             yield tmp
         finally:
             tmp.unlink(missing_ok=True)
 
-    def move_in(self, src: Path, dest_key: str) -> None:
+    def move_in(self, src: Path, dest_key: str) -> CreationReceipt:
         """Move a local staged file into the vault at *dest_key*.
 
-        Local backend renames; remote backends upload then remove the
-        staged file.
+        Concrete local storage overrides this with create-only placement;
+        remote backends upload and then remove the staged file.
         """
-        if self.direct_path(dest_key) is not None:
-            self.move(str(src), dest_key)
-            return
-        self.upload_file(src, dest_key)
+        with src.open("rb") as incoming:
+            receipt = self.create_stream(incoming, dest_key)
         try:
-            src.unlink(missing_ok=True)
+            src.unlink()
         except OSError:
-            pass
+            # Destination publication already succeeded. Returning its receipt
+            # lets the caller commit ownership (or roll it back precisely);
+            # failing here would strand an untracked destination. A duplicate
+            # staging file is the data-preserving failure mode.
+            logger.warning(
+                "storage move-in left staged source after successful create",
+                extra={"source": str(src), "destination": dest_key},
+            )
+        return receipt
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +292,52 @@ class StorageBackend(ABC):
 
 
 class LocalStorageBackend(StorageBackend):
+    backend_name = "local"
+
+    @staticmethod
+    def _assert_no_managed_escape(path: Path) -> None:
+        """Reject a key lexically inside a managed root that resolves outside it."""
+        lexical = path.expanduser().absolute()
+        roots = [settings.data_dir, settings.thumb_dir]
+        backup_root = getattr(settings, "backup_dir", None)
+        if backup_root is not None:
+            roots.append(backup_root)
+        for configured_root in roots:
+            lexical_root = Path(configured_root).expanduser().absolute()
+            if lexical == lexical_root or lexical.is_relative_to(lexical_root):
+                resolved_root = lexical_root.resolve(strict=False)
+                resolved = lexical.resolve(strict=False)
+                if resolved != resolved_root and not resolved.is_relative_to(
+                    resolved_root
+                ):
+                    raise StorageCollisionError("managed_storage_symlink_escape")
+                return
+
+    @staticmethod
+    def _owned_namespace(path: Path) -> str | None:
+        resolved = path.resolve(strict=False)
+        roots: list[tuple[str, Path]] = [
+            ("data", settings.data_dir),
+            ("thumb", settings.thumb_dir),
+        ]
+        backup_root = getattr(settings, "backup_dir", None)
+        if backup_root is not None:
+            roots.append(("backup", backup_root))
+        for role, configured_root in roots:
+            root = Path(configured_root).resolve(strict=False)
+            if resolved == root or resolved.is_relative_to(root):
+                return f"{role}:{root}"
+        return None
+
     def direct_path(self, key: str) -> Path | None:
         return Path(key)
+
+    @staticmethod
+    def _relocated_receipt(receipt: CreationReceipt, path: Path) -> CreationReceipt:
+        # rename(2) updates ctime on Linux. Device/inode/size still prove that
+        # quarantine captured the same object selected by the preflight check.
+        current = path.stat(follow_symlinks=False)
+        return replace(receipt, key=str(path), ctime_ns=current.st_ctime_ns)
 
     def blob_key(self, slug: str, version: int, filename: str) -> str:
         return str(settings.data_dir / slug / f"v{version}" / filename)
@@ -187,44 +352,232 @@ class LocalStorageBackend(StorageBackend):
         return str(settings.thumb_dir / "stl-cache" / f"{sha256}.stl")
 
     def collection_image_key(self, collection_id: int, name: str) -> str:
-        return str(
-            settings.thumb_dir / "collection-images" / str(collection_id) / name
-        )
+        return str(settings.thumb_dir / "collection-images" / str(collection_id) / name)
 
     def document_file_key(self, document_id: int, name: str) -> str:
         return str(settings.data_dir / "documents" / str(document_id) / name)
 
     def document_image_key(self, document_id: int, name: str) -> str:
-        return str(
-            settings.thumb_dir / "document-images" / str(document_id) / name
-        )
+        return str(settings.thumb_dir / "document-images" / str(document_id) / name)
 
     def exists(self, key: str) -> bool:
         return Path(key).exists()
 
     def write_stream(self, src: BinaryIO, key: str) -> int:
-        dest = Path(key)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        written = 0
-        with dest.open("wb") as out:
-            while True:
-                chunk = src.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
-                written += len(chunk)
-        return written
+        return self.create_stream(src, key).size
 
     def write_bytes(self, data: bytes, key: str) -> int:
+        return self.create_bytes(data, key).size
+
+    def create_stream(self, src: BinaryIO, key: str) -> CreationReceipt:
+        # A remote-compatible subclass may override ``direct_path`` while
+        # inheriting this class. Keep it on the generic seam rather than
+        # interpreting its opaque key as a local filesystem path.
+        if self.direct_path(key) is None:
+            return StorageBackend.create_stream(self, src, key)
+
         dest = Path(key)
+        self._assert_no_managed_escape(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
-        return len(data)
+        fd, temp_name = tempfile.mkstemp(prefix=".printstash-create-", dir=dest.parent)
+        temp = Path(temp_name)
+        written = 0
+        try:
+            with os.fdopen(fd, "wb") as out:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    written += len(chunk)
+                out.flush()
+                os.fsync(out.fileno())
+            try:
+                # link(2) is an atomic no-replace publication on the same
+                # filesystem. Readers never observe the partial temp file.
+                os.link(temp, dest, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise StorageCollisionError(str(dest)) from exc
+            # Dropping the temporary hard link changes ctime/link-count. Capture
+            # the fingerprint only after the destination is the sole link.
+            temp.unlink()
+            _fsync_directory(dest.parent)
+            stat = dest.stat(follow_symlinks=False)
+            return CreationReceipt(
+                key=str(dest),
+                size=written,
+                token=uuid.uuid4().hex,
+                backend="local",
+                namespace=self._owned_namespace(dest)
+                or f"external:{dest.parent.resolve(strict=False)}",
+                device=stat.st_dev,
+                inode=stat.st_ino,
+                ctime_ns=stat.st_ctime_ns,
+            )
+        finally:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "storage create temp cleanup failed", extra={"path": str(temp)}
+                )
+
+    def _quarantine_owned(self, receipt: CreationReceipt) -> Path | None:
+        """Move the current exact inode aside before any unlink or replacement.
+
+        POSIX has no unlink-if-inode-still-matches primitive. A check followed
+        by unlink has a TOCTOU window that could remove a newly mounted or
+        concurrently replaced path. Renaming into a random same-directory
+        quarantine is atomic and non-destructive; only the moved inode is then
+        eligible for deletion.
+        """
+        if not self.creation_matches(receipt):
+            return None
+        dest = Path(receipt.key)
+        fd, quarantine_name = tempfile.mkstemp(
+            prefix=".printstash-quarantine-", dir=dest.parent
+        )
+        os.close(fd)
+        quarantine = Path(quarantine_name)
+        moved = False
+        try:
+            # The only overwritten inode is the empty placeholder just created
+            # by this operation. Whichever inode is at dest is preserved at the
+            # quarantine path for a second proof check.
+            os.replace(dest, quarantine)
+            moved = True
+            moved_receipt = self._relocated_receipt(receipt, quarantine)
+            if self.creation_matches(moved_receipt):
+                return quarantine
+
+            # The path changed after the first check. Restore without replacing
+            # anything that may now occupy the original destination.
+            try:
+                os.link(quarantine, dest, follow_symlinks=False)
+            except FileExistsError as exc:
+                logger.critical(
+                    "storage quarantine preserved a raced object for recovery",
+                    extra={"destination": str(dest), "quarantine": str(quarantine)},
+                )
+                raise StorageCollisionError(str(dest)) from exc
+            quarantine.unlink()
+            moved = False
+            return None
+        finally:
+            if not moved:
+                quarantine.unlink(missing_ok=True)
+
+    def rollback_create(self, receipt: CreationReceipt) -> bool:
+        quarantine = self._quarantine_owned(receipt)
+        if quarantine is None:
+            logger.warning(
+                "storage rollback skipped: destination no longer matches receipt",
+                extra={"key": receipt.key},
+            )
+            return False
+        moved_receipt = self._relocated_receipt(receipt, quarantine)
+        if not self.creation_matches(moved_receipt):
+            logger.critical(
+                "storage quarantine changed before deletion; preserving it",
+                extra={"quarantine": str(quarantine)},
+            )
+            return False
+        quarantine.unlink()
+        return True
+
+    def replace_stream(
+        self, src: BinaryIO, receipt: CreationReceipt
+    ) -> CreationReceipt:
+        dest = Path(receipt.key)
+        fd, temp_name = tempfile.mkstemp(prefix=".printstash-replace-", dir=dest.parent)
+        temp = Path(temp_name)
+        written = 0
+        try:
+            with os.fdopen(fd, "wb") as out:
+                while chunk := src.read(1024 * 1024):
+                    out.write(chunk)
+                    written += len(chunk)
+                out.flush()
+                os.fsync(out.fileno())
+            quarantine = self._quarantine_owned(receipt)
+            if quarantine is None:
+                raise StorageCollisionError(receipt.key)
+            try:
+                # Atomic no-replace publication. If another process claims the
+                # path after quarantine, both its file and our old owned inode
+                # survive; the replacement aborts.
+                os.link(temp, dest, follow_symlinks=False)
+            except FileExistsError as exc:
+                logger.critical(
+                    "storage replacement collision preserved old quarantine",
+                    extra={"destination": str(dest), "quarantine": str(quarantine)},
+                )
+                raise StorageCollisionError(receipt.key) from exc
+            temp.unlink()
+            stat_result = dest.stat(follow_symlinks=False)
+            replacement_receipt = CreationReceipt(
+                key=str(dest),
+                size=written,
+                token=uuid.uuid4().hex,
+                backend="local",
+                namespace=receipt.namespace,
+                device=stat_result.st_dev,
+                inode=stat_result.st_ino,
+                ctime_ns=stat_result.st_ctime_ns,
+            )
+            try:
+                quarantine.unlink()
+            except OSError:
+                # The new object and receipt are durable. Preserve an uncertain
+                # old quarantine rather than failing and orphaning the new one.
+                logger.exception(
+                    "storage replacement left an owned quarantine",
+                    extra={"quarantine": str(quarantine)},
+                )
+            return replacement_receipt
+        finally:
+            temp.unlink(missing_ok=True)
+
+    def creation_matches(self, receipt: CreationReceipt) -> bool:
+        if receipt.backend != "local":
+            return False
+        path = Path(receipt.key)
+        current_namespace = self._owned_namespace(path)
+        if current_namespace is None or current_namespace != receipt.namespace:
+            logger.warning(
+                "storage delete skipped: key is outside its recorded current root",
+                extra={"key": receipt.key},
+            )
+            return False
+        try:
+            stat = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if (
+            stat.st_dev != receipt.device
+            or stat.st_ino != receipt.inode
+            or stat.st_ctime_ns != receipt.ctime_ns
+            or stat.st_size != receipt.size
+        ):
+            return False
+        return True
+
+    def verify_destructive_access(self, keys: list[str]) -> None:
+        # Probe every distinct parent because nested ACLs/read-only submounts
+        # can differ beneath one configured root. mkstemp is O_EXCL: cleanup
+        # targets only the inode this probe just created.
+        if any(self.direct_path(key) is None for key in keys):
+            return super().verify_destructive_access(keys)
+        for parent in {Path(key).parent for key in keys}:
+            fd, probe_name = tempfile.mkstemp(
+                prefix=".printstash-delete-probe-", dir=parent
+            )
+            os.close(fd)
+            Path(probe_name).unlink()
 
     def move(self, src_key: str, dest_key: str) -> None:
-        dest = Path(dest_key)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(src_key, str(dest))
+        del src_key, dest_key
+        raise RuntimeError("unchecked_storage_move_disabled")
 
     def stat_size(self, key: str) -> int:
         return Path(key).stat().st_size
@@ -251,24 +604,20 @@ class LocalStorageBackend(StorageBackend):
                 yield chunk
 
     def download_to_path(self, key: str, dest: Path) -> Path:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(key, str(dest))
-        return dest
+        with Path(key).open("rb") as source:
+            return _copy_stream_create_only(source, dest)
 
     def upload_file(self, src: Path, key: str) -> None:
-        dest = Path(key)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(src), str(dest))
+        with src.open("rb") as source:
+            self.create_stream(source, key)
 
     def ensure_setup(self) -> None:
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         settings.thumb_dir.mkdir(parents=True, exist_ok=True)
 
     def delete(self, key: str) -> None:
-        try:
-            Path(key).unlink(missing_ok=True)
-        except OSError:
-            pass
+        del key
+        raise RuntimeError("unchecked_storage_delete_disabled")
 
     def list_keys(self, prefix: str = "") -> list[str]:
         root = Path(prefix) if prefix else settings.data_dir
@@ -325,6 +674,8 @@ class LocalStorageBackend(StorageBackend):
 
 class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-compatible
     # endpoint; verified against SeaweedFS in the storage-s3 CI job (see docs).
+    backend_name = "s3"
+
     def __init__(self) -> None:
         import boto3
         from botocore.config import Config as BotoConfig
@@ -349,6 +700,39 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         self._bucket = settings.s3_bucket
 
         self._ensure_bucket()
+
+    def destructive_lifecycle_findings(self) -> list[dict[str, object]]:
+        import botocore.exceptions
+
+        try:
+            response = self._client.get_bucket_lifecycle_configuration(
+                Bucket=self._bucket
+            )
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {
+                "404",
+                "NoSuchLifecycleConfiguration",
+                "NoSuchLifecycle",
+            }:
+                return []
+            logger.warning("S3 lifecycle audit failed", exc_info=True)
+            return []
+        managed_prefix = self._prefix()
+        findings: list[dict[str, object]] = []
+        for rule in response.get("Rules", []):
+            if rule.get("Status") != "Enabled" or "Expiration" not in rule:
+                continue
+            filter_value = rule.get("Filter") or {}
+            prefix = str(filter_value.get("Prefix", rule.get("Prefix", "")))
+            if managed_prefix.startswith(prefix) or prefix.startswith(managed_prefix):
+                findings.append(
+                    {
+                        "rule_id": str(rule.get("ID", "unnamed")),
+                        "prefix": prefix,
+                        "expiration": rule["Expiration"],
+                    }
+                )
+        return findings
 
     def _ensure_bucket(self) -> None:
         import botocore.exceptions
@@ -432,8 +816,8 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
             response = self._client.head_object(Bucket=self._bucket, Key=key)
         except botocore.exceptions.ClientError as exc:
             # Only a genuine "not there" is False. Credential, permission and
-            # network errors must raise: swallowing them tells the orphan-blob
-            # GC that every blob is missing, and it deletes the bucket.
+            # network errors must raise: callers need to distinguish an absent
+            # object from a storage backend they cannot inspect.
             if exc.response.get("Error", {}).get("Code") in (
                 "404",
                 "NoSuchKey",
@@ -450,23 +834,230 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         )
 
     def write_stream(self, src: BinaryIO, key: str) -> int:
-        from boto3.s3.transfer import TransferConfig
-
-        threshold = int(settings.s3_multipart_threshold_mb) * 1024 * 1024
-        transfer_cfg = TransferConfig(multipart_threshold=threshold)
-        self._client.upload_fileobj(src, self._bucket, key, Config=transfer_cfg)
-        return self.stat_size(key)
+        return self.create_stream(src, key).size
 
     def write_bytes(self, data: bytes, key: str) -> int:
-        self._client.put_object(Bucket=self._bucket, Key=key, Body=data)
-        return len(data)
+        return self.create_bytes(data, key).size
+
+    def create_stream(self, src: BinaryIO, key: str) -> CreationReceipt:
+        import botocore.exceptions
+
+        token = uuid.uuid4().hex
+        threshold = int(settings.s3_multipart_threshold_mb) * 1024 * 1024
+        spool = tempfile.SpooledTemporaryFile(max_size=threshold)
+        shutil.copyfileobj(src, spool, length=1024 * 1024)
+        size = spool.tell()
+        spool.seek(0)
+        try:
+            if size > threshold:
+                try:
+                    response = self._multipart_create(spool, key=key, token=token)
+                except botocore.exceptions.ParamValidationError:
+                    spool.seek(0)
+                    response = self._client.put_object(
+                        Bucket=self._bucket,
+                        Key=key,
+                        Body=spool,
+                        IfNoneMatch="*",
+                        Metadata={"printstash-create-token": token},
+                    )
+            else:
+                response = self._client.put_object(
+                    Bucket=self._bucket,
+                    Key=key,
+                    Body=spool,
+                    IfNoneMatch="*",
+                    Metadata={"printstash-create-token": token},
+                )
+        except botocore.exceptions.ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in {
+                "412",
+                "PreconditionFailed",
+                "ConditionalRequestConflict",
+            } or status in {409, 412}:
+                raise StorageCollisionError(key) from exc
+            raise
+        finally:
+            spool.close()
+        info = self.object_info(key)
+        if info is None:
+            raise RuntimeError(f"storage create could not verify destination: {key}")
+        etag = response.get("ETag") or info.etag
+        return CreationReceipt(
+            key=key,
+            size=info.size,
+            token=token,
+            backend="s3",
+            namespace=f"{self._bucket}/{self._prefix()}",
+            etag=str(etag) if etag else None,
+            version_id=(
+                str(response["VersionId"]) if response.get("VersionId") else None
+            ),
+        )
+
+    def _multipart_create(
+        self,
+        src: tempfile.SpooledTemporaryFile[bytes],
+        *,
+        key: str,
+        token: str,
+    ) -> dict:
+        """Publish multipart data create-only, aborting every incomplete upload."""
+        created = self._client.create_multipart_upload(
+            Bucket=self._bucket,
+            Key=key,
+            Metadata={"printstash-create-token": token},
+        )
+        upload_id = created["UploadId"]
+        parts: list[dict[str, object]] = []
+        try:
+            part_number = 1
+            while chunk := src.read(8 * 1024 * 1024):
+                uploaded = self._client.upload_part(
+                    Bucket=self._bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                    PartNumber=part_number,
+                    Body=chunk,
+                )
+                parts.append({"ETag": uploaded["ETag"], "PartNumber": part_number})
+                part_number += 1
+            return self._client.complete_multipart_upload(
+                Bucket=self._bucket,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": parts},
+                IfNoneMatch="*",
+            )
+        except Exception:
+            try:
+                self._client.abort_multipart_upload(
+                    Bucket=self._bucket, Key=key, UploadId=upload_id
+                )
+            except Exception:
+                logger.exception("S3 multipart abort failed", extra={"key": key})
+            raise
+
+    def rollback_create(self, receipt: CreationReceipt) -> bool:
+        if not receipt.version_id:
+            if self.object_info(receipt.key) is None:
+                return True
+            logger.warning(
+                "storage delete blocked: S3 object has no immutable version identity",
+                extra={"key": receipt.key},
+            )
+            return False
+        import botocore.exceptions
+
+        try:
+            self._client.head_object(
+                Bucket=self._bucket,
+                Key=receipt.key,
+                VersionId=receipt.version_id,
+            )
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {
+                "404",
+                "NoSuchKey",
+                "NoSuchVersion",
+                "NotFound",
+            }:
+                return True
+            raise
+        if not self.creation_matches(receipt):
+            return False
+        kwargs = {
+            "Bucket": self._bucket,
+            "Key": receipt.key,
+            "VersionId": receipt.version_id,
+        }
+        self._client.delete_object(**kwargs)
+        return True
+
+    def replace_stream(
+        self, src: BinaryIO, receipt: CreationReceipt
+    ) -> CreationReceipt:
+        import botocore.exceptions
+
+        if not receipt.etag or not self.creation_matches(receipt):
+            raise StorageCollisionError(receipt.key)
+        token = uuid.uuid4().hex
+        try:
+            response = self._client.put_object(
+                Bucket=self._bucket,
+                Key=receipt.key,
+                Body=src,
+                IfMatch=receipt.etag,
+                Metadata={"printstash-create-token": token},
+            )
+        except botocore.exceptions.ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in {
+                "412",
+                "PreconditionFailed",
+                "ConditionalRequestConflict",
+            } or status_code in {
+                409,
+                412,
+            }:
+                raise StorageCollisionError(receipt.key) from exc
+            raise
+        info = self.object_info(receipt.key)
+        if info is None:
+            raise RuntimeError("storage_replace_verification_failed")
+        etag = response.get("ETag") or info.etag
+        return CreationReceipt(
+            key=receipt.key,
+            size=info.size,
+            token=token,
+            backend="s3",
+            namespace=receipt.namespace,
+            etag=str(etag) if etag else None,
+            version_id=(
+                str(response["VersionId"]) if response.get("VersionId") else None
+            ),
+        )
+
+    def creation_matches(self, receipt: CreationReceipt) -> bool:
+        if (
+            receipt.backend != "s3"
+            or receipt.namespace != f"{self._bucket}/{self._prefix()}"
+        ):
+            return False
+        try:
+            kwargs = {"Bucket": self._bucket, "Key": receipt.key}
+            if receipt.version_id:
+                kwargs["VersionId"] = receipt.version_id
+            response = self._client.head_object(**kwargs)
+        except Exception:
+            raise
+        metadata = response.get("Metadata", {})
+        if metadata.get("printstash-create-token") != receipt.token:
+            logger.warning(
+                "storage rollback skipped: remote token no longer matches receipt",
+                extra={"key": receipt.key},
+            )
+            return False
+        if int(response.get("ContentLength", -1)) != receipt.size:
+            return False
+        if receipt.etag and str(response.get("ETag", "")) != receipt.etag:
+            return False
+        return True
+
+    def verify_destructive_access(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        probe_key = f"{self._prefix()}.printstash-delete-probes/{uuid.uuid4().hex}"
+        receipt = self.create_bytes(b"", probe_key)
+        if not self.rollback_create(receipt):
+            raise RuntimeError("storage_delete_probe_cleanup_unverified")
 
     def move(self, src_key: str, dest_key: str) -> None:
-        copy_source = {"Bucket": self._bucket, "Key": src_key}
-        self._client.copy_object(
-            Bucket=self._bucket, Key=dest_key, CopySource=copy_source
-        )
-        self._client.delete_object(Bucket=self._bucket, Key=src_key)
+        del src_key, dest_key
+        raise RuntimeError("unchecked_storage_move_disabled")
 
     def stat_size(self, key: str) -> int:
         resp = self._client.head_object(Bucket=self._bucket, Key=key)
@@ -486,26 +1077,29 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
             yield chunk
 
     def download_to_path(self, key: str, dest: Path) -> Path:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        self._client.download_file(self._bucket, key, str(dest))
-        return dest
+        response = self._client.get_object(Bucket=self._bucket, Key=key)
+        return _copy_stream_create_only(response["Body"], dest)
 
     def upload_file(self, src: Path, key: str) -> None:
-        from boto3.s3.transfer import TransferConfig
-
-        threshold = int(settings.s3_multipart_threshold_mb) * 1024 * 1024
-        transfer_cfg = TransferConfig(multipart_threshold=threshold)
-        self._client.upload_file(str(src), self._bucket, key, Config=transfer_cfg)
+        with src.open("rb") as source:
+            self.create_stream(source, key)
 
     def ensure_setup(self) -> None:
         self._ensure_bucket()
-        self._apply_lifecycle_policy()
+        if (
+            int(settings.s3_lifecycle_expiration_days or 0) > 0
+            or int(settings.s3_lifecycle_transition_days or 0) > 0
+        ):
+            # Bucket lifecycle configuration is bucket-wide and replacing it
+            # can destroy operator-managed rules or expire objects that this
+            # installation never proved it owns. Keep automatic mutation off.
+            logger.warning(
+                "automatic S3 lifecycle mutation is disabled for data safety"
+            )
 
     def delete(self, key: str) -> None:
-        try:
-            self._client.delete_object(Bucket=self._bucket, Key=key)
-        except Exception:
-            pass
+        del key
+        raise RuntimeError("unchecked_storage_delete_disabled")
 
     def list_keys(self, prefix: str = "") -> list[str]:
         full_prefix = prefix or self._prefix()

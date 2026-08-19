@@ -52,6 +52,7 @@ THUMBNAIL_FORMATS = {0: "png", 1: "jpg", 2: "qoi"}
 _MAX_BLOCKS = 4096
 _MAX_BLOCK_DATA = 64 * 1024 * 1024  # per-block on-disk data we'll read
 _MAX_METADATA_BYTES = 8 * 1024 * 1024  # total decompressed metadata text
+_MAX_THUMBNAIL_BYTES = 32 * 1024 * 1024
 
 
 def is_bgcode(path: Path) -> bool:
@@ -125,12 +126,26 @@ def _walk(fh, want: frozenset[int]) -> Iterator[Tuple[int, int, bytes, bytes]]:
             fh.seek(4, 1)
 
 
-def _decompress(compression: int, data: bytes) -> Optional[bytes]:
+def _decompress(
+    compression: int, data: bytes, *, max_output: int = _MAX_METADATA_BYTES
+) -> Optional[bytes]:
     if compression == _COMP_NONE:
-        return data
+        return data if len(data) <= max_output else None
     if compression == _COMP_DEFLATE:
         try:
-            return zlib.decompress(data)
+            decompressor = zlib.decompressobj()
+            output = decompressor.decompress(data, max_output + 1)
+            if len(output) > max_output or decompressor.unconsumed_tail:
+                return None
+            output += decompressor.flush(max_output + 1 - len(output))
+            if (
+                len(output) > max_output
+                or not decompressor.eof
+                or decompressor.unused_data
+                or decompressor.unconsumed_tail
+            ):
+                return None
+            return output
         except zlib.error:
             return None
     # Heatshrink (G-code blocks only) — never reached for metadata/thumbnails.
@@ -150,7 +165,7 @@ def read_metadata_text(path: Path) -> Optional[str]:
     try:
         with path.open("rb") as fh:
             for btype, compression, _params, data in _walk(fh, _METADATA_TYPES):
-                raw = _decompress(compression, data)
+                raw = _decompress(compression, data, max_output=_MAX_METADATA_BYTES)
                 if raw is None:
                     continue
                 total += len(raw)
@@ -181,7 +196,7 @@ def iter_thumbnails(path: Path) -> Iterator[Tuple[int, int, int, bytes]]:
     try:
         with path.open("rb") as fh:
             for _btype, compression, params, data in _walk(fh, frozenset({_THUMBNAIL})):
-                raw = _decompress(compression, data)
+                raw = _decompress(compression, data, max_output=_MAX_THUMBNAIL_BYTES)
                 if raw is None or len(params) < 6:
                     continue
                 fmt, width, height = struct.unpack_from("<HHH", params, 0)

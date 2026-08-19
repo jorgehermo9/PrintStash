@@ -1,10 +1,10 @@
 """The single source of truth for "which blobs does the database still own?".
 
-Both the orphan-blob GC (``services.trash``) and the backup manifest
-(``services.backup``) have to answer this question, and they must answer it
-identically: a key the GC believes is orphaned gets deleted, and a key the
-backup misses is silently absent from the archive. They used to census
-``File.path`` alone, which made every Document blob look unowned.
+Backup manifests and vault audits both need a complete, identical answer to
+this question.  The census is deliberately read-only: destructive maintenance
+never treats absence from this snapshot as evidence that a discovered file is
+safe to delete.  The census used to cover ``File.path`` alone, which made every
+Document blob appear unowned.
 """
 
 from __future__ import annotations
@@ -150,9 +150,9 @@ def all_owned_blob_keys(session: Session) -> set[str]:
     Trashed rows are included on purpose: their bytes must survive until the
     row is hard-deleted, otherwise restoring from trash yields an empty file.
 
-    Includes derived and embedded keys now that the sweeper covers their
-    namespaces. External paths remain protected for compatibility and because
-    their bytes are always user-owned.
+    Includes derived and embedded keys for backup/audit completeness. External
+    paths remain included for compatibility even though their bytes are always
+    user-owned.
     """
     snapshot = ownership_snapshot(session, discover=False)
     # Compatibility contract: external File.path values historically appeared

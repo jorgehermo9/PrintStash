@@ -45,7 +45,9 @@ from app.schemas.documents import (
     DocumentUpdate,
 )
 from app.services import rbac
-from app.services.storage_backend import get_backend
+from app.services.storage_backend import StorageCollisionError, get_backend
+from app.services.storage_deletion import process_storage_delete_intents
+from app.services.storage_ownership import UnsafeStorageDeleteError, record_creation
 from app.services.trash import hard_delete_document, restore_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -243,8 +245,16 @@ def permanently_delete_document(
     ).first()
     if document is None:
         raise HTTPException(status_code=404, detail="document_not_found")
-    hard_delete_document(session, document)
+    try:
+        hard_delete_document(session, document)
+    except UnsafeStorageDeleteError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_ownership_unverified",
+        ) from exc
     session.commit()
+    process_storage_delete_intents()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -293,21 +303,31 @@ async def upload_document(
 
     # Binary doc — store the blob keyed by the new row id.
     session.add(doc)
-    session.commit()
-    session.refresh(doc)
+    session.flush()
     safe = _safe_filename(raw)
     backend = get_backend()
     key = backend.document_file_key(doc.id, safe)
-    written = await run_in_threadpool(backend.write_stream, file.file, key)
-    if written > settings.max_upload_bytes:
-        backend.delete(key)
-        session.delete(doc)
+    receipt = None
+    try:
+        receipt = await run_in_threadpool(backend.create_stream, file.file, key)
+        if receipt.size > settings.max_upload_bytes:
+            raise HTTPException(status_code=413, detail="upload_too_large")
+        doc.filename = safe
+        doc.size_bytes = receipt.size
+        session.add(doc)
+        record_creation(session, receipt, object_kind="document")
         session.commit()
-        raise HTTPException(status_code=413, detail="upload_too_large")
-    doc.filename = safe
-    doc.size_bytes = written
-    session.add(doc)
-    session.commit()
+    except StorageCollisionError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_destination_exists",
+        ) from exc
+    except Exception:
+        session.rollback()
+        if receipt is not None:
+            backend.rollback_create(receipt)
+        raise
     session.refresh(doc)
     return _read(session, current_user, doc)
 
@@ -425,8 +445,22 @@ async def upload_document_image(
     name = f"{hashlib.sha256(data).hexdigest()}{'.jpg' if ext == '.jpeg' else ext}"
     backend = get_backend()
     key = backend.document_image_key(doc.id, name)
-    if not backend.exists(key):
-        backend.write_bytes(data, key)
+    receipt = None
+    try:
+        receipt = backend.create_bytes(data, key)
+        record_creation(session, receipt, object_kind="document_image")
+        session.commit()
+    except StorageCollisionError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="storage_destination_exists",
+        ) from exc
+    except Exception:
+        session.rollback()
+        if receipt is not None:
+            backend.rollback_create(receipt)
+        raise
     return DocumentImageUpload(url=f"/api/v1/documents/{doc.id}/images/{name}")
 
 

@@ -450,11 +450,17 @@ class TestAdminDeleteResource:
         self, client: TestClient, db_session: Session, tmp_path
     ) -> None:
         from app.services.storage_backend import get_backend
+        from app.services.storage_ownership import record_creation
 
         admin = _user(db_session, "admin-n")
         backend = get_backend()
-        key = "test-admin-hard-delete.bin"
-        backend.write_bytes(b"hello", key)
+        key = backend.blob_key("host", 1, "test-admin-hard-delete.bin")
+        record_creation(
+            db_session,
+            backend.create_bytes(b"hello", key),
+            object_kind="artifact",
+        )
+        db_session.commit()
         assert backend.exists(key)
 
         model = Model(name="host", slug="host", hash="9" * 64)

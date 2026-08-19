@@ -14,7 +14,17 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from sqlalchemy import Boolean, Column, Index, Integer, Text, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -128,6 +138,36 @@ class RoutingStrategy(str, Enum):
     LEAST_BUSY = "least_busy"
 
 
+class MaterialSlotState(str, Enum):
+    LOADED = "loaded"
+    EMPTY = "empty"
+    UNKNOWN = "unknown"
+
+
+class MaterialSource(str, Enum):
+    MANUAL = "manual"
+    BAMBU_AMS = "bambu_ams"
+    MOONRAKER_SPOOLMAN = "moonraker_spoolman"
+
+
+class JobPriority(str, Enum):
+    LOW = "low"
+    NORMAL = "normal"
+    RUSH = "rush"
+
+
+class CompatibilityPolicy(str, Enum):
+    SAFE = "safe"
+    ALLOW_MISMATCH = "allow_mismatch"
+
+
+class OperatorGateState(str, Enum):
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    RELEASED = "released"
+    HELD = "held"
+
+
 class CollectionRole(str, Enum):
     VIEW = "view"
     EDIT = "edit"
@@ -213,6 +253,25 @@ class Metadata(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
     file: Optional["File"] = Relationship(back_populates="file_metadata")
+
+
+class ArtifactMaterialRequirement(SQLModel, table=True):
+    """Per-tool material facts parsed from one G-code Artifact."""
+
+    __tablename__ = "artifact_material_requirements"
+    __table_args__ = (
+        UniqueConstraint(
+            "file_id", "tool_index", name="uq_artifact_material_requirement_tool"
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    file_id: int = Field(foreign_key="files.id", index=True)
+    tool_index: int = Field(default=0)
+    material_type: Optional[str] = Field(default=None, max_length=64)
+    color_hex: Optional[str] = Field(default=None, max_length=16)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class FilamentProfile(SQLModel, table=True):
@@ -301,10 +360,15 @@ class File(SQLModel, table=True):
         default=None, foreign_key="external_libraries.id", index=True
     )
     source_mtime: Optional[float] = None
+    ingestion_key: Optional[str] = Field(
+        default=None, max_length=64, unique=True, index=True
+    )
+    thumbnail_path: Optional[str] = Field(default=None, max_length=2048)
 
     uploaded_at: datetime = Field(default_factory=utcnow, index=True)
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
 
     model: Optional["Model"] = Relationship(
         back_populates="files",
@@ -344,6 +408,7 @@ class Collection(SQLModel, table=True):
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
@@ -452,6 +517,7 @@ class Model(SQLModel, table=True):
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
@@ -503,6 +569,7 @@ class Document(SQLModel, table=True):
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    purge_token: Optional[str] = Field(default=None, max_length=64, index=True)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
@@ -579,6 +646,14 @@ class Printer(SQLModel, table=True):
     )
     drain_reason: Optional[str] = Field(default=None, max_length=512)
     drain_updated_at: Optional[datetime] = None
+    provider_material_sync_enabled: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default="1"),
+    )
+    operator_release_required: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0", index=True),
+    )
 
     # Cached liveness info (refreshed by the live-state worker).
     status: PrinterStatus = Field(default=PrinterStatus.UNKNOWN, index=True)
@@ -587,6 +662,76 @@ class Printer(SQLModel, table=True):
 
     deleted_at: Optional[datetime] = Field(default=None, index=True)
     deleted_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PrinterTool(SQLModel, table=True):
+    __tablename__ = "printer_tools"
+    __table_args__ = (
+        UniqueConstraint(
+            "printer_id", "source", "tool_key", name="uq_printer_tools_source_key"
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(foreign_key="printers.id", index=True)
+    tool_key: str = Field(default="tool0", max_length=64)
+    label: str = Field(default="Tool 0", max_length=128)
+    nozzle_diameter_mm: Optional[float] = None
+    source: MaterialSource = Field(
+        default=MaterialSource.MANUAL,
+        sa_column=Column(
+            SAEnum(MaterialSource), nullable=False, server_default="MANUAL"
+        ),
+    )
+    observed_at: Optional[datetime] = None
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PrinterMaterialSlot(SQLModel, table=True):
+    __tablename__ = "printer_material_slots"
+    __table_args__ = (
+        UniqueConstraint(
+            "printer_id",
+            "source",
+            "slot_key",
+            name="uq_printer_material_slot_source_key",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(foreign_key="printers.id", index=True)
+    slot_key: str = Field(max_length=64)
+    label: str = Field(max_length=128)
+    tool_key: Optional[str] = Field(default=None, max_length=64)
+    state: MaterialSlotState = Field(
+        default=MaterialSlotState.UNKNOWN,
+        sa_column=Column(
+            SAEnum(MaterialSlotState),
+            nullable=False,
+            server_default="UNKNOWN",
+            index=True,
+        ),
+    )
+    source: MaterialSource = Field(
+        default=MaterialSource.MANUAL,
+        sa_column=Column(
+            SAEnum(MaterialSource), nullable=False, server_default="MANUAL"
+        ),
+    )
+    material_type: Optional[str] = Field(default=None, max_length=64)
+    material_brand: Optional[str] = Field(default=None, max_length=128)
+    color_hex: Optional[str] = Field(default=None, max_length=16)
+    spool_id: Optional[int] = Field(default=None, index=True)
+    spool_name: Optional[str] = Field(default=None, max_length=256)
+    spool_filament_id: Optional[int] = Field(default=None, index=True)
+    observed_at: Optional[datetime] = Field(default=None, index=True)
     created_by: Optional[int] = Field(default=None, foreign_key="users.id")
     updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
@@ -758,6 +903,10 @@ class SystemConfig(SQLModel, table=True):
     # cost). ``None`` falls back to the default "USD".
     currency: Optional[str] = Field(default=None, max_length=3)
 
+    # Generated Model preview width. Null falls back to
+    # VAULT_MODEL_THUMBNAIL_WIDTH (640 by default).
+    model_thumbnail_width: Optional[int] = Field(default=None)
+
     # Opt-in master switch for the Spoolman filament-inventory integration. Off
     # by default: while disabled the Spoolman API/UI are idle and no consumption
     # is written. Spoolman stays the source of truth for spools and remaining
@@ -797,6 +946,85 @@ class SystemConfig(SQLModel, table=True):
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class OwnedStorageObject(SQLModel, table=True):
+    """Object-level proof recorded only after a create-only storage write.
+
+    Legacy rows intentionally have no entry. Their bytes are therefore never
+    eligible for automated deletion: database presence, naming, and directory
+    placement are claims, not proof that this installation created an object.
+    """
+
+    __tablename__ = "owned_storage_objects"
+    __table_args__ = (
+        UniqueConstraint(
+            "backend", "namespace", "key", name="uq_owned_storage_locator"
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    backend: str = Field(max_length=32, index=True)
+    namespace: str = Field(max_length=1024, index=True)
+    key: str = Field(max_length=2048)
+    object_kind: str = Field(max_length=64, index=True)
+    token: str = Field(max_length=64)
+    size_bytes: int
+    etag: Optional[str] = Field(default=None, max_length=255)
+    version_id: Optional[str] = Field(default=None, max_length=1024)
+    device: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    inode: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    ctime_ns: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class StorageDeleteIntent(SQLModel, table=True):
+    """Durable, immutable authorization to delete one exact owned object."""
+
+    __tablename__ = "storage_delete_intents"
+    __table_args__ = (
+        UniqueConstraint(
+            "backend",
+            "namespace",
+            "key",
+            "token",
+            name="uq_storage_delete_intent_receipt",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    backend: str = Field(max_length=32, index=True)
+    namespace: str = Field(max_length=1024)
+    key: str = Field(max_length=2048)
+    object_kind: str = Field(max_length=64, index=True)
+    token: str = Field(max_length=64)
+    size_bytes: int
+    etag: Optional[str] = Field(default=None, max_length=255)
+    version_id: Optional[str] = Field(default=None, max_length=1024)
+    device: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    inode: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    ctime_ns: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    resource_kind: Optional[str] = Field(default=None, max_length=64, index=True)
+    resource_id: Optional[str] = Field(default=None, max_length=64, index=True)
+    status: str = Field(default="pending", max_length=16, index=True)
+    attempts: int = Field(default=0)
+    next_attempt_at: Optional[datetime] = Field(default=None, index=True)
+    last_error: Optional[str] = Field(default=None, max_length=255)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow)
+    completed_at: Optional[datetime] = None
 
 
 class ExternalLibraryCollectionMode(str, Enum):
@@ -874,13 +1102,55 @@ class ExternalLibrary(SQLModel, table=True):
     # JSON blob: {"added": n, "updated": n, "removed": n, "skipped": n,
     #             "errors": [..], "error": "..."}
     last_scan_summary: Optional[str] = Field(default=None, sa_column=Column(Text))
+    scan_claim_token: Optional[str] = Field(default=None, max_length=64, index=True)
+    scan_claim_expires_at: Optional[datetime] = Field(default=None, index=True)
+    scan_job_id: Optional[str] = Field(default=None, max_length=64, index=True)
 
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PrintBatch(SQLModel, table=True):
+    __tablename__ = "print_batches"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_print_batches_quantity_positive"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    file_id: int = Field(foreign_key="files.id", index=True)
+    model_id: int = Field(foreign_key="models.id", index=True)
+    quantity: int
+    routing_strategy: RoutingStrategy = Field(
+        default=RoutingStrategy.LEAST_BUSY,
+        sa_column=Column(
+            SAEnum(RoutingStrategy), nullable=False, server_default="LEAST_BUSY"
+        ),
+    )
+    priority: JobPriority = Field(
+        default=JobPriority.NORMAL,
+        sa_column=Column(SAEnum(JobPriority), nullable=False, server_default="NORMAL"),
+    )
+    target_group: Optional[str] = Field(default=None, max_length=128, index=True)
+    compatibility_policy: CompatibilityPolicy = Field(
+        default=CompatibilityPolicy.SAFE,
+        sa_column=Column(
+            SAEnum(CompatibilityPolicy), nullable=False, server_default="SAFE"
+        ),
+    )
+    requested_by: Optional[int] = Field(
+        default=None, foreign_key="users.id", index=True
+    )
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    updated_by: Optional[int] = Field(default=None, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
 
 class PrintJob(SQLModel, table=True):
     __tablename__ = "print_jobs"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "copy_index", name="uq_print_jobs_batch_copy"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     # Null when the job was logged against an ad-hoc printer that isn't
@@ -891,6 +1161,10 @@ class PrintJob(SQLModel, table=True):
     printer_name: Optional[str] = Field(default=None, max_length=128)
     file_id: int = Field(foreign_key="files.id", index=True)
     model_id: int = Field(foreign_key="models.id", index=True)
+    batch_id: Optional[int] = Field(
+        default=None, foreign_key="print_batches.id", index=True
+    )
+    copy_index: Optional[int] = None
 
     remote_filename: str = Field(max_length=512)  # filename as uploaded to Moonraker
     state: PrintJobState = Field(default=PrintJobState.QUEUED, index=True)
@@ -906,6 +1180,35 @@ class PrintJob(SQLModel, table=True):
         default=0,
         sa_column=Column(Integer, nullable=False, server_default="0", index=True),
     )
+    priority: JobPriority = Field(
+        default=JobPriority.NORMAL,
+        sa_column=Column(
+            SAEnum(JobPriority), nullable=False, server_default="NORMAL", index=True
+        ),
+    )
+    target_group: Optional[str] = Field(default=None, max_length=128, index=True)
+    compatibility_policy: CompatibilityPolicy = Field(
+        default=CompatibilityPolicy.SAFE,
+        sa_column=Column(
+            SAEnum(CompatibilityPolicy),
+            nullable=False,
+            server_default="SAFE",
+            index=True,
+        ),
+    )
+    material_override_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    material_override_at: Optional[datetime] = None
+    operator_gate_state: OperatorGateState = Field(
+        default=OperatorGateState.NOT_REQUIRED,
+        sa_column=Column(
+            SAEnum(OperatorGateState),
+            nullable=False,
+            server_default="NOT_REQUIRED",
+            index=True,
+        ),
+    )
+    operator_decided_by: Optional[int] = Field(default=None, foreign_key="users.id")
+    operator_decided_at: Optional[datetime] = None
     provider_job_id: Optional[str] = Field(default=None, max_length=255, index=True)
     blocked_reason: Optional[str] = Field(default=None, max_length=255)
     dispatch_claimed_at: Optional[datetime] = Field(default=None, index=True)
@@ -922,6 +1225,22 @@ class PrintJob(SQLModel, table=True):
 
     # Distinguishes vault-initiated jobs from those detected on the printer.
     source: str = Field(default="vault", max_length=16)  # "vault" or "external"
+
+    # Provider-side identity and evidence for prints started outside PrintStash.
+    # These fields intentionally describe what the printer reported; they do
+    # not pretend that slicer settings absent from MQTT can be reconstructed.
+    external_display_name: Optional[str] = Field(default=None, max_length=512)
+    external_task_id: Optional[str] = Field(default=None, max_length=255, index=True)
+    external_subtask_id: Optional[str] = Field(default=None, max_length=255)
+    external_project_id: Optional[str] = Field(default=None, max_length=255)
+    external_profile_id: Optional[str] = Field(default=None, max_length=255)
+    external_gcode_file: Optional[str] = Field(default=None, max_length=1024)
+    external_plate_index: Optional[int] = None
+    external_current_layer: Optional[int] = None
+    external_total_layers: Optional[int] = None
+    external_nozzle_diameter: Optional[float] = None
+    artifact_evidence: str = Field(default="vault", max_length=32, index=True)
+    artifact_capture_error: Optional[str] = Field(default=None, max_length=1024)
 
     # Measured outcome, captured from Moonraker when the print finishes.
     # filament in mm (raw from print_stats) and grams (derived when a matching
@@ -1016,9 +1335,43 @@ class BackgroundJob(SQLModel, table=True):
     status_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     payload_json: Optional[str] = Field(default=None, sa_column=Column(Text))
     replay_safe: bool = Field(default=False, index=True)
+    claim_token: Optional[str] = Field(default=None, max_length=64, index=True)
+    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
+    attempts: int = Field(default=0)
+    next_attempt_at: Optional[datetime] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow, index=True)
     updated_at: datetime = Field(default_factory=utcnow, index=True)
     finished_at: Optional[datetime] = Field(default=None, index=True)
+
+
+class StagingLease(SQLModel, table=True):
+    """Exact durable ownership record for one staged ingestion object."""
+
+    __tablename__ = "staging_leases"
+
+    id: str = Field(primary_key=True, max_length=64)
+    path: str = Field(unique=True, max_length=2048)
+    owner_user_id: Optional[int] = Field(
+        default=None, foreign_key="users.id", index=True
+    )
+    background_job_id: str = Field(
+        foreign_key="background_jobs.id", unique=True, index=True
+    )
+    size_bytes: int
+    sha256: str = Field(max_length=64, index=True)
+    device: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    inode: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    ctime_ns: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
+    destination_key: Optional[str] = Field(default=None, max_length=2048)
+    receipt_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class VaultAuditRun(SQLModel, table=True):
