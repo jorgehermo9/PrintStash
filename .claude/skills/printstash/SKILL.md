@@ -12,10 +12,11 @@ Redis/queues/cloud. `AGENTS.md` (layout, commands, hard rules) is binding.
 ## Where we are
 
 <!-- Update this block when a release ships. -->
-Latest shipped: v0.11.4 (large-library performance, archive and deletion
-safety, session and administrator hardening, enforced single-process topology,
-PostgreSQL contract coverage, and SeaweedFS for bundled local S3), merged to
-`main` and tagged. Next: resume 0.12 planning from `docs/roadmap.md`.
+Latest shipped: v0.12.0 (material-aware fleet dispatch, reliable ingestion and
+thumbnail outcomes, dependency and image modernization, storage-ownership
+safety, and a verified MinIO-to-SeaweedFS migration path), merged to `main` and
+tagged. Next: gather upgrade and hardware feedback, then scope the next release
+from `docs/roadmap.md`.
 
 Private plans live in `reports/`. They are local-only: never commit, publish,
 or quote them. Older long-range plans may not exist in every checkout; when

@@ -8,7 +8,7 @@ Roadmap feedback belongs in
 [the public roadmap discussion](https://github.com/xiao-villamor/PrintStash/discussions/1).
 Issues are better for confirmed bugs or scoped implementation work.
 
-## Current Release: 0.11.4 — Large-Library and Data-Safety Hardening
+## Current Release: 0.12.0 — Material-Aware Fleet and Ingestion Reliability
 
 Production hardening is in place. The app is useful for local-first 3D print
 library workflows, installable through Docker Compose (the default compose pulls
@@ -59,6 +59,14 @@ Developed features in the current app:
 - One supported API process per vault, enforced at startup and reported through detailed health
 - SeaweedFS as the bundled local S3 service, with a non-destructive transitional
   helper for migrating existing Compose-managed MinIO volumes
+- Source-labelled printer tools and material feeds, with Bambu AMS and
+  Moonraker active-Spoolman synchronization
+- Material and nozzle compatibility preflight, atomic multi-copy batches,
+  group constraints, priority lanes, operator release gates, and a fleet board
+- Durable complete/partial import outcomes, restart recovery, and
+  memory-bounded thumbnail fallbacks for oversized STL files
+- Full and lite multi-architecture API images with explicit runtime capability
+  reporting and modernized Python dependencies
 
 The releases below are intentionally small: each is meant to be a single,
 shippable step rather than a multi-month epic. Versions are indicative, not
@@ -211,7 +219,7 @@ queue manager.
 - Real PostgreSQL contract tests and explicit SQLite-only built-in backup capability
 - SeaweedFS as the bundled local S3 service, with a legacy MinIO migration profile
 
-## 0.12 — Dependency and Ingestion Reliability (in development)
+## 0.12 — Material-Aware Fleet and Ingestion Reliability (delivered in 0.12.0)
 
 - Source-labelled printer tools and material feeds, with manual state for every
   provider, Bambu AMS synchronization, and Moonraker active-Spoolman tracking
