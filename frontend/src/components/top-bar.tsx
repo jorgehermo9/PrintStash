@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter, useSearchParams, usePathname } from "@/lib/navigation";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import {
   BarChart3,
   Bell,

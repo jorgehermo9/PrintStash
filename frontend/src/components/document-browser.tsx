@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { FileText, FileType2, Loader2, Plus, Trash2, Upload } from "lucide-react";
 
 import { deleteDocument, listDocuments, uploadDocument } from "@/lib/api";
-import { Link, useRouter } from "@/lib/navigation";
+import { useRouter } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { timeAgoShort } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import type { DocumentKind, DocumentListItem } from "@/types";

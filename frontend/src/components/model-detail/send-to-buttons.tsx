@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { FileCode2, Loader2, Printer as PrinterIcon, Send, WifiOff } from "lucide-react";
 
 import {

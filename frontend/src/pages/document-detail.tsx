@@ -13,7 +13,8 @@ import {
   uploadDocumentImage,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { Link, useRouter, useSearchParams } from "@/lib/navigation";
+import { useRouter, useSearchParams } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { toast } from "@/lib/toast";
 import type { DocumentRead } from "@/types";
 import NotFound from "./not-found";

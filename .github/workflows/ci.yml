@@ -381,9 +381,6 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium
-
       - name: Typecheck frontend
         run: pnpm typecheck
 
@@ -398,6 +395,9 @@ jobs:
 
       - name: Build frontend
         run: pnpm build
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Test frontend in browser
         run: pnpm test:e2e

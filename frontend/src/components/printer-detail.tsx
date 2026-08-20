@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import type { ProviderJsonObject, ProviderJsonValue } from "@/types/printers";
 import {
   MoonrakerConfigRead,

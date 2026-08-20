@@ -3,7 +3,7 @@
 import { CheckCircle2, ChevronDown, Loader2, XCircle } from "lucide-react";
 
 import type { TaskItem } from "@/lib/task-center";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 
 export function TaskList({
   tasks,

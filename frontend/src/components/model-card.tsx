@@ -1,6 +1,6 @@
 "use client";
 
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { useRouter } from "@/lib/navigation";
 import { memo, useEffect, useState } from "react";
 import { ModelListItem, FileRevisionStatus } from "@/types";
@@ -11,10 +11,7 @@ import { toast } from "@/lib/toast";
 import { timeAgoShort } from "@/lib/format";
 import { useAuthenticatedAssetUrl } from "@/lib/use-authenticated-asset-url";
 import { Localized } from "@/components/ui/localized";
-
-// MIME type carrying a dragged model's id, so collection drop targets can tell
-// an internal "move model" drag apart from an OS file-upload drag.
-export const MODEL_DND_MIME = "application/x-printstash-model";
+import { MODEL_DND_MIME } from "@/lib/model-dnd";
 
 // STL blobs already warmed this session (the /stl endpoint serves
 // Cache-Control'd responses, so a hover fetch lands in the HTTP cache and the

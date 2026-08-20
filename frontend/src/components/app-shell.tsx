@@ -7,7 +7,7 @@ import { useRouter } from "@/lib/navigation";
 import { BottomNavBar } from "@/components/bottom-nav-bar";
 import { Toaster } from "@/components/toaster";
 import { TopBar } from "@/components/top-bar";
-import { MobileFilterProvider } from "@/lib/mobile-filter-context";
+import { MobileFilterProvider } from "@/lib/mobile-filter-provider";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { Localized } from "@/components/ui/localized";

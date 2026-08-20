@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { PrinterRead, type PrinterCreate, type PrinterStatus } from "@/types";
 import { createPrinter, deletePrinter, updatePrinter } from "@/lib/api";
 import { usePrinterDashboard, usePrinters } from "@/lib/queries";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { AlertTriangle, X } from "lucide-react";
 import { isLoggedIn, onAuthChange, onUnauthorized } from "@/lib/auth";
 import { toast } from "@/lib/toast";

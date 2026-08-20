@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,6 +10,8 @@ import {
   type FleetMaintenanceDeps,
   type FleetQueueDeps,
 } from "@/components/fleet-panels";
+import { defaultQueryApi, QueryApiProvider, type QueryApi } from "@/lib/queries";
+import { queryKeys } from "@/lib/query-client";
 import type {
   FleetSummary,
   MaintenanceLog,
@@ -17,20 +20,18 @@ import type {
   PrintJobRead,
 } from "@/types";
 
-// Both panels take their collaborators through an optional `deps` prop, so the
-// fleet API calls and the two query hooks are replaced by passing stubs in.
+// Both panels take their fleet mutations through an optional `deps` prop, so
+// those are stubbed by passing them in. The queue panel's reads are the real
+// `useFleetQueue`/`useFleetSummary` hooks, driven by the pre-seeded
+// `QueryClient` cache `renderQueuePanel` renders them under.
 // Toasts are left as the real thing — sonner is happy without a mounted
 // `<Toaster />` and nothing here asserts on them.
 const cancelJob = vi.fn<FleetQueueDeps["cancelJob"]>();
 const updateJob = vi.fn<FleetQueueDeps["updateJob"]>();
 const retryJob = vi.fn<FleetQueueDeps["retryJob"]>();
 const decideOperatorGate = vi.fn<FleetQueueDeps["decideOperatorGate"]>();
-const useQueue = vi.fn<FleetQueueDeps["useQueue"]>();
-const useSummary = vi.fn<FleetQueueDeps["useSummary"]>();
 
 const queueDeps: FleetQueueDeps = {
-  useQueue,
-  useSummary,
   cancelJob,
   updateJob,
   retryJob,
@@ -173,27 +174,58 @@ function makeLog(overrides: Partial<MaintenanceLog> = {}): MaintenanceLog {
   };
 }
 
+/** FleetQueuePanel's history window is part of the fleet-queue query key. */
+const FLEET_QUEUE_HISTORY_LIMIT = 20;
+
+/**
+ * Renders the queue panel over its real query hooks: the cache is seeded with
+ * the given jobs and summary and held stale-free, so the first render already
+ * has data and nothing falls back to the network. `QueryApiProvider` keeps the
+ * `refetch()` the panel fires after a mutation resolving to the same data.
+ */
+function renderQueuePanel(
+  seed: { printers?: PrinterRead[]; jobs?: PrintJobRead[]; summary?: FleetSummary } = {},
+) {
+  const jobs = seed.jobs ?? [];
+  const summary = seed.summary ?? makeSummary();
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, staleTime: Infinity, refetchOnWindowFocus: false },
+    },
+  });
+  client.setQueryData([...queryKeys.fleetQueue, FLEET_QUEUE_HISTORY_LIMIT], jobs);
+  client.setQueryData(queryKeys.fleetSummary, summary);
+  const api: QueryApi = {
+    ...defaultQueryApi,
+    listFleetQueue: () => Promise.resolve(jobs),
+    getFleetSummary: () => Promise.resolve(summary),
+  };
+
+  return render(
+    <QueryApiProvider value={api}>
+      <QueryClientProvider client={client}>
+        <FleetQueuePanel printers={seed.printers ?? [makePrinter()]} deps={queueDeps} />
+      </QueryClientProvider>
+    </QueryApiProvider>,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  useQueue.mockReturnValue({ data: [], isLoading: false, refetch: vi.fn<() => void>() });
-  useSummary.mockReturnValue({ data: makeSummary(), refetch: vi.fn<() => void>() });
   listWindows.mockResolvedValue([]);
   listLog.mockResolvedValue([]);
 });
 
 describe("FleetQueuePanel", () => {
   it("renders queued, active, and recent jobs grouped into sections", () => {
-    useQueue.mockReturnValue({
-      data: [
+    renderQueuePanel({
+      jobs: [
         makeJob({ id: 1, state: "queued", queue_position: 1, remote_filename: "first.gcode" }),
         makeJob({ id: 2, state: "queued", queue_position: 2, remote_filename: "second.gcode" }),
         makeJob({ id: 3, state: "printing", remote_filename: "active.gcode" }),
         makeJob({ id: 4, state: "completed", remote_filename: "done.gcode" }),
       ],
-      isLoading: false,
-      refetch: vi.fn<() => void>(),
     });
-    render(<FleetQueuePanel printers={[makePrinter()]} deps={queueDeps} />);
 
     expect(screen.getByRole("heading", { name: "Queued" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Active" })).toBeInTheDocument();
@@ -204,21 +236,18 @@ describe("FleetQueuePanel", () => {
   });
 
   it("shows the empty state when there are no jobs", () => {
-    render(<FleetQueuePanel printers={[]} deps={queueDeps} />);
+    renderQueuePanel({ printers: [] });
     expect(screen.getByText("No queued print jobs")).toBeInTheDocument();
   });
 
   it("moving a queued job down calls updateFleetJob with the new queue position", async () => {
     updateJob.mockResolvedValue(makeJob());
-    useQueue.mockReturnValue({
-      data: [
+    renderQueuePanel({
+      jobs: [
         makeJob({ id: 1, state: "queued", queue_position: 1, remote_filename: "first.gcode" }),
         makeJob({ id: 2, state: "queued", queue_position: 2, remote_filename: "second.gcode" }),
       ],
-      isLoading: false,
-      refetch: vi.fn<() => void>(),
     });
-    render(<FleetQueuePanel printers={[makePrinter()]} deps={queueDeps} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Move first.gcode down" }));
 
@@ -227,15 +256,12 @@ describe("FleetQueuePanel", () => {
 
   it("moving a queued job up calls updateFleetJob with the new queue position", async () => {
     updateJob.mockResolvedValue(makeJob());
-    useQueue.mockReturnValue({
-      data: [
+    renderQueuePanel({
+      jobs: [
         makeJob({ id: 1, state: "queued", queue_position: 1, remote_filename: "first.gcode" }),
         makeJob({ id: 2, state: "queued", queue_position: 2, remote_filename: "second.gcode" }),
       ],
-      isLoading: false,
-      refetch: vi.fn<() => void>(),
     });
-    render(<FleetQueuePanel printers={[makePrinter()]} deps={queueDeps} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Move second.gcode up" }));
 
@@ -244,14 +270,11 @@ describe("FleetQueuePanel", () => {
 
   it("cancelling a queued job confirms then calls cancelFleetJob", async () => {
     cancelJob.mockResolvedValue(undefined);
-    useQueue.mockReturnValue({
-      data: [
+    renderQueuePanel({
+      jobs: [
         makeJob({ id: 5, state: "queued", queue_position: 1, remote_filename: "cancel-me.gcode" }),
       ],
-      isLoading: false,
-      refetch: vi.fn<() => void>(),
     });
-    render(<FleetQueuePanel printers={[makePrinter()]} deps={queueDeps} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel cancel-me.gcode" }));
     await userEvent.click(screen.getByRole("button", { name: "Cancel job" }));
@@ -261,14 +284,11 @@ describe("FleetQueuePanel", () => {
 
   it("retrying a failed retryable job calls retryFleetJob", async () => {
     retryJob.mockResolvedValue(makeJob({ id: 9, state: "queued" }));
-    useQueue.mockReturnValue({
-      data: [
+    renderQueuePanel({
+      jobs: [
         makeJob({ id: 9, state: "failed", retryable: true, remote_filename: "retry-me.gcode" }),
       ],
-      isLoading: false,
-      refetch: vi.fn<() => void>(),
     });
-    render(<FleetQueuePanel printers={[makePrinter()]} deps={queueDeps} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 

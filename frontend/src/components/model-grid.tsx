@@ -15,7 +15,8 @@ import {
   SavedViewRead,
   TagRead,
 } from "@/types";
-import { ModelCard, MODEL_DND_MIME } from "@/components/model-card";
+import { ModelCard } from "@/components/model-card";
+import { MODEL_DND_MIME } from "@/lib/model-dnd";
 import { BatchToolbar } from "@/components/batch-toolbar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CollectionReadme } from "@/components/collection-readme";
@@ -90,7 +91,7 @@ import { queryKeys, refreshVaultAfterIngest } from "@/lib/query-client";
 import { toast } from "@/lib/toast";
 import { useRequireAuth } from "@/lib/use-require-auth";
 import { useAuth } from "@/lib/auth-context";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { timeAgo } from "@/lib/format";
 import { rememberLastCollection, readLastView, rememberLastView } from "@/lib/last-collection";
 import { useAuthenticatedAssetUrl } from "@/lib/use-authenticated-asset-url";

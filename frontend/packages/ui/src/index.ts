@@ -14,6 +14,7 @@ export * from "./components/separator";
 export * from "./components/skeleton";
 export * from "./components/spinner";
 export * from "./components/tabs";
+export * from "./lib/input-classes";
 export * from "./lib/overlay";
 export * from "./lib/use-combobox-nav";
 export * from "./lib/use-media-query";

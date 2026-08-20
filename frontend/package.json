@@ -7,7 +7,7 @@
     "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
     "start": "vite preview",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "typecheck": "tsc --noEmit && pnpm --filter @printstash/ui typecheck && pnpm --filter @printstash/domain typecheck",
     "test": "vitest run && pnpm --filter @printstash/ui test && pnpm --filter @printstash/domain test",
     "test:watch": "vitest",
@@ -16,7 +16,7 @@
     "test:e2e:real": "playwright test --config=playwright.real.config.ts",
     "test:frontend": "node scripts/frontend-smoke.mjs",
     "media:readme": "node scripts/generate-readme-media.mjs",
-    "lint:fix": "oxlint --fix",
+    "lint:fix": "oxlint --fix --deny-warnings",
     "format": "oxfmt .",
     "format:check": "oxfmt --check ."
   },

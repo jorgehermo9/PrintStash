@@ -2,7 +2,7 @@
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { useRouter } from "@/lib/navigation";
 import {
   ArrowLeft,

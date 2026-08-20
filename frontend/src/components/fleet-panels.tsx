@@ -24,13 +24,7 @@ import {
 } from "@/lib/api";
 import { useFleetQueue, useFleetSummary } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import type {
-  FleetSummary,
-  MaintenanceLog,
-  MaintenanceWindow,
-  PrinterRead,
-  PrintJobRead,
-} from "@/types";
+import type { MaintenanceLog, MaintenanceWindow, PrinterRead, PrintJobRead } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
@@ -42,31 +36,16 @@ import { Localized } from "@/components/ui/localized";
 
 const ACTIVE = new Set(["uploading", "started", "printing", "paused"]);
 
-/** The part of a fleet-queue query result the panel reads. */
-export interface FleetQueueView {
-  data: PrintJobRead[] | undefined;
-  isLoading: boolean;
-  /** Started for its effect only; the panel never inspects the result. */
-  refetch: () => void;
-}
-
-/** The part of a fleet-summary query result the panel reads. */
-export interface FleetSummaryView {
-  data: FleetSummary | undefined;
-  refetch: () => void;
-}
-
 /**
- * Everything `FleetQueuePanel` reaches for outside itself. Application code
- * renders the panel without a `deps` prop and gets `REAL_FLEET_QUEUE_DEPS`; a
- * test overrides the entries it wants to drive or observe.
+ * The fleet mutations `FleetQueuePanel` reaches for outside itself. Application
+ * code renders the panel without a `deps` prop and gets
+ * `REAL_FLEET_QUEUE_DEPS`; a test overrides the entries it wants to observe.
  *
- * `useQueue`/`useSummary` are called as hooks, so an override has to keep a
- * stable identity for as long as the panel stays mounted.
+ * The panel's reads are deliberately *not* in here: it calls `useFleetQueue`
+ * and `useFleetSummary` directly, so both are statically known Hooks. A test
+ * drives them by seeding the `QueryClient` cache it renders the panel under.
  */
 export interface FleetQueueDeps {
-  useQueue: (options: { refetchInterval: number; historyLimit: number }) => FleetQueueView;
-  useSummary: (options: { refetchInterval: number }) => FleetSummaryView;
   cancelJob: typeof cancelFleetJob;
   updateJob: typeof updateFleetJob;
   retryJob: typeof retryFleetJob;
@@ -74,8 +53,6 @@ export interface FleetQueueDeps {
 }
 
 const REAL_FLEET_QUEUE_DEPS: FleetQueueDeps = {
-  useQueue: useFleetQueue,
-  useSummary: useFleetSummary,
   cancelJob: cancelFleetJob,
   updateJob: updateFleetJob,
   retryJob: retryFleetJob,
@@ -89,13 +66,13 @@ export function FleetQueuePanel({
   printers: PrinterRead[];
   deps?: Partial<FleetQueueDeps>;
 }) {
-  const { useQueue, useSummary, cancelJob, updateJob, retryJob, decideOperatorGate } = {
+  const { cancelJob, updateJob, retryJob, decideOperatorGate } = {
     ...REAL_FLEET_QUEUE_DEPS,
     ...deps,
   };
   const [historyLimit, setHistoryLimit] = useState(20);
-  const queueQuery = useQueue({ refetchInterval: 5_000, historyLimit });
-  const summaryQuery = useSummary({ refetchInterval: 5_000 });
+  const queueQuery = useFleetQueue({ refetchInterval: 5_000, historyLimit });
+  const summaryQuery = useFleetSummary({ refetchInterval: 5_000 });
   const [cancelTarget, setCancelTarget] = useState<PrintJobRead | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const jobs = queueQuery.data ?? [];

@@ -13,12 +13,11 @@
  */
 
 import {
-  Link as RouterLink,
   useLocation,
   useNavigate,
   useSearchParams as useRouterSearchParams,
 } from "react-router-dom";
-import { useMemo, type AnchorHTMLAttributes, type ReactNode } from "react";
+import { useMemo } from "react";
 
 /** Next's `NavigateOptions` (e.g. `{ scroll: false }`) — accepted, ignored. */
 interface NavOptions {
@@ -57,17 +56,4 @@ export function usePathname(): string {
 export function useSearchParams(): URLSearchParams {
   const [params] = useRouterSearchParams();
   return params;
-}
-
-type LinkProps = {
-  href: string;
-  children: ReactNode;
-  /** Accepted for API parity with next/link; ignored under React Router. */
-  prefetch?: boolean;
-  scroll?: boolean;
-  replace?: boolean;
-} & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href">;
-
-export function Link({ href, prefetch: _p, scroll: _s, replace, ...rest }: LinkProps) {
-  return <RouterLink to={href} replace={replace} {...rest} />;
 }

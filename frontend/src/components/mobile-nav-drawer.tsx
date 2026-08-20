@@ -1,6 +1,6 @@
 "use client";
 
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { usePathname } from "@/lib/navigation";
 import {
   Box,

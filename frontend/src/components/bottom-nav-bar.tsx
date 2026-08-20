@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { usePathname, useRouter } from "@/lib/navigation";
 import {
   BarChart3,

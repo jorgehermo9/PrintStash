@@ -28,7 +28,7 @@ import {
 } from "@/lib/api";
 import { useCollections } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import type { InboxItem } from "@/types";
 
 const ACTIVE = new Set(["captured", "resolving", "importing"]);

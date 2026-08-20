@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { AuthProvider, useAuth, type AuthApi } from "@/lib/auth-context";
+import { useAuth, type AuthApi } from "@/lib/auth-context";
+import { AuthProvider } from "@/lib/auth-provider";
 import { storeLogin } from "@/lib/auth-store";
 
 /** Stub of the provider's auth port — no network, calls recorded. */
