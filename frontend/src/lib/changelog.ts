@@ -22,6 +22,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.12.1",
+    date: "Aug 2026",
+    changes: [
+      "API images now isolate legacy or operator-supplied uv commands from the root-owned build cache, preventing unprivileged startup from crash-looping on a cache permission error",
+    ],
+  },
+  {
     version: "0.12.0",
     date: "Aug 2026",
     changes: [

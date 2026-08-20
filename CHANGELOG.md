@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.12.1
+
+### Fixed
+
+- **Container startup reliability.** API images now give legacy or
+  operator-supplied `uv run` commands a fresh user-writable runtime cache and
+  disable runtime environment synchronization. This prevents the unprivileged
+  API process from crash-looping on the root-owned build cache
+  ([#77](https://github.com/xiao-villamor/PrintStash/issues/77)).
+
 ## 0.12.0
 
 **Back up before upgrading. This release includes additive database migrations and deployment/dependency changes; PostgreSQL, MinIO, and lite-image users should review [UPGRADE.md](./UPGRADE.md).**

@@ -8,14 +8,16 @@ Roadmap feedback belongs in
 [the public roadmap discussion](https://github.com/xiao-villamor/PrintStash/discussions/1).
 Issues are better for confirmed bugs or scoped implementation work.
 
-## Current Release: 0.12.0 — Material-Aware Fleet and Ingestion Reliability
+## Current Release: 0.12.1 — Container Startup Reliability
 
 Production hardening is in place. The app is useful for local-first 3D print
 library workflows, installable through Docker Compose (the default compose pulls
 prebuilt GHCR images; a build overlay is available for contributors), and ready
 for real homelab feedback. SQLite plus local filesystem storage remain the
 default path. Postgres, S3/R2-compatible storage, cloud backups, and provider
-adapters are available as optional deployment paths.
+adapters are available as optional deployment paths. The 0.12.1 patch prevents
+legacy or operator-supplied uv commands from reusing the root-owned image-build
+cache during unprivileged startup.
 
 Developed features in the current app:
 
