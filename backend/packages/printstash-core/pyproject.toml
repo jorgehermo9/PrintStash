@@ -19,6 +19,17 @@ network = [
     "httpx>=0.27,<0.29",
     "httpcore>=1,<2",
 ]
+testkit = [
+    "fastapi>=0.115,<1",
+    "python-multipart>=0.0.12,<0.1",
+    "starlette>=0.41,<2",
+    "uvicorn[standard]>=0.30,<1",
+    "wsproto>=1.2,<2",
+]
+mesh = [
+    "numpy>=1.26,<3",
+    "pillow>=10,<13",
+]
 bambu = [
     "paho-mqtt>=2.1,<3",
 ]

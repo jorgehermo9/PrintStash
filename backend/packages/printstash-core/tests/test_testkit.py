@@ -7,7 +7,12 @@ from printstash_core_testkit import (
     PrintSim,
     Received,
     Recorder,
+    build_provider_app,
+    start_server,
 )
+from printstash_core_testkit.mock_octoprint import create_app as create_octoprint_app
+from printstash_core_testkit.mock_printer import create_app as create_moonraker_app
+from printstash_core_testkit.mock_prusalink import create_app as create_prusalink_app
 
 
 def test_print_sim_uses_injected_clock() -> None:
@@ -41,3 +46,26 @@ def test_recorder_returns_copies_and_counts_calls() -> None:
     assert recorder.for_target("webhook") == [received]
     assert recorder.bump("retry") == 1
     assert recorder.bump("retry") == 2
+
+
+def test_contract_apps_are_available_from_the_shared_testkit() -> None:
+    recorder = Recorder()
+    provider_app = build_provider_app(recorder)
+    moonraker_app, _ = create_moonraker_app()
+    prusalink_app, _ = create_prusalink_app()
+    octoprint_app, _ = create_octoprint_app()
+
+    assert provider_app.routes
+    assert moonraker_app.routes
+    assert prusalink_app.routes
+    assert octoprint_app.routes
+
+
+def test_contract_server_runs_on_a_real_loopback_socket() -> None:
+    app, _ = create_octoprint_app()
+    server = start_server(app)
+    try:
+        assert server.base_url == f"http://127.0.0.1:{server.port}"
+        assert server.port > 0
+    finally:
+        server.stop()

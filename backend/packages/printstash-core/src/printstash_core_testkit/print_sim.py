@@ -36,9 +36,7 @@ class PrintSim:
 
     def elapsed(self) -> float:
         if self.state == PRINTING and self._started is not None:
-            return self._accumulated + (
-                self._monotonic() - self._started
-            ) * self.speed
+            return self._accumulated + (self._monotonic() - self._started) * self.speed
         return self._accumulated
 
     def progress(self) -> float:

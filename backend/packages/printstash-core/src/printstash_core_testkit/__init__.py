@@ -9,7 +9,9 @@ from .print_sim import (
     STANDBY,
     PrintSim,
 )
+from .provider_targets import build_provider_app
 from .recorder import Received, Recorder
+from .server import RunningServer, start_server
 
 __all__ = [
     "CANCELLED",
@@ -21,4 +23,7 @@ __all__ = [
     "PrintSim",
     "Received",
     "Recorder",
+    "RunningServer",
+    "build_provider_app",
+    "start_server",
 ]
