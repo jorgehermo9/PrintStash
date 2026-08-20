@@ -5,8 +5,7 @@ ARG PRINTSTASH_VARIANT=full
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_CACHE_DIR=/tmp/.uv_cache \
-    UV_COMPILE_BYTECODE=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+    UV_COMPILE_BYTECODE=1
 
 WORKDIR /app
 
@@ -29,23 +28,17 @@ RUN case "$PRINTSTASH_VARIANT" in \
  && uv cache clean \
  && rm -rf "$UV_CACHE_DIR"
 
-# Chromium for server-side rendering of Cloudflare-gated pages (MakerWorld
-# imports). --with-deps pulls the OS libraries Chromium needs; the browser is
-# stored at $PLAYWRIGHT_BROWSERS_PATH so the runtime finds it. This is the bulk
-# of the image size. See app/services/browser_fetch.py.
-RUN if [ "$PRINTSTASH_VARIANT" = "full" ]; then \
-      uv run --no-sync patchright install --with-deps chromium; \
-    fi
-
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin printstash \
- && mkdir -p /data/files /data/thumbs /data/staging /data/backups /data/db /opt/pw-browsers \
- && chown -R printstash:printstash /data /opt/pw-browsers
+ && mkdir -p /data/files /data/thumbs /data/staging /data/backups /data/db \
+ && chown -R printstash:printstash /data
 
 COPY --chown=printstash:printstash app ./app
 COPY --chown=printstash:printstash --chmod=0644 alembic.ini ./alembic.ini
 COPY --chown=printstash:printstash alembic ./alembic
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod +x ./docker-entrypoint.sh
+# The entrypoint re-execs as the unprivileged runtime user, which needs read as
+# well as execute permission regardless of the build context's local umask.
+RUN chmod 0755 ./docker-entrypoint.sh
 
 ENV VAULT_DATA_DIR=/data/files \
     VAULT_THUMB_DIR=/data/thumbs \

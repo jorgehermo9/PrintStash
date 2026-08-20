@@ -32,11 +32,12 @@ def test_facade_preserves_pure_rule_api() -> None:
     assert r._extract_next_data is core_resolvers.extract_next_data
     assert r._pick_printables_pack is core_resolvers.pick_printables_pack
     assert r._printables_link_from_output is core_resolvers.printables_link_from_output
-    assert r._printables_links_from_output is core_resolvers.printables_links_from_output
+    assert (
+        r._printables_links_from_output is core_resolvers.printables_links_from_output
+    )
     assert r._printables_files_from_print is core_resolvers.printables_files_from_print
     assert (
-        r._makerworld_collection_members
-        is core_resolvers.makerworld_collection_members
+        r._makerworld_collection_members is core_resolvers.makerworld_collection_members
     )
 
 
@@ -396,125 +397,13 @@ async def test_resolve_printables_collection_skips_duplicate_and_missing_ids() -
 
 
 @pytest.mark.asyncio
-async def test_resolve_makerworld_uses_instance_download_api() -> None:
-    # design API -> defaultInstanceId; instance f3mf API -> the file link.
-    design = {"id": 1, "defaultInstanceId": 99}
-    f3mf = {"url": "https://cdn.makerworld.test/x.3mf"}
-
-    async def fake_api(api_url, *_a, **_k):
-        return f3mf if "/instance/99/f3mf" in api_url else design
-
-    with patch.object(r, "_makerworld_api_get", side_effect=fake_api):
-        out = await r.resolve_page_url("https://makerworld.com/en/models/1123776-x")
-    assert out == "https://cdn.makerworld.test/x.3mf"
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_falls_back_to_model_api() -> None:
-    # No instance on the design -> fall back to the model-level download endpoint.
-    bundle = {"url": "https://cdn.makerworld.test/bundle.zip"}
-
-    async def fake_api(api_url, *_a, **_k):
-        if "/instance/" in api_url:
-            return None
-        if "/design/" in api_url:
-            return {"id": 1}  # no defaultInstanceId / instances
-        return bundle  # /models/{id}/download
-
-    with patch.object(r, "_makerworld_api_get", side_effect=fake_api):
-        out = await r.resolve_page_url("https://makerworld.com/en/models/1123776-x")
-    assert out == "https://cdn.makerworld.test/bundle.zip"
-
-
-def test_makerworld_api_headers_includes_nonce_when_given() -> None:
-    headers = r._makerworld_api_headers("https://makerworld.com/x", "abc123")
-    assert headers["X-Nonce"] == "abc123"
-    assert "X-Nonce" not in r._makerworld_api_headers("https://makerworld.com/x", None)
-
-
-@pytest.mark.asyncio
-async def test_makerworld_fetch_page_sends_cookie_header() -> None:
-    good = '<script id="__NEXT_DATA__">{}</script>'
-    client = _fake_http_client(200, good)
-    with patch.object(r, "get_http_client", return_value=client):
-        out = await r._makerworld_fetch_page(
-            "https://makerworld.com/en/models/1-x", "session=abc"
+async def test_resolve_makerworld_requires_browser_extension() -> None:
+    with pytest.raises(ImportError_) as exc:
+        await r.resolve_page_url(
+            "https://makerworld.com/en/models/1123776-x",
+            makerworld_cookie="legacy-cookie-must-not-be-used",
         )
-    assert out == good
-    assert client.get.await_args.kwargs["headers"]["Cookie"] == "session=abc"
-
-
-@pytest.mark.asyncio
-async def test_makerworld_fetch_page_returns_original_html_when_browser_fallback_fails() -> (
-    None
-):
-    challenge = "<title>Just a moment...</title><div class='cf-chl'></div>"
-    browser = AsyncMock(return_value=None)
-    with (
-        patch.object(
-            r, "get_http_client", return_value=_fake_http_client(200, challenge)
-        ),
-        patch.object(r.browser_fetch, "fetch_rendered_html", browser),
-    ):
-        out = await r._makerworld_fetch_page(
-            "https://makerworld.com/en/models/1-x", None
-        )
-    assert out == challenge
-
-
-@pytest.mark.asyncio
-async def test_makerworld_api_get_returns_none_when_browser_fetch_returns_none() -> (
-    None
-):
-    with patch.object(r.browser_fetch, "api_get", AsyncMock(return_value=None)):
-        assert await r._makerworld_api_get("https://x", "https://x", None, None) is None
-
-
-@pytest.mark.asyncio
-async def test_makerworld_api_get_raises_blocked_when_not_login_related() -> None:
-    with patch.object(
-        r.browser_fetch, "api_get", AsyncMock(return_value=(429, "rate limited"))
-    ):
-        with pytest.raises(ImportError_) as exc:
-            await r._makerworld_api_get("https://x", "https://x", None, None)
-    assert str(exc.value) == "makerworld_blocked"
-
-
-@pytest.mark.asyncio
-async def test_makerworld_api_get_returns_none_on_non_200() -> None:
-    with patch.object(
-        r.browser_fetch, "api_get", AsyncMock(return_value=(500, "server error"))
-    ):
-        assert await r._makerworld_api_get("https://x", "https://x", None, None) is None
-
-
-@pytest.mark.asyncio
-async def test_makerworld_api_get_returns_none_on_invalid_json() -> None:
-    with patch.object(
-        r.browser_fetch, "api_get", AsyncMock(return_value=(200, "not json"))
-    ):
-        assert await r._makerworld_api_get("https://x", "https://x", None, None) is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_no_design_id_returns_none() -> None:
-    assert (
-        await r._resolve_makerworld("https://makerworld.com/en/social/1-x", None)
-        is None
-    )
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_finds_instance_in_instances_list() -> None:
-    design = {"id": 1, "instances": [{"id": 55}]}
-    f3mf = {"url": "https://cdn.makerworld.test/x.3mf"}
-
-    async def fake_api(api_url, *_a, **_k):
-        return f3mf if "/instance/55/f3mf" in api_url else design
-
-    with patch.object(r, "_makerworld_api_get", side_effect=fake_api):
-        out = await r.resolve_page_url("https://makerworld.com/en/models/1123776-x")
-    assert out == "https://cdn.makerworld.test/x.3mf"
+    assert str(exc.value) == "makerworld_extension_required"
 
 
 def test_makerworld_collection_members_handles_malformed_next_data() -> None:
@@ -539,51 +428,13 @@ def test_makerworld_collection_members_skips_non_dict_and_duplicate_entries() ->
 
 
 @pytest.mark.asyncio
-async def test_resolve_makerworld_collection_no_id_returns_none() -> None:
-    assert (
-        await r._resolve_makerworld_collection(
-            "https://makerworld.com/en/social/1-x", None
+async def test_resolve_makerworld_collection_requires_browser_extension() -> None:
+    with pytest.raises(ImportError_) as exc:
+        await r.resolve_collection_url(
+            "https://makerworld.com/en/collections/5-x",
+            makerworld_cookie="legacy-cookie-must-not-be-used",
         )
-        is None
-    )
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_collection_no_html_returns_none() -> None:
-    with patch.object(r, "_makerworld_fetch_page", AsyncMock(return_value=None)):
-        assert (
-            await r._resolve_makerworld_collection(
-                "https://makerworld.com/en/collections/5-x", None
-            )
-            is None
-        )
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_collection_no_next_data_returns_none() -> None:
-    with patch.object(
-        r, "_makerworld_fetch_page", AsyncMock(return_value="<html>no data</html>")
-    ):
-        assert (
-            await r._resolve_makerworld_collection(
-                "https://makerworld.com/en/collections/5-x", None
-            )
-            is None
-        )
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_collection_falls_back_when_title_lookup_fails() -> (
-    None
-):
-    # No ``props`` key at all -> the title KeyError is swallowed and the generic
-    # "Collection <id>" title is kept; no members are found either.
-    html = '<script id="__NEXT_DATA__" type="application/json">{}</script>'
-    with patch.object(r, "_makerworld_fetch_page", AsyncMock(return_value=html)):
-        result = await r._resolve_makerworld_collection(
-            "https://makerworld.com/en/collections/5-x", None
-        )
-    assert result is None  # no members found from a malformed pageProps
+    assert str(exc.value) == "makerworld_extension_required"
 
 
 @pytest.mark.asyncio
@@ -594,19 +445,8 @@ async def test_resolve_thingiverse_no_id_returns_none() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_resolve_makerworld_login_required_surfaces_clear_error() -> None:
-    # The auth-gated download API answers 403 "please log in" without a cookie;
-    # that must surface as a specific, user-actionable error code.
-    challenge = (403, '{"code":1,"error":"Please log in to download models."}')
-    with patch.object(r.browser_fetch, "api_get", AsyncMock(return_value=challenge)):
-        with pytest.raises(ImportError_) as exc:
-            await r.resolve_page_url("https://makerworld.com/en/models/1123776-x")
-    assert str(exc.value) == "makerworld_login_required"
-
-
 # --------------------------------------------------------------------------- #
-# Cloudflare challenge detection + headless-browser fallback
+# Provider payload characterization
 # --------------------------------------------------------------------------- #
 def test_looks_like_challenge_detects_interstitial() -> None:
     html = "<html><head><title>Just a moment...</title></head><body><div class='cf-chl'></div></body>"
@@ -623,60 +463,6 @@ def test_looks_like_challenge_false_when_next_data_present() -> None:
 
 def test_looks_like_challenge_false_for_plain_page() -> None:
     assert r._looks_like_challenge("<html><body>hello world</body></html>") is False
-
-
-def _fake_http_client(status_code: int, text: str) -> MagicMock:
-    client = MagicMock()
-    client.get = AsyncMock(return_value=MagicMock(status_code=status_code, text=text))
-    return client
-
-
-@pytest.mark.asyncio
-async def test_makerworld_fetch_uses_httpx_when_not_challenged() -> None:
-    good = '<script id="__NEXT_DATA__">{}</script>'
-    browser = AsyncMock()
-    with (
-        patch.object(r, "get_http_client", return_value=_fake_http_client(200, good)),
-        patch.object(r.browser_fetch, "fetch_rendered_html", browser),
-    ):
-        out = await r._makerworld_fetch_page(
-            "https://makerworld.com/en/models/1-x", None
-        )
-    assert out == good
-    browser.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_makerworld_fetch_falls_back_to_browser_on_challenge() -> None:
-    challenge = "<title>Just a moment...</title><div class='cf-chl'></div>"
-    rendered = '<script id="__NEXT_DATA__">{"ok":1}</script>'
-    browser = AsyncMock(return_value=rendered)
-    with (
-        patch.object(
-            r, "get_http_client", return_value=_fake_http_client(200, challenge)
-        ),
-        patch.object(r.browser_fetch, "fetch_rendered_html", browser),
-    ):
-        out = await r._makerworld_fetch_page(
-            "https://makerworld.com/en/models/1-x", None
-        )
-    assert out == rendered
-    browser.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_makerworld_fetch_falls_back_to_browser_on_non_200() -> None:
-    rendered = '<script id="__NEXT_DATA__">{}</script>'
-    browser = AsyncMock(return_value=rendered)
-    with (
-        patch.object(r, "get_http_client", return_value=_fake_http_client(403, "")),
-        patch.object(r.browser_fetch, "fetch_rendered_html", browser),
-    ):
-        out = await r._makerworld_fetch_page(
-            "https://makerworld.com/en/models/1-x", None
-        )
-    assert out == rendered
-    browser.assert_awaited_once()
 
 
 # --------------------------------------------------------------------------- #
@@ -968,35 +754,3 @@ async def test_resolve_collection_wraps_unexpected_errors() -> None:
         with pytest.raises(ImportError_) as exc:
             await r.resolve_collection_url("https://printables.com/collections/9")
     assert str(exc.value) == "printables_collection_resolve_failed"
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_collection_walks_next_data() -> None:
-    next_data = {
-        "props": {
-            "pageProps": {
-                "collection": {"name": "H2D Sample Projects"},
-                "designs": [
-                    {"id": 5600001, "title": "Sample A"},
-                    {"design": {"id": 5600002, "designTitle": "Sample B"}},
-                ],
-            }
-        }
-    }
-    html = (
-        '<script id="__NEXT_DATA__" type="application/json">'
-        + __import__("json").dumps(next_data)
-        + "</script>"
-    )
-    with patch.object(r, "_makerworld_fetch_page", AsyncMock(return_value=html)):
-        result = await r.resolve_collection_url(
-            "https://makerworld.com/es/collections/5600774-h2d-sample-projects"
-        )
-    assert result is not None
-    title, members = result
-    assert title == "H2D Sample Projects"
-    assert [(m.source_id, m.title) for m in members] == [
-        ("5600001", "Sample A"),
-        ("5600002", "Sample B"),
-    ]
-    assert members[0].page_url == "https://makerworld.com/en/models/5600001"

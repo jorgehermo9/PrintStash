@@ -17,12 +17,13 @@ from app.core.config import FrozenSettings
         ("mesh_render_face_chunk_size", 0),
         ("mesh_step_timeout_seconds", 0),
         ("max_archive_entries", 0),
-        ("browser_fetch_timeout_seconds", 0),
         ("backup_retention_days", -1),
         ("trash_retention_days", -1),
     ],
 )
-def test_numeric_settings_reject_impossible_values(field: str, value: int | float) -> None:
+def test_numeric_settings_reject_impossible_values(
+    field: str, value: int | float
+) -> None:
     with pytest.raises(ValidationError):
         FrozenSettings(_env_file=None, **{field: value})
 

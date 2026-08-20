@@ -263,15 +263,15 @@ def test_pending_registry_prunes_entries_past_ttl() -> None:
     assert registry_.get(fresh_token) is None
 
 
-def test_makerworld_cookie_prefers_override_then_settings_then_none() -> None:
+def test_makerworld_cookie_is_ignored() -> None:
     _overlay["makerworld_cookie"] = ""
-    assert ingest_module._makerworld_cookie("  session=abc  ") == "session=abc"
+    assert ingest_module._makerworld_cookie("  session=abc  ") is None
     assert ingest_module._makerworld_cookie(None) is None
     assert ingest_module._makerworld_cookie("   ") is None
 
     _overlay["makerworld_cookie"] = "instance=cookie"
-    assert ingest_module._makerworld_cookie(None) == "instance=cookie"
-    assert ingest_module._makerworld_cookie("override") == "override"
+    assert ingest_module._makerworld_cookie(None) is None
+    assert ingest_module._makerworld_cookie("override") is None
 
 
 def test_collection_target_nests_under_parent_and_defaults_title() -> None:

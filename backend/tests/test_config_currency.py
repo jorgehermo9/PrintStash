@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -154,149 +155,34 @@ def test_makerworld_status_defaults_disconnected(
     assert resp.json() == {"connected": False, "updated_at": None}
 
 
-def test_makerworld_token_connects_and_disconnects(
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        (
+            "/api/v1/config/makerworld/login",
+            {"account": "user@example.com", "password": "secret"},
+        ),
+        (
+            "/api/v1/config/makerworld/verify",
+            {"login_token": "pending", "code": "123456"},
+        ),
+        ("/api/v1/config/makerworld/token", {"token": "legacy-token"}),
+    ],
+)
+def test_makerworld_connection_mutations_require_extension(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    path: str,
+    payload: dict[str, str],
+) -> None:
+    resp = client.post(path, json=payload, headers=auth_headers)
+    assert resp.status_code == 410
+    assert resp.json()["detail"] == "makerworld_extension_required"
+
+
+def test_makerworld_disconnect_remains_compatible(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    resp = client.post(
-        "/api/v1/config/makerworld/token",
-        json={"token": "token=abc.def.ghi; other=x"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    assert resp.json()["connected"] is True
-
     resp = client.delete("/api/v1/config/makerworld", headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.json()["connected"] is False
-
-
-def test_makerworld_token_rejects_blank(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.post(
-        "/api/v1/config/makerworld/token",
-        json={"token": "token=   "},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "missing_token"
-
-
-def test_makerworld_login_needs_email_code(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    from unittest.mock import AsyncMock, patch
-
-    from app.services.makerworld_auth import LoginResult
-
-    result = LoginResult(status="need_email_code", login_token="pending-123")
-    with patch("app.api.v1.config.begin_login", new=AsyncMock(return_value=result)):
-        resp = client.post(
-            "/api/v1/config/makerworld/login",
-            json={"account": "user@example.com", "password": "hunter2"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "need_email_code"
-    assert body["login_token"] == "pending-123"
-    assert body["connected"] is False
-
-
-def test_makerworld_login_succeeds_immediately(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    from unittest.mock import AsyncMock, patch
-
-    from app.services.makerworld_auth import LoginResult
-
-    result = LoginResult(status="ok", token="a-real-token")
-    with patch("app.api.v1.config.begin_login", new=AsyncMock(return_value=result)):
-        resp = client.post(
-            "/api/v1/config/makerworld/login",
-            json={"account": "user@example.com", "password": "hunter2"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["connected"] is True
-
-    status_resp = client.get("/api/v1/config/makerworld", headers=auth_headers)
-    assert status_resp.json()["connected"] is True
-
-
-def test_makerworld_login_rejects_bad_credentials(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    from unittest.mock import AsyncMock, patch
-
-    from app.services.makerworld_auth import MakerWorldAuthError
-
-    with patch(
-        "app.api.v1.config.begin_login",
-        new=AsyncMock(side_effect=MakerWorldAuthError("invalid_credentials")),
-    ):
-        resp = client.post(
-            "/api/v1/config/makerworld/login",
-            json={"account": "user@example.com", "password": "wrong"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "invalid_credentials"
-
-
-def test_makerworld_verify_succeeds(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    from unittest.mock import AsyncMock, patch
-
-    from app.services.makerworld_auth import LoginResult
-
-    result = LoginResult(status="ok", token="a-real-token")
-    with patch("app.api.v1.config.submit_code", new=AsyncMock(return_value=result)):
-        resp = client.post(
-            "/api/v1/config/makerworld/verify",
-            json={"login_token": "pending-123", "code": "123456"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 200
-    assert resp.json()["connected"] is True
-
-
-def test_makerworld_verify_rejects_invalid_code(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    from unittest.mock import AsyncMock, patch
-
-    from app.services.makerworld_auth import LoginResult
-
-    result = LoginResult(status="need_email_code", token=None)
-    with patch("app.api.v1.config.submit_code", new=AsyncMock(return_value=result)):
-        resp = client.post(
-            "/api/v1/config/makerworld/verify",
-            json={"login_token": "pending-123", "code": "wrong"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "invalid_code"
-
-
-def test_makerworld_verify_raises_auth_error(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    from unittest.mock import AsyncMock, patch
-
-    from app.services.makerworld_auth import MakerWorldAuthError
-
-    with patch(
-        "app.api.v1.config.submit_code",
-        new=AsyncMock(side_effect=MakerWorldAuthError("expired_token")),
-    ):
-        resp = client.post(
-            "/api/v1/config/makerworld/verify",
-            json={"login_token": "pending-123", "code": "123456"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "expired_token"
+    assert resp.json() == {"connected": False, "updated_at": None}

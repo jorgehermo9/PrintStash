@@ -3,18 +3,18 @@ set -euo pipefail
 
 full_image="${1:?full image name required}"
 lite_image="${2:?lite image name required}"
-minimum_delta=$((700 * 1024 * 1024))
+minimum_delta=$((20 * 1024 * 1024))
 
 full_size="$(docker image inspect "$full_image" --format '{{.Size}}')"
 lite_size="$(docker image inspect "$lite_image" --format '{{.Size}}')"
 delta=$((full_size - lite_size))
 if (( delta < minimum_delta )); then
-  echo "lite image is only $((delta / 1024 / 1024)) MiB smaller than full; expected at least 700 MiB" >&2
+  echo "lite image is only $((delta / 1024 / 1024)) MiB smaller than full; expected at least 20 MiB" >&2
   exit 1
 fi
 
 docker run --rm --entrypoint /app/.venv/bin/python "$full_image" -c \
-  'import importlib.util as i; assert all(i.find_spec(x) for x in ("patchright", "cascadio", "numpy", "PIL", "trimesh"))'
+  'import importlib.util as i; assert not i.find_spec("patchright"); assert all(i.find_spec(x) for x in ("cascadio", "numpy", "PIL", "trimesh"))'
 docker run --rm --entrypoint /app/.venv/bin/python "$lite_image" -c \
   'import importlib.util as i; assert not i.find_spec("patchright"); assert not i.find_spec("cascadio"); assert not i.find_spec("aiosqlite"); assert all(i.find_spec(x) for x in ("numpy", "PIL", "trimesh"))'
 

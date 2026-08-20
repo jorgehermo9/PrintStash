@@ -1094,6 +1094,14 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Version", "Versión"],
   ["source ·", "origen ·"],
   ["Choose printer user", "Elegir usuario de impresora"],
+  ["MakerWorld browser import", "Importación de MakerWorld desde el navegador"],
+  ["Import authenticated models with the PrintStash browser extension", "Importa modelos autenticados con la extensión de navegador de PrintStash"],
+  ["PrintStash does not store your MakerWorld password, session token, or cookies. The extension downloads the selected package inside your signed-in browser and sends only the model file to Pending Imports.", "PrintStash no guarda tu contraseña, token de sesión ni cookies de MakerWorld. La extensión descarga el paquete seleccionado dentro del navegador con tu sesión iniciada y envía únicamente el archivo del modelo a Importaciones pendientes."],
+  ["Install the extension and configure this Vault with a named API key.", "Instala la extensión y configura este almacén con una clave API con nombre."],
+  ["Sign in to MakerWorld and open an individual model page.", "Inicia sesión en MakerWorld y abre la página de un modelo individual."],
+  ["Use the extension, then review the staged file in Pending Imports.", "Usa la extensión y revisa después el archivo preparado en Importaciones pendientes."],
+  ["MakerWorld collections are not supported; capture their model pages individually.", "Las colecciones de MakerWorld no son compatibles; captura las páginas de sus modelos individualmente."],
+  ["Open extension source", "Abrir el código de la extensión"],
 ];
 
 const TRANSLATED_PROPS = new Set([

@@ -117,9 +117,13 @@ const ERROR_MESSAGES: Record<string, string> = {
   printables_blocked:
     "Printables blocked the request. Try again later or use a direct download link.",
   makerworld_blocked:
-    "MakerWorld blocked the request. Connect MakerWorld under Settings → Imports, or use a direct download link.",
+    "MakerWorld blocked the browser request. Sign in on the model page and try the extension again.",
   makerworld_login_required:
-    "MakerWorld requires you to be logged in to download this model. Connect MakerWorld under Settings → Imports and try again.",
+    "MakerWorld requires you to be signed in on the model page before using the extension.",
+  makerworld_extension_required:
+    "MakerWorld imports must be sent from the PrintStash browser extension.",
+  makerworld_model_page_required:
+    "Open an individual MakerWorld model page before using the browser extension.",
   // MakerWorld login (Settings → Imports)
   missing_credentials: "Enter your MakerWorld email and password.",
   invalid_code: "That verification code wasn't accepted. Try again.",

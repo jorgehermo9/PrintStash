@@ -3,19 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>PrintStash Quick Capture</title>
+    <title>PrintStash Importer</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main>
-      <h1>PrintStash</h1>
+      <h1>Import to PrintStash</h1>
       <p id="page" class="muted">Reading current page…</p>
+      <p id="source" class="source">Detecting MakerWorld or Printables…</p>
       <label>Vault URL<input id="vault" type="url" placeholder="https://prints.example.com" /></label>
       <label>Username<input id="username" type="text" autocomplete="username" placeholder="your username" /></label>
       <label>Named API key<input id="key" type="password" autocomplete="off" placeholder="psk_…" /></label>
-      <div class="actions"><button id="save-config" class="secondary">Save settings</button><button id="capture">Save current page</button></div>
+      <div class="actions"><button id="save-config" class="secondary">Save settings</button><button id="capture">Import model</button></div>
+      <button id="open-inbox" class="secondary wide" hidden>Open Pending Imports</button>
       <p id="status" role="status" aria-live="polite"></p>
     </main>
-    <script src="popup.js"></script>
+    <script type="module" src="popup.mjs"></script>
   </body>
 </html>

@@ -36,7 +36,9 @@ def test_get_or_create_creates_singleton_row_once(db_session: Session) -> None:
     assert second.id == first.id
 
 
-def test_is_configured_false_without_configured_at_or_users(db_session: Session) -> None:
+def test_is_configured_false_without_configured_at_or_users(
+    db_session: Session,
+) -> None:
     assert runtime_config.is_configured(db_session) is False
 
 
@@ -123,7 +125,7 @@ def test_apply_overlay_copies_all_persisted_fields(db_session: Session) -> None:
     assert _overlay["oidc_enabled"] is True
     assert _overlay["oidc_client_secret"] == "client-secret"
     assert _overlay["oidc_allow_insecure_http"] is True
-    assert _overlay["makerworld_cookie"] == "token=mw-token-abc"
+    assert "makerworld_cookie" not in _overlay
 
 
 def test_apply_overlay_clears_stale_keys_not_in_config(db_session: Session) -> None:
@@ -220,15 +222,18 @@ def test_update_config_data_dir_clear_uses_env_default_path(
     assert isinstance(_overlay["data_dir"], Path)
 
 
-def test_makerworld_token_set_and_clear_cycle(db_session: Session) -> None:
+def test_makerworld_legacy_token_helper_only_clears(db_session: Session) -> None:
     status_before = runtime_config.makerworld_status(db_session)
     assert status_before == {"connected": False, "updated_at": None}
 
     runtime_config.set_makerworld_token(db_session, "session-token-xyz")
-    assert _overlay["makerworld_cookie"] == "token=session-token-xyz"
-    status_connected = runtime_config.makerworld_status(db_session)
-    assert status_connected["connected"] is True
-    assert status_connected["updated_at"] is not None
+    config = runtime_config.get_or_create(db_session)
+    assert config.makerworld_token is None
+    assert "makerworld_cookie" not in _overlay
+    assert runtime_config.makerworld_status(db_session) == {
+        "connected": False,
+        "updated_at": None,
+    }
 
     runtime_config.clear_makerworld_token(db_session)
     assert "makerworld_cookie" not in _overlay
@@ -245,14 +250,19 @@ def test_spoolman_config_set_and_get_respects_unset_sentinel(
     assert got == {"base_url": "http://spoolman.local:7912", "api_key": "secret-key"}
 
     # Passing only base_url must not clobber the previously stored api_key.
-    runtime_config.set_spoolman_config(db_session, base_url="http://spoolman.local:9999")
+    runtime_config.set_spoolman_config(
+        db_session, base_url="http://spoolman.local:9999"
+    )
     got2 = runtime_config.spoolman_config(db_session)
     assert got2["api_key"] == "secret-key"
     assert got2["base_url"] == "http://spoolman.local:9999"
 
 
 def test_spoolman_config_defaults_when_no_row(db_session: Session) -> None:
-    assert runtime_config.spoolman_config(db_session) == {"base_url": None, "api_key": None}
+    assert runtime_config.spoolman_config(db_session) == {
+        "base_url": None,
+        "api_key": None,
+    }
 
 
 def test_currency_defaults_to_usd_and_round_trips(db_session: Session) -> None:

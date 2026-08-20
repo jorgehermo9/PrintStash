@@ -169,11 +169,9 @@ async def lifespan(app: FastAPI):
     )
     await watcher.stop_all()
     await hub.stop_all()
-    from app.services.browser_fetch import close_browser
     from app.services.moonraker import close_http_client
 
     await close_http_client()
-    await close_browser()
     release_process_lock(process_lock)
     logger.info("shutting down")
 

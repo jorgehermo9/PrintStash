@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "PrintStash Quick Capture",
-  "version": "0.11.1",
-  "description": "Save current page to a self-hosted PrintStash Pending Imports queue.",
-  "permissions": ["activeTab", "storage"],
+  "name": "PrintStash Model Importer",
+  "version": "0.12.1",
+  "description": "Send MakerWorld and Printables models to a self-hosted PrintStash instance.",
+  "permissions": ["activeTab", "scripting", "storage"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "action": {
-    "default_title": "Save to PrintStash",
+    "default_title": "Import model to PrintStash",
     "default_popup": "popup.html"
   }
 }

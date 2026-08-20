@@ -28,7 +28,11 @@ from app.services.jobs import registry
 
 
 def _make_user(session: Session, username: str, *, admin: bool = True) -> User:
-    user = User(username=username, hashed_password=hash_password("Password123"), is_superuser=admin)
+    user = User(
+        username=username,
+        hashed_password=hash_password("Password123"),
+        is_superuser=admin,
+    )
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -97,7 +101,9 @@ def test_requested_tags_returns_empty_on_bad_json() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_list_visible_scopes_to_owner_and_can_exclude_completed(db_session: Session) -> None:
+def test_list_visible_scopes_to_owner_and_can_exclude_completed(
+    db_session: Session,
+) -> None:
     owner = _make_user(db_session, "inbox-owner", admin=False)
     other = _make_user(db_session, "inbox-other", admin=False)
     admin = _make_user(db_session, "inbox-admin", admin=True)
@@ -129,7 +135,11 @@ def test_prune_history_removes_only_old_terminal_items(db_session: Session) -> N
     still_review.updated_at = utcnow() - timedelta(days=40)
     db_session.add_all([old_done, recent_done, still_review])
     db_session.commit()
-    old_done_id, recent_done_id, still_review_id = old_done.id, recent_done.id, still_review.id
+    old_done_id, recent_done_id, still_review_id = (
+        old_done.id,
+        recent_done.id,
+        still_review.id,
+    )
 
     pruned = inbox.prune_history(retention_days=30)
 
@@ -188,7 +198,9 @@ async def test_resolve_ignores_item_in_wrong_state(db_session: Session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_marks_failed_when_source_url_missing(db_session: Session) -> None:
+async def test_resolve_marks_failed_when_source_url_missing(
+    db_session: Session,
+) -> None:
     owner = _make_user(db_session, "resolve-no-url")
     row = _make_item(db_session, owner, source_url=None)
     await inbox.resolve(row.id)
@@ -204,7 +216,9 @@ async def test_resolve_collection_success_builds_manifest(
 ) -> None:
     owner = _make_user(db_session, "resolve-collection")
     row = _make_item(db_session, owner)
-    monkeypatch.setattr(import_resolvers, "classify_collection", lambda _url: "printables")
+    monkeypatch.setattr(
+        import_resolvers, "classify_collection", lambda _url: "printables"
+    )
 
     async def fake_resolve_collection_url(_url: str):
         return "My Collection", [
@@ -213,7 +227,9 @@ async def test_resolve_collection_success_builds_manifest(
             )
         ]
 
-    monkeypatch.setattr(import_resolvers, "resolve_collection_url", fake_resolve_collection_url)
+    monkeypatch.setattr(
+        import_resolvers, "resolve_collection_url", fake_resolve_collection_url
+    )
 
     await inbox.resolve(row.id)
 
@@ -231,7 +247,9 @@ async def test_resolve_collection_failure_marks_item_failed(
 ) -> None:
     owner = _make_user(db_session, "resolve-collection-fail")
     row = _make_item(db_session, owner)
-    monkeypatch.setattr(import_resolvers, "classify_collection", lambda _url: "printables")
+    monkeypatch.setattr(
+        import_resolvers, "classify_collection", lambda _url: "printables"
+    )
 
     async def no_result(_url: str):
         return None
@@ -256,7 +274,9 @@ async def test_resolve_model_files_listing_builds_manifest(
 
     async def fake_list_model_files(_url: str):
         return "Bracket", [
-            import_resolvers.ModelFile(file_id="f1", name="bracket.stl", file_type="stl", size=10)
+            import_resolvers.ModelFile(
+                file_id="f1", name="bracket.stl", file_type="stl", size=10
+            )
         ]
 
     monkeypatch.setattr(import_resolvers, "list_model_files", fake_list_model_files)
@@ -479,7 +499,9 @@ async def test_run_import_archive_completes(
     extracted = tmp_path / "a.stl"
     extracted.write_bytes(b"solid x endsolid")
     monkeypatch.setattr(
-        importer, "extract_selected", lambda _path, names: [(extracted, "a.stl")] if "a.stl" in names else []
+        importer,
+        "extract_selected",
+        lambda _path, names: [(extracted, "a.stl")] if "a.stl" in names else [],
     )
 
     def fake_import_assets(*, job_id: str, **_kwargs) -> None:
@@ -498,6 +520,45 @@ async def test_run_import_archive_completes(
 
 
 @pytest.mark.asyncio
+async def test_run_import_browser_file_uses_copy_and_releases_staging_on_success(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    owner = _make_user(db_session, "run-import-browser-file")
+    _overlay["staging_dir"] = tmp_path / "staging"
+    settings.incoming_dir.mkdir(parents=True)
+    staged = settings.incoming_dir / "inbox" / "1" / "source.3mf"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"browser-owned-package")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.REVIEW,
+        source_url="https://makerworld.com/en/models/1234-widget",
+        manifest_json=json.dumps({"kind": "browser_file", "filename": "widget.3mf"}),
+        staging_key=str(staged),
+    )
+
+    def fake_import_assets(*, job_id: str, staged_files, **_kwargs) -> None:
+        copied, name = staged_files[0]
+        assert copied != staged
+        assert copied.read_bytes() == b"browser-owned-package"
+        assert name == "widget.3mf"
+        copied.unlink()
+        registry.update(job_id, state="completed", model_id=8)
+
+    monkeypatch.setattr(importer, "import_assets", fake_import_assets)
+
+    await inbox.run_import(row.id, [], get_session_factory())
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, row.id)
+        assert fresh.state == InboxItemState.COMPLETED
+        assert fresh.resulting_model_id == 8
+        assert fresh.staging_key is None
+    assert not staged.exists()
+
+
+@pytest.mark.asyncio
 async def test_run_import_model_files_completes(
     db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -509,7 +570,9 @@ async def test_run_import_model_files_completes(
         manifest_json=json.dumps(
             {
                 "kind": "model_files",
-                "files": [{"id": "f1", "name": "bracket.stl", "file_type": "stl", "size": 10}],
+                "files": [
+                    {"id": "f1", "name": "bracket.stl", "file_type": "stl", "size": 10}
+                ],
             }
         ),
     )
@@ -518,7 +581,9 @@ async def test_run_import_model_files_completes(
         assert chosen[0].file_id == "f1"
         return ["https://example.com/download/f1"]
 
-    monkeypatch.setattr(import_resolvers, "resolve_selected_download", fake_resolve_selected_download)
+    monkeypatch.setattr(
+        import_resolvers, "resolve_selected_download", fake_resolve_selected_download
+    )
 
     staged = tmp_path / "bracket.stl"
     staged.write_bytes(b"solid x endsolid")
@@ -639,7 +704,9 @@ async def test_run_import_exception_marks_failed(
 
 
 @pytest.mark.asyncio
-async def test_run_import_requires_target_collection_access(db_session: Session) -> None:
+async def test_run_import_requires_target_collection_access(
+    db_session: Session,
+) -> None:
     owner = _make_user(db_session, "run-import-no-access", admin=False)
     row = _make_item(
         db_session,
@@ -694,14 +761,18 @@ def test_dismiss_rejects_importing_item(db_session: Session) -> None:
     assert exc.value.status_code == 409
 
 
-def test_dismiss_cleans_up_staging_directory(db_session: Session, tmp_path: Path) -> None:
+def test_dismiss_cleans_up_staging_directory(
+    db_session: Session, tmp_path: Path
+) -> None:
     owner = _make_user(db_session, "dismiss-owner2")
     _overlay["staging_dir"] = tmp_path / "staging"
     staging_dir = settings.incoming_dir / "inbox-item"
     staging_dir.mkdir(parents=True)
     staged_file = staging_dir / "source.stl"
     staged_file.write_bytes(b"solid x endsolid")
-    row = _make_item(db_session, owner, state=InboxItemState.REVIEW, staging_key=str(staged_file))
+    row = _make_item(
+        db_session, owner, state=InboxItemState.REVIEW, staging_key=str(staged_file)
+    )
 
     inbox.dismiss(db_session, row)
 
@@ -727,7 +798,9 @@ def test_reconcile_marks_resolving_items_failed(db_session: Session) -> None:
         assert fresh.error_code == "import_interrupted"
 
 
-def test_reconcile_completes_importing_item_with_finished_job(db_session: Session) -> None:
+def test_reconcile_completes_importing_item_with_finished_job(
+    db_session: Session,
+) -> None:
     owner = _make_user(db_session, "reconcile-importing-ok")
     job_id = registry.create(owner_user_id=owner.id)
     registry.update(job_id, state="completed", model_id=5)
@@ -743,9 +816,13 @@ def test_reconcile_completes_importing_item_with_finished_job(db_session: Sessio
         assert fresh.resulting_model_id == 5
 
 
-def test_reconcile_fails_importing_item_without_finished_job(db_session: Session) -> None:
+def test_reconcile_fails_importing_item_without_finished_job(
+    db_session: Session,
+) -> None:
     owner = _make_user(db_session, "reconcile-importing-fail")
-    row = _make_item(db_session, owner, state=InboxItemState.IMPORTING, background_job_id=None)
+    row = _make_item(
+        db_session, owner, state=InboxItemState.IMPORTING, background_job_id=None
+    )
 
     inbox.reconcile_interrupted_items()
 

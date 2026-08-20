@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import uuid
 import zipfile
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import HTTPException
@@ -15,11 +16,13 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.core.time import utcnow
 from app.db.models import (
+    SUFFIX_TO_FILE_TYPE,
     BackgroundJob,
     Collection,
     CollectionRole,
     InboxItem,
     InboxItemState,
+    InboxSourceKind,
     User,
 )
 from app.db.session import SessionFactory, get_session_factory
@@ -175,6 +178,89 @@ def create(session: Session, user: User, payload: InboxItemCreate) -> InboxItem:
     session.commit()
     session.refresh(row)
     return row
+
+
+def create_browser_upload(
+    session: Session,
+    user: User,
+    *,
+    source_url: str,
+    title: str | None,
+    filename: str,
+    stream: BinaryIO,
+) -> InboxItem:
+    """Durably stage a package selected by the authenticated browser.
+
+    The source URL is metadata only: the server deliberately never resolves or
+    fetches MakerWorld. The extension transfers the selected bytes while its
+    browser tab owns the site session.
+    """
+    if user.id is None:
+        raise ValueError("not_authenticated")
+    clean_url = sanitize_source_url(source_url)
+    if import_resolvers.classify_page(clean_url) != "makerworld":
+        raise importer.ImportError_("makerworld_model_page_required")
+    clean_name = Path(filename.replace("\\", "/")).name
+    suffix = Path(clean_name).suffix.lower()
+    if not clean_name:
+        raise importer.ImportError_("filename_required")
+    if suffix != ".zip" and suffix not in SUFFIX_TO_FILE_TYPE:
+        raise importer.ImportError_("unsupported_file_type")
+
+    row = InboxItem(
+        owner_user_id=user.id,
+        source_kind=InboxSourceKind.BROWSER,
+        source_url=clean_url,
+        source_hostname=urlsplit(clean_url).hostname,
+        display_title=safe_item(title) if title else None,
+        state=InboxItemState.RESOLVING,
+    )
+    session.add(row)
+    session.flush()
+    assert row.id is not None
+    directory = settings.incoming_dir / "inbox" / str(row.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    managed = directory / f"source{suffix}"
+    try:
+        size = storage.stream_to_path(
+            stream, managed, max_bytes=settings.max_upload_bytes
+        )
+        if suffix == ".zip":
+            entries = importer.inspect_archive(managed)
+            manifest = {
+                "kind": "archive",
+                "title": safe_item(clean_name),
+                "entries": [
+                    {
+                        "id": entry.name,
+                        "name": entry.name,
+                        "size": entry.size_bytes,
+                        "file_type": entry.file_type,
+                    }
+                    for entry in entries
+                    if entry.file_type
+                ],
+            }
+        else:
+            manifest = {
+                "kind": "browser_file",
+                "title": safe_item(clean_name),
+                "filename": safe_item(clean_name),
+                "size": size,
+            }
+        row.manifest_json = json.dumps(manifest, separators=(",", ":"))
+        row.staging_key = str(managed)
+        row.display_title = row.display_title or manifest["title"]
+        row.state = InboxItemState.REVIEW
+        row.updated_at = utcnow()
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception:
+        session.rollback()
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
 
 
 def update(
@@ -390,6 +476,24 @@ async def run_import(
             assets = await asyncio.to_thread(
                 importer.extract_selected, Path(staging_key), wanted
             )
+        elif kind == "browser_file":
+            filename = manifest.get("filename")
+            if (
+                not staging_key
+                or not Path(staging_key).exists()
+                or not isinstance(filename, str)
+            ):
+                raise importer.ImportError_("staging_expired")
+            source = Path(staging_key)
+            copy = (
+                settings.incoming_dir
+                / f"browser-{item_id}-{uuid.uuid4().hex}{source.suffix}"
+            )
+            with source.open("rb") as incoming:
+                storage.stream_to_path(
+                    incoming, copy, max_bytes=settings.max_upload_bytes
+                )
+            assets = [(copy, filename)]
         elif kind == "model_files":
             files_by_id = {item["id"]: item for item in manifest.get("files", [])}
             wanted = [item for item in selected if item in files_by_id] or list(

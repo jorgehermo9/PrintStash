@@ -487,6 +487,39 @@
         "title": "Body_add_gcode_revision_api_v1_models__model_id__gcode_revisions_post",
         "type": "object"
       },
+      "Body_capture_browser_upload_api_v1_inbox_browser_upload_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "source_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Source Url",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "file",
+          "source_url"
+        ],
+        "title": "Body_capture_browser_upload_api_v1_inbox_browser_upload_post",
+        "type": "object"
+      },
       "Body_import_library_archive_api_v1_models_library_import_post": {
         "properties": {
           "file": {
@@ -9764,7 +9797,7 @@
         "type": "object"
       },
       "UrlIngestRequest": {
-        "description": "Body for POST /ingest/url.\n\n``url`` may be a direct file/.zip link *or* a model *page* on a supported\nhost (Printables / MakerWorld / Thingiverse); pages are resolved to their\ndownload link server-side. The optional ``*_cookie`` fields carry a browser\nsession header for hosts that gate downloads behind login.",
+        "description": "Body for POST /ingest/url.\n\n``url`` may be a direct file/.zip link *or* a model *page* on a supported\nhost (Printables / Thingiverse); pages are resolved to their download link\nserver-side. Authenticated MakerWorld packages are captured by the browser\nextension and uploaded through the inbox. The optional cookie fields remain\naccepted for backwards compatibility; ``makerworld_cookie`` is ignored.",
         "properties": {
           "collection": {
             "anyOf": [
@@ -12749,7 +12782,7 @@
     },
     "/api/v1/config/makerworld/login": {
       "post": {
-        "description": "Submit MakerWorld (Bambu) email + password. Bambu usually emails a verification code, so the response is typically ``need_email_code`` with a ``login_token`` to pass to /makerworld/verify. The password is never stored — only the resulting session token is, on success.",
+        "description": "Retained for client compatibility. MakerWorld imports now require the browser extension and this endpoint returns HTTP 410.",
         "operationId": "makerworld_login_api_v1_config_makerworld_login_post",
         "requestBody": {
           "content": {
@@ -12788,7 +12821,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Start MakerWorld login",
+        "summary": "Legacy MakerWorld login endpoint",
         "tags": [
           "config"
         ]
@@ -12796,7 +12829,7 @@
     },
     "/api/v1/config/makerworld/token": {
       "post": {
-        "description": "Store a MakerWorld session token directly (the ``token`` cookie value copied from a logged-in browser). Use this for Google-SSO accounts, which have no password to log in with.",
+        "description": "Retained for client compatibility. MakerWorld imports now require the browser extension and this endpoint returns HTTP 410.",
         "operationId": "makerworld_set_token_api_v1_config_makerworld_token_post",
         "requestBody": {
           "content": {
@@ -12835,7 +12868,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Connect MakerWorld with a pasted session token",
+        "summary": "Legacy MakerWorld token endpoint",
         "tags": [
           "config"
         ]
@@ -12881,7 +12914,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Complete MakerWorld login with a verification code",
+        "summary": "Legacy MakerWorld verification endpoint",
         "tags": [
           "config"
         ]
@@ -15243,6 +15276,53 @@
           }
         ],
         "summary": "Batch Items",
+        "tags": [
+          "pending imports"
+        ]
+      }
+    },
+    "/api/v1/inbox/browser-upload": {
+      "post": {
+        "description": "Accept MakerWorld bytes selected by the authenticated browser extension.",
+        "operationId": "capture_browser_upload_api_v1_inbox_browser_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_capture_browser_upload_api_v1_inbox_browser_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxItemRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Capture Browser Upload",
         "tags": [
           "pending imports"
         ]

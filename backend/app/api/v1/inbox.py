@@ -4,11 +4,15 @@ from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
+    File,
+    Form,
     HTTPException,
     Query,
     Response,
+    UploadFile,
     status,
 )
+from fastapi.concurrency import run_in_threadpool
 from sqlmodel import Session
 
 from app.core.security import require_auth, require_user
@@ -48,16 +52,53 @@ async def capture(
     return inbox.read(row)
 
 
+@router.post(
+    "/browser-upload",
+    response_model=InboxItemRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_auth)],
+)
+async def capture_browser_upload(
+    file: UploadFile = File(...),
+    source_url: str = Form(..., min_length=1, max_length=2048),
+    title: str | None = Form(None, max_length=255),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> InboxItemRead:
+    """Accept MakerWorld bytes selected by the authenticated browser extension."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="filename_required")
+    try:
+        row = await run_in_threadpool(
+            inbox.create_browser_upload,
+            session,
+            current_user,
+            source_url=source_url,
+            title=title,
+            filename=file.filename,
+            stream=file.file,
+        )
+    except inbox.storage.UploadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="upload_too_large") from exc
+    except (ValueError, inbox.importer.ImportError_) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return inbox.read(row)
+
+
 @router.get("", response_model=list[InboxItemRead])
 def list_items(
     include_completed: bool = Query(True),
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[InboxItemRead]:
-    return inbox.list_visible(session, current_user, include_completed=include_completed)
+    return inbox.list_visible(
+        session, current_user, include_completed=include_completed
+    )
 
 
-@router.post("/batch", response_model=list[InboxItemRead], dependencies=[Depends(require_auth)])
+@router.post(
+    "/batch", response_model=list[InboxItemRead], dependencies=[Depends(require_auth)]
+)
 def batch_items(
     payload: InboxBatchRequest,
     background_tasks: BackgroundTasks,
@@ -76,7 +117,11 @@ def batch_items(
                 InboxItemUpdate(collection_id=payload.collection_id),
             )
         elif payload.action == "add_tags":
-            tags = list(dict.fromkeys([*inbox.requested_tags(row.requested_tags_json), *payload.tags]))
+            tags = list(
+                dict.fromkeys(
+                    [*inbox.requested_tags(row.requested_tags_json), *payload.tags]
+                )
+            )
             row = inbox.update(session, current_user, row, InboxItemUpdate(tags=tags))
         elif payload.action == "retry":
             row = inbox.retry(session, row)
@@ -102,7 +147,9 @@ def get_item(
     return inbox.read(inbox.require_visible(session, current_user, item_id))
 
 
-@router.patch("/{item_id}", response_model=InboxItemRead, dependencies=[Depends(require_auth)])
+@router.patch(
+    "/{item_id}", response_model=InboxItemRead, dependencies=[Depends(require_auth)]
+)
 def update_item(
     item_id: int,
     payload: InboxItemUpdate,
@@ -113,7 +160,11 @@ def update_item(
     return inbox.read(inbox.update(session, current_user, row, payload))
 
 
-@router.post("/{item_id}/resolve", response_model=InboxItemRead, dependencies=[Depends(require_auth)])
+@router.post(
+    "/{item_id}/resolve",
+    response_model=InboxItemRead,
+    dependencies=[Depends(require_auth)],
+)
 def resolve_item(
     item_id: int,
     background_tasks: BackgroundTasks,
@@ -127,7 +178,11 @@ def resolve_item(
     return inbox.read(row)
 
 
-@router.post("/{item_id}/import", response_model=InboxItemRead, dependencies=[Depends(require_auth)])
+@router.post(
+    "/{item_id}/import",
+    response_model=InboxItemRead,
+    dependencies=[Depends(require_auth)],
+)
 def import_item(
     item_id: int,
     payload: InboxImportRequest,
@@ -139,11 +194,17 @@ def import_item(
     row = inbox.require_visible(session, current_user, item_id)
     if row.state != InboxItemState.REVIEW:
         raise HTTPException(status_code=409, detail="pending_import_not_ready")
-    background_tasks.add_task(inbox.run_import, row.id, payload.selected_ids, session_factory)
+    background_tasks.add_task(
+        inbox.run_import, row.id, payload.selected_ids, session_factory
+    )
     return inbox.read(row)
 
 
-@router.post("/{item_id}/retry", response_model=InboxItemRead, dependencies=[Depends(require_auth)])
+@router.post(
+    "/{item_id}/retry",
+    response_model=InboxItemRead,
+    dependencies=[Depends(require_auth)],
+)
 def retry_item(
     item_id: int,
     background_tasks: BackgroundTasks,
@@ -156,7 +217,11 @@ def retry_item(
     return inbox.read(row)
 
 
-@router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_auth)])
+@router.delete(
+    "/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_auth)],
+)
 def dismiss_item(
     item_id: int,
     current_user: User = Depends(require_user),

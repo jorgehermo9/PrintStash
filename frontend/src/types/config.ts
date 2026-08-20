@@ -120,32 +120,6 @@ export interface VaultConfigUpdate {
   oidc_allow_insecure_http?: boolean;
 }
 
-export interface MakerWorldStatus {
-  connected: boolean;
-  updated_at: string | null;
-}
-
-export interface MakerWorldLoginRequest {
-  account: string;
-  password: string;
-}
-
-export interface MakerWorldVerifyRequest {
-  login_token: string;
-  code: string;
-}
-
-export interface MakerWorldTokenRequest {
-  token: string;
-}
-
-// status: "ok" (connected), "need_email_code", or "need_tfa_code".
-export interface MakerWorldLoginResponse {
-  status: string;
-  login_token: string | null;
-  connected: boolean;
-}
-
 export type ExternalLibraryCollectionMode = "mirror" | "single";
 
 // auto: watch only on local filesystems; events: always watch; off: never watch.

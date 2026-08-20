@@ -37,17 +37,12 @@ dependencies = [
 async-db = [
     "aiosqlite>=0.22,<1",
 ]
-browser = [
-    # Stealth-patched Chromium automation for Cloudflare-gated imports.
-    "patchright>=1.49",
-]
 step = [
     # OpenCASCADE tessellation; 0.1.1 ships amd64 and arm64 Linux wheels.
     "cascadio>=0.1.1,<0.2",
 ]
 full = [
     "cascadio>=0.1.1,<0.2",
-    "patchright>=1.49",
 ]
 dev = [
     "bandit>=1.8",

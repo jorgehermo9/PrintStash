@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,11 +13,6 @@ from app.core.security import require_superuser
 from app.db.models import Collection, Document, File, Model
 from app.db.session import get_session
 from app.services import runtime_config
-from app.services.makerworld_auth import (
-    MakerWorldAuthError,
-    begin_login,
-    submit_code,
-)
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -113,7 +108,8 @@ def get_config(
 
 
 # --------------------------------------------------------------------------- #
-# MakerWorld login (Bambu account) — obtains the download session token.
+# Legacy MakerWorld connection contract. Imports now use the browser extension;
+# routes remain present so existing clients receive an actionable response.
 # --------------------------------------------------------------------------- #
 class MakerWorldStatus(BaseModel):
     connected: bool = False
@@ -156,84 +152,62 @@ class MakerWorldTokenRequest(BaseModel):
     summary="MakerWorld connection status",
 )
 def makerworld_status(session: Session = Depends(get_session)) -> MakerWorldStatus:
-    return MakerWorldStatus(**runtime_config.makerworld_status(session))
+    del session
+    return MakerWorldStatus(connected=False)
+
+
+def _makerworld_extension_only() -> NoReturn:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="makerworld_extension_required",
+    )
 
 
 @router.post(
     "/makerworld/login",
     dependencies=[Depends(require_superuser)],
-    summary="Start MakerWorld login",
+    summary="Legacy MakerWorld login endpoint",
     description=(
-        "Submit MakerWorld (Bambu) email + password. Bambu usually emails a "
-        "verification code, so the response is typically ``need_email_code`` with "
-        "a ``login_token`` to pass to /makerworld/verify. The password is never "
-        "stored — only the resulting session token is, on success."
+        "Retained for client compatibility. MakerWorld imports now require the "
+        "browser extension and this endpoint returns HTTP 410."
     ),
 )
 async def makerworld_login(
     body: MakerWorldLoginRequest,
     session: Session = Depends(get_session),
 ) -> MakerWorldLoginResponse:
-    try:
-        result = await begin_login(body.account, body.password)
-    except MakerWorldAuthError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code
-        ) from exc
-    if result.status == "ok" and result.token:
-        runtime_config.set_makerworld_token(session, result.token)
-        return MakerWorldLoginResponse(status="ok", connected=True)
-    return MakerWorldLoginResponse(status=result.status, login_token=result.login_token)
+    del body, session
+    _makerworld_extension_only()
 
 
 @router.post(
     "/makerworld/verify",
     dependencies=[Depends(require_superuser)],
-    summary="Complete MakerWorld login with a verification code",
+    summary="Legacy MakerWorld verification endpoint",
 )
 async def makerworld_verify(
     body: MakerWorldVerifyRequest,
     session: Session = Depends(get_session),
 ) -> MakerWorldLoginResponse:
-    try:
-        result = await submit_code(body.login_token, body.code)
-    except MakerWorldAuthError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code
-        ) from exc
-    if not result.token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_code"
-        )
-    runtime_config.set_makerworld_token(session, result.token)
-    return MakerWorldLoginResponse(status="ok", connected=True)
+    del body, session
+    _makerworld_extension_only()
 
 
 @router.post(
     "/makerworld/token",
     dependencies=[Depends(require_superuser)],
-    summary="Connect MakerWorld with a pasted session token",
+    summary="Legacy MakerWorld token endpoint",
     description=(
-        "Store a MakerWorld session token directly (the ``token`` cookie value "
-        "copied from a logged-in browser). Use this for Google-SSO accounts, "
-        "which have no password to log in with."
+        "Retained for client compatibility. MakerWorld imports now require the "
+        "browser extension and this endpoint returns HTTP 410."
     ),
 )
 def makerworld_set_token(
     body: MakerWorldTokenRequest,
     session: Session = Depends(get_session),
 ) -> MakerWorldStatus:
-    token = body.token.strip()
-    # Be forgiving: accept a full ``token=<jwt>`` (or ``token=<jwt>; other=…``)
-    # cookie header pasted as-is, not just the bare value.
-    if token.lower().startswith("token="):
-        token = token.split("=", 1)[1].split(";", 1)[0].strip()
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="missing_token"
-        )
-    runtime_config.set_makerworld_token(session, token)
-    return MakerWorldStatus(**runtime_config.makerworld_status(session))
+    del body, session
+    _makerworld_extension_only()
 
 
 @router.delete(

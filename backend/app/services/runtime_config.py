@@ -94,10 +94,6 @@ def _merge_config_overlay(config: SystemConfig) -> None:
     _set("oidc_redirect_uri", config.oidc_redirect_uri)
     if config.oidc_allow_insecure_http is not None:
         _overlay["oidc_allow_insecure_http"] = config.oidc_allow_insecure_http
-    # A logged-in MakerWorld token overlays the env cookie as ``token=<jwt>`` so
-    # the importer's existing cookie path picks it up (see makerworld_auth).
-    if config.makerworld_token:
-        _overlay["makerworld_cookie"] = f"token={config.makerworld_token}"
 
 
 def apply_overlay(session: Session) -> None:
@@ -457,19 +453,17 @@ def set_auto_mark_known_good(session: Session, enabled: bool) -> SystemConfig:
 
 
 def set_makerworld_token(session: Session, token: str) -> SystemConfig:
-    """Persist a MakerWorld session token and apply it as the import cookie now."""
+    """Compatibility helper used only to clear a token from older installs."""
+    del token
     config = get_or_create(session)
-    config.makerworld_token = token or None
-    config.makerworld_token_updated_at = utcnow() if token else None
+    config.makerworld_token = None
+    config.makerworld_token_updated_at = None
     config.updated_at = utcnow()
     session.add(config)
     session.commit()
     session.refresh(config)
-    if token:
-        _overlay["makerworld_cookie"] = f"token={token}"
-    else:
-        _overlay.pop("makerworld_cookie", None)
-    logger.info("MakerWorld token %s", "set" if token else "cleared")
+    _overlay.pop("makerworld_cookie", None)
+    logger.info("legacy MakerWorld token cleared")
     return config
 
 
@@ -479,14 +473,9 @@ def clear_makerworld_token(session: Session) -> SystemConfig:
 
 
 def makerworld_status(session: Session) -> dict:
-    """Connection status for the MakerWorld login UI (never returns the token)."""
-    config = session.get(SystemConfig, 1)
-    connected = bool(config and config.makerworld_token)
-    updated_at = config.makerworld_token_updated_at if config else None
-    return {
-        "connected": connected,
-        "updated_at": updated_at.isoformat() if updated_at else None,
-    }
+    """Compatibility status: MakerWorld connections are no longer server-side."""
+    del session
+    return {"connected": False, "updated_at": None}
 
 
 def mark_configured(session: Session, *, commit: bool = True) -> SystemConfig:

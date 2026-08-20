@@ -24,14 +24,12 @@ graceful degradation — is ours.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
 
 from printstash_core.imports import resolvers as _resolver_rules
 
 from app.core.http_client import get_http_client
 from app.core.logging import get_logger
-from app.services import browser_fetch
 from app.services.importer import ImportError_
 
 logger = get_logger(__name__)
@@ -129,7 +127,12 @@ async def _resolve_printables(url: str) -> Optional[str]:
     if pack_id:
         payload = await _printables_graphql(
             _PRINTABLES_LINK_MUTATION,
-            {"printId": print_id, "source": "model_detail", "fileType": "pack", "id": pack_id},
+            {
+                "printId": print_id,
+                "source": "model_detail",
+                "fileType": "pack",
+                "id": pack_id,
+            },
             url,
         )
         link = _printables_link_from_output(payload)
@@ -172,6 +175,7 @@ query ($id: ID!) {
 }
 """
 
+
 async def _list_printables_files(url: str) -> Optional[tuple[str, list[ModelFile]]]:
     print_id = _printables_id(url)
     if not print_id:
@@ -192,7 +196,9 @@ async def _printables_download_links(url: str, files: list[ModelFile]) -> list[s
     grouped: dict[str, list[str]] = {}
     for f in files:
         grouped.setdefault(f.file_type, []).append(f.file_id)
-    files_arg = [{"fileType": file_type, "ids": ids} for file_type, ids in grouped.items()]
+    files_arg = [
+        {"fileType": file_type, "ids": ids} for file_type, ids in grouped.items()
+    ]
     payload = await _printables_graphql(
         _PRINTABLES_LINK_MUTATION,
         {"printId": print_id, "source": "model_detail", "files": files_arg},
@@ -218,11 +224,15 @@ query ($collectionId: ID!, $limit: Int, $cursor: String, $ordering: CollectionPr
 """
 
 
-async def _resolve_printables_collection(url: str) -> Optional[tuple[str, list[CollectionMember]]]:
+async def _resolve_printables_collection(
+    url: str,
+) -> Optional[tuple[str, list[CollectionMember]]]:
     collection_id = _collection_id(url)
     if not collection_id:
         return None
-    meta = await _printables_graphql(_PRINTABLES_COLLECTION_QUERY, {"id": collection_id}, url)
+    meta = await _printables_graphql(
+        _PRINTABLES_COLLECTION_QUERY, {"id": collection_id}, url
+    )
     collection = (meta or {}).get("data", {}).get("collection") or {}
     title = str(collection.get("name") or f"Collection {collection_id}")
 
@@ -262,129 +272,6 @@ async def _resolve_printables_collection(url: str) -> Optional[tuple[str, list[C
 
 
 # --------------------------------------------------------------------------- #
-# MakerWorld (Next.js page → instance/model download API)
-# --------------------------------------------------------------------------- #
-def _makerworld_api_headers(referer: str, nonce: Optional[str]) -> dict:
-    # The login cookie is injected into the browser context by browser_fetch, not
-    # set here, so the request carries it alongside Cloudflare clearance.
-    headers = {
-        "User-Agent": _BROWSER_UA,
-        "Accept": "application/json",
-        "X-BBL-Client-Type": "web",
-        "X-BBL-Client-Name": "MakerWorld",
-        "Referer": referer,
-    }
-    if nonce:
-        headers["X-Nonce"] = nonce
-    return headers
-
-
-async def _makerworld_fetch_page(url: str, cookie: Optional[str]) -> Optional[str]:
-    """Fetch a MakerWorld page's HTML, rendering past Cloudflare if needed.
-
-    The cheap httpx fetch is tried first. If MakerWorld returns nothing usable —
-    a non-200, or the Cloudflare "Verify you are human" interstitial — fall back
-    to a headless browser that solves the challenge and returns rendered HTML.
-    """
-    client = get_http_client()
-    headers = {
-        "User-Agent": _BROWSER_UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    if cookie:
-        headers["Cookie"] = cookie
-    resp = await client.get(url, headers=headers, follow_redirects=True, timeout=_TIMEOUT)
-    html = resp.text if resp.status_code == 200 else None
-
-    if html is not None and not _looks_like_challenge(html):
-        return html
-
-    # httpx was blocked or challenged — render the page in a fresh browser context
-    # that solves the Cloudflare challenge.
-    rendered = await browser_fetch.fetch_rendered_html(
-        url, wait_selector="script#__NEXT_DATA__", extra_cookie=cookie
-    )
-    if rendered:
-        return rendered
-    return html
-
-
-async def _makerworld_api_get(
-    api_url: str, referer: str, nonce: Optional[str], cookie: Optional[str]
-) -> Optional[Any]:
-    """GET a MakerWorld API endpoint through the browser, past Cloudflare.
-
-    Plain httpx is challenged (403) by Cloudflare, so the request rides the
-    browser's request context. ``cookie`` carries the user's login session;
-    download endpoints are auth-gated and answer 403 "please log in" without it.
-    """
-    headers = _makerworld_api_headers(referer, nonce)
-    result = await browser_fetch.api_get(api_url, cookie=cookie, headers=headers)
-    if result is None:
-        return None
-    status, text = result
-    if status in (401, 403, 429):
-        if "log in" in text.lower() or "login" in text.lower():
-            raise ImportError_("makerworld_login_required")
-        raise ImportError_("makerworld_blocked")
-    if status != 200:
-        return None
-    try:
-        return json.loads(text)
-    except ValueError:
-        return None
-
-
-async def _resolve_makerworld(url: str, cookie: Optional[str]) -> Optional[str]:
-    """Resolve a MakerWorld model page to a direct download URL.
-
-    The page HTML embeds no real file link (only thumbnails and store links), so
-    we go straight to the download API: the public design endpoint yields the
-    instance id, and the instance's ``f3mf`` endpoint yields the file link. The
-    latter is auth-gated — without a login ``cookie`` it raises
-    ``makerworld_login_required`` (surfaced via :func:`_makerworld_api_get`).
-    """
-    design_id = _makerworld_id(url)
-    if not design_id:
-        return None
-    base = "https://makerworld.com/api/v1/design-service"
-
-    design = await _makerworld_api_get(f"{base}/design/{design_id}", url, None, cookie)
-    instance_id = _makerworld_instance_id(design)
-
-    if instance_id:
-        api = f"{base}/instance/{instance_id}/f3mf?type=download&fileType=3mfstl"
-        data = await _makerworld_api_get(api, url, None, cookie)
-        link = _first_download_url(data) if data is not None else None
-        if link:
-            return link
-
-    # Fallback to the model-level download endpoint.
-    api = f"https://makerworld.com/api/v1/models/{design_id}/download"
-    data = await _makerworld_api_get(api, url, None, cookie)
-    return _first_download_url(data) if data is not None else None
-
-
-async def _resolve_makerworld_collection(
-    url: str, cookie: Optional[str]
-) -> Optional[tuple[str, list[CollectionMember]]]:
-    collection_id = _collection_id(url)
-    if not collection_id:
-        return None
-    html = await _makerworld_fetch_page(url, cookie)
-    if not html:
-        return None
-    next_data = _extract_next_data(html)
-    if next_data is None:
-        return None
-
-    title = _makerworld_collection_title(next_data, collection_id)
-    members = _makerworld_collection_members(next_data)
-    return (title, members) if members else None
-
-
-# --------------------------------------------------------------------------- #
 # Thingiverse (stable public per-thing zip endpoint)
 # --------------------------------------------------------------------------- #
 async def _resolve_thingiverse(url: str, cookie: Optional[str]) -> Optional[str]:
@@ -415,7 +302,7 @@ async def resolve_page_url(
         if kind == "printables":
             resolved = await _resolve_printables(url)
         elif kind == "makerworld":
-            resolved = await _resolve_makerworld(url, makerworld_cookie)
+            raise ImportError_("makerworld_extension_required")
         else:
             resolved = await _resolve_thingiverse(url, thingiverse_cookie)
     except ImportError_:
@@ -474,7 +361,7 @@ async def resolve_collection_url(
         if kind == "printables":
             resolved = await _resolve_printables_collection(url)
         else:
-            resolved = await _resolve_makerworld_collection(url, makerworld_cookie)
+            raise ImportError_("makerworld_extension_required")
     except ImportError_:
         raise
     except Exception as exc:  # noqa: BLE001 — network/parse boundary

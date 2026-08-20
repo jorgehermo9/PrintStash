@@ -193,19 +193,8 @@ class Settings(BaseSettings):
     max_archive_depth: int = Field(default=32, gt=0)
     max_archive_path_bytes: int = Field(default=1024, gt=0)
 
-    # Headless-browser fallback for Cloudflare-gated imports (MakerWorld). When
-    # enabled, pages that return the bot challenge are re-fetched with Chromium
-    # which solves the challenge automatically. See services/browser_fetch.py.
-    makerworld_browser_enabled: bool = True
-    makerworld_browser_headless: bool = True
-    browser_fetch_timeout_seconds: int = Field(default=45, gt=0)
-
-    # Instance-level MakerWorld session cookie. MakerWorld auth-gates file
-    # downloads, so anonymous URL import can list a collection but never fetch its
-    # files. Setting this once (admin pastes a logged-in `k=v; k2=v2` cookie
-    # header) lets every import reuse it, so end users paste nothing. A per-request
-    # `makerworld_cookie` still overrides it. Sessions expire — when downloads
-    # start failing with `makerworld_login_required`, re-paste a fresh value.
+    # Deprecated compatibility input. MakerWorld files are transferred by the
+    # browser extension and this value is never used for network requests.
     makerworld_cookie: str = ""
 
     backup_dir: Path = Path("/data/backups")
