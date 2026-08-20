@@ -3,6 +3,7 @@
   "ignorePatterns": [
     "dist/**",
     "playwright-report/**",
+    "src/generated/**",
     "test-results/**",
     "tools/oxlint/anti-slop/**"
   ]
