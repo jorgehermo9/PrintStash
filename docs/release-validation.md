@@ -56,6 +56,7 @@ uv run pip-audit
 ```bash
 cd frontend
 pnpm lint
+pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm build

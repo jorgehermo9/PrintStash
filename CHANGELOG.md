@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Changed
+
+- **Frontend toolchain moved to oxc.** ESLint and `typescript-eslint` are
+  replaced by [oxlint](https://oxc.rs), formatting is now enforced by
+  [oxfmt](https://oxc.rs) (the frontend was previously unformatted), and
+  typechecking runs on the TypeScript 7 native compiler — about 6x faster
+  (`3.97s` to `0.66s` on this tree). Dropping `typescript-eslint` is what makes
+  TypeScript 7 usable at all: it has no stable programmatic API until 7.1.
+  `pnpm lint` and `pnpm typecheck` keep their names; `pnpm format` and
+  `pnpm format:check` are new and `format:check` gates CI.
+- **Lint rules now reject low-evidence typing.** The
+  [anti-slop](https://github.com/dmmulroy/anti-slop) rule set is vendored at
+  `frontend/tools/oxlint/anti-slop/` and enabled as errors, alongside oxlint's
+  React and Vitest rules. `react/set-state-in-effect`, previously disabled, is
+  now enforced.
+- The i18n coverage test parses JSX with `oxc-parser` instead of the TypeScript
+  compiler API, which TypeScript 7 no longer exposes.
+
 ## 0.12.1
 
 ### Fixed

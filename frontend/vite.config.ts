@@ -1,4 +1,3 @@
-/// <reference types="vitest/config" />
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
@@ -18,12 +17,7 @@ export default defineConfig({
   // reload — a one-off ~30s stall on the first viewer open (worse on WSL2).
   // Listing them here pre-bundles at dev-server startup instead.
   optimizeDeps: {
-    include: [
-      "three",
-      "three-stdlib",
-      "@react-three/fiber",
-      "@react-three/drei",
-    ],
+    include: ["three", "three-stdlib", "@react-three/fiber", "@react-three/drei"],
   },
   server: {
     port: 3000,

@@ -385,10 +385,13 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Typecheck frontend
-        run: pnpm exec tsc --noEmit
+        run: pnpm typecheck
 
       - name: Lint frontend
         run: pnpm lint
+
+      - name: Check frontend formatting
+        run: pnpm format:check
 
       - name: Unit test frontend
         run: pnpm test
