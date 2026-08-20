@@ -79,10 +79,7 @@ def is_valid_container(path: Path) -> bool:
                 if len(file.read(param_len)) != param_len:
                     return False
                 checksum_len = 4 if checksum_type != 0 else 0
-                if (
-                    data_len > _MAX_BLOCK_DATA
-                    or file.tell() + data_len + checksum_len > file_size
-                ):
+                if file.tell() + data_len + checksum_len > file_size:
                     return False
 
                 if block_type == _GCODE:
@@ -90,7 +87,10 @@ def is_valid_container(path: Path) -> bool:
 
                 output_limit = _output_limit(block_type)
                 if output_limit is not None:
-                    if uncompressed_size > output_limit:
+                    if (
+                        data_len > _MAX_BLOCK_DATA
+                        or uncompressed_size > output_limit
+                    ):
                         return False
                     data = file.read(data_len)
                     if compression not in {_COMP_NONE, _COMP_DEFLATE}:
@@ -158,10 +158,12 @@ def _walk(file: BinaryIO, wanted: frozenset[int]) -> Iterator[_Block]:
 
         param_len = _block_param_len(block_type)
         params = file.read(param_len)
-        if len(params) < param_len or data_len > _MAX_BLOCK_DATA:
+        if len(params) < param_len:
             return
 
         if block_type in wanted:
+            if data_len > _MAX_BLOCK_DATA:
+                return
             data = file.read(data_len)
             if len(data) < data_len:
                 return

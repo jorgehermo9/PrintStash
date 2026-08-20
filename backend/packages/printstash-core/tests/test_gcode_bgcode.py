@@ -118,3 +118,17 @@ def test_container_requires_a_printable_gcode_block(tmp_path: Path) -> None:
     )
 
     assert is_valid_container(metadata_only) is False
+
+
+def test_container_validation_skips_large_printable_body(tmp_path: Path) -> None:
+    """Printable blocks are seeked, not read, so their size is not metadata-capped."""
+    path = tmp_path / "large-sparse.bgcode"
+    body_size = bgcode._MAX_BLOCK_DATA + 1
+    with path.open("wb") as file:
+        file.write(b"GCDE" + struct.pack("<IH", 1, 0))
+        file.write(struct.pack("<HHI", _GCODE, 0, body_size))
+        file.write(struct.pack("<H", 2))
+        file.seek(body_size - 1, 1)
+        file.write(b"\0")
+
+    assert is_valid_container(path) is True
