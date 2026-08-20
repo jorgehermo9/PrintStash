@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  ingestUrl,
-  selectCollectionMembers,
-  selectModelFiles,
-} from "@/lib/api/models";
+import { ingestUrl, selectCollectionMembers, selectModelFiles } from "@/lib/api/models";
 import { invalidateApiCache } from "@/lib/api/request";
 
 /**

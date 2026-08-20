@@ -133,7 +133,12 @@ describe("import reconnect", () => {
 
     await tc.syncImportJobs();
 
-    expect(tc.listTasks().map((task) => task.title).sort()).toEqual(localTitles.sort());
+    expect(
+      tc
+        .listTasks()
+        .map((task) => task.title)
+        .sort(),
+    ).toEqual(localTitles.sort());
   });
 });
 

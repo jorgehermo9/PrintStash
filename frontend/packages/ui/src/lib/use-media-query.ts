@@ -17,10 +17,7 @@ function subscribe(onChange: () => void, query: string) {
 }
 
 export function useMediaQuery(query: string): boolean {
-  const subscribeToMql = useCallback(
-    (onChange: () => void) => subscribe(onChange, query),
-    [query],
-  );
+  const subscribeToMql = useCallback((onChange: () => void) => subscribe(onChange, query), [query]);
   const getSnap = useCallback(() => getSnapshot(query), [query]);
   return useSyncExternalStore(subscribeToMql, getSnap);
 }

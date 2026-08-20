@@ -3,18 +3,12 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "@/lib/navigation";
 import { AlertTriangle, X } from "lucide-react";
-import {
-  isLoggedIn,
-  onAuthChange,
-  onUnauthorized,
-} from "@/lib/auth";
+import { isLoggedIn, onAuthChange, onUnauthorized } from "@/lib/auth";
 import { toast } from "@/lib/toast";
 
 export function AuthBanner() {
   const [show, setShow] = useState(false);
-  const [reason, setReason] = useState<"missing" | "rejected" | "expired">(
-    "missing",
-  );
+  const [reason, setReason] = useState<"missing" | "rejected" | "expired">("missing");
   const firstFire = useRef(true);
 
   useEffect(() => {
@@ -53,12 +47,9 @@ export function AuthBanner() {
   if (!show) return null;
 
   const messages: Record<string, string> = {
-    missing:
-      "An action requires authentication. Sign in to continue.",
-    rejected:
-      "Server rejected the stored credentials. Sign in again.",
-    expired:
-      "Your session has expired. Please sign in again.",
+    missing: "An action requires authentication. Sign in to continue.",
+    rejected: "Server rejected the stored credentials. Sign in again.",
+    expired: "Your session has expired. Please sign in again.",
   };
 
   return (

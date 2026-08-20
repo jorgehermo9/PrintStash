@@ -20,12 +20,8 @@ it("fully localizes and labels a destructive confirmation dialog", () => {
     </I18nProvider>,
   );
 
-  expect(
-    screen.getByRole("dialog", { name: "¿Eliminar permanentemente?" }),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "¿Eliminar permanentemente?" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
-  expect(
-    screen.getByRole("button", { name: "Eliminar definitivamente" }),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Eliminar definitivamente" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cerrar" })).toBeInTheDocument();
 });

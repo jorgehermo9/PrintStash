@@ -80,7 +80,12 @@ it("translates nested legacy component text without rewriting user content", asy
   document.body.append(container);
 
   function NestedLegacySurface() {
-    return <section title="No backups available."><p>No backups available.</p><p>My Models collection</p></section>;
+    return (
+      <section title="No backups available.">
+        <p>No backups available.</p>
+        <p>My Models collection</p>
+      </section>
+    );
   }
 
   render(

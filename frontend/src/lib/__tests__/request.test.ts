@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  getUrl,
-  getWsUrl,
-  invalidateApiCache,
-} from "@/lib/api/request";
+import { getUrl, getWsUrl, invalidateApiCache } from "@/lib/api/request";
 import { getJson, sendJson, sendAction } from "@/lib/api/request";
 
 /**
@@ -69,10 +65,7 @@ describe("getJson caching", () => {
       }),
     );
 
-    const both = Promise.all([
-      getJson("/api/v1/tags"),
-      getJson("/api/v1/tags"),
-    ]);
+    const both = Promise.all([getJson("/api/v1/tags"), getJson("/api/v1/tags")]);
     resolve(jsonResponse([{ id: 9 }]));
     const [a, b] = await both;
 
@@ -146,9 +139,7 @@ describe("mutations", () => {
 
   it("sendAction sends a bare method and resolves void on 204", async () => {
     fetchMock.mockResolvedValue(jsonResponse(null, 204));
-    await expect(
-      sendAction("/api/v1/tags/5", "DELETE"),
-    ).resolves.toBeUndefined();
+    await expect(sendAction("/api/v1/tags/5", "DELETE")).resolves.toBeUndefined();
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "DELETE" });
   });
 });

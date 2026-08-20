@@ -31,9 +31,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     let alive = true;
-    void getAuthProviders().then((value) => {
-      if (alive) setProviders(value);
-    }).catch(() => undefined);
+    void getAuthProviders()
+      .then((value) => {
+        if (alive) setProviders(value);
+      })
+      .catch(() => undefined);
 
     const params = new URLSearchParams(window.location.search);
     if (params.get("oidc") === "success") {
@@ -45,7 +47,9 @@ export default function LoginPage() {
     } else if (params.has("oidc_error")) {
       setError(t("auth.ssoFailed"));
     }
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [refresh, router, t]);
 
   if (user) {
@@ -150,11 +154,7 @@ export default function LoginPage() {
               </div>
 
               <div className="flex items-center gap-2.5">
-                <Checkbox
-                  checked={remember_me}
-                  onChange={setremember_me}
-                  ariaLabel="Remember me"
-                />
+                <Checkbox checked={remember_me} onChange={setremember_me} ariaLabel="Remember me" />
                 <span className="text-sm text-on-surface-variant">{t("auth.remember")}</span>
               </div>
 

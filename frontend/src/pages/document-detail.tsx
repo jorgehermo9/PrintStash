@@ -233,7 +233,11 @@ export default function DocumentDetailPage() {
                 disabled={saving}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary-foreground bg-primary rounded hover:bg-primary-hover disabled:opacity-50"
               >
-                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                {saving ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
                 Save
               </button>
             </>
@@ -249,69 +253,69 @@ export default function DocumentDetailPage() {
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto pb-24 md:pb-0">
-        {/* Markdown: edit or preview */}
-        {isMarkdown &&
-          (mode === "edit" ? (
-            <div className="flex flex-col h-full">
-              <textarea
-                ref={textareaRef}
-                value={draftBody}
-                onChange={(e) => setDraftBody(e.target.value)}
-                onPaste={(e) => {
-                  if (e.clipboardData.files.length) {
-                    e.preventDefault();
-                    handleImages(e.clipboardData.files);
-                  }
-                }}
-                onDrop={(e) => {
-                  if (e.dataTransfer.files.length) {
-                    e.preventDefault();
-                    handleImages(e.dataTransfer.files);
-                  }
-                }}
-                placeholder="# Document&#10;&#10;Write markdown. Paste or drop images to embed them."
-                className="w-full flex-1 min-h-0 resize-none bg-surface text-foreground font-mono text-sm border border-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-              <div className="mt-1 text-xs text-muted-foreground">
-                {uploading ? (
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading image…
-                  </span>
-                ) : (
-                  "Markdown · paste or drop images to embed"
-                )}
-              </div>
-            </div>
-          ) : draftBody ? (
-            <MarkdownView source={draftBody} />
-          ) : (
-            <p className="text-sm text-muted-foreground">This document is empty.</p>
-          ))}
-
-        {/* PDF: themed inline viewer (pdf.js) */}
-        {doc.kind === "pdf" &&
-          (pdfUrl ? (
-            <Suspense
-              fallback={
-                <div className="flex-1 flex items-center justify-center text-muted-foreground">
-                  <Loader2 className="w-5 h-5 animate-spin" />
+          {/* Markdown: edit or preview */}
+          {isMarkdown &&
+            (mode === "edit" ? (
+              <div className="flex flex-col h-full">
+                <textarea
+                  ref={textareaRef}
+                  value={draftBody}
+                  onChange={(e) => setDraftBody(e.target.value)}
+                  onPaste={(e) => {
+                    if (e.clipboardData.files.length) {
+                      e.preventDefault();
+                      handleImages(e.clipboardData.files);
+                    }
+                  }}
+                  onDrop={(e) => {
+                    if (e.dataTransfer.files.length) {
+                      e.preventDefault();
+                      handleImages(e.dataTransfer.files);
+                    }
+                  }}
+                  placeholder="# Document&#10;&#10;Write markdown. Paste or drop images to embed them."
+                  className="w-full flex-1 min-h-0 resize-none bg-surface text-foreground font-mono text-sm border border-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {uploading ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading image…
+                    </span>
+                  ) : (
+                    "Markdown · paste or drop images to embed"
+                  )}
                 </div>
-              }
-            >
-              <PdfViewer file={pdfUrl} />
-            </Suspense>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground">
-              <Loader2 className="w-5 h-5 animate-spin" />
-            </div>
-          ))}
+              </div>
+            ) : draftBody ? (
+              <MarkdownView source={draftBody} />
+            ) : (
+              <p className="text-sm text-muted-foreground">This document is empty.</p>
+            ))}
 
-        {/* Other binary: download only */}
-        {doc.kind === "other" && (
-          <p className="text-sm text-muted-foreground">
-            {doc.filename ?? "File"} — use Download to open it.
-          </p>
-        )}
+          {/* PDF: themed inline viewer (pdf.js) */}
+          {doc.kind === "pdf" &&
+            (pdfUrl ? (
+              <Suspense
+                fallback={
+                  <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  </div>
+                }
+              >
+                <PdfViewer file={pdfUrl} />
+              </Suspense>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                <Loader2 className="w-5 h-5 animate-spin" />
+              </div>
+            ))}
+
+          {/* Other binary: download only */}
+          {doc.kind === "other" && (
+            <p className="text-sm text-muted-foreground">
+              {doc.filename ?? "File"} — use Download to open it.
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -16,9 +16,7 @@ export function useMountTransition(open: boolean, exitMs: number) {
     if (open) {
       window.clearTimeout(timer.current);
       setMounted(true);
-      const raf = requestAnimationFrame(() =>
-        requestAnimationFrame(() => setState("open")),
-      );
+      const raf = requestAnimationFrame(() => requestAnimationFrame(() => setState("open")));
       return () => cancelAnimationFrame(raf);
     }
     setState("closed");

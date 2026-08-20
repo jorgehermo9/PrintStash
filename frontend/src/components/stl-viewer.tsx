@@ -116,12 +116,16 @@ function Scene({
   const orbitRef = useRef<any>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const { gl, scene, camera } = useThree();
-  const [size, setSize] = useState(() => new THREE.Vector3(NORMALIZED_SIZE, NORMALIZED_SIZE, NORMALIZED_SIZE));
+  const [size, setSize] = useState(
+    () => new THREE.Vector3(NORMALIZED_SIZE, NORMALIZED_SIZE, NORMALIZED_SIZE),
+  );
   const [loaded, setLoaded] = useState(false);
   const fittedRef = useRef(false);
   // Ref so fit() always reads the latest size without stale closure
   const sizeRef = useRef(size);
-  useEffect(() => { sizeRef.current = size; }, [size]);
+  useEffect(() => {
+    sizeRef.current = size;
+  }, [size]);
 
   const handleSized = (s: THREE.Vector3) => {
     setSize(s);
@@ -226,10 +230,7 @@ function Scene({
         <Mesh url={url} displayMode={displayMode} onSized={handleSized} />
       </Suspense>
       {showGrid && (
-        <gridHelper
-          args={[gridSize, 26, "#94a3b8", "#475569"]}
-          position={[0, floorY, 0]}
-        />
+        <gridHelper args={[gridSize, 26, "#94a3b8", "#475569"]} position={[0, floorY, 0]} />
       )}
       <OrbitControls ref={orbitRef} enablePan enableZoom enableRotate />
     </>

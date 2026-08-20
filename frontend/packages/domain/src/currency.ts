@@ -23,10 +23,7 @@ export const CURRENCY_OPTIONS: CurrencyOption[] = [
   { code: "MXN", label: "MXN — Mexican Peso ($)" },
 ];
 
-export function formatCurrency(
-  value: number | null | undefined,
-  code: string,
-): string {
+export function formatCurrency(value: number | null | undefined, code: string): string {
   if (value == null) return "—";
   try {
     return new Intl.NumberFormat(undefined, {

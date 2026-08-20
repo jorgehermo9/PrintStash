@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import {
   getUser,
   isLoggedIn,
@@ -20,7 +14,7 @@ import { login as apiLogin, logout as apiLogout, getMe } from "@/lib/api";
 interface AuthState {
   user: StoredUser | null;
   loading: boolean;
-  login: (username: string, password: string, remember_me?: boolean) => Promise<void>
+  login: (username: string, password: string, remember_me?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -74,24 +68,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const login = useCallback(async (username: string, password: string, remember_me: boolean = false ) => {
-    const token = await apiLogin({ username, password, remember_me });
-    storeLogin(token.access_token, { id: 0, username, email: null, is_superuser: false });
-    try {
-      const me = await getMe();
-      const stored: StoredUser = {
-        id: me.id,
-        username: me.username,
-        email: me.email,
-        is_superuser: me.is_superuser,
-      };
-      storeLogin(token.access_token, stored, { silent: true });
-      setUser(stored);
-    } catch (e) {
-      clearLogin();
-      throw e;
-    }
-  }, []);
+  const login = useCallback(
+    async (username: string, password: string, remember_me: boolean = false) => {
+      const token = await apiLogin({ username, password, remember_me });
+      storeLogin(token.access_token, { id: 0, username, email: null, is_superuser: false });
+      try {
+        const me = await getMe();
+        const stored: StoredUser = {
+          id: me.id,
+          username: me.username,
+          email: me.email,
+          is_superuser: me.is_superuser,
+        };
+        storeLogin(token.access_token, stored, { silent: true });
+        setUser(stored);
+      } catch (e) {
+        clearLogin();
+        throw e;
+      }
+    },
+    [],
+  );
 
   const logout = useCallback(async () => {
     try {

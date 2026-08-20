@@ -43,7 +43,8 @@ vi.mock("@/lib/api", () => ({
   deleteMaintenanceLog,
 }));
 
-const mockUseFleetQueue = vi.fn<() => { data: PrintJobRead[]; isLoading: boolean; refetch: () => void }>();
+const mockUseFleetQueue =
+  vi.fn<() => { data: PrintJobRead[]; isLoading: boolean; refetch: () => void }>();
 const mockUseFleetSummary = vi.fn<() => { data: unknown; refetch: () => void }>();
 vi.mock("@/lib/queries", () => ({
   useFleetQueue: () => mockUseFleetQueue(),
@@ -207,7 +208,9 @@ describe("FleetQueuePanel", () => {
   it("cancelling a queued job confirms then calls cancelFleetJob", async () => {
     cancelFleetJob.mockResolvedValue(undefined);
     mockUseFleetQueue.mockReturnValue({
-      data: [makeJob({ id: 5, state: "queued", queue_position: 1, remote_filename: "cancel-me.gcode" })],
+      data: [
+        makeJob({ id: 5, state: "queued", queue_position: 1, remote_filename: "cancel-me.gcode" }),
+      ],
       isLoading: false,
       refetch: vi.fn(),
     });
@@ -222,7 +225,9 @@ describe("FleetQueuePanel", () => {
   it("retrying a failed retryable job calls retryFleetJob", async () => {
     retryFleetJob.mockResolvedValue({});
     mockUseFleetQueue.mockReturnValue({
-      data: [makeJob({ id: 9, state: "failed", retryable: true, remote_filename: "retry-me.gcode" })],
+      data: [
+        makeJob({ id: 9, state: "failed", retryable: true, remote_filename: "retry-me.gcode" }),
+      ],
       isLoading: false,
       refetch: vi.fn(),
     });
@@ -244,7 +249,10 @@ describe("FleetMaintenancePanel", () => {
     updatePrinterRouting.mockResolvedValue({});
     const onPrintersChanged = vi.fn();
     render(
-      <FleetMaintenancePanel printers={[makePrinter({ drain_mode: false })]} onPrintersChanged={onPrintersChanged} />,
+      <FleetMaintenancePanel
+        printers={[makePrinter({ drain_mode: false })]}
+        onPrintersChanged={onPrintersChanged}
+      />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Soft drain" }));
@@ -270,7 +278,10 @@ describe("FleetMaintenancePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Resume routing" }));
 
     await waitFor(() =>
-      expect(updatePrinterRouting).toHaveBeenCalledWith(1, { drain_mode: false, drain_reason: null }),
+      expect(updatePrinterRouting).toHaveBeenCalledWith(1, {
+        drain_mode: false,
+        drain_reason: null,
+      }),
     );
   });
 
@@ -305,7 +316,10 @@ describe("FleetMaintenancePanel", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
-      expect(createMaintenanceLog).toHaveBeenCalledWith(1, { category: "belt", note: "Tensioned X belt" }),
+      expect(createMaintenanceLog).toHaveBeenCalledWith(1, {
+        category: "belt",
+        note: "Tensioned X belt",
+      }),
     );
   });
 });

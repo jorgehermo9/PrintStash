@@ -45,9 +45,7 @@ export function DropdownMenu({
   useEffect(() => {
     if (!open || role === "dialog") return;
     const raf = requestAnimationFrame(() => {
-      wrapperRef.current
-        ?.querySelector<HTMLElement>('[role="menuitem"], [role="option"]')
-        ?.focus();
+      wrapperRef.current?.querySelector<HTMLElement>('[role="menuitem"], [role="option"]')?.focus();
     });
     return () => cancelAnimationFrame(raf);
   }, [open, role]);
@@ -56,17 +54,13 @@ export function DropdownMenu({
     if (e.key === "Escape") {
       e.stopPropagation();
       onOpenChange(false);
-      wrapperRef.current
-        ?.querySelector<HTMLElement>("[data-menu-trigger]")
-        ?.focus();
+      wrapperRef.current?.querySelector<HTMLElement>("[data-menu-trigger]")?.focus();
       return;
     }
     if (role === "dialog") return;
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
     const items = Array.from(
-      wrapperRef.current?.querySelectorAll<HTMLElement>(
-        '[role="menuitem"], [role="option"]',
-      ) ?? [],
+      wrapperRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"], [role="option"]') ?? [],
     );
     if (items.length === 0) return;
     e.preventDefault();
@@ -83,11 +77,7 @@ export function DropdownMenu({
   }
 
   return (
-    <div
-      ref={wrapperRef}
-      className={cn("relative", className)}
-      onKeyDown={onKeyDown}
-    >
+    <div ref={wrapperRef} className={cn("relative", className)} onKeyDown={onKeyDown}>
       {trigger}
       {mounted && (
         <div
@@ -95,9 +85,7 @@ export function DropdownMenu({
           data-state={state}
           className={cn(
             "absolute top-full z-dropdown mt-2",
-            align === "end"
-              ? "right-0 origin-top-right"
-              : "left-0 origin-top-left",
+            align === "end" ? "right-0 origin-top-right" : "left-0 origin-top-left",
             "transition-[opacity,transform] duration-press ease-out",
             "data-[state=closed]:opacity-0 data-[state=closed]:scale-95 motion-reduce:data-[state=closed]:scale-100",
             contentClassName,

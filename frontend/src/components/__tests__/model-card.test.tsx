@@ -40,8 +40,8 @@ describe("model card revision badge", () => {
   it("shows revision status alongside a custom revision label", () => {
     render(<ModelCard model={model} />);
 
-    expect(
-      screen.getByLabelText("Revision status: Needs Test; label: a"),
-    ).toHaveTextContent("Needs Test·a");
+    expect(screen.getByLabelText("Revision status: Needs Test; label: a")).toHaveTextContent(
+      "Needs Test·a",
+    );
   });
 });

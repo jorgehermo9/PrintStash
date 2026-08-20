@@ -50,10 +50,7 @@ export async function getAuthenticatedBlob(path: string): Promise<Blob> {
  * token, so reads gated behind auth (post-RBAC) 401. Fetch the blob with the
  * token, then trigger a save via a temporary object URL.
  */
-export async function downloadAuthenticatedFile(
-  path: string,
-  filename?: string,
-): Promise<void> {
+export async function downloadAuthenticatedFile(path: string, filename?: string): Promise<void> {
   const res = await fetch(getUrl(path), {
     headers: authHeaders(),
     cache: "no-store",
@@ -72,10 +69,7 @@ export async function downloadAuthenticatedFile(
 
 export function getWsUrl(path: string): string {
   if (!isBrowser()) {
-    const base = (WS_BASE || API_BASE || "http://localhost:8000").replace(
-      /\/$/,
-      "",
-    );
+    const base = (WS_BASE || API_BASE || "http://localhost:8000").replace(/\/$/, "");
     return base.replace(/^http/, "ws") + path;
   }
   if (WS_BASE) {
@@ -173,10 +167,7 @@ export interface GetJsonOptions {
   fresh?: boolean;
 }
 
-export async function getJson<T>(
-  path: string,
-  options?: GetJsonOptions,
-): Promise<T> {
+export async function getJson<T>(path: string, options?: GetJsonOptions): Promise<T> {
   if (!isBrowser() || options?.fresh) {
     const res = await fetch(getUrl(path), {
       headers: authHeaders(),
@@ -225,10 +216,7 @@ export async function sendJson<T>(
   return handleResponse<T>(res);
 }
 
-export async function sendForm<T>(
-  path: string,
-  formData: FormData,
-): Promise<T> {
+export async function sendForm<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(getUrl(path), {
     method: "POST",
     headers: authHeaders(),
@@ -238,10 +226,7 @@ export async function sendForm<T>(
   return handleResponse<T>(res);
 }
 
-export async function sendAction(
-  path: string,
-  method: "POST" | "DELETE",
-): Promise<void> {
+export async function sendAction(path: string, method: "POST" | "DELETE"): Promise<void> {
   const res = await fetch(getUrl(path), {
     method,
     headers: authHeaders(),

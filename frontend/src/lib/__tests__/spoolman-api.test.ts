@@ -79,7 +79,12 @@ describe("updateSpoolman", () => {
 describe("testSpoolman", () => {
   it("POSTs to the test endpoint", async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse({ connected: true, version: "0.18.0", error: null, native_hook_detected: false }),
+      jsonResponse({
+        connected: true,
+        version: "0.18.0",
+        error: null,
+        native_hook_detected: false,
+      }),
     );
     const res = await testSpoolman();
     expect(res.connected).toBe(true);
@@ -106,9 +111,7 @@ describe("listSpools", () => {
 
 describe("syncSpoolmanFilaments", () => {
   it("POSTs to the sync endpoint and returns counts", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({ created: 2, updated: 1, adopted: 0, unlinked: 0 }),
-    );
+    fetchMock.mockResolvedValue(jsonResponse({ created: 2, updated: 1, adopted: 0, unlinked: 0 }));
     const res = await syncSpoolmanFilaments();
     expect(res.created).toBe(2);
     const { url, init } = lastCall();

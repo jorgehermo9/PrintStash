@@ -1,8 +1,7 @@
 import type { PrinterCreate, PrinterProvider, PrinterRead } from "@/types";
 import { SHARED_PRINTER_CONTRACT } from "@/generated/printer-contracts";
 
-export type PrinterSetupKind =
-  (typeof SHARED_PRINTER_CONTRACT.setupOptions)[number]["value"];
+export type PrinterSetupKind = (typeof SHARED_PRINTER_CONTRACT.setupOptions)[number]["value"];
 
 const SETUP_DESCRIPTION_OVERLAY: Partial<Record<PrinterSetupKind, string>> = {
   prusalink: "Local Prusa FDM connection; Prusa Connect cloud is not used.",
@@ -137,10 +136,9 @@ export function providerAddress(
   return printer.moonraker_url;
 }
 
-export function setupProviderFields(kind: PrinterSetupKind): Pick<
-  PrinterCreate,
-  "provider" | "provider_variant"
-> {
+export function setupProviderFields(
+  kind: PrinterSetupKind,
+): Pick<PrinterCreate, "provider" | "provider_variant"> {
   const option = SHARED_PRINTER_CONTRACT.setupOptions.find(({ value }) => value === kind);
   if (!option) throw new Error(`Unknown printer setup kind: ${kind}`);
   return option.variant

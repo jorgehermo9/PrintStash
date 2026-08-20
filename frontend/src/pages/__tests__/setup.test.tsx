@@ -83,11 +83,16 @@ describe("first-run setup", () => {
     const user = await reachStorage();
     await user.click(screen.getByRole("button", { name: "Complete setup" }));
 
-    await waitFor(() => expect(mocks.storeLogin).toHaveBeenCalledWith("token", expect.objectContaining({ username: "admin" })));
+    await waitFor(() =>
+      expect(mocks.storeLogin).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({ username: "admin" }),
+      ),
+    );
     expect(mocks.completeSetup).toHaveBeenCalledWith(
       expect.objectContaining({ setup_token: "operator-setup-token-123" }),
     );
-  expect(mocks.router.replace).toHaveBeenCalledWith("/");
+    expect(mocks.router.replace).toHaveBeenCalledWith("/");
   });
 
   it("preserves values after recoverable failure and allows safe retry", async () => {
@@ -107,7 +112,9 @@ describe("first-run setup", () => {
     await user.type(screen.getByLabelText("Data directory"), "/recoverable/path");
     await user.click(screen.getByRole("button", { name: "Complete setup" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("cannot write to the data directory");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "cannot write to the data directory",
+    );
     expect(screen.getByLabelText("Data directory")).toHaveValue("/recoverable/path");
     await user.click(screen.getByRole("button", { name: "Complete setup" }));
     await waitFor(() => expect(mocks.completeSetup).toHaveBeenCalledTimes(2));
@@ -121,15 +128,17 @@ describe("first-run setup", () => {
 
     await user.click(screen.getByRole("button", { name: "Complete setup" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "dedicated empty directory",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("dedicated empty directory");
     expect(screen.getByRole("alert")).toHaveTextContent("External Libraries");
   });
 
   it("blocks duplicate completion submissions while request is active", async () => {
     let resolve!: (value: unknown) => void;
-    mocks.completeSetup.mockReturnValue(new Promise((done) => { resolve = done; }));
+    mocks.completeSetup.mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
     const user = await reachStorage();
     const submit = screen.getByRole("button", { name: "Complete setup" });
     await user.dblClick(submit);

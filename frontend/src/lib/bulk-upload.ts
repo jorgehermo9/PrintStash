@@ -56,10 +56,7 @@ export function fileListToItems(files: FileList | File[]): BulkItem[] {
 // Merge newly picked/dropped items into an existing queue: drop non-mesh files
 // and duplicates (matched by folder path + name + size). Returns counts so the
 // caller can surface a "some files skipped" notice.
-export function mergeBulkItems(
-  existing: BulkItem[],
-  incoming: BulkItem[],
-): BulkMergeResult {
+export function mergeBulkItems(existing: BulkItem[], incoming: BulkItem[]): BulkMergeResult {
   const meshes = incoming.filter((it) => isMeshFile(it.file.name));
   const skipped = incoming.length - meshes.length;
   const keyOf = (it: BulkItem) => `${it.relPath}/${it.file.name}:${it.file.size}`;
@@ -97,9 +94,7 @@ function readEntryFile(entry: FileSystemFileEntry): Promise<File> {
 }
 
 // A directory reader returns children in batches; keep calling until drained.
-function readAllDirEntries(
-  reader: FileSystemDirectoryReader,
-): Promise<FileSystemEntry[]> {
+function readAllDirEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
   return new Promise((resolve, reject) => {
     const out: FileSystemEntry[] = [];
     const pump = () =>
@@ -122,9 +117,7 @@ export async function walkEntry(entry: FileSystemEntry): Promise<BulkItem[]> {
     return [{ file, relPath: dirOf(entry.fullPath.replace(/^\/+/, "")) }];
   }
   if (entry.isDirectory) {
-    const children = await readAllDirEntries(
-      (entry as FileSystemDirectoryEntry).createReader(),
-    );
+    const children = await readAllDirEntries((entry as FileSystemDirectoryEntry).createReader());
     const nested = await Promise.all(children.map(walkEntry));
     return nested.flat();
   }
@@ -132,9 +125,7 @@ export async function walkEntry(entry: FileSystemEntry): Promise<BulkItem[]> {
 }
 
 /** Walk a set of dropped entries (files and/or folders) into a flat queue. */
-export async function walkEntries(
-  entries: FileSystemEntry[],
-): Promise<BulkItem[]> {
+export async function walkEntries(entries: FileSystemEntry[]): Promise<BulkItem[]> {
   const nested = await Promise.all(entries.map(walkEntry));
   return nested.flat();
 }

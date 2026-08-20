@@ -36,7 +36,12 @@ export const toast = {
   undo(message: string, onUndo: () => void | Promise<void>): void {
     sonner.success(message, {
       duration: 6000,
-      action: { label: "Undo", onClick: () => { void onUndo(); } },
+      action: {
+        label: "Undo",
+        onClick: () => {
+          void onUndo();
+        },
+      },
     });
   },
 

@@ -39,10 +39,7 @@ function fileEntry(fullPath: string): FileSystemEntry {
 
 // Directory whose reader yields `batches` in sequence, then an empty batch —
 // exercising the "keep reading until drained" loop.
-function dirEntry(
-  fullPath: string,
-  batches: FileSystemEntry[][],
-): FileSystemEntry {
+function dirEntry(fullPath: string, batches: FileSystemEntry[][]): FileSystemEntry {
   let i = 0;
   return {
     isFile: false,
@@ -111,9 +108,7 @@ describe("dirOf", () => {
 
 describe("bulkTargetCollection", () => {
   it("joins base and relative folder", () => {
-    expect(bulkTargetCollection("Imports", "Lib/brackets")).toBe(
-      "Imports/Lib/brackets",
-    );
+    expect(bulkTargetCollection("Imports", "Lib/brackets")).toBe("Imports/Lib/brackets");
   });
   it("uses just the relative path when base is empty", () => {
     expect(bulkTargetCollection("", "Lib/brackets")).toBe("Lib/brackets");
@@ -146,10 +141,7 @@ describe("fileListToItems", () => {
 
 describe("mergeBulkItems", () => {
   it("filters out non-mesh files and reports the skip count", () => {
-    const res = mergeBulkItems(
-      [],
-      [item("a.stl"), item("notes.txt"), item("pic.png")],
-    );
+    const res = mergeBulkItems([], [item("a.stl"), item("notes.txt"), item("pic.png")]);
     expect(res.items.map((i) => i.file.name)).toEqual(["a.stl"]);
     expect(res.added).toBe(1);
     expect(res.skipped).toBe(2);
@@ -166,10 +158,7 @@ describe("mergeBulkItems", () => {
   });
 
   it("keeps same-named files from different folders", () => {
-    const res = mergeBulkItems(
-      [],
-      [item("foo.stl", "a"), item("foo.stl", "b")],
-    );
+    const res = mergeBulkItems([], [item("foo.stl", "a"), item("foo.stl", "b")]);
     expect(res.items).toHaveLength(2);
     expect(res.items.map((i) => i.relPath)).toEqual(["a", "b"]);
   });
@@ -211,15 +200,11 @@ describe("walkEntries", () => {
     const tree = dirEntry("/Lib", [
       [
         fileEntry("/Lib/top.stl"),
-        dirEntry("/Lib/brackets", [
-          [fileEntry("/Lib/brackets/small.stl")],
-        ]),
+        dirEntry("/Lib/brackets", [[fileEntry("/Lib/brackets/small.stl")]]),
       ],
     ]);
     const items = await walkEntries([tree]);
-    const byName = Object.fromEntries(
-      items.map((i) => [i.file.name, i.relPath]),
-    );
+    const byName = Object.fromEntries(items.map((i) => [i.file.name, i.relPath]));
     expect(byName).toEqual({
       "top.stl": "Lib",
       "small.stl": "Lib/brackets",
@@ -227,10 +212,7 @@ describe("walkEntries", () => {
   });
 
   it("drains a directory reader that returns children in batches", async () => {
-    const dir = dirEntry("/Lib", [
-      [fileEntry("/Lib/a.stl")],
-      [fileEntry("/Lib/b.stl")],
-    ]);
+    const dir = dirEntry("/Lib", [[fileEntry("/Lib/a.stl")], [fileEntry("/Lib/b.stl")]]);
     const items = await walkEntries([dir]);
     expect(items.map((i) => i.file.name).sort()).toEqual(["a.stl", "b.stl"]);
   });

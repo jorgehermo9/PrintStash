@@ -4,11 +4,7 @@ import { type ReactNode, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { cn } from "../lib/utils";
-import {
-  DURATION,
-  useMountTransition,
-  useOverlayBehavior,
-} from "../lib/overlay";
+import { DURATION, useMountTransition, useOverlayBehavior } from "../lib/overlay";
 
 const SIDE_CLASSES = {
   left: cn(

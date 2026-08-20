@@ -31,11 +31,14 @@ const config = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getVaultConfig).mockResolvedValue(config as never);
-  vi.mocked(updateVaultConfig).mockImplementation(async (payload) => ({
-    ...config,
-    ...payload,
-    has_oidc_client_secret: true,
-  }) as never);
+  vi.mocked(updateVaultConfig).mockImplementation(
+    async (payload) =>
+      ({
+        ...config,
+        ...payload,
+        has_oidc_client_secret: true,
+      }) as never,
+  );
 });
 
 it("loads and saves OIDC settings without replaying stored secret", async () => {
@@ -59,7 +62,5 @@ it("loads and saves OIDC settings without replaying stored secret", async () => 
       oidc_client_id: "printstash",
     }),
   );
-  expect(vi.mocked(updateVaultConfig).mock.calls[0][0]).not.toHaveProperty(
-    "oidc_client_secret",
-  );
+  expect(vi.mocked(updateVaultConfig).mock.calls[0][0]).not.toHaveProperty("oidc_client_secret");
 });

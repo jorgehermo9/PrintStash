@@ -57,7 +57,5 @@ test("revoking a share link breaks the public page", async ({ page }) => {
 
   // The token now 404s — the public page shows the error state.
   await page.goto(url);
-  await expect(
-    page.getByText("This share link is invalid, expired, or revoked."),
-  ).toBeVisible();
+  await expect(page.getByText("This share link is invalid, expired, or revoked.")).toBeVisible();
 });

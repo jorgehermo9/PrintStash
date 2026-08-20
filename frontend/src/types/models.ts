@@ -27,11 +27,7 @@ export interface MetadataRead {
   triangle_count: number | null;
 }
 
-export type FileRevisionStatus =
-  | "known_good"
-  | "needs_test"
-  | "failed"
-  | "archived";
+export type FileRevisionStatus = "known_good" | "needs_test" | "failed" | "archived";
 
 export type CollectionRole = "view" | "edit" | "admin";
 
@@ -327,7 +323,16 @@ export interface IngestJobStatus {
   label?: string | null;
   progress?: number | null;
   result?: Record<string, unknown> | null;
-  stage?: "resolving" | "downloading" | "inspecting" | "extracting" | "hashing" | "ingesting" | "thumbnailing" | "completed" | null;
+  stage?:
+    | "resolving"
+    | "downloading"
+    | "inspecting"
+    | "extracting"
+    | "hashing"
+    | "ingesting"
+    | "thumbnailing"
+    | "completed"
+    | null;
   current_item?: string | null;
   processed?: number;
   total?: number | null;
@@ -492,8 +497,7 @@ export interface OutlinerModelRead {
   collection_id: number | null;
 }
 
-export interface ListModelPageParams
-  extends Omit<ListModelsParams, "offset"> {
+export interface ListModelPageParams extends Omit<ListModelsParams, "offset"> {
   sort?: ModelSort;
   cursor?: string;
 }
@@ -544,7 +548,10 @@ export interface SavedViewRead {
   updated_at: string;
 }
 
-export interface ModelStarRead { model_id: number; starred: boolean }
+export interface ModelStarRead {
+  model_id: number;
+  starred: boolean;
+}
 
 export interface CollectionCreate {
   name: string;

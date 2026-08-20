@@ -1,10 +1,4 @@
-export type PrinterStatus =
-  | "unknown"
-  | "offline"
-  | "ready"
-  | "printing"
-  | "paused"
-  | "error";
+export type PrinterStatus = "unknown" | "offline" | "ready" | "printing" | "paused" | "error";
 
 export type PrinterProvider =
   | "moonraker"
@@ -233,7 +227,13 @@ export interface PrintJobRead {
   external_current_layer: number | null;
   external_total_layers: number | null;
   external_nozzle_diameter: number | null;
-  artifact_evidence: "vault" | "metadata_only" | "capture_pending" | "gcode_archived" | "project_archived" | "capture_failed";
+  artifact_evidence:
+    | "vault"
+    | "metadata_only"
+    | "capture_pending"
+    | "gcode_archived"
+    | "project_archived"
+    | "capture_failed";
   artifact_capture_error: string | null;
   error: string | null;
   routing_strategy: RoutingStrategy;
@@ -417,7 +417,11 @@ export interface ManualMaterialStateUpdate {
 
 export interface CompatibilityRead {
   file_id: number;
-  requirements: Array<{ tool_index: number; material_type: string | null; color_hex: string | null }>;
+  requirements: Array<{
+    tool_index: number;
+    material_type: string | null;
+    color_hex: string | null;
+  }>;
   nozzle_diameter_mm: number | null;
   printers: Array<{
     printer_id: number;

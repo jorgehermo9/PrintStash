@@ -25,10 +25,7 @@ describe("card metrics persistence", () => {
   });
 
   it("rejects an array of the wrong length", () => {
-    window.localStorage.setItem(
-      CARD_METRIC_STORAGE_KEY,
-      JSON.stringify(["material", "slicer"]),
-    );
+    window.localStorage.setItem(CARD_METRIC_STORAGE_KEY, JSON.stringify(["material", "slicer"]));
     expect(readCardMetrics()).toEqual(DEFAULT_CARD_METRICS);
   });
 

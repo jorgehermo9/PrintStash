@@ -40,10 +40,7 @@ let tasks: TaskItem[] = loadTasks();
 const dismissedJobIds = loadDismissedJobIds();
 const emittedTerminalJobIds = loadIdSet(EMITTED_TERMINALS_KEY);
 const terminalJobs = new Map<string, IngestJobStatus>();
-const terminalWaiters = new Map<
-  string,
-  Set<(job: IngestJobStatus) => void>
->();
+const terminalWaiters = new Map<string, Set<(job: IngestJobStatus) => void>>();
 let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncSubscribers = 0;
@@ -130,11 +127,14 @@ function scheduleCleanup(): void {
   }, null);
 
   if (nextExpiry === null) return;
-  cleanupTimer = setTimeout(() => {
-    cleanupTimer = null;
-    if (pruneExpired()) emit();
-    scheduleCleanup();
-  }, Math.max(0, nextExpiry - now));
+  cleanupTimer = setTimeout(
+    () => {
+      cleanupTimer = null;
+      if (pruneExpired()) emit();
+      scheduleCleanup();
+    },
+    Math.max(0, nextExpiry - now),
+  );
 }
 
 export function listTasks(): TaskItem[] {
@@ -178,10 +178,7 @@ export function updateTask(
       ? {
           ...task,
           ...patch,
-          progress:
-            patch.progress === undefined
-              ? task.progress
-              : clampProgress(patch.progress),
+          progress: patch.progress === undefined ? task.progress : clampProgress(patch.progress),
           ...(patch.status === "completed" ? { progress: 100 } : {}),
           updatedAt: now,
         }
@@ -208,9 +205,7 @@ export function clearCompletedTasks(): void {
     if (task.jobId) dismissedJobIds.add(task.jobId);
     for (const jobId of task.jobIds ?? []) dismissedJobIds.add(jobId);
   }
-  tasks = tasks.filter(
-    (task) => task.status !== "completed" && task.status !== "failed",
-  );
+  tasks = tasks.filter((task) => task.status !== "completed" && task.status !== "failed");
   persistDismissedJobIds();
   persist();
   emit();
@@ -267,7 +262,8 @@ function applyJob(job: IngestJobStatus): void {
     existing?.serverUpdatedAt &&
     job.updated_at &&
     Date.parse(job.updated_at) < Date.parse(existing.serverUpdatedAt)
-  ) return;
+  )
+    return;
   const status: TaskStatus = job.state;
   const patch = {
     jobId: job.job_id,
@@ -307,8 +303,7 @@ function applyGroupedJobs(task: TaskItem, jobs: IngestJobStatus[]): void {
     return;
   }
 
-  const allCompleted =
-    jobs.length >= expected && jobs.every((job) => job.state === "completed");
+  const allCompleted = jobs.length >= expected && jobs.every((job) => job.state === "completed");
   if (allCompleted) {
     updateTask(task.id, {
       status: "completed",
@@ -376,9 +371,7 @@ export function waitForImportJob(
 }
 
 export async function syncImportJobs(): Promise<boolean> {
-  const jobs = (await listIngestJobs()).filter(
-    (job) => !dismissedJobIds.has(job.job_id),
-  );
+  const jobs = (await listIngestJobs()).filter((job) => !dismissedJobIds.has(job.job_id));
   const jobsById = new Map(jobs.map((job) => [job.job_id, job]));
   const claimedJobIds = new Set<string>();
 
@@ -440,9 +433,7 @@ async function pollImportJobs(): Promise<void> {
     syncFailures += 1;
     // We could not learn whether the server has active work. Retry at a
     // bounded backoff even when this browser has no local task record.
-    scheduleImportJobSync(
-      Math.min(30_000, 1_000 * 2 ** Math.max(0, syncFailures - 1)),
-    );
+    scheduleImportJobSync(Math.min(30_000, 1_000 * 2 ** Math.max(0, syncFailures - 1)));
   } finally {
     syncInFlight = false;
     if (syncWakePending) {

@@ -75,9 +75,7 @@ describe("ExternalLibrariesPanel", () => {
       }),
     ]);
     render(<ExternalLibrariesPanel canEdit />);
-    expect(
-      await screen.findByText(/\+3 added · 1 updated · 2 removed/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/\+3 added · 1 updated · 2 removed/)).toBeInTheDocument();
   });
 
   it("surfaces the error message for a failed scan", async () => {
@@ -109,20 +107,14 @@ describe("ExternalLibrariesPanel", () => {
     expect(
       await screen.findByText(/\+5 added · 0 updated · 0 removed · 1 errors/),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/some files could not be indexed/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/some files could not be indexed/i)).toBeInTheDocument();
   });
 
   it("does not query libraries while the feature is disabled", async () => {
     mockConfig(false, []);
     render(<ExternalLibrariesPanel canEdit />);
-    await waitFor(() =>
-      expect(api.getVaultConfig as ReturnType<typeof vi.fn>).toHaveBeenCalled(),
-    );
+    await waitFor(() => expect(api.getVaultConfig as ReturnType<typeof vi.fn>).toHaveBeenCalled());
     expect(api.listExternalLibraries).not.toHaveBeenCalled();
-    expect(
-      screen.queryByText(/no libraries yet/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/no libraries yet/i)).not.toBeInTheDocument();
   });
 });

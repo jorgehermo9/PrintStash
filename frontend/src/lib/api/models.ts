@@ -49,7 +49,15 @@ function modelListSearch(params?: ListModelsParams): URLSearchParams {
   for (const tag of params?.tag ?? []) {
     search.append("tag", tag);
   }
-  for (const key of ["file_type", "material_type", "slicer_name", "printer_model", "revision_status", "print_outcome", "storage"] as const) {
+  for (const key of [
+    "file_type",
+    "material_type",
+    "slicer_name",
+    "printer_model",
+    "revision_status",
+    "print_outcome",
+    "storage",
+  ] as const) {
     for (const value of params?.[key] ?? []) search.append(key, String(value));
   }
   if (params?.printed !== undefined) search.set("printed", String(params.printed));
@@ -59,16 +67,12 @@ function modelListSearch(params?: ListModelsParams): URLSearchParams {
   return search;
 }
 
-export async function listModels(
-  params?: ListModelsParams,
-): Promise<ModelListItem[]> {
+export async function listModels(params?: ListModelsParams): Promise<ModelListItem[]> {
   const query = modelListSearch(params).toString();
   return getJson<ModelListItem[]>(`/api/v1/models${query ? `?${query}` : ""}`);
 }
 
-export async function listModelPage(
-  params?: ListModelPageParams,
-): Promise<ModelPageRead> {
+export async function listModelPage(params?: ListModelPageParams): Promise<ModelPageRead> {
   const search = modelListSearch(params);
   if (params?.sort) search.set("sort", params.sort);
   if (params?.cursor) search.set("cursor", params.cursor);
@@ -81,9 +85,7 @@ export async function listOutlinerModels(
 ): Promise<OutlinerModelRead[]> {
   const search = modelListSearch(params);
   const query = search.toString();
-  return getJson<OutlinerModelRead[]>(
-    `/api/v1/models/outliner${query ? `?${query}` : ""}`,
-  );
+  return getJson<OutlinerModelRead[]>(`/api/v1/models/outliner${query ? `?${query}` : ""}`);
 }
 
 export async function getModelFacets(
@@ -97,7 +99,15 @@ export async function getModelFacets(
   if (params?.printer_presence) search.set("printer_presence", params.printer_presence);
   if (params?.favorites) search.set("favorites", "true");
   for (const tag of params?.tag ?? []) search.append("tag", tag);
-  for (const key of ["file_type", "material_type", "slicer_name", "printer_model", "revision_status", "print_outcome", "storage"] as const) {
+  for (const key of [
+    "file_type",
+    "material_type",
+    "slicer_name",
+    "printer_model",
+    "revision_status",
+    "print_outcome",
+    "storage",
+  ] as const) {
     for (const value of params?.[key] ?? []) search.append(key, String(value));
   }
   if (params?.printed !== undefined) search.set("printed", String(params.printed));
@@ -122,9 +132,7 @@ export function getModel(id: number): Promise<ModelRead> {
   return getJson<ModelRead>(`/api/v1/models/${id}`);
 }
 
-export function getVaultStats(
-  options?: GetJsonOptions,
-): Promise<VaultStatsRead> {
+export function getVaultStats(options?: GetJsonOptions): Promise<VaultStatsRead> {
   return getJson<VaultStatsRead>("/api/v1/models/stats", options);
 }
 
@@ -149,17 +157,25 @@ export async function downloadModelExport(format: "json" | "csv"): Promise<void>
 }
 
 export async function downloadLibraryArchive(): Promise<void> {
-  const res = await fetch(getUrl("/api/v1/models/library-archive"), { headers: authHeaders(), cache: "no-store" });
+  const res = await fetch(getUrl("/api/v1/models/library-archive"), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
   await expectOk(res);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url; link.download = "printstash-library-v1.zip";
-  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+  link.href = url;
+  link.download = "printstash-library-v1.zip";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function importLibraryArchive(file: File): Promise<IngestResponse> {
-  const form = new FormData(); form.append("file", file);
+  const form = new FormData();
+  form.append("file", file);
   return sendForm("/api/v1/models/library-import", form);
 }
 
@@ -171,7 +187,10 @@ export function getModelPrintJobs(id: number): Promise<ModelPrintJobRead[]> {
   return getJson<ModelPrintJobRead[]>(`/api/v1/models/${id}/print-jobs`);
 }
 
-export function getArtifactOutcomes(modelId: number, fileIds: number[]): Promise<ArtifactOutcomeRead[]> {
+export function getArtifactOutcomes(
+  modelId: number,
+  fileIds: number[],
+): Promise<ArtifactOutcomeRead[]> {
   const search = new URLSearchParams();
   fileIds.forEach((id) => search.append("file_id", String(id)));
   return getJson<ArtifactOutcomeRead[]>(`/api/v1/models/${modelId}/artifact-outcomes?${search}`);
@@ -195,10 +214,7 @@ export function importPrintJobsFromPrinter(
   );
 }
 
-export function updateModel(
-  id: number,
-  payload: ModelUpdate,
-): Promise<ModelRead> {
+export function updateModel(id: number, payload: ModelUpdate): Promise<ModelRead> {
   return sendJson<ModelRead>(`/api/v1/models/${id}`, "PATCH", payload);
 }
 
@@ -206,10 +222,7 @@ export function deleteModel(id: number): Promise<void> {
   return sendAction(`/api/v1/models/${id}`, "DELETE");
 }
 
-export function batchMoveModels(
-  modelIds: number[],
-  collection: string,
-): Promise<ModelBatchResult> {
+export function batchMoveModels(modelIds: number[], collection: string): Promise<ModelBatchResult> {
   return sendJson<ModelBatchResult>("/api/v1/models/batch/move", "POST", {
     model_ids: modelIds,
     collection,
@@ -232,16 +245,13 @@ export function batchSetRevisionLabels(
   fileIds: number[],
   revisionLabel: string | null,
 ): Promise<RevisionBatchResult> {
-  return sendJson<RevisionBatchResult>(
-    "/api/v1/models/batch/revision-labels",
-    "PATCH",
-    { file_ids: fileIds, revision_label: revisionLabel },
-  );
+  return sendJson<RevisionBatchResult>("/api/v1/models/batch/revision-labels", "PATCH", {
+    file_ids: fileIds,
+    revision_label: revisionLabel,
+  });
 }
 
-export function batchDeleteModels(
-  modelIds: number[],
-): Promise<ModelBatchResult> {
+export function batchDeleteModels(modelIds: number[]): Promise<ModelBatchResult> {
   return sendJson<ModelBatchResult>("/api/v1/models/batch/delete", "POST", {
     model_ids: modelIds,
   });
@@ -285,10 +295,7 @@ export function updateFileRevision(
   );
 }
 
-export async function deleteFileRevision(
-  modelId: number,
-  fileId: number,
-): Promise<ModelRead> {
+export async function deleteFileRevision(modelId: number, fileId: number): Promise<ModelRead> {
   const path = `/api/v1/models/${modelId}/files/${fileId}/revision`;
   const res = await fetch(getUrl(path), {
     method: "DELETE",
@@ -298,14 +305,8 @@ export async function deleteFileRevision(
   return handleResponse<ModelRead>(res);
 }
 
-export function addGcodeRevision(
-  modelId: number,
-  formData: FormData,
-): Promise<ModelRead> {
-  return sendForm<ModelRead>(
-    `/api/v1/models/${modelId}/gcode-revisions`,
-    formData,
-  );
+export function addGcodeRevision(modelId: number, formData: FormData): Promise<ModelRead> {
+  return sendForm<ModelRead>(`/api/v1/models/${modelId}/gcode-revisions`, formData);
 }
 
 export function ingestOrca(formData: FormData): Promise<IngestResponse> {
@@ -337,11 +338,7 @@ export function selectModelFiles(
   filesToken: string,
   payload: { file_ids: string[]; collection?: string; tags?: string },
 ): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(
-    `/api/v1/ingest/url/files/${filesToken}/select`,
-    "POST",
-    payload,
-  );
+  return sendJson<IngestResponse>(`/api/v1/ingest/url/files/${filesToken}/select`, "POST", payload);
 }
 
 export function selectCollectionMembers(
@@ -367,9 +364,5 @@ export function selectArchiveEntries(
   archiveId: string,
   payload: { names: string[]; collection?: string; tags?: string },
 ): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(
-    `/api/v1/ingest/archive/${archiveId}/select`,
-    "POST",
-    payload,
-  );
+  return sendJson<IngestResponse>(`/api/v1/ingest/archive/${archiveId}/select`, "POST", payload);
 }

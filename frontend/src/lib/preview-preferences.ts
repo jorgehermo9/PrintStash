@@ -51,10 +51,7 @@ export function readPreviewPreferences(): PreviewPreferences {
 
 export function writePreviewPreferences(preferences: PreviewPreferences): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(
-    PREVIEW_PREFERENCES_STORAGE_KEY,
-    JSON.stringify(preferences),
-  );
+  window.localStorage.setItem(PREVIEW_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
   window.dispatchEvent(
     new CustomEvent<PreviewPreferences>(PREVIEW_PREFERENCES_EVENT, {
       detail: preferences,
@@ -72,9 +69,7 @@ export function usePreviewPreferences(): PreviewPreferences {
   useEffect(() => {
     const refresh = () => setPreferences(readPreviewPreferences());
     const receive = (event: Event) => {
-      setPreferences(
-        (event as CustomEvent<PreviewPreferences>).detail ?? readPreviewPreferences(),
-      );
+      setPreferences((event as CustomEvent<PreviewPreferences>).detail ?? readPreviewPreferences());
     };
     window.addEventListener("storage", refresh);
     window.addEventListener(PREVIEW_PREFERENCES_EVENT, receive);

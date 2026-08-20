@@ -117,15 +117,15 @@ describe("filter query continuity", () => {
   it("keeps outliner data mounted while changed filters refetch", async () => {
     const firstModels = [{ id: 1, name: "Drawer Housing" }];
     let resolveFiltered!: (value: typeof firstModels) => void;
-    mocked.listOutlinerModels
-      .mockResolvedValueOnce(firstModels as never)
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveFiltered = resolve; }) as never);
+    mocked.listOutlinerModels.mockResolvedValueOnce(firstModels as never).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFiltered = resolve;
+        }) as never,
+    );
 
     const { result, rerender } = renderHook(
-      ({ filtered }) => useOutlinerModels(
-        { material_type: filtered ? ["PLA"] : undefined },
-        500,
-      ),
+      ({ filtered }) => useOutlinerModels({ material_type: filtered ? ["PLA"] : undefined }, 500),
       { initialProps: { filtered: false }, wrapper: wrapper() },
     );
 
@@ -145,9 +145,12 @@ describe("filter query continuity", () => {
       material_type: [{ value: "PLA", count: 2 }],
     };
     let resolveFiltered!: (value: typeof firstFacets) => void;
-    mocked.getModelFacets
-      .mockResolvedValueOnce(firstFacets as never)
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveFiltered = resolve; }) as never);
+    mocked.getModelFacets.mockResolvedValueOnce(firstFacets as never).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFiltered = resolve;
+        }) as never,
+    );
 
     const { result, rerender } = renderHook(
       ({ filtered }) => useModelFacets({ material_type: filtered ? ["PLA"] : undefined }),
@@ -207,10 +210,9 @@ describe("server-owned Model pagination", () => {
   });
 
   it("does not request outliner leaves while disabled", async () => {
-    const { result } = renderHook(
-      () => useOutlinerModels({}, 500, { enabled: false }),
-      { wrapper: wrapper() },
-    );
+    const { result } = renderHook(() => useOutlinerModels({}, 500, { enabled: false }), {
+      wrapper: wrapper(),
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");
     expect(mocked.listOutlinerModels).not.toHaveBeenCalled();

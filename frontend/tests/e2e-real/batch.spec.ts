@@ -158,11 +158,22 @@ test("a batch delete from a viewer-role user is rejected by the backend prefligh
 
   await page.goto("/settings?section=access");
   const accessCard = page.getByRole("group", { name: "Collection access" });
-  await accessCard.getByRole("combobox").filter({ has: page.getByRole("option", { name: "Select user" }) }).selectOption({ label: viewer });
-  await accessCard.getByRole("combobox").filter({ has: page.getByRole("option", { name: "Select collection" }) }).selectOption({ label: col });
-  await accessCard.getByRole("combobox").filter({ has: page.getByRole("option", { name: "Admin", exact: true }) }).selectOption({ label: "View" });
+  await accessCard
+    .getByRole("combobox")
+    .filter({ has: page.getByRole("option", { name: "Select user" }) })
+    .selectOption({ label: viewer });
+  await accessCard
+    .getByRole("combobox")
+    .filter({ has: page.getByRole("option", { name: "Select collection" }) })
+    .selectOption({ label: col });
+  await accessCard
+    .getByRole("combobox")
+    .filter({ has: page.getByRole("option", { name: "Admin", exact: true }) })
+    .selectOption({ label: "View" });
   await Promise.all([
-    page.waitForResponse((r) => /\/collections\/\d+\/permissions\/\d+/.test(r.url()) && r.request().method() === "PUT"),
+    page.waitForResponse(
+      (r) => /\/collections\/\d+\/permissions\/\d+/.test(r.url()) && r.request().method() === "PUT",
+    ),
     accessCard.getByRole("button", { name: "Grant" }).click(),
   ]);
 
@@ -174,7 +185,10 @@ test("a batch delete from a viewer-role user is rejected by the backend prefligh
     await viewerPage.getByRole("button", { name: "Select", exact: true }).click();
     await viewerPage.getByRole("button", { name: /Select all on screen \(1\)/ }).click();
     await viewerPage.locator("div.fixed.bottom-4").getByRole("button", { name: "Delete" }).click();
-    await viewerPage.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
+    await viewerPage
+      .getByRole("dialog")
+      .getByRole("button", { name: "Delete", exact: true })
+      .click();
 
     // Rejected server-side — no toast.undo (that only fires on success), the
     // model is still present, and it survives a reload.

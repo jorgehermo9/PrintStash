@@ -126,7 +126,11 @@ describe("BatchToolbar", () => {
     const selected = collection({ id: 1, path: "projects" });
     const child = collection({ id: 2, path: "projects/archive", parent_id: 1 });
     const target = collection({ id: 3, name: "Storage", path: "storage" });
-    setup({ modelCount: 0, selectedCollections: [selected], collections: [selected, child, target] });
+    setup({
+      modelCount: 0,
+      selectedCollections: [selected],
+      collections: [selected, child, target],
+    });
 
     await user.click(screen.getByRole("button", { name: /move/i }));
     expect(screen.queryByText("projects/archive", { exact: false })).not.toBeInTheDocument();

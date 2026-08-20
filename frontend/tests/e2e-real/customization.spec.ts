@@ -19,7 +19,6 @@ test("model metadata visibility toggle persists across reload", async ({ page })
   );
 });
 
-
 test("model card metric slot selection persists, and reset restores defaults", async ({ page }) => {
   await page.goto("/settings");
   await page.getByRole("button", { name: "Design" }).click();

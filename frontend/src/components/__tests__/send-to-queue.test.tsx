@@ -6,7 +6,14 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { SendToButtons } from "@/components/model-detail/send-to-buttons";
 import type { PrinterRead, SpoolRead } from "@/types";
 
-const { checkFleetCompatibility, createFleetBatch, enqueueFleetJob, mockUsePrinters, mockUseSpoolmanStatus, mockUseSpools } = vi.hoisted(() => ({
+const {
+  checkFleetCompatibility,
+  createFleetBatch,
+  enqueueFleetJob,
+  mockUsePrinters,
+  mockUseSpoolmanStatus,
+  mockUseSpools,
+} = vi.hoisted(() => ({
   checkFleetCompatibility: vi.fn(),
   createFleetBatch: vi.fn(),
   enqueueFleetJob: vi.fn(),
@@ -36,7 +43,9 @@ vi.mock("@/lib/auth-context", () => ({
 }));
 vi.mock("@/lib/task-center", () => ({ createTask: vi.fn(), updateTask: vi.fn() }));
 vi.mock("@/lib/navigation", () => ({
-  Link: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a {...props}>{children}</a>,
+  Link: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a {...props}>{children}</a>
+  ),
 }));
 vi.mock("@/lib/toast", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -82,7 +91,12 @@ beforeEach(() => {
   createFleetBatch.mockReset();
   createFleetBatch.mockResolvedValue({ id: 1, jobs: [] });
   checkFleetCompatibility.mockReset();
-  checkFleetCompatibility.mockResolvedValue({ file_id: 42, requirements: [], nozzle_diameter_mm: null, printers: [] });
+  checkFleetCompatibility.mockResolvedValue({
+    file_id: 42,
+    requirements: [],
+    nozzle_diameter_mm: null,
+    printers: [],
+  });
   mockUsePrinters.mockReturnValue({ data: [printer], isLoading: false, error: null });
   mockUseSpoolmanStatus.mockReturnValue({ data: { enabled: false } });
   mockUseSpools.mockReturnValue({ data: [] });
@@ -91,15 +105,17 @@ beforeEach(() => {
 it("adds selected G-code to least-busy fleet queue", async () => {
   render(
     <SendToButtons
-      gcodeFiles={[{
-        id: 42,
-        original_filename: "cube.gcode",
-        version: 1,
-        gcode_revision_number: 1,
-        revision_label: null,
-        is_recommended: true,
-        metadata: null,
-      }]}
+      gcodeFiles={[
+        {
+          id: 42,
+          original_filename: "cube.gcode",
+          version: 1,
+          gcode_revision_number: 1,
+          revision_label: null,
+          is_recommended: true,
+          metadata: null,
+        },
+      ]}
       printerFiles={[]}
     />,
   );
@@ -108,32 +124,50 @@ it("adds selected G-code to least-busy fleet queue", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));
   await userEvent.click(screen.getAllByRole("button", { name: "Add to queue" }).at(-1)!);
 
-  await waitFor(() => expect(enqueueFleetJob).toHaveBeenCalledWith(expect.objectContaining({
-    file_id: 42,
-    strategy: "least_busy",
-    printer_id: undefined,
-  })));
+  await waitFor(() =>
+    expect(enqueueFleetJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file_id: 42,
+        strategy: "least_busy",
+        printer_id: undefined,
+      }),
+    ),
+  );
 });
 
 it("warns when the selected spool doesn't have enough filament left, but doesn't block sending", async () => {
   mockUseSpoolmanStatus.mockReturnValue({ data: { enabled: true } });
   mockUseSpools.mockReturnValue({
     data: [
-      { id: 1, filament_id: null, name: "Almost empty", filament_name: null, vendor_name: null, material: null, color_hex: null, remaining_weight: 10, used_weight: null, archived: false, location: null },
+      {
+        id: 1,
+        filament_id: null,
+        name: "Almost empty",
+        filament_name: null,
+        vendor_name: null,
+        material: null,
+        color_hex: null,
+        remaining_weight: 10,
+        used_weight: null,
+        archived: false,
+        location: null,
+      },
     ],
   });
 
   render(
     <SendToButtons
-      gcodeFiles={[{
-        id: 42,
-        original_filename: "cube.gcode",
-        version: 1,
-        gcode_revision_number: 1,
-        revision_label: null,
-        is_recommended: true,
-        metadata: { filament_weight_g: 250 } as import("@/types").MetadataRead,
-      }]}
+      gcodeFiles={[
+        {
+          id: 42,
+          original_filename: "cube.gcode",
+          version: 1,
+          gcode_revision_number: 1,
+          revision_label: null,
+          is_recommended: true,
+          metadata: { filament_weight_g: 250 } as import("@/types").MetadataRead,
+        },
+      ]}
       printerFiles={[]}
     />,
   );
@@ -149,21 +183,35 @@ it("warns when the spool has no tracked remaining weight instead of assuming it'
   mockUseSpoolmanStatus.mockReturnValue({ data: { enabled: true } });
   mockUseSpools.mockReturnValue({
     data: [
-      { id: 1, filament_id: null, name: "Untracked", filament_name: null, vendor_name: null, material: null, color_hex: null, remaining_weight: null, used_weight: null, archived: false, location: null },
+      {
+        id: 1,
+        filament_id: null,
+        name: "Untracked",
+        filament_name: null,
+        vendor_name: null,
+        material: null,
+        color_hex: null,
+        remaining_weight: null,
+        used_weight: null,
+        archived: false,
+        location: null,
+      },
     ],
   });
 
   render(
     <SendToButtons
-      gcodeFiles={[{
-        id: 42,
-        original_filename: "cube.gcode",
-        version: 1,
-        gcode_revision_number: 1,
-        revision_label: null,
-        is_recommended: true,
-        metadata: { filament_weight_g: 250 } as import("@/types").MetadataRead,
-      }]}
+      gcodeFiles={[
+        {
+          id: 42,
+          original_filename: "cube.gcode",
+          version: 1,
+          gcode_revision_number: 1,
+          revision_label: null,
+          is_recommended: true,
+          metadata: { filament_weight_g: 250 } as import("@/types").MetadataRead,
+        },
+      ]}
       printerFiles={[]}
     />,
   );
@@ -179,9 +227,32 @@ it("confirms a known manual mismatch and records the override policy", async () 
     file_id: 42,
     requirements: [{ tool_index: 0, material_type: "PLA", color_hex: null }],
     nozzle_diameter_mm: 0.4,
-    printers: [{ printer_id: 7, verdict: "mismatch", reasons: ["material_type_mismatch"], missing_materials: ["pla"], color_advisories: [] }],
+    printers: [
+      {
+        printer_id: 7,
+        verdict: "mismatch",
+        reasons: ["material_type_mismatch"],
+        missing_materials: ["pla"],
+        color_advisories: [],
+      },
+    ],
   });
-  render(<SendToButtons gcodeFiles={[{ id: 42, original_filename: "cube.gcode", version: 1, gcode_revision_number: 1, revision_label: null, is_recommended: true, metadata: null }]} printerFiles={[]} />);
+  render(
+    <SendToButtons
+      gcodeFiles={[
+        {
+          id: 42,
+          original_filename: "cube.gcode",
+          version: 1,
+          gcode_revision_number: 1,
+          revision_label: null,
+          is_recommended: true,
+          metadata: null,
+        },
+      ]}
+      printerFiles={[]}
+    />,
+  );
 
   await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
   await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));
@@ -190,14 +261,33 @@ it("confirms a known manual mismatch and records the override policy", async () 
   expect(await screen.findByText("Print with a known material mismatch?")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Print anyway" }));
 
-  await waitFor(() => expect(enqueueFleetJob).toHaveBeenCalledWith(expect.objectContaining({
-    compatibility_policy: "allow_mismatch",
-    printer_id: 7,
-  })));
+  await waitFor(() =>
+    expect(enqueueFleetJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compatibility_policy: "allow_mismatch",
+        printer_id: 7,
+      }),
+    ),
+  );
 });
 
 it("creates an atomic batch when copies is greater than one", async () => {
-  render(<SendToButtons gcodeFiles={[{ id: 42, original_filename: "cube.gcode", version: 1, gcode_revision_number: 1, revision_label: null, is_recommended: true, metadata: null }]} printerFiles={[]} />);
+  render(
+    <SendToButtons
+      gcodeFiles={[
+        {
+          id: 42,
+          original_filename: "cube.gcode",
+          version: 1,
+          gcode_revision_number: 1,
+          revision_label: null,
+          is_recommended: true,
+          metadata: null,
+        },
+      ]}
+      printerFiles={[]}
+    />,
+  );
 
   await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
   await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));
@@ -207,10 +297,14 @@ it("creates an atomic batch when copies is greater than one", async () => {
   await userEvent.type(screen.getByLabelText("Printer group"), "Workshop");
   await userEvent.click(screen.getAllByRole("button", { name: "Add to queue" }).at(-1)!);
 
-  await waitFor(() => expect(createFleetBatch).toHaveBeenCalledWith(expect.objectContaining({
-    file_id: 42,
-    quantity: 3,
-    priority: "rush",
-    target_group: "Workshop",
-  })));
+  await waitFor(() =>
+    expect(createFleetBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file_id: 42,
+        quantity: 3,
+        priority: "rush",
+        target_group: "Workshop",
+      }),
+    ),
+  );
 });

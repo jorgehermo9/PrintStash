@@ -9,7 +9,9 @@ import { modelCard, uploadGcodeModel } from "./util";
 
 const MOCK_PRINTER_PORT = Number(process.env.PLAYWRIGHT_MOCK_PRINTER_PORT ?? 7530);
 
-test("an emulated Moonraker printer comes online, accepts a queued print, and drains", async ({ page }) => {
+test("an emulated Moonraker printer comes online, accepts a queued print, and drains", async ({
+  page,
+}) => {
   const stamp = Date.now();
   const printerName = `e2e-fleet-${stamp}`;
   const modelName = `e2e-fleet-model-${stamp}`;
@@ -18,10 +20,14 @@ test("an emulated Moonraker printer comes online, accepts a queued print, and dr
   await page.goto("/printers");
   await page.getByRole("button", { name: "Add printer" }).click();
   await page.getByPlaceholder("Voron 2.4").fill(printerName);
-  await page.getByPlaceholder("http://printer.local:7125").fill(`http://127.0.0.1:${MOCK_PRINTER_PORT}`);
+  await page
+    .getByPlaceholder("http://printer.local:7125")
+    .fill(`http://127.0.0.1:${MOCK_PRINTER_PORT}`);
   await page.getByRole("button", { name: "Add printer" }).last().click();
 
-  const card = page.getByRole("link", { name: new RegExp(printerName) }).locator("xpath=ancestor::article");
+  const card = page
+    .getByRole("link", { name: new RegExp(printerName) })
+    .locator("xpath=ancestor::article");
   await expect(card).toBeVisible();
 
   // The hub connects on printer creation — status flips from unknown/offline

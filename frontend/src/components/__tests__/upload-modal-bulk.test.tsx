@@ -44,15 +44,9 @@ function renderBulk(over: Partial<Parameters<typeof BulkFiles>[0]> = {}) {
 describe("BulkFiles", () => {
   it("shows the drop-zone hint and a folder-select action when empty", () => {
     renderBulk();
-    expect(
-      screen.getByText(/drop 3d models or a folder here/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/subfolders become nested collections/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /select a folder/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/drop 3d models or a folder here/i)).toBeInTheDocument();
+    expect(screen.getByText(/subfolders become nested collections/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /select a folder/i })).toBeInTheDocument();
   });
 
   it("queues files picked through the file input", async () => {
@@ -72,17 +66,13 @@ describe("BulkFiles", () => {
     const folderInput = container.querySelectorAll('input[type="file"]')[1];
     expect(folderInput).toHaveAttribute("webkitdirectory");
 
-    await userEvent.upload(folderInput as HTMLInputElement, [
-      makeFile("a.stl"),
-    ]);
+    await userEvent.upload(folderInput as HTMLInputElement, [makeFile("a.stl")]);
     expect(props.onAddItems).toHaveBeenCalledTimes(1);
   });
 
   it("recurses a dropped entry tree into the queue", async () => {
     const { props } = renderBulk();
-    const zone = screen
-      .getByText(/drop 3d models or a folder here/i)
-      .closest("div") as HTMLElement;
+    const zone = screen.getByText(/drop 3d models or a folder here/i).closest("div") as HTMLElement;
 
     fireEvent.drop(zone, {
       dataTransfer: {
@@ -99,9 +89,7 @@ describe("BulkFiles", () => {
 
   it("falls back to a flat FileList when the entries API is unavailable", async () => {
     const { props } = renderBulk();
-    const zone = screen
-      .getByText(/drop 3d models or a folder here/i)
-      .closest("div") as HTMLElement;
+    const zone = screen.getByText(/drop 3d models or a folder here/i).closest("div") as HTMLElement;
 
     fireEvent.drop(zone, {
       dataTransfer: { items: [], files: [makeFile("flat.stl")] },

@@ -32,9 +32,7 @@ export function rememberLastView(view: "models" | "docs"): void {
 export function readLastView(): "models" | "docs" {
   if (typeof window === "undefined") return "models";
   try {
-    return window.localStorage.getItem(LAST_VIEW_STORAGE_KEY) === "docs"
-      ? "docs"
-      : "models";
+    return window.localStorage.getItem(LAST_VIEW_STORAGE_KEY) === "docs" ? "docs" : "models";
   } catch {
     return "models";
   }

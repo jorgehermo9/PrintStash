@@ -145,12 +145,12 @@ export type {
   NotificationDelivery,
 } from "./notifications";
 
-export type {
-  SpoolmanStatus,
-  SpoolmanUpdate,
-  SpoolmanTestResult,
-  SpoolRead,
-} from "./spoolman";
+export type { SpoolmanStatus, SpoolmanUpdate, SpoolmanTestResult, SpoolRead } from "./spoolman";
 
-export type { VaultAuditFinding, VaultAuditMode, VaultAuditRun, BackupVerification } from "./maintenance";
+export type {
+  VaultAuditFinding,
+  VaultAuditMode,
+  VaultAuditRun,
+  BackupVerification,
+} from "./maintenance";
 export type { InboxItem, InboxItemState } from "./inbox";

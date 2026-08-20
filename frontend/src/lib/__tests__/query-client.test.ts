@@ -17,9 +17,7 @@ import {
 type Spy = ReturnType<typeof vi.spyOn>;
 
 function bustedKeys(spy: Spy): unknown[][] {
-  return spy.mock.calls.map(
-    (call: unknown[]) => (call[0] as { queryKey: unknown[] }).queryKey,
-  );
+  return spy.mock.calls.map((call: unknown[]) => (call[0] as { queryKey: unknown[] }).queryKey);
 }
 
 function expectBusted(spy: Spy, expected: readonly (readonly unknown[])[]) {
@@ -57,11 +55,7 @@ describe("invalidateQueriesForPath", () => {
   });
 
   it("treats files/ingest/gcode paths as model writes", () => {
-    for (const path of [
-      "/api/v1/files/3",
-      "/api/v1/ingest",
-      "/api/v1/gcode-revision/7",
-    ]) {
+    for (const path of ["/api/v1/files/3", "/api/v1/ingest", "/api/v1/gcode-revision/7"]) {
       spy.mockClear();
       invalidateQueriesForPath(path);
       expectBusted(spy, [queryKeys.models, queryKeys.vaultStats, queryKeys.collections]);

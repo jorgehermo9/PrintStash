@@ -12,11 +12,7 @@ export const CARD_METRIC_OPTIONS = [
 export type CardMetricId = (typeof CARD_METRIC_OPTIONS)[number]["id"];
 export type CardMetrics = [CardMetricId, CardMetricId, CardMetricId];
 
-export const DEFAULT_CARD_METRICS: CardMetrics = [
-  "layer_height",
-  "print_time",
-  "filament_weight",
-];
+export const DEFAULT_CARD_METRICS: CardMetrics = ["layer_height", "print_time", "filament_weight"];
 
 export function readCardMetrics(): CardMetrics {
   if (typeof window === "undefined") return DEFAULT_CARD_METRICS;
@@ -27,9 +23,7 @@ export function readCardMetrics(): CardMetrics {
     if (
       Array.isArray(parsed) &&
       parsed.length === 3 &&
-      parsed.every((id: unknown) =>
-        CARD_METRIC_OPTIONS.some((option) => option.id === id),
-      )
+      parsed.every((id: unknown) => CARD_METRIC_OPTIONS.some((option) => option.id === id))
     ) {
       return parsed as CardMetrics;
     }

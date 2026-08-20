@@ -107,7 +107,10 @@ function makePrinter(overrides: Partial<PrinterRead> = {}): PrinterRead {
 beforeEach(() => {
   vi.clearAllMocks();
   mockUsePrinters.mockReturnValue({ data: [], isLoading: false, error: null, refetch: vi.fn() });
-  mockUsePrinterDashboard.mockReturnValue({ data: { total_printers: 0, status_counts: {}, active_jobs: 0, groups: [] }, refetch: vi.fn() });
+  mockUsePrinterDashboard.mockReturnValue({
+    data: { total_printers: 0, status_counts: {}, active_jobs: 0, groups: [] },
+    refetch: vi.fn(),
+  });
   window.localStorage.clear();
 });
 
@@ -120,12 +123,17 @@ describe("printer setup", () => {
   it("submits only once when add is triggered twice before request resolves", async () => {
     let resolveCreate!: () => void;
     vi.mocked(createPrinter).mockImplementationOnce(
-      () => new Promise((resolve) => { resolveCreate = () => resolve({} as PrinterRead); }),
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = () => resolve({} as PrinterRead);
+        }),
     );
     await openForm();
     await userEvent.type(screen.getByLabelText("Name"), "Voron");
     await userEvent.type(screen.getByLabelText("Moonraker URL"), "http://voron.local:7125");
-    const form = screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!
+    const form = screen
+      .getAllByRole("button", { name: /^add printer$/i })
+      .at(-1)!
       .closest("form")!;
 
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -144,14 +152,18 @@ describe("printer setup", () => {
     await userEvent.type(screen.getByLabelText("Password"), "secret");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() => expect(createPrinter).toHaveBeenCalledWith(expect.objectContaining({
-      name: "Prusa MK4",
-      provider: "prusalink",
-      prusalink_url: "http://mk4.local",
-      prusalink_auth_mode: "digest",
-      prusalink_username: "maker",
-      prusalink_password: "secret",
-    })));
+    await waitFor(() =>
+      expect(createPrinter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Prusa MK4",
+          provider: "prusalink",
+          prusalink_url: "http://mk4.local",
+          prusalink_auth_mode: "digest",
+          prusalink_username: "maker",
+          prusalink_password: "secret",
+        }),
+      ),
+    );
     expect(createPrinter).toHaveBeenCalledWith(
       expect.not.objectContaining({ moonraker_url: expect.anything() }),
     );
@@ -164,46 +176,46 @@ describe("printer setup", () => {
     await userEvent.type(screen.getByLabelText("Printer URL"), "http://neptune.local:7125");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() => expect(createPrinter).toHaveBeenCalledWith(expect.objectContaining({
-      provider: "moonraker",
-      provider_variant: "elegoo_neptune4",
-      moonraker_url: "http://neptune.local:7125",
-    })));
+    await waitFor(() =>
+      expect(createPrinter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "moonraker",
+          provider_variant: "elegoo_neptune4",
+          moonraker_url: "http://neptune.local:7125",
+        }),
+      ),
+    );
   });
 
   it("explains that Centauri Carbon commands need the Mainboard ID while idle", async () => {
     await openForm();
-    await userEvent.selectOptions(
-      screen.getByLabelText("Integration"),
-      "elegoo_centauri_carbon",
-    );
+    await userEvent.selectOptions(screen.getByLabelText("Integration"), "elegoo_centauri_carbon");
 
     expect(screen.getByLabelText(/Mainboard ID/i)).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Needed for reliable printer commands while idle, paused, or errored.",
-      ),
+      screen.getByText("Needed for reliable printer commands while idle, paused, or errored."),
     ).toBeInTheDocument();
   });
 
   it("submits Centauri Carbon 2 local MQTT credentials", async () => {
     await openForm();
     await userEvent.type(screen.getByLabelText("Name"), "Centauri Carbon 2");
-    await userEvent.selectOptions(
-      screen.getByLabelText("Integration"),
-      "elegoo_centauri_carbon_2",
-    );
+    await userEvent.selectOptions(screen.getByLabelText("Integration"), "elegoo_centauri_carbon_2");
     expect(screen.getAllByText(/enable lan only/i)).toHaveLength(2);
     await userEvent.type(screen.getByLabelText("Printer host or IP"), "192.168.1.51");
     await userEvent.type(screen.getByLabelText("Printer access code"), "ABC123");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() => expect(createPrinter).toHaveBeenCalledWith(expect.objectContaining({
-      provider: "elegoo_centauri",
-      provider_variant: "elegoo_centauri_carbon_2",
-      elegoo_centauri_host: "192.168.1.51",
-      elegoo_centauri_access_code: "ABC123",
-    })));
+    await waitFor(() =>
+      expect(createPrinter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "elegoo_centauri",
+          provider_variant: "elegoo_centauri_carbon_2",
+          elegoo_centauri_host: "192.168.1.51",
+          elegoo_centauri_access_code: "ABC123",
+        }),
+      ),
+    );
   });
 
   it("submits OctoPrint URL and API key", async () => {
@@ -214,11 +226,15 @@ describe("printer setup", () => {
     await userEvent.type(screen.getByLabelText("API key"), "secret-key");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() => expect(createPrinter).toHaveBeenCalledWith(expect.objectContaining({
-      provider: "octoprint",
-      octoprint_url: "http://octopi.local",
-      octoprint_api_key: "secret-key",
-    })));
+    await waitFor(() =>
+      expect(createPrinter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "octoprint",
+          octoprint_url: "http://octopi.local",
+          octoprint_api_key: "secret-key",
+        }),
+      ),
+    );
   });
 });
 
@@ -317,9 +333,7 @@ describe("printer card", () => {
     await userEvent.click(screen.getByRole("button", { name: "Voron 2.4" }));
     await userEvent.click(screen.getByRole("button", { name: "Save model" }));
 
-    await waitFor(() =>
-      expect(updatePrinter).toHaveBeenCalledWith(1, { model_name: "Voron 2.4" }),
-    );
+    await waitFor(() => expect(updatePrinter).toHaveBeenCalledWith(1, { model_name: "Voron 2.4" }));
   });
 
   it("falls back to a custom text field for a model not in the list", async () => {
@@ -332,10 +346,7 @@ describe("printer card", () => {
     render(<PrintersPage />);
 
     await userEvent.click(screen.getByText("Set model"));
-    await userEvent.type(
-      screen.getByPlaceholderText("Enter model name"),
-      "Homebrew CoreXY",
-    );
+    await userEvent.type(screen.getByPlaceholderText("Enter model name"), "Homebrew CoreXY");
     await userEvent.click(screen.getByRole("button", { name: "Save model" }));
 
     await waitFor(() =>

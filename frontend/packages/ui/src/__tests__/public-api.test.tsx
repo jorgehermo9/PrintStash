@@ -19,9 +19,7 @@ describe("@printstash/ui public API", () => {
       </Modal>,
     );
 
-    expect(
-      screen.getByRole("button", { name: "Dismiss dialog" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss dialog" })).toBeInTheDocument();
   });
 
   it("uses injected confirmation labels and preserves actions", () => {

@@ -1,11 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import type { Server } from "node:http";
 
-import {
-  resetMockApiState,
-  setExternalLibrariesEnabled,
-  startMockApi,
-} from "./mock-api";
+import { resetMockApiState, setExternalLibrariesEnabled, startMockApi } from "./mock-api";
 
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? 4210);
 
@@ -83,7 +79,7 @@ test("model detail route renders data and hydrates printer integrations", async 
 
   const html = await page.content();
   expect(html).not.toContain("NEXT_HTTP_ERROR_FALLBACK;404");
-  expect(html).not.toContain("printerId\":\"$NaN");
+  expect(html).not.toContain('printerId":"$NaN');
   expect(problems).toEqual([]);
 });
 
@@ -139,7 +135,9 @@ test("model detail tabs fit and details sidebar width persists", async ({ page }
   await page.mouse.move(handleBox!.x - 120, handleBox!.y + 100, { steps: 5 });
   await page.mouse.up();
 
-  await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeGreaterThan(initialWidth + 100);
+  await expect
+    .poll(async () => (await sidebar.boundingBox())!.width)
+    .toBeGreaterThan(initialWidth + 100);
   const resizedWidth = (await sidebar.boundingBox())!.width;
   await page.reload();
   await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
@@ -167,7 +165,9 @@ test("add revision modal uses designed file picker and labeled fields", async ({
   await expect(dialog.getByRole("button", { name: "Add revision" })).toBeEnabled();
 });
 
-test("printer list route loads configured printers through the frontend proxy", async ({ page }) => {
+test("printer list route loads configured printers through the frontend proxy", async ({
+  page,
+}) => {
   const problems = await collectPageProblems(page);
 
   await page.goto("/printers");
@@ -206,8 +206,7 @@ test("vault sort requests one globally sorted cursor page", async ({ page }) => 
     page.waitForRequest((request) => {
       const url = new URL(request.url());
       return (
-        url.pathname === "/api/v1/models/page" &&
-        url.searchParams.get("sort") === "success-desc"
+        url.pathname === "/api/v1/models/page" && url.searchParams.get("sort") === "success-desc"
       );
     }),
     page.getByRole("menuitem", { name: "Best success rate" }).click(),
@@ -248,14 +247,13 @@ test("preview settings persist quality choices and queue image recreation", asyn
 
   await page.getByLabel("Preview quality").selectOption("detail");
   await page.getByLabel("Screenshot resolution").selectOption("3");
-  await expect.poll(() =>
-    page.evaluate(() => localStorage.getItem("printstash.preview.preferences:v1")),
-  ).toContain('"previewQuality":"detail"');
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("printstash.preview.preferences:v1")))
+    .toContain('"previewQuality":"detail"');
 
   await Promise.all([
     page.waitForRequest(
-      (request) =>
-        request.url().includes("/api/v1/config") && request.method() === "PUT",
+      (request) => request.url().includes("/api/v1/config") && request.method() === "PUT",
     ),
     page.getByLabel("Model image quality").selectOption("1280"),
   ]);
@@ -320,7 +318,7 @@ test("printer detail route preserves the dynamic id and renders live status", as
   await expect(page).toHaveURL(/\/printers\/3$/);
 
   const html = await page.content();
-  expect(html).not.toContain("printerId\":\"$NaN");
+  expect(html).not.toContain('printerId":"$NaN');
   expect(problems).toEqual([]);
 });
 
@@ -358,17 +356,24 @@ test("reduced motion drops the grid stagger entirely", async ({ page }) => {
 });
 
 test("header and recent-folder menus stay above adjacent vault surfaces", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("ps-recent-folders", JSON.stringify(["maraio"])));
+  await page.addInitScript(() =>
+    localStorage.setItem("ps-recent-folders", JSON.stringify(["maraio"])),
+  );
   await page.goto("/");
 
-  const headerZ = await page.locator("header").evaluate((element) => Number(getComputedStyle(element).zIndex));
-  const stickyZ = await page.locator(".sticky.top-0").evaluate((element) => Number(getComputedStyle(element).zIndex));
+  const headerZ = await page
+    .locator("header")
+    .evaluate((element) => Number(getComputedStyle(element).zIndex));
+  const stickyZ = await page
+    .locator(".sticky.top-0")
+    .evaluate((element) => Number(getComputedStyle(element).zIndex));
   expect(headerZ).toBeGreaterThan(stickyZ);
 
   await page.getByRole("button", { name: "Recent" }).click();
   const menuBox = await page.getByRole("menu").boundingBox();
   const sidebarBox = await page.locator("aside").boundingBox();
-  expect(menuBox).not.toBeNull(); expect(sidebarBox).not.toBeNull();
+  expect(menuBox).not.toBeNull();
+  expect(sidebarBox).not.toBeNull();
   expect(menuBox!.x).toBeGreaterThanOrEqual(sidebarBox!.x + sidebarBox!.width);
 });
 
@@ -416,9 +421,7 @@ test.describe("shared volumes enabled", () => {
     // defaulting to vault and offering the shared volume as a write-back target.
     const destination = page.getByRole("combobox").filter({ hasText: "Vault storage" });
     await expect(destination).toBeVisible();
-    await expect(
-      page.getByRole("option", { name: /nas-main \(shared volume\)/ }),
-    ).toBeAttached();
+    await expect(page.getByRole("option", { name: /nas-main \(shared volume\)/ })).toBeAttached();
 
     expect(problems).toEqual([]);
   });

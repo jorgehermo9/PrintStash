@@ -137,7 +137,9 @@ function initialLocale(): Locale {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (SUPPORTED_LOCALES.includes(stored as Locale)) return stored as Locale;
-  } catch { /* Storage can be unavailable in hardened/private contexts. */ }
+  } catch {
+    /* Storage can be unavailable in hardened/private contexts. */
+  }
   return "en";
 }
 
@@ -146,20 +148,27 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = locale;
-    try { localStorage.setItem(STORAGE_KEY, locale); } catch { /* non-fatal */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, locale);
+    } catch {
+      /* non-fatal */
+    }
   }, [locale]);
 
-  const value = useMemo<I18nValue>(() => ({
-    locale,
-    setLocale: setLocaleState,
-    t(key, values) {
-      let message: string = messageCatalogs[locale][key] ?? messageCatalogs.en[key];
-      for (const [name, replacement] of Object.entries(values ?? {})) {
-        message = message.replaceAll(`{${name}}`, replacement);
-      }
-      return message;
-    },
-  }), [locale]);
+  const value = useMemo<I18nValue>(
+    () => ({
+      locale,
+      setLocale: setLocaleState,
+      t(key, values) {
+        let message: string = messageCatalogs[locale][key] ?? messageCatalogs.en[key];
+        for (const [name, replacement] of Object.entries(values ?? {})) {
+          message = message.replaceAll(`{${name}}`, replacement);
+        }
+        return message;
+      },
+    }),
+    [locale],
+  );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

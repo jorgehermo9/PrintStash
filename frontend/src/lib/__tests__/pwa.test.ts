@@ -35,10 +35,7 @@ it("does not register when disabled", () => {
 });
 
 it("uses versioned caches, offline navigation fallback, and revalidation", () => {
-  const source = readFileSync(
-    `${process.cwd()}/public/sw.js`,
-    "utf8",
-  );
+  const source = readFileSync(`${process.cwd()}/public/sw.js`, "utf8");
 
   expect(source).toContain('const CACHE = "printstash-shell-v2"');
   expect(source).toContain('caches.match("/offline.html")');

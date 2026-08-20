@@ -12,10 +12,15 @@ export function capturePendingImport(payload: {
 }
 
 export function listPendingImports(includeCompleted = true): Promise<InboxItem[]> {
-  return getJson<InboxItem[]>(`/api/v1/inbox?include_completed=${includeCompleted}`, { fresh: true });
+  return getJson<InboxItem[]>(`/api/v1/inbox?include_completed=${includeCompleted}`, {
+    fresh: true,
+  });
 }
 
-export function updatePendingImport(id: number, payload: Record<string, unknown>): Promise<InboxItem> {
+export function updatePendingImport(
+  id: number,
+  payload: Record<string, unknown>,
+): Promise<InboxItem> {
   return sendJson<InboxItem>(`/api/v1/inbox/${id}`, "PATCH", payload);
 }
 

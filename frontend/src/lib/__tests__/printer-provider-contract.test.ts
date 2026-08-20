@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  PRINTER_SETUP_OPTIONS,
-  providerLabel,
-  setupProviderFields,
-} from "../printer-providers";
+import { PRINTER_SETUP_OPTIONS, providerLabel, setupProviderFields } from "../printer-providers";
 import type { PrinterProvider } from "@/types";
 import type { PrinterVariant } from "@/types/printers";
 

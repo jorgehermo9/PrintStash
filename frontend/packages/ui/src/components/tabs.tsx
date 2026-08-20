@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  type KeyboardEvent,
-  type ReactNode,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "../lib/utils";
 
@@ -61,14 +55,10 @@ export function TabBar<K extends string>({
     e.preventDefault();
     const idx = tabs.findIndex((tab) => tab.key === active);
     const next =
-      e.key === "ArrowRight"
-        ? (idx + 1) % tabs.length
-        : (idx - 1 + tabs.length) % tabs.length;
+      e.key === "ArrowRight" ? (idx + 1) % tabs.length : (idx - 1 + tabs.length) % tabs.length;
     onChange(tabs[next].key);
     requestAnimationFrame(() => {
-      listRef.current
-        ?.querySelector<HTMLElement>('[data-active="true"]')
-        ?.focus();
+      listRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.focus();
     });
   }
 

@@ -60,8 +60,7 @@ const SETUP_ERROR_MESSAGES: Record<string, string> = {
     "The backend cannot write to the thumbnail directory. Check filesystem permissions.",
   thumb_dir_not_readable:
     "The backend cannot inspect the thumbnail directory. Check filesystem permissions.",
-  thumb_dir_not_empty:
-    "The thumbnail directory must be a dedicated empty directory.",
+  thumb_dir_not_empty: "The thumbnail directory must be a dedicated empty directory.",
   invalid_storage_backend: "Choose either local disk or S3/R2 storage.",
   s3_bucket_required: "S3/R2 storage needs a bucket name.",
   invalid_setup_token:
@@ -134,10 +133,7 @@ export default function SetupPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setBootError(
-          err?.message ??
-            "Could not reach the backend. Make sure the API is running.",
-        );
+        setBootError(err?.message ?? "Could not reach the backend. Make sure the API is running.");
       });
     return () => {
       cancelled = true;
@@ -147,12 +143,10 @@ export default function SetupPage() {
   function validateStep1(): string | null {
     if (setupToken.trim().length < 16)
       return "Enter the setup token shown in the API container logs.";
-    if (username.trim().length < 3)
-      return "Username must be at least 3 characters.";
+    if (username.trim().length < 3) return "Username must be at least 3 characters.";
     if (password.length < 8) return "Password must be at least 8 characters.";
     if (password !== confirm) return "Passwords do not match.";
-    if (email && !email.includes("@"))
-      return "Email looks invalid (or leave blank).";
+    if (email && !email.includes("@")) return "Email looks invalid (or leave blank).";
     return null;
   }
 
@@ -199,15 +193,11 @@ export default function SetupPage() {
         storage_backend: storageBackend,
         // Only send path overrides if the user actually changed the value.
         data_dir:
-          storageBackend === "local" &&
-          trimmedData &&
-          trimmedData !== status?.current_data_dir
+          storageBackend === "local" && trimmedData && trimmedData !== status?.current_data_dir
             ? trimmedData
             : undefined,
         thumb_dir:
-          storageBackend === "local" &&
-          trimmedThumb &&
-          trimmedThumb !== status?.current_thumb_dir
+          storageBackend === "local" && trimmedThumb && trimmedThumb !== status?.current_thumb_dir
             ? trimmedThumb
             : undefined,
         s3_bucket: s3Bucket.trim() || undefined,
@@ -242,17 +232,9 @@ export default function SetupPage() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background px-4">
         <Card className="w-full max-w-md space-y-4 border-outline-variant bg-surface-container-low p-6">
-          <h1 className="text-lg font-semibold text-on-surface">
-            Cannot reach the vault
-          </h1>
-          <p className="text-sm text-on-surface-variant font-mono break-words">
-            {bootError}
-          </p>
-          <Button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="w-fit"
-          >
+          <h1 className="text-lg font-semibold text-on-surface">Cannot reach the vault</h1>
+          <p className="text-sm text-on-surface-variant font-mono break-words">{bootError}</p>
+          <Button type="button" onClick={() => window.location.reload()} className="w-fit">
             Retry
           </Button>
         </Card>
@@ -262,7 +244,11 @@ export default function SetupPage() {
 
   if (!status) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background" role="status" aria-live="polite">
+      <main
+        className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background"
+        role="status"
+        aria-live="polite"
+      >
         <Loader2 className="h-6 w-6 animate-spin text-on-surface-variant" aria-hidden />
         <p className="text-sm text-on-surface-variant">Checking vault setup…</p>
       </main>
@@ -295,7 +281,10 @@ export default function SetupPage() {
             </div>
           </div>
 
-          <ol className="mt-6 grid grid-cols-2 gap-2 lg:mt-10 lg:grid-cols-1 lg:gap-3" aria-label="Setup progress">
+          <ol
+            className="mt-6 grid grid-cols-2 gap-2 lg:mt-10 lg:grid-cols-1 lg:gap-3"
+            aria-label="Setup progress"
+          >
             <StepIndicator
               active={step === 1}
               done={step > 1}
@@ -313,8 +302,7 @@ export default function SetupPage() {
           </ol>
 
           <p className="mt-6 hidden text-xs leading-relaxed text-on-surface-variant lg:mt-auto lg:block">
-            Setup runs once. Additional administrators and storage settings can
-            be managed later.
+            Setup runs once. Additional administrators and storage settings can be managed later.
           </p>
         </aside>
 
@@ -378,7 +366,12 @@ export default function SetupPage() {
           </div>
 
           {error && (
-            <div role="alert" className="mt-5 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+            <div
+              role="alert"
+              className="mt-5 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              {error}
+            </div>
           )}
 
           <div className="mt-6 flex items-center justify-between gap-3 border-t border-outline-variant pt-5">
@@ -405,13 +398,8 @@ export default function SetupPage() {
                 <ChevronRight className="h-4 w-4" />
               </Button>
             ) : (
-              <Button
-                type="submit"
-                loading={busy}
-              >
-                {!busy && (
-                  <ShieldCheck className="h-4 w-4" />
-                )}
+              <Button type="submit" loading={busy}>
+                {!busy && <ShieldCheck className="h-4 w-4" />}
                 Complete setup
               </Button>
             )}
@@ -498,9 +486,7 @@ function AccountStep(props: {
       </div>
       <div className="flex gap-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
-        <p>
-        Create the first administrator account. You can add more users later.
-        </p>
+        <p>Create the first administrator account. You can add more users later.</p>
       </div>
     </div>
   );
@@ -591,9 +577,8 @@ function StorageStep(props: {
             />
           </div>
           <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-            These are private PrintStash storage and must be empty. Add existing
-            NAS or Nextcloud folders later under Settings → External Libraries;
-            those files stay in place.
+            These are private PrintStash storage and must be empty. Add existing NAS or Nextcloud
+            folders later under Settings → External Libraries; those files stay in place.
           </div>
         </div>
       ) : (
@@ -644,7 +629,10 @@ function StorageStep(props: {
         </div>
       )}
 
-      <section className="space-y-4 border-t border-outline-variant pt-5" aria-labelledby="backup-heading">
+      <section
+        className="space-y-4 border-t border-outline-variant pt-5"
+        aria-labelledby="backup-heading"
+      >
         <div className="flex items-start gap-3">
           <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
             <RefreshCw className="h-4 w-4" aria-hidden />
@@ -675,7 +663,10 @@ function StorageStep(props: {
             <span>
               Off-site backup <span className="font-normal text-muted-foreground">(optional)</span>
             </span>
-            <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-fast group-open:rotate-180" aria-hidden />
+            <ChevronDown
+              className="h-4 w-4 text-muted-foreground transition-transform duration-fast group-open:rotate-180"
+              aria-hidden
+            />
           </summary>
           <div className="grid gap-4 border-t border-outline-variant p-4 sm:grid-cols-2">
             <Field
@@ -789,16 +780,9 @@ function Field(props: {
         autoComplete={props.autoComplete}
         autoFocus={props.autoFocus}
         required={props.required}
-        className={cn(
-          "bg-surface-container-lowest text-on-surface",
-          props.mono && "font-mono",
-        )}
+        className={cn("bg-surface-container-lowest text-on-surface", props.mono && "font-mono")}
       />
-      {props.hint && (
-        <p className="text-3xs font-mono text-on-surface-variant">
-          {props.hint}
-        </p>
-      )}
+      {props.hint && <p className="text-3xs font-mono text-on-surface-variant">{props.hint}</p>}
     </div>
   );
 }
@@ -826,7 +810,11 @@ function StepIndicator(props: {
           props.done && "border-success/30 bg-success/10 text-success",
         )}
       >
-        {props.done ? <Check className="h-4 w-4" aria-hidden /> : <Icon className="h-4 w-4" aria-hidden />}
+        {props.done ? (
+          <Check className="h-4 w-4" aria-hidden />
+        ) : (
+          <Icon className="h-4 w-4" aria-hidden />
+        )}
       </span>
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium">{props.label}</span>
@@ -836,23 +824,15 @@ function StepIndicator(props: {
   );
 }
 
-function StepHeader(props: {
-  eyebrow: string;
-  title: string;
-  description: string;
-}) {
+function StepHeader(props: { eyebrow: string; title: string; description: string }) {
   return (
     <header className="space-y-2">
-      <p className="text-xs font-mono uppercase tracking-wider text-primary">
-        {props.eyebrow}
-      </p>
+      <p className="text-xs font-mono uppercase tracking-wider text-primary">{props.eyebrow}</p>
       <div>
         <h2 className="text-xl font-semibold tracking-tight text-on-surface sm:text-2xl">
           {props.title}
         </h2>
-        <p className="mt-1 text-sm leading-relaxed text-on-surface-variant">
-          {props.description}
-        </p>
+        <p className="mt-1 text-sm leading-relaxed text-on-surface-variant">{props.description}</p>
       </div>
     </header>
   );

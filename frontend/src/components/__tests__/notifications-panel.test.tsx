@@ -59,9 +59,7 @@ describe("NotificationsPanel", () => {
   it("hides channel management from non-admins", async () => {
     mockSettings(false, []);
     render(<NotificationsPanel canEdit={false} />);
-    expect(
-      await screen.findByText(/only an administrator can manage/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/only an administrator can manage/i)).toBeInTheDocument();
     expect(screen.queryByText(/add channel/i)).not.toBeInTheDocument();
   });
 
@@ -85,9 +83,7 @@ describe("NotificationsPanel", () => {
     const testBtn = screen.getByTitle(/send a test notification/i);
     await userEvent.click(testBtn);
 
-    await waitFor(() =>
-      expect(api.testNotificationChannel).toHaveBeenCalledWith(1),
-    );
+    await waitFor(() => expect(api.testNotificationChannel).toHaveBeenCalledWith(1));
     expect(toast.success).toHaveBeenCalled();
   });
 

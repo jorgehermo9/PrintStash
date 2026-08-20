@@ -1,8 +1,4 @@
-import {
-  keepPreviousData,
-  useInfiniteQuery,
-  useQuery,
-} from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import {
   getPrintStatistics,
@@ -194,11 +190,7 @@ export function useModelFacets(filters: ModelListFilters) {
  * Mutations invalidate `["models"]` via `invalidateQueriesForPath`, which by
  * prefix-matching also busts every keyed list here.
  */
-export function useModelList(
-  filters: ModelListFilters,
-  pageSize: number,
-  sort: ModelSort,
-) {
+export function useModelList(filters: ModelListFilters, pageSize: number, sort: ModelSort) {
   return useInfiniteQuery<ModelPageRead>({
     queryKey: [...queryKeys.models, "list", filters, sort],
     queryFn: ({ pageParam }) =>

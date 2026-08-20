@@ -6,10 +6,7 @@ import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import { AlertTriangle, Layers, Loader2 } from "lucide-react";
 import { authHeaders, getUrl } from "@/lib/api/request";
-import {
-  previewPixelRatio,
-  usePreviewPreferences,
-} from "@/lib/preview-preferences";
+import { previewPixelRatio, usePreviewPreferences } from "@/lib/preview-preferences";
 
 // ---- Types ----
 
@@ -27,7 +24,9 @@ export interface ToolpathData {
   cumulativeVertices: Uint32Array; // cumulative vertex count per layer (length = layerRanges.length + 1)
   totalLayers: number;
   bounds: {
-    sizeX: number; sizeY: number; sizeZ: number;
+    sizeX: number;
+    sizeY: number;
+    sizeZ: number;
     maxDim: number;
   };
 }
@@ -44,8 +43,12 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 }
 
 export function parseGcode(text: string): ToolpathData {
-  let cx = 0, cy = 0, cz = 0, ce = 0;
-  let relXYZ = false, relE = false;
+  let cx = 0,
+    cy = 0,
+    cz = 0,
+    ce = 0;
+  let relXYZ = false,
+    relE = false;
 
   const extrudeSegs: number[] = [];
   const travelSegs: number[] = [];
@@ -54,9 +57,12 @@ export function parseGcode(text: string): ToolpathData {
   let currentZ = -1;
   let layerVertStart = 0; // in vertex units (floats/3)
 
-  let minX = Infinity, maxX = -Infinity;
-  let minY = Infinity, maxY = -Infinity;
-  let minZ = Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    maxX = -Infinity;
+  let minY = Infinity,
+    maxY = -Infinity;
+  let minZ = Infinity,
+    maxZ = -Infinity;
 
   const lines = text.split("\n");
 
@@ -70,13 +76,28 @@ export function parseGcode(text: string): ToolpathData {
     const tokens = line.split(/\s+/);
     const op = tokens[0].toUpperCase();
 
-    if (op === "G90") { relXYZ = false; continue; }
-    if (op === "G91") { relXYZ = true; continue; }
-    if (op === "M82") { relE = false; continue; }
-    if (op === "M83") { relE = true; continue; }
+    if (op === "G90") {
+      relXYZ = false;
+      continue;
+    }
+    if (op === "G91") {
+      relXYZ = true;
+      continue;
+    }
+    if (op === "M82") {
+      relE = false;
+      continue;
+    }
+    if (op === "M83") {
+      relE = true;
+      continue;
+    }
     if (op !== "G0" && op !== "G1" && op !== "G00" && op !== "G01") continue;
 
-    let nx = cx, ny = cy, nz = cz, ne = ce;
+    let nx = cx,
+      ny = cy,
+      nz = cz,
+      ne = ce;
     let hasE = false;
 
     for (let i = 1; i < tokens.length; i++) {
@@ -88,7 +109,10 @@ export function parseGcode(text: string): ToolpathData {
       if (k === "X") nx = relXYZ ? cx + v : v;
       else if (k === "Y") ny = relXYZ ? cy + v : v;
       else if (k === "Z") nz = relXYZ ? cz + v : v;
-      else if (k === "E") { ne = relE ? ce + v : v; hasE = true; }
+      else if (k === "E") {
+        ne = relE ? ce + v : v;
+        hasE = true;
+      }
     }
 
     // Layer change: Z increases
@@ -108,12 +132,17 @@ export function parseGcode(text: string): ToolpathData {
 
     // Track bounds only from extrusion moves so start-gcode travel to X0 Y0 doesn't skew center
     if (isExtrusion) {
-      if (nx < minX) minX = nx; if (nx > maxX) maxX = nx;
-      if (ny < minY) minY = ny; if (ny > maxY) maxY = ny;
-      if (nz < minZ) minZ = nz; if (nz > maxZ) maxZ = nz;
+      if (nx < minX) minX = nx;
+      if (nx > maxX) maxX = nx;
+      if (ny < minY) minY = ny;
+      if (ny > maxY) maxY = ny;
+      if (nz < minZ) minZ = nz;
+      if (nz > maxZ) maxZ = nz;
     }
 
-    const dx = nx - cx, dy = ny - cy, dz = nz - cz;
+    const dx = nx - cx,
+      dy = ny - cy,
+      dz = nz - cz;
     if (dx !== 0 || dy !== 0 || dz !== 0) {
       // Map: three.x = gcodeX, three.y = gcodeZ (height), three.z = -gcodeY
       if (isExtrusion) {
@@ -123,7 +152,9 @@ export function parseGcode(text: string): ToolpathData {
       }
     }
 
-    cx = nx; cy = ny; cz = nz;
+    cx = nx;
+    cy = ny;
+    cz = nz;
   }
 
   // Push final layer
@@ -132,7 +163,14 @@ export function parseGcode(text: string): ToolpathData {
     layerRanges.push({ z: currentZ, vertexStart: layerVertStart, vertexCount: vCount });
   }
 
-  if (minX === Infinity) { minX = 0; maxX = 200; minY = 0; maxY = 200; minZ = 0; maxZ = 20; }
+  if (minX === Infinity) {
+    minX = 0;
+    maxX = 200;
+    minY = 0;
+    maxY = 200;
+    minZ = 0;
+    maxZ = 20;
+  }
 
   // Center coordinates
   const centerX = (minX + maxX) / 2;
@@ -230,15 +268,21 @@ function GcodeScene({
   );
 
   // Stable LineSegments objects — must be memoized so <primitive> identity is stable across renders
-  const extrudeLines = useMemo(() => new THREE.LineSegments(extrudeGeo, extrudeMat), [extrudeGeo, extrudeMat]);
-  const travelLines  = useMemo(() => new THREE.LineSegments(travelGeo,  travelMat),  [travelGeo,  travelMat]);
+  const extrudeLines = useMemo(
+    () => new THREE.LineSegments(extrudeGeo, extrudeMat),
+    [extrudeGeo, extrudeMat],
+  );
+  const travelLines = useMemo(
+    () => new THREE.LineSegments(travelGeo, travelMat),
+    [travelGeo, travelMat],
+  );
 
   // Bed geometry (actual mm dimensions — gcode coords are real mm)
   const bedGeo = useMemo(() => {
     if (!printerBedMm) return null;
     return new THREE.PlaneGeometry(printerBedMm.x, printerBedMm.y);
   }, [printerBedMm]);
-  const bedEdgesGeo = useMemo(() => bedGeo ? new THREE.EdgesGeometry(bedGeo) : null, [bedGeo]);
+  const bedEdgesGeo = useMemo(() => (bedGeo ? new THREE.EdgesGeometry(bedGeo) : null), [bedGeo]);
 
   // Update drawRange directly on the stable geometry — no ref gymnastics needed
   useEffect(() => {
@@ -254,12 +298,13 @@ function GcodeScene({
       orbitRef.current.target.set(0, 0, 0);
       orbitRef.current.update();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  const gridHalfSize = showBed && printerBedMm
-    ? Math.max(printerBedMm.x, printerBedMm.y) * 0.6
-    : (Math.max(data.bounds.sizeX, data.bounds.sizeY) / 2) * 1.1 || 10;
+  const gridHalfSize =
+    showBed && printerBedMm
+      ? Math.max(printerBedMm.x, printerBedMm.y) * 0.6
+      : (Math.max(data.bounds.sizeX, data.bounds.sizeY) / 2) * 1.1 || 10;
   const floorY = -(data.bounds.sizeZ / 2);
 
   return (
@@ -273,15 +318,18 @@ function GcodeScene({
       />
       <ambientLight intensity={0.8} />
       <primitive object={extrudeLines} />
-      {showTravel && data.travelPositions.length > 0 && (
-        <primitive object={travelLines} />
-      )}
+      {showTravel && data.travelPositions.length > 0 && <primitive object={travelLines} />}
 
       {/* Bed platform (only in bed-fit mode) */}
       {showBed && bedGeo && bedEdgesGeo && printerBedMm && (
         <group position={[0, floorY - 0.5, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <mesh geometry={bedGeo}>
-            <meshStandardMaterial color="#1e3a5f" transparent opacity={0.15} side={THREE.DoubleSide} />
+            <meshStandardMaterial
+              color="#1e3a5f"
+              transparent
+              opacity={0.15}
+              side={THREE.DoubleSide}
+            />
           </mesh>
           <lineSegments geometry={bedEdgesGeo}>
             <lineBasicMaterial color="#3b82f6" transparent opacity={0.8} />
@@ -308,16 +356,17 @@ function GcodeScene({
 
 // ---- Error Boundary ----
 
-interface EBState { hasError: boolean }
-class GcodeErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  EBState
-> {
+interface EBState {
+  hasError: boolean;
+}
+class GcodeErrorBoundary extends React.Component<{ children: React.ReactNode }, EBState> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { hasError: false };
   }
-  static getDerivedStateFromError(): EBState { return { hasError: true }; }
+  static getDerivedStateFromError(): EBState {
+    return { hasError: true };
+  }
   render() {
     if (this.state.hasError) {
       return (

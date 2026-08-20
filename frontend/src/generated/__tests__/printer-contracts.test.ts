@@ -34,9 +34,7 @@ describe("generated printer contracts", () => {
 
   it("drives action visibility from declared capabilities", () => {
     const supports = (provider: (typeof PROVIDER_IDS)[number], capability: string) =>
-      SHARED_PRINTER_CONTRACT.providers[provider].capabilities.includes(
-        capability as never,
-      );
+      SHARED_PRINTER_CONTRACT.providers[provider].capabilities.includes(capability as never);
 
     expect(supports("moonraker", "send_gcode")).toBe(true);
     expect(supports("bambu_lan", "upload")).toBe(true);

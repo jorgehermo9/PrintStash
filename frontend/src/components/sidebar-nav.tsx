@@ -3,7 +3,17 @@
 import { useEffect, useState } from "react";
 import { Link } from "@/lib/navigation";
 import { usePathname } from "@/lib/navigation";
-import { BookOpen, Box, Inbox, SlidersHorizontal, LogIn, LogOut, Printer, Settings, User } from "lucide-react";
+import {
+  BookOpen,
+  Box,
+  Inbox,
+  SlidersHorizontal,
+  LogIn,
+  LogOut,
+  Printer,
+  Settings,
+  User,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { BrandMark } from "@/components/brand-mark";
 import { listPendingImports } from "@/lib/api";
@@ -14,12 +24,15 @@ const mainItems = [
   { href: "/inbox", labelKey: "nav.inbox", icon: Inbox },
   { href: "/printers", labelKey: "nav.printers", icon: Printer, adminOnly: true },
   { href: "/profiles", labelKey: "nav.profiles", icon: SlidersHorizontal },
-  { href: "https://xiao-villamor.github.io/PrintStash/", labelKey: "nav.wiki", icon: BookOpen, external: true },
+  {
+    href: "https://xiao-villamor.github.io/PrintStash/",
+    labelKey: "nav.wiki",
+    icon: BookOpen,
+    external: true,
+  },
 ];
 
-const bottomItems = [
-  { href: "/settings", labelKey: "nav.settings", icon: Settings },
-];
+const bottomItems = [{ href: "/settings", labelKey: "nav.settings", icon: Settings }];
 
 export function SidebarNav() {
   const pathname = usePathname();
@@ -27,8 +40,13 @@ export function SidebarNav() {
   const { t } = useI18n();
   const [pendingCount, setPendingCount] = useState(0);
   useEffect(() => {
-    if (!user) { setPendingCount(0); return; }
-    listPendingImports(false).then((items) => setPendingCount(items.filter((item) => item.state !== "dismissed").length)).catch(() => setPendingCount(0));
+    if (!user) {
+      setPendingCount(0);
+      return;
+    }
+    listPendingImports(false)
+      .then((items) => setPendingCount(items.filter((item) => item.state !== "dismissed").length))
+      .catch(() => setPendingCount(0));
   }, [pathname, user]);
   const visibleMainItems = mainItems.filter((item) => !item.adminOnly || user?.is_superuser);
 
@@ -42,22 +60,15 @@ export function SidebarNav() {
           <h1 className="text-xl font-bold text-foreground leading-tight tracking-tight">
             PrintStash
           </h1>
-          <p className="text-2xs text-muted-foreground font-mono">
-            Your prints, organized
-          </p>
+          <p className="text-2xs text-muted-foreground font-mono">Your prints, organized</p>
         </div>
       </div>
 
       <div className="flex flex-col gap-1 flex-1">
         {visibleMainItems.map((item) => {
-          const isActive =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
+          const isActive = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
           const className = `flex items-center gap-4 px-3 py-2 rounded text-sm font-medium transition-[color,background-color,transform] duration-press active:scale-[0.98] ${
-            isActive
-              ? "text-accent-foreground bg-accent"
-              : "text-muted-foreground hover:bg-muted"
+            isActive ? "text-accent-foreground bg-accent" : "text-muted-foreground hover:bg-muted"
           }`;
           if (item.external) {
             return (
@@ -75,7 +86,11 @@ export function SidebarNav() {
               <span className="font-mono text-xs tracking-wider uppercase">
                 {t(item.labelKey as MessageKey)}
               </span>
-              {item.href === "/inbox" && pendingCount > 0 && <span className="ml-auto rounded-full bg-accent px-2 py-0.5 font-mono text-3xs text-accent-foreground">{pendingCount}</span>}
+              {item.href === "/inbox" && pendingCount > 0 && (
+                <span className="ml-auto rounded-full bg-accent px-2 py-0.5 font-mono text-3xs text-accent-foreground">
+                  {pendingCount}
+                </span>
+              )}
             </Link>
           );
         })}
@@ -127,7 +142,9 @@ export function SidebarNav() {
               }`}
             >
               <item.icon className="h-5 w-5" />
-              <span className="font-mono text-xs tracking-wider uppercase">{t(item.labelKey as MessageKey)}</span>
+              <span className="font-mono text-xs tracking-wider uppercase">
+                {t(item.labelKey as MessageKey)}
+              </span>
             </Link>
           );
         })}

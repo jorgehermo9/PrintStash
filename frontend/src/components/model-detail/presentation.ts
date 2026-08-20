@@ -2,12 +2,7 @@
  * Presentation maps and derived-row builders shared by the model-detail tabs.
  */
 
-import {
-  FileRead,
-  FileRevisionStatus,
-  MetadataRead,
-  PrintJobState,
-} from "@/types";
+import { FileRead, FileRevisionStatus, MetadataRead, PrintJobState } from "@/types";
 import {
   formatCost,
   formatDuration,
@@ -74,19 +69,17 @@ export function headerStatusLabel(status: FileRevisionStatus | null): string {
 
 export type PrintJobTone = "success" | "error" | "progress";
 
-export const PRINT_JOB_PRESENTATION: Record<
-  PrintJobState,
-  { label: string; tone: PrintJobTone }
-> = {
-  queued: { label: "Queued", tone: "progress" },
-  uploading: { label: "Uploading", tone: "progress" },
-  started: { label: "Started", tone: "progress" },
-  printing: { label: "Printing", tone: "progress" },
-  paused: { label: "Paused", tone: "progress" },
-  completed: { label: "Success", tone: "success" },
-  cancelled: { label: "Cancelled", tone: "error" },
-  failed: { label: "Failed", tone: "error" },
-};
+export const PRINT_JOB_PRESENTATION: Record<PrintJobState, { label: string; tone: PrintJobTone }> =
+  {
+    queued: { label: "Queued", tone: "progress" },
+    uploading: { label: "Uploading", tone: "progress" },
+    started: { label: "Started", tone: "progress" },
+    printing: { label: "Printing", tone: "progress" },
+    paused: { label: "Paused", tone: "progress" },
+    completed: { label: "Success", tone: "success" },
+    cancelled: { label: "Cancelled", tone: "error" },
+    failed: { label: "Failed", tone: "error" },
+  };
 
 export function printJobToneClass(tone: PrintJobTone): string {
   switch (tone) {
@@ -159,9 +152,9 @@ export function buildPrintSettingRows(
   }
 
   if (
-    preferences.supports
-    && meta?.support_material !== null
-    && meta?.support_material !== undefined
+    preferences.supports &&
+    meta?.support_material !== null &&
+    meta?.support_material !== undefined
   ) {
     rows.push({ label: "SUPPORTS", value: meta.support_material ? "Yes" : "No" });
   }

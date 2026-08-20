@@ -46,11 +46,7 @@ export function isLoggedIn(): boolean {
   return !!getUser();
 }
 
-export function storeLogin(
-  token: string,
-  user: StoredUser,
-  options?: { silent?: boolean },
-): void {
+export function storeLogin(token: string, user: StoredUser, options?: { silent?: boolean }): void {
   if (!isBrowser()) return;
   try {
     // The backend also sets the access JWT as an HttpOnly SameSite cookie.
@@ -66,7 +62,9 @@ export function storeLogin(
     // getMe is the *same* identity, so firing it there would needlessly nuke
     // freshly-loaded queries on every page load.
     if (!options?.silent) emit();
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 export function clearLogin(): void {
@@ -77,7 +75,9 @@ export function clearLogin(): void {
     localStorage.removeItem(LEGACY_TOKEN_KEY);
     localStorage.removeItem(LEGACY_USER_KEY);
     emit();
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 export function onAuthChange(cb: () => void): () => void {
@@ -98,7 +98,9 @@ export function emitUnauthorized(): void {
   if (!isLoggedIn()) return;
   try {
     sessionStorage.setItem(SESSION_EXPIRED_KEY, "1");
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   clearLogin();
   window.dispatchEvent(new Event(UNAUTH_EVENT));
 }

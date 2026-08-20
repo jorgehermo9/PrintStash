@@ -13,9 +13,9 @@ import { APP_VERSION, CHANGELOG } from "@/lib/changelog";
  */
 
 // vitest runs from the frontend package root, so package.json sits at cwd.
-const pkg = JSON.parse(
-  readFileSync(join(process.cwd(), "package.json"), "utf8"),
-) as { version: string };
+const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
+  version: string;
+};
 
 // Version bumps are a triple (backend/pyproject.toml, config.py's
 // app_version, frontend/package.json) — this only guards the frontend/backend
@@ -33,9 +33,7 @@ const backendConfig = readFileSync(
   join(process.cwd(), "..", "backend", "app", "core", "config.py"),
   "utf8",
 );
-const backendConfigVersionMatch = backendConfig.match(
-  /^\s*app_version: str = "([^"]+)"/m,
-);
+const backendConfigVersionMatch = backendConfig.match(/^\s*app_version: str = "([^"]+)"/m);
 if (!backendConfigVersionMatch) {
   throw new Error("could not find app_version in backend/app/core/config.py");
 }
