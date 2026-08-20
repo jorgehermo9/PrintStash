@@ -105,9 +105,7 @@ async def test_file_operations_preserve_streaming_and_nested_paths(
 
     monkeypatch.setattr(Path, "read_bytes", forbid_read_bytes)
     client = _client(handler)
-    assert [item["path"] for item in await client.list_files()] == [
-        "folder/cube.gcode"
-    ]
+    assert [item["path"] for item in await client.list_files()] == ["folder/cube.gcode"]
     await client.upload(source, "sub/dir/cube.gcode")
     await client.start("sub/dir/cube.gcode")
     await client.delete_file("sub/dir/cube.gcode")
@@ -161,7 +159,5 @@ async def test_legacy_subscription_adapts_to_snapshot_callback() -> None:
 
 
 def test_factory_builds_runtime_protocol_client() -> None:
-    client = OctoPrintFactory().build(
-        OctoPrintConfig("http://octoprint.local", "key")
-    )
+    client = OctoPrintFactory().build(OctoPrintConfig("http://octoprint.local", "key"))
     assert isinstance(client, PrinterClient)

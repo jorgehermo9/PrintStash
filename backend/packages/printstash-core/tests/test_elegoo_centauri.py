@@ -98,9 +98,7 @@ async def test_status_and_snapshot_preserve_legacy_shape() -> None:
         return connection
 
     client = ElegooCentauriClient(
-        ElegooCentauriConfig(
-            "192.168.1.50", "elegoo_centauri_carbon"
-        ),
+        ElegooCentauriConfig("192.168.1.50", "elegoo_centauri_carbon"),
         connector=connector,
     )
     legacy = await client.query_status()
@@ -138,9 +136,7 @@ async def test_controls_upload_and_old_start_signature_remain_compatible(
         return connection
 
     client = ElegooCentauriClient(
-        ElegooCentauriConfig(
-            "192.168.1.50", "elegoo_centauri_carbon_2", "ABC123"
-        ),
+        ElegooCentauriConfig("192.168.1.50", "elegoo_centauri_carbon_2", "ABC123"),
         connector=connector,
     )
     source = tmp_path / "cube.gcode"
@@ -215,9 +211,7 @@ async def test_subscription_and_errors_keep_public_behavior() -> None:
         return connection
 
     client = ElegooCentauriClient(
-        ElegooCentauriConfig(
-            "192.168.1.50", "elegoo_centauri_carbon"
-        ),
+        ElegooCentauriConfig("192.168.1.50", "elegoo_centauri_carbon"),
         connector=connector,
     )
     stop = asyncio.Event()
@@ -238,8 +232,6 @@ async def test_subscription_and_errors_keep_public_behavior() -> None:
 
 def test_factory_builds_runtime_protocol_client() -> None:
     client = ElegooCentauriFactory().build(
-        ElegooCentauriConfig(
-            "192.168.1.50", "elegoo_centauri_carbon"
-        )
+        ElegooCentauriConfig("192.168.1.50", "elegoo_centauri_carbon")
     )
     assert isinstance(client, PrinterClient)

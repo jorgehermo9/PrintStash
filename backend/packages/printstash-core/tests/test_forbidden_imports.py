@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-PACKAGE_ROOT = Path(__file__).parents[1] / "src" / "printstash_core"
+CORE_ROOT = Path(__file__).parents[1]
+SOURCE_ROOTS = (
+    CORE_ROOT / "src" / "printstash_core",
+    CORE_ROOT / "testkit" / "printstash_core_testkit",
+)
 FORBIDDEN_ROOTS = {
     "app",
     "fastapi",
@@ -23,7 +27,10 @@ FORBIDDEN_ROOTS = {
 }
 
 
-@pytest.mark.parametrize("source_path", sorted(PACKAGE_ROOT.rglob("*.py")))
+@pytest.mark.parametrize(
+    "source_path",
+    sorted(path for root in SOURCE_ROOTS for path in root.rglob("*.py")),
+)
 def test_core_package_has_no_forbidden_imports(source_path: Path) -> None:
     tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
     imported_roots: set[str] = set()
@@ -37,3 +44,11 @@ def test_core_package_has_no_forbidden_imports(source_path: Path) -> None:
             imported_roots.add(node.module.split(".", 1)[0].lower())
 
     assert imported_roots.isdisjoint(FORBIDDEN_ROOTS)
+
+
+def test_runtime_package_has_no_mandatory_dependencies() -> None:
+    """The wheel remains importable without any optional integration extras."""
+    import tomllib
+
+    metadata = tomllib.loads((CORE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert metadata["project"]["dependencies"] == []

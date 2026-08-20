@@ -102,9 +102,7 @@ async def test_file_operations_preserve_paths_and_control_calls(
                         {
                             "name": "sub",
                             "type": "FOLDER",
-                            "children": [
-                                {"name": "cube.gcode", "type": "PRINT_FILE"}
-                            ],
+                            "children": [{"name": "cube.gcode", "type": "PRINT_FILE"}],
                         }
                     ]
                 },
@@ -117,9 +115,7 @@ async def test_file_operations_preserve_paths_and_control_calls(
     source.write_text("G28\n")
     client = _client(handler)
 
-    assert [item["path"] for item in await client.list_files()] == [
-        "sub/cube.gcode"
-    ]
+    assert [item["path"] for item in await client.list_files()] == ["sub/cube.gcode"]
     await client.upload(source, "folder/cube.gcode")
     await client.start("folder/cube.gcode")
     await client.delete_file("folder/cube.gcode")
