@@ -4,11 +4,9 @@ This guide covers supported self-hosted upgrades. SQLite plus local filesystem
 storage remains the default. Always upgrade from a fresh backup and retain the
 previous application image until validation is complete.
 
-## Pending 0.12.0 notes
+## 0.12.0 notes
 
-The `0.12.0` branch is not a published release yet. Its upgrade-relevant
-changes are documented here so the pull request can be reviewed without
-implying that an image or tag already exists.
+`0.12.0` was published on 2026-08-19. Its upgrade-relevant changes:
 
 - Existing bcrypt password hashes remain valid. A successful login verifies
   the legacy hash and replaces it with Argon2; no offline password migration is
