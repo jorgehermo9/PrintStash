@@ -43,7 +43,6 @@ packages = ["src/printstash_core"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["testkit"]
 
 [tool.ruff]
 target-version = "py311"

@@ -8,7 +8,7 @@ import pytest
 CORE_ROOT = Path(__file__).parents[1]
 SOURCE_ROOTS = (
     CORE_ROOT / "src" / "printstash_core",
-    CORE_ROOT / "testkit" / "printstash_core_testkit",
+    CORE_ROOT / "src" / "printstash_core_testkit",
 )
 FORBIDDEN_ROOTS = {
     "app",
