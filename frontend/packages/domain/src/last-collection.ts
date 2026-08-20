@@ -1,38 +1,63 @@
 export const LAST_COLLECTION_STORAGE_KEY = "printstash.last.collection";
 export const LAST_VIEW_STORAGE_KEY = "printstash.last.view";
 
-export function rememberLastCollection(path: string | null): void {
-  if (typeof window === "undefined") return;
+/** Which tab of the vault the user last had open. */
+export type LastView = "models" | "docs";
+
+/**
+ * The store the remembered vault context lives in, or null when there is none:
+ * a server render, or a browser that refuses storage access outright.
+ */
+function contextStore(): Storage | null {
+  if (!("localStorage" in globalThis)) return null;
   try {
-    if (path) window.localStorage.setItem(LAST_COLLECTION_STORAGE_KEY, path);
-    else window.localStorage.removeItem(LAST_COLLECTION_STORAGE_KEY);
+    return globalThis.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode a persisted view string; anything we did not write reads as the model grid. */
+function parseLastView(raw: string | null): LastView {
+  return raw === "docs" ? "docs" : "models";
+}
+
+export function rememberLastCollection(path: string | null): void {
+  const store = contextStore();
+  if (store === null) return;
+  try {
+    if (path) store.setItem(LAST_COLLECTION_STORAGE_KEY, path);
+    else store.removeItem(LAST_COLLECTION_STORAGE_KEY);
   } catch {
     // Best-effort context restoration when browser storage is unavailable.
   }
 }
 
 export function readLastCollection(): string | null {
-  if (typeof window === "undefined") return null;
+  const store = contextStore();
+  if (store === null) return null;
   try {
-    return window.localStorage.getItem(LAST_COLLECTION_STORAGE_KEY) || null;
+    return store.getItem(LAST_COLLECTION_STORAGE_KEY) || null;
   } catch {
     return null;
   }
 }
 
-export function rememberLastView(view: "models" | "docs"): void {
-  if (typeof window === "undefined") return;
+export function rememberLastView(view: LastView): void {
+  const store = contextStore();
+  if (store === null) return;
   try {
-    window.localStorage.setItem(LAST_VIEW_STORAGE_KEY, view);
+    store.setItem(LAST_VIEW_STORAGE_KEY, view);
   } catch {
     // Best-effort context restoration when browser storage is unavailable.
   }
 }
 
-export function readLastView(): "models" | "docs" {
-  if (typeof window === "undefined") return "models";
+export function readLastView(): LastView {
+  const store = contextStore();
+  if (store === null) return "models";
   try {
-    return window.localStorage.getItem(LAST_VIEW_STORAGE_KEY) === "docs" ? "docs" : "models";
+    return parseLastView(store.getItem(LAST_VIEW_STORAGE_KEY));
   } catch {
     return "models";
   }

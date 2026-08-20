@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Loader2, PlugZap, Save } from "lucide-react";
 
@@ -29,13 +29,14 @@ export function SpoolmanConnectCard({ canEdit }: { canEdit: boolean }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  // Hydrate the form from server state once it loads (and after saves).
-  useEffect(() => {
-    if (status) {
-      setBaseUrl(status.base_url ?? "");
-      setApiKey(status.has_api_key ? SECRET_MASK : "");
-    }
-  }, [status]);
+  // Hydrate the form from server state once it loads (and after saves), during
+  // render rather than in an effect so the inputs never paint a stale value.
+  const [hydratedFrom, setHydratedFrom] = useState<SpoolmanStatus | undefined>(undefined);
+  if (status && status !== hydratedFrom) {
+    setHydratedFrom(status);
+    setBaseUrl(status.base_url ?? "");
+    setApiKey(status.has_api_key ? SECRET_MASK : "");
+  }
 
   const connected = !!status?.connected;
 

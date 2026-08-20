@@ -6,6 +6,9 @@ import { Localized } from "@/components/ui/localized";
 
 export type ViewerMode = "model" | "gcode";
 
+/** Display modes in the order the toolbar offers them. */
+const DISPLAY_MODES: readonly ViewerDisplayMode[] = ["solid", "xray", "wireframe"];
+
 export function ViewerToolbar({
   displayMode,
   setDisplayMode,
@@ -65,7 +68,7 @@ export function ViewerToolbar({
         {viewerMode === "model" && (
           <>
             <div className={cluster}>
-              {(["solid", "xray", "wireframe"] as ViewerDisplayMode[]).map((m) => (
+              {DISPLAY_MODES.map((m) => (
                 <button
                   key={m}
                   onClick={() => setDisplayMode(m)}

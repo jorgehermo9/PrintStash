@@ -26,7 +26,7 @@ const SLICERS: Slicer[] = [
 ];
 
 function isMacOS() {
-  if (typeof navigator === "undefined") return false;
+  if (!("navigator" in globalThis)) return false;
   // navigator.platform is deprecated but still the most reliable signal here;
   // fall back to the user-agent string.
   const platform = navigator.platform ?? "";

@@ -4,9 +4,10 @@ import { PRINTER_MODEL_OPTIONS } from "@/lib/printer-providers";
 
 describe("printerArtwork", () => {
   it("has artwork for every curated model", () => {
-    for (const model of PRINTER_MODEL_OPTIONS) {
-      expect(printerArtwork(model).source, model).toBe("orca");
-    }
+    const withoutArtwork = PRINTER_MODEL_OPTIONS.filter(
+      (model) => printerArtwork(model).source !== "orca",
+    );
+    expect(withoutArtwork).toEqual([]);
   });
 
   it("maps a known model to its OrcaSlicer cover", () => {

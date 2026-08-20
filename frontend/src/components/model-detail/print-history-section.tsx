@@ -12,7 +12,8 @@ import { FileRead, ModelPrintJobRead } from "@/types";
 import { PRINT_JOB_PRESENTATION, printJobToneClass } from "./presentation";
 import { Localized } from "@/components/ui/localized";
 
-type PrintHistoryMode = "manual" | "auto";
+const PRINT_HISTORY_MODES = ["manual", "auto"] as const;
+type PrintHistoryMode = (typeof PRINT_HISTORY_MODES)[number];
 
 export function PrintHistorySection({
   jobs,
@@ -30,12 +31,14 @@ export function PrintHistorySection({
 
   // Manual form state
   const printers = usePrinters().data ?? [];
-  const [selectedPrinterId, setSelectedPrinterId] = useState<number | "">("");
+  // `null` is "nothing selected"; the empty-string the <select> needs for that is
+  // produced at the JSX boundary, so the ids stay numbers everywhere else.
+  const [selectedPrinterId, setSelectedPrinterId] = useState<number | null>(null);
   // When the printer isn't a registered one, log against this free-text name.
   const [adhocPrinter, setAdhocPrinter] = useState(false);
   const [adhocPrinterName, setAdhocPrinterName] = useState("");
-  const [selectedFileId, setSelectedFileId] = useState<number | "">(gcodeFiles[0]?.id ?? "");
-  const [selectedSpoolId, setSelectedSpoolId] = useState<number | "">("");
+  const [selectedFileId, setSelectedFileId] = useState<number | null>(gcodeFiles[0]?.id ?? null);
+  const [selectedSpoolId, setSelectedSpoolId] = useState<number | null>(null);
   const [jobState, setJobState] = useState("completed");
   const [startedAt, setStartedAt] = useState("");
   const [finishedAt, setFinishedAt] = useState("");
@@ -54,11 +57,11 @@ export function PrintHistorySection({
   function openAdd() {
     setShowAdd(true);
     setMode("manual");
-    setSelectedPrinterId("");
+    setSelectedPrinterId(null);
     setAdhocPrinter(false);
     setAdhocPrinterName("");
-    setSelectedFileId(gcodeFiles[0]?.id ?? "");
-    setSelectedSpoolId("");
+    setSelectedFileId(gcodeFiles[0]?.id ?? null);
+    setSelectedSpoolId(null);
     setJobState("completed");
     setStartedAt("");
     setFinishedAt("");
@@ -77,13 +80,13 @@ export function PrintHistorySection({
     setSubmitting(true);
     try {
       const spool =
-        selectedSpoolId !== "" ? spools.find((s) => s.id === selectedSpoolId) : undefined;
+        selectedSpoolId !== null ? spools.find((s) => s.id === selectedSpoolId) : undefined;
       const job = await createManualPrintJob(modelId, {
-        printer_id: adhocPrinter ? null : (selectedPrinterId as number),
+        printer_id: adhocPrinter ? null : selectedPrinterId,
         printer_name: adhocPrinter ? adhocPrinterName.trim() : null,
-        file_id: selectedFileId as number,
+        file_id: selectedFileId,
         state: jobState,
-        spool_id: selectedSpoolId === "" ? null : (selectedSpoolId as number),
+        spool_id: selectedSpoolId,
         spool_name: spool ? spool.filament_name || spool.name || `Spool ${spool.id}` : null,
         spool_filament_id: spool ? spool.filament_id : null,
         started_at: startedAt || null,
@@ -106,7 +109,7 @@ export function PrintHistorySection({
     setImportResults([]);
     setImportDone(false);
     try {
-      const results = await importPrintJobsFromPrinter(modelId, selectedPrinterId as number);
+      const results = await importPrintJobsFromPrinter(modelId, selectedPrinterId);
       setImportResults(results.map((r) => ({ filename: r.filename, imported: r.imported })));
       setImportDone(true);
       const imported = results.filter((r) => r.imported).length;
@@ -144,7 +147,7 @@ export function PrintHistorySection({
           <div className="mb-4 border border-outline-variant rounded bg-surface-container-low p-3 space-y-3">
             {/* Mode toggle */}
             <div className="flex gap-1">
-              {(["manual", "auto"] as PrintHistoryMode[]).map((m) => (
+              {PRINT_HISTORY_MODES.map((m) => (
                 <button
                   key={m}
                   onClick={() => {
@@ -171,15 +174,15 @@ export function PrintHistorySection({
                       Printer
                     </label>
                     <select
-                      value={adhocPrinter ? "__adhoc__" : selectedPrinterId}
+                      value={adhocPrinter ? "__adhoc__" : (selectedPrinterId ?? "")}
                       onChange={(e) => {
                         const v = e.target.value;
                         if (v === "__adhoc__") {
                           setAdhocPrinter(true);
-                          setSelectedPrinterId("");
+                          setSelectedPrinterId(null);
                         } else {
                           setAdhocPrinter(false);
-                          setSelectedPrinterId(v ? Number(v) : "");
+                          setSelectedPrinterId(v ? Number(v) : null);
                         }
                       }}
                       className="w-full h-8 bg-surface text-on-surface font-mono text-xs border border-outline-variant rounded px-2 focus:outline-none focus:ring-1 focus:ring-primary"
@@ -198,9 +201,9 @@ export function PrintHistorySection({
                       G-code Revision
                     </label>
                     <select
-                      value={selectedFileId}
+                      value={selectedFileId ?? ""}
                       onChange={(e) =>
-                        setSelectedFileId(e.target.value ? Number(e.target.value) : "")
+                        setSelectedFileId(e.target.value ? Number(e.target.value) : null)
                       }
                       className="w-full h-8 bg-surface text-on-surface font-mono text-xs border border-outline-variant rounded px-2 focus:outline-none focus:ring-1 focus:ring-primary"
                     >
@@ -247,9 +250,9 @@ export function PrintHistorySection({
                       Spool (opt.)
                     </label>
                     <select
-                      value={selectedSpoolId}
+                      value={selectedSpoolId ?? ""}
                       onChange={(e) =>
-                        setSelectedSpoolId(e.target.value ? Number(e.target.value) : "")
+                        setSelectedSpoolId(e.target.value ? Number(e.target.value) : null)
                       }
                       className="w-full h-8 bg-surface text-on-surface font-mono text-xs border border-outline-variant rounded px-2 focus:outline-none focus:ring-1 focus:ring-primary"
                     >
@@ -335,9 +338,9 @@ export function PrintHistorySection({
                     Printer
                   </label>
                   <select
-                    value={selectedPrinterId}
+                    value={selectedPrinterId ?? ""}
                     onChange={(e) => {
-                      setSelectedPrinterId(e.target.value ? Number(e.target.value) : "");
+                      setSelectedPrinterId(e.target.value ? Number(e.target.value) : null);
                       setImportResults([]);
                       setImportDone(false);
                     }}

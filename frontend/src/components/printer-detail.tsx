@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@/lib/navigation";
+import type { ProviderJsonObject, ProviderJsonValue } from "@/types/printers";
 import {
   MoonrakerConfigRead,
   PrintJobRead,
@@ -69,14 +70,14 @@ const PREHEAT_PRESETS: { name: string; hotend: number; bed: number }[] = [
   { name: "ABS", hotend: 245, bed: 100 },
 ];
 
-const STATUS_COLORS: Record<PrinterStatus, string> = {
+const STATUS_COLORS = {
   ready: "bg-success",
   printing: "bg-primary",
   paused: "bg-warning",
   offline: "bg-muted-foreground",
   unknown: "bg-muted-foreground",
   error: "bg-destructive",
-};
+} satisfies Record<PrinterStatus, string>;
 
 const BTN_SECONDARY = cn(buttonVariants({ variant: "outline", size: "xs" }), "hover:bg-muted");
 const BTN_DANGER = cn(
@@ -95,24 +96,34 @@ function actionLabel(name: string): string {
   return name.replaceAll("_", " ");
 }
 
-function deepMerge<T extends Record<string, any>>(a: T, b: Partial<T>): T {
-  const out: any = { ...a };
-  for (const k of Object.keys(b)) {
-    const av = (a as any)[k];
-    const bv = (b as any)[k];
-    if (
-      av &&
-      bv &&
-      typeof av === "object" &&
-      typeof bv === "object" &&
-      !Array.isArray(av) &&
-      !Array.isArray(bv)
-    ) {
-      out[k] = deepMerge(av, bv);
-    } else {
-      out[k] = bv;
-    }
-  }
+/**
+ * A nested printer object inside a snapshot. `instanceof Object` is false for every
+ * JSON scalar and for null, and `Array.isArray` peels off `toolhead.position` and
+ * friends, leaving exactly the values that are worth merging into.
+ */
+function isSnapshotSection(value: ProviderJsonValue): value is ProviderJsonObject {
+  return value instanceof Object && !Array.isArray(value);
+}
+
+/**
+ * Fold one field of a Moonraker `update` patch over the field the snapshot already
+ * holds. A patch carries only what changed, so two nested objects merge key-by-key;
+ * arrays and scalars replace the previous value wholesale.
+ */
+function mergeSnapshotField(
+  previous: ProviderJsonValue,
+  next: ProviderJsonValue,
+): ProviderJsonValue {
+  if (!isSnapshotSection(previous) || !isSnapshotSection(next)) return next;
+  const merged: ProviderJsonObject = { ...previous };
+  for (const k of Object.keys(next)) merged[k] = mergeSnapshotField(previous[k], next[k]);
+  return merged;
+}
+
+/** Apply a Moonraker `update` patch to the held snapshot without dropping untouched fields. */
+function mergeSnapshot(a: PrinterSnapshot, b: PrinterSnapshot): PrinterSnapshot {
+  const out: PrinterSnapshot = { ...a };
+  for (const k of Object.keys(b)) out[k] = mergeSnapshotField(a[k], b[k]);
   return out;
 }
 
@@ -220,7 +231,7 @@ export function PrinterDetailPage({
           if (msg.type === "snapshot") {
             setSnapshot(msg.data || {});
           } else if (msg.type === "update") {
-            setSnapshot((prev) => deepMerge(prev, msg.data || {}));
+            setSnapshot((prev) => mergeSnapshot(prev, msg.data || {}));
           }
           const state = msg?.data?.print_stats?.state;
           if (state) loadJobs();
@@ -268,7 +279,7 @@ export function PrinterDetailPage({
     }
   }
 
-  async function machineAction(key: string, fn: () => Promise<unknown>, successMsg: string) {
+  async function machineAction<T>(key: string, fn: () => Promise<T>, successMsg: string) {
     if (!auth.isAuthenticated) {
       auth.showAuthRequiredToast();
       return;
@@ -405,7 +416,7 @@ export function PrinterDetailPage({
   const bed = snapshot.heater_bed || {};
   const toolhead = snapshot.toolhead || {};
   const webhook = snapshot.webhooks || {};
-  const progress = typeof vs.progress === "number" ? vs.progress * 100 : null;
+  const progress = vs.progress == null ? null : vs.progress * 100;
   const hasCurrentPrint = Boolean(ps.filename || ps.state === "printing" || ps.state === "paused");
 
   if (!printer) {
@@ -1105,7 +1116,8 @@ export function PrinterDetailPage({
                       </span>
                     </div>
                     <p className="mt-2 text-sm text-muted-foreground">
-                      {providerLabel(diagnostics.provider)} is marked {diagnostics.support_level}.
+                      {providerLabel({ provider: diagnostics.provider })} is marked{" "}
+                      {diagnostics.support_level}.
                     </p>
                   </div>
 
@@ -1198,9 +1210,12 @@ export function PrinterDetailPage({
   );
 }
 
-function ConfigSummary({ title, data }: { title: string; data: Record<string, any> }) {
+function ConfigSummary({ title, data }: { title: string; data: ProviderJsonObject }) {
+  // Scalars only: nested objects and arrays are unreadable in a two-column summary and
+  // are already shown in full by the raw ConfigBlock below. `instanceof Object` is false
+  // for every JSON scalar and for null, which is exactly the set worth summarising.
   const rows = Object.entries(data)
-    .filter(([, value]) => value == null || ["string", "number", "boolean"].includes(typeof value))
+    .filter(([, value]) => !(value instanceof Object))
     .slice(0, 8);
 
   return (
@@ -1509,7 +1524,7 @@ function SettingsField({
   );
 }
 
-function ConfigBlock({ title, data }: { title: string; data: Record<string, any> }) {
+function ConfigBlock({ title, data }: { title: string; data: ProviderJsonObject }) {
   return (
     <div className="rounded border border-border overflow-hidden">
       <div className="border-b border-border px-4 py-3">

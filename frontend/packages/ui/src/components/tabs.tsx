@@ -6,6 +6,12 @@ import { cn } from "../lib/utils";
 
 export type TabItem<K extends string = string> = { key: K; label: ReactNode };
 
+/**
+ * Feature detection: ResizeObserver is absent during SSR and in bare Node test
+ * environments, where the indicator simply stays at its measured position.
+ */
+const canObserveResize = "ResizeObserver" in globalThis;
+
 export interface TabBarProps<K extends string> {
   tabs: TabItem<K>[];
   active: K;
@@ -44,7 +50,7 @@ export function TabBar<K extends string>({
       else setIndicator(null);
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return;
+    if (!canObserveResize) return;
     const ro = new ResizeObserver(measure);
     ro.observe(list);
     return () => ro.disconnect();

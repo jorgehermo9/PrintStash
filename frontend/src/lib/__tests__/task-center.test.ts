@@ -1,15 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listIngestJobs } = vi.hoisted(() => ({
-  listIngestJobs: vi.fn(),
-}));
-
-vi.mock("@/lib/api/models", () => ({ listIngestJobs }));
+import type { IngestJobSource } from "@/lib/task-center";
+import type { IngestJobStatus } from "@/types";
 
 // task-center holds module-private state, so each test gets a fresh module via
 // resetModules() + dynamic import. Fake timers (which also fake Date.now in
-// vitest) drive the TTL-based pruning of completed/failed tasks.
+// vitest) drive the TTL-based pruning of completed/failed tasks. The server's
+// job list is injected through the module's own IngestJobSource seam, so no
+// network (and no module mocking) is involved.
 type TaskCenter = typeof import("@/lib/task-center");
+
+const listIngestJobs = vi.fn<IngestJobSource>();
+
+/** Fresh module instance, wired to the stubbed job source. */
+async function loadTaskCenter(): Promise<TaskCenter> {
+  const taskCenter = await import("@/lib/task-center");
+  taskCenter.setIngestJobSource(listIngestJobs);
+  return taskCenter;
+}
 
 let tc: TaskCenter;
 
@@ -20,7 +28,7 @@ beforeEach(async () => {
   localStorage.clear();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-14T12:00:00Z"));
-  tc = await import("@/lib/task-center");
+  tc = await loadTaskCenter();
 });
 
 afterEach(() => {
@@ -112,7 +120,7 @@ describe("import reconnect", () => {
     expect(tc.listTasks()[0]).toMatchObject({ id, jobId: "server-job-1", status: "pending" });
 
     vi.resetModules();
-    tc = await import("@/lib/task-center");
+    tc = await loadTaskCenter();
     expect(tc.listTasks()[0]).toMatchObject({ jobId: "server-job-1", status: "pending" });
   });
 
@@ -175,7 +183,7 @@ describe("clearCompletedTasks", () => {
     expect(tc.listTasks()).toEqual([]);
 
     vi.resetModules();
-    tc = await import("@/lib/task-center");
+    tc = await loadTaskCenter();
     await tc.syncImportJobs();
     expect(tc.listTasks()).toEqual([]);
   });
@@ -227,7 +235,7 @@ describe("grouped upload jobs", () => {
 
 describe("subscribeTasks", () => {
   it("notifies subscribers on change and stops after unsubscribe", () => {
-    const cb = vi.fn();
+    const cb = vi.fn<() => void>();
     const unsubscribe = tc.subscribeTasks(cb);
 
     tc.createTask({ title: "x" });
@@ -241,7 +249,7 @@ describe("subscribeTasks", () => {
 
 describe("terminal import contract", () => {
   it("emits one completion event per job id and never regresses terminal state", async () => {
-    const completed = vi.fn();
+    const completed = vi.fn<(job: IngestJobStatus) => void>();
     const unsubscribe = tc.subscribeImportJobCompletions(completed);
     tc.trackImportJob("terminal-job", "Import archive");
     listIngestJobs.mockResolvedValue([

@@ -26,27 +26,30 @@ import { toast } from "@/lib/toast";
 import type { BackupMeta } from "@/lib/api";
 import type { BackupVerification, VaultAuditFinding, VaultAuditRun } from "@/types";
 
-const FINDING_LABELS: Record<string, string> = {
-  owned_blob_missing: "Owned Artifact is missing",
-  owned_blob_unreadable: "Owned Artifact cannot be read",
-  owned_blob_size_mismatch: "Artifact size differs from database",
-  owned_blob_hash_mismatch: "Artifact checksum differs from database",
-  unowned_blob_detected: "Unclaimed storage object",
-  external_root_unavailable: "External Library is unavailable",
-  linked_file_missing: "Linked file is missing",
-  thumbnail_missing: "Thumbnail is missing",
-  thumbnail_unreadable: "Thumbnail cannot be decoded",
-  metadata_missing: "Artifact Metadata is missing",
-  model_without_live_artifact: "Model has no live Artifact",
-  recommended_revision_missing: "Recommended Revision is missing",
-  recommended_revision_duplicate: "Multiple Revisions are recommended",
-  embedded_image_missing: "Embedded image is missing",
-  embedded_image_unreferenced: "Embedded image is no longer referenced",
-  background_job_stuck: "Background job may be stuck",
-  backup_manifest_invalid: "Backup manifest or archive is invalid",
-  backup_member_missing: "Backup member is missing",
-  backup_member_size_mismatch: "Backup member size differs from its manifest",
-};
+// Audit codes arrive from the API as plain strings, so the lookup is a Map: a
+// code this build has no wording for reads back as `undefined` and falls back
+// to the raw code instead of silently rendering an empty label.
+const FINDING_LABELS = new Map([
+  ["owned_blob_missing", "Owned Artifact is missing"],
+  ["owned_blob_unreadable", "Owned Artifact cannot be read"],
+  ["owned_blob_size_mismatch", "Artifact size differs from database"],
+  ["owned_blob_hash_mismatch", "Artifact checksum differs from database"],
+  ["unowned_blob_detected", "Unclaimed storage object"],
+  ["external_root_unavailable", "External Library is unavailable"],
+  ["linked_file_missing", "Linked file is missing"],
+  ["thumbnail_missing", "Thumbnail is missing"],
+  ["thumbnail_unreadable", "Thumbnail cannot be decoded"],
+  ["metadata_missing", "Artifact Metadata is missing"],
+  ["model_without_live_artifact", "Model has no live Artifact"],
+  ["recommended_revision_missing", "Recommended Revision is missing"],
+  ["recommended_revision_duplicate", "Multiple Revisions are recommended"],
+  ["embedded_image_missing", "Embedded image is missing"],
+  ["embedded_image_unreferenced", "Embedded image is no longer referenced"],
+  ["background_job_stuck", "Background job may be stuck"],
+  ["backup_manifest_invalid", "Backup manifest or archive is invalid"],
+  ["backup_member_missing", "Backup member is missing"],
+  ["backup_member_size_mismatch", "Backup member size differs from its manifest"],
+]);
 
 function isActive(run: VaultAuditRun | null): boolean {
   return run?.state === "pending" || run?.state === "running";
@@ -62,16 +65,14 @@ export function MaintenancePanel() {
   const [repairTarget, setRepairTarget] = useState<VaultAuditFinding | null>(null);
   const [repairing, setRepairing] = useState(false);
 
-  const refresh = useCallback(async () => {
-    try {
-      setRun(await getLatestVaultAudit());
-    } catch {
-      setRun(null);
-    }
+  const refresh = useCallback(() => {
+    getLatestVaultAudit()
+      .then(setRun)
+      .catch(() => setRun(null));
   }, []);
 
   useEffect(() => {
-    void refresh();
+    refresh();
     listBackups()
       .then(setBackups)
       .catch(() => setBackups([]));
@@ -246,7 +247,7 @@ export function MaintenancePanel() {
                       />
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium">
-                          {FINDING_LABELS[finding.code] ?? finding.code}
+                          {FINDING_LABELS.get(finding.code) ?? finding.code}
                         </p>
                         <p className="truncate text-xs text-muted-foreground">
                           {finding.resource_identifier}

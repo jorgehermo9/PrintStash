@@ -1,13 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import {
-  Children,
-  cloneElement,
-  isValidElement,
-  useEffect,
-  useRef,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { Children, cloneElement, isValidElement, useEffect, useRef, type ReactNode } from "react";
 
 import { useI18n, useOptionalI18n, type Locale } from "@/lib/i18n";
 
@@ -1526,7 +1518,7 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Open extension source", "Abrir el código de la extensión"],
 ];
 
-const TRANSLATED_PROPS = new Set([
+const TRANSLATED_PROPS = [
   "aria-label",
   "aria-description",
   "description",
@@ -1536,14 +1528,26 @@ const TRANSLATED_PROPS = new Set([
   "title",
   "confirmLabel",
   "ariaLabel",
-]);
+] as const;
+
+type TranslatedProp = (typeof TRANSLATED_PROPS)[number];
+
+/**
+ * The props this boundary reads off an arbitrary element: the translatable ones
+ * plus children to recurse into. Every one is declared `ReactNode` because a
+ * caller may legitimately pass an element (an icon `label`, a rich `hint`);
+ * only the string ones are translated.
+ */
+type LocalizableProps = { [K in TranslatedProp]?: ReactNode } & { children?: ReactNode };
 
 // Legacy literals remain isolated by locale until their callers move to typed
 // message keys. Entries are intentionally exact: UI translation must never
 // rewrite model names, tag names, collection names, or other user content.
-const PHRASE_LOOKUPS: Partial<Record<Locale, ReadonlyMap<string, string>>> = {
+const PHRASE_LOOKUPS = {
+  // English is the source language, so its literals need no lookup at all.
+  en: undefined,
   es: new Map(ES_PHRASES),
-};
+} satisfies Record<Locale, ReadonlyMap<string, string> | undefined>;
 
 export function hasUiTranslation(locale: Locale, value: string): boolean {
   return PHRASE_LOOKUPS[locale]?.has(value.trim()) ?? false;
@@ -1583,24 +1587,29 @@ export function translateUiText(locale: Locale, value: string): string {
   return value;
 }
 
-function localizeNode(node: ReactNode, locale: Locale): ReactNode {
-  if (typeof node === "string") return translateUiText(locale, node);
-  if (Array.isArray(node)) return node.map((child) => localizeNode(child, locale));
-  if (!isValidElement(node)) return node;
+/**
+ * The one place a `ReactNode` is decoded into text. `ReactNode` is a structural
+ * union — strings carry no tag, and React exposes no predicate for them — so
+ * `typeof` is the only discriminator available, and it lives here alone.
+ */
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- ReactNode's string member has no runtime discriminator other than typeof, and React ships no parser for it; this is the single decode site.
+const nodeText = (node: ReactNode): string | null => (typeof node === "string" ? node : null);
 
-  const element = node as ReactElement<Record<string, unknown>>;
-  const props: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(element.props)) {
-    if (TRANSLATED_PROPS.has(name) && typeof value === "string") {
-      props[name] = translateUiText(locale, value);
-    }
+function localizeNode(node: ReactNode, locale: Locale): ReactNode {
+  const text = nodeText(node);
+  if (text !== null) return translateUiText(locale, text);
+  if (Array.isArray(node)) return node.map((child) => localizeNode(child, locale));
+  if (!isValidElement<LocalizableProps>(node)) return node;
+
+  const props: LocalizableProps = {};
+  for (const name of TRANSLATED_PROPS) {
+    const value = nodeText(node.props[name]);
+    if (value !== null) props[name] = translateUiText(locale, value);
   }
-  if ("children" in element.props) {
-    props.children = Children.map(element.props.children as ReactNode, (child) =>
-      localizeNode(child, locale),
-    );
+  if ("children" in node.props) {
+    props.children = Children.map(node.props.children, (child) => localizeNode(child, locale));
   }
-  return cloneElement(element, props);
+  return cloneElement(node, props);
 }
 
 export function Localized({ children }: { children: ReactNode }) {
@@ -1661,10 +1670,9 @@ export function DomLocalization() {
     }
 
     function localizeTree(node: Node) {
-      if (node.nodeType === Node.TEXT_NODE) localizeText(node as Text);
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        for (const attribute of DOM_TRANSLATED_ATTRIBUTES)
-          localizeAttribute(node as Element, attribute);
+      if (node instanceof Text) localizeText(node);
+      if (node instanceof Element) {
+        for (const attribute of DOM_TRANSLATED_ATTRIBUTES) localizeAttribute(node, attribute);
       }
       for (const child of node.childNodes) localizeTree(child);
     }
@@ -1672,9 +1680,14 @@ export function DomLocalization() {
     localizeTree(root);
     const observer = new MutationObserver((records) => {
       for (const record of records) {
-        if (record.type === "characterData") localizeText(record.target as Text);
-        if (record.type === "attributes" && record.attributeName)
-          localizeAttribute(record.target as Element, record.attributeName);
+        if (record.type === "characterData" && record.target instanceof Text)
+          localizeText(record.target);
+        if (
+          record.type === "attributes" &&
+          record.attributeName &&
+          record.target instanceof Element
+        )
+          localizeAttribute(record.target, record.attributeName);
         for (const node of record.addedNodes) localizeTree(node);
       }
     });

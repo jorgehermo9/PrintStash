@@ -26,6 +26,12 @@ type OidcDraft = Pick<
   | "oidc_allow_insecure_http"
 >;
 
+/** The config slice this card reads back from a load or a save. */
+export type OidcConfig = OidcDraft & Pick<VaultConfigRead, "has_oidc_client_secret">;
+
+/** The patch this card sends: its own fields, plus the optional new secret. */
+export type OidcConfigUpdate = OidcDraft & Pick<VaultConfigUpdate, "oidc_client_secret">;
+
 const EMPTY: OidcDraft = {
   oidc_enabled: false,
   oidc_issuer_url: "",
@@ -55,7 +61,18 @@ function Field({
   );
 }
 
-export function OidcSettingsCard() {
+/**
+ * The two collaborators default to the real API layer, so callers render
+ * `<OidcSettingsCard />` unchanged. They are props so a test can drive the card
+ * with an in-memory config instead of reaching through its imports.
+ */
+export function OidcSettingsCard({
+  loadConfig = getVaultConfig,
+  saveConfig = updateVaultConfig,
+}: {
+  loadConfig?: () => Promise<OidcConfig>;
+  saveConfig?: (payload: OidcConfigUpdate) => Promise<OidcConfig>;
+} = {}) {
   const [draft, setDraft] = useState<OidcDraft>(EMPTY);
   const [clientSecret, setClientSecret] = useState("");
   const [hasClientSecret, setHasClientSecret] = useState(false);
@@ -65,7 +82,7 @@ export function OidcSettingsCard() {
 
   useEffect(() => {
     let alive = true;
-    getVaultConfig()
+    loadConfig()
       .then((config) => {
         if (!alive) return;
         setDraft({
@@ -89,7 +106,7 @@ export function OidcSettingsCard() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [loadConfig]);
 
   function set<K extends keyof OidcDraft>(key: K, value: OidcDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -102,10 +119,10 @@ export function OidcSettingsCard() {
     }
     setSaving(true);
     try {
-      const payload: VaultConfigUpdate = { ...draft };
+      const payload: OidcConfigUpdate = { ...draft };
       if (clientSecret) payload.oidc_client_secret = clientSecret;
       else if (clearClientSecret) payload.oidc_client_secret = "";
-      const config = await updateVaultConfig(payload);
+      const config = await saveConfig(payload);
       setHasClientSecret(config.has_oidc_client_secret);
       setClientSecret("");
       setClearClientSecret(false);

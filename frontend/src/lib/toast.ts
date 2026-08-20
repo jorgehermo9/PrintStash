@@ -22,9 +22,9 @@ import { userMessage, parseApiError } from "@/lib/errors";
 
 export const toast = {
   /** Show a red error toast with a description parsed from the thrown value. */
-  error(raw: unknown): void {
-    const msg = userMessage(raw);
-    console.debug("PrintStash API error", parseApiError(raw));
+  error(cause: unknown): void {
+    const msg = userMessage(cause);
+    console.debug("PrintStash API error", parseApiError(cause));
     sonner.error(msg, { duration: 6000 });
   },
 

@@ -56,7 +56,8 @@ export function StorageConfigCard() {
   }, []);
 
   useEffect(() => {
-    load();
+    // oxlint-disable-next-line react/set-state-in-effect -- load() is async: every setState runs after `await getVaultConfig()`, i.e. from the fetch continuation, so nothing is set synchronously during this effect. The rule inlines the useCallback body and cannot see the await boundary.
+    void load();
   }, [load]);
 
   const save = useCallback(async () => {

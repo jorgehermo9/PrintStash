@@ -63,7 +63,7 @@ test("bulk upload waits for three terminal jobs and loads every WebP", async ({ 
     const image = modelCard(page, name).getByRole("img", { name });
     await expect(image).toBeVisible({ timeout: 60_000 });
     await expect
-      .poll(() => image.evaluate((node) => (node as HTMLImageElement).naturalWidth))
+      .poll(() => image.evaluate<number, HTMLImageElement>((node) => node.naturalWidth))
       .toBeGreaterThan(0);
   }
   expect(thumbnailResponses.length).toBeGreaterThanOrEqual(3);

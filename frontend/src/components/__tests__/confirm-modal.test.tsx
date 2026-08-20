@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
-import { ConfirmModal } from "@/components/ui/confirm-modal";
+import { ConfirmModal, type ConfirmModalProps } from "@/components/ui/confirm-modal";
 import { I18nProvider } from "@/lib/i18n";
 
 it("fully localizes and labels a destructive confirmation dialog", () => {
@@ -11,8 +11,8 @@ it("fully localizes and labels a destructive confirmation dialog", () => {
     <I18nProvider>
       <ConfirmModal
         open
-        onClose={vi.fn()}
-        onConfirm={vi.fn()}
+        onClose={vi.fn<ConfirmModalProps["onClose"]>()}
+        onConfirm={vi.fn<ConfirmModalProps["onConfirm"]>()}
         title="Permanently delete?"
         description="This will delete the model and all its files immediately. This cannot be undone."
         confirmLabel="Delete forever"

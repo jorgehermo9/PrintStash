@@ -299,7 +299,7 @@ const snapshot = {
   webhooks: { state: "ready", state_message: "Printer is ready" },
 };
 
-function sendJson(res: ServerResponse, body: unknown, status = 200): void {
+function sendJson<T>(res: ServerResponse, body: T, status = 200): void {
   res.writeHead(status, {
     "content-type": "application/json",
     "access-control-allow-origin": "*",

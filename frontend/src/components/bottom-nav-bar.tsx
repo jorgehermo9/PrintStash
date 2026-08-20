@@ -66,21 +66,16 @@ export function BottomNavBar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  // The sheet remembers which route it was opened on, so navigating away closes
+  // it by derivation instead of by an after-the-fact effect.
+  const [openedOnPath, setOpenedOnPath] = useState<string | null>(null);
+  const moreOpen = openedOnPath === pathname;
+  const [tasks, setTasks] = useState<TaskItem[]>(listTasks);
   const [pendingImports, setPendingImports] = useState(0);
 
   const visibleItems = NAV_ITEMS.filter((item) => !item.adminOnly || user?.is_superuser);
 
-  // Close the sheet on navigation.
-  useEffect(() => {
-    setMoreOpen(false);
-  }, [pathname]);
-
-  useEffect(() => {
-    setTasks(listTasks());
-    return subscribeTasks(() => setTasks(listTasks()));
-  }, []);
+  useEffect(() => subscribeTasks(() => setTasks(listTasks())), []);
 
   useEffect(() => {
     let active = true;
@@ -104,7 +99,7 @@ export function BottomNavBar() {
 
   async function handleLogout() {
     await logout();
-    setMoreOpen(false);
+    setOpenedOnPath(null);
     router.push("/login");
   }
 
@@ -121,7 +116,7 @@ export function BottomNavBar() {
         ))}
         <button
           type="button"
-          onClick={() => setMoreOpen(true)}
+          onClick={() => setOpenedOnPath(pathname)}
           aria-label={t("nav.more")}
           aria-expanded={moreOpen}
           aria-current={moreActive ? "page" : undefined}
@@ -143,7 +138,7 @@ export function BottomNavBar() {
           setTasks(listTasks());
         }}
         onLogout={user ? handleLogout : undefined}
-        onClose={() => setMoreOpen(false)}
+        onClose={() => setOpenedOnPath(null)}
       />
     </>
   );

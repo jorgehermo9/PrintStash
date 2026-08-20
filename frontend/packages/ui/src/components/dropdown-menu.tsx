@@ -36,7 +36,9 @@ export function DropdownMenu({
   useEffect(() => {
     if (!open) return;
     function onPointerDown(e: PointerEvent) {
-      if (!wrapperRef.current?.contains(e.target as Node)) onOpenChange(false);
+      const target = e.target;
+      if (target instanceof Node && wrapperRef.current?.contains(target)) return;
+      onOpenChange(false);
     }
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
@@ -64,7 +66,7 @@ export function DropdownMenu({
     );
     if (items.length === 0) return;
     e.preventDefault();
-    const current = items.indexOf(document.activeElement as HTMLElement);
+    const current = items.findIndex((item) => item === document.activeElement);
     const next =
       e.key === "Home"
         ? 0

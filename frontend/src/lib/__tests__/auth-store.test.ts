@@ -15,7 +15,7 @@ describe("session expiry", () => {
   });
 
   it("expires an established session once across concurrent 401 responses", () => {
-    const listener = vi.fn();
+    const listener = vi.fn<() => void>();
     const off = onUnauthorized(listener);
     storeLogin("expired-token", {
       id: 1,

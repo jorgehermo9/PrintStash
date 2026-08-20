@@ -40,7 +40,7 @@ import type { SetupStatus } from "@/types";
 
 type Step = 1 | 2;
 
-const SETUP_ERROR_MESSAGES: Record<string, string> = {
+const SETUP_ERROR_MESSAGES = {
   already_configured: "This vault has already been set up. Redirecting to sign in.",
   users_already_exist:
     "A user already exists in this vault. Sign in with an existing account instead.",
@@ -65,19 +65,38 @@ const SETUP_ERROR_MESSAGES: Record<string, string> = {
   s3_bucket_required: "S3/R2 storage needs a bucket name.",
   invalid_setup_token:
     "That setup token is not valid. Copy the current token from the API container logs.",
-};
+} satisfies Record<string, string>;
+
+/** A setup failure code the backend can return that we have prose for. */
+type SetupErrorCode = keyof typeof SETUP_ERROR_MESSAGES;
+
+function isSetupErrorCode(code: string): code is SetupErrorCode {
+  return Object.hasOwn(SETUP_ERROR_MESSAGES, code);
+}
 
 function humanizeError(raw: string): string {
   // api.ts wraps errors as "HTTP <code>: <body>" where the body for FastAPI
   // HTTPException is typically '{"detail":"<code>"}'. Extract the code.
   const match = raw.match(/"detail"\s*:\s*"([^"]+)"/);
   const code = match?.[1];
-  if (code && SETUP_ERROR_MESSAGES[code]) return SETUP_ERROR_MESSAGES[code];
+  if (code && isSetupErrorCode(code)) return SETUP_ERROR_MESSAGES[code];
   if (code) return code.replace(/_/g, " ");
   return raw;
 }
 
-export default function SetupPage() {
+/**
+ * The setup endpoints and the login store the wizard writes to. Injectable so a test
+ * can drive the wizard with fakes instead of replacing the modules underneath it.
+ */
+export interface SetupPageDeps {
+  getSetupStatus: typeof getSetupStatus;
+  completeSetup: typeof completeSetup;
+  storeLogin: typeof storeLogin;
+}
+
+const LIVE_DEPS: SetupPageDeps = { getSetupStatus, completeSetup, storeLogin };
+
+export default function SetupPage({ deps = LIVE_DEPS }: { deps?: SetupPageDeps }) {
   const router = useRouter();
 
   const [status, setStatus] = useState<SetupStatus | null>(null);
@@ -112,7 +131,8 @@ export default function SetupPage() {
 
   useEffect(() => {
     let cancelled = false;
-    getSetupStatus()
+    deps
+      .getSetupStatus()
       .then((s) => {
         if (cancelled) return;
         if (s.configured) {
@@ -138,7 +158,7 @@ export default function SetupPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [deps, router]);
 
   function validateStep1(): string | null {
     if (setupToken.trim().length < 16)
@@ -185,7 +205,7 @@ export default function SetupPage() {
     try {
       const trimmedData = dataDir.trim();
       const trimmedThumb = thumbDir.trim();
-      const res = await completeSetup({
+      const res = await deps.completeSetup({
         setup_token: setupToken.trim(),
         username: username.trim(),
         password,
@@ -218,7 +238,7 @@ export default function SetupPage() {
         email: email.trim() || null,
         is_superuser: true,
       };
-      storeLogin(res.access_token, stored);
+      deps.storeLogin(res.access_token, stored);
       router.replace("/");
     } catch (err: any) {
       setError(humanizeError(err?.message ?? "Setup failed."));

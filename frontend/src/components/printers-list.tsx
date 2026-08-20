@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { Link } from "@/lib/navigation";
-import { PrinterRead } from "@/types";
+import { PrinterRead, type PrinterCreate, type PrinterStatus } from "@/types";
 import { createPrinter, deletePrinter, updatePrinter } from "@/lib/api";
 import { usePrinterDashboard, usePrinters } from "@/lib/queries";
 import { toast } from "@/lib/toast";
@@ -45,23 +45,30 @@ import {
   Play,
 } from "lucide-react";
 
-const STATUS_COLORS: Record<string, string> = {
+// `satisfies` keeps the literal keys (so a status can't be misspelled here) while
+// still requiring every PrinterStatus to have an entry.
+const STATUS_COLORS = {
   ready: "bg-emerald-500",
   printing: "bg-primary",
   paused: "bg-amber-500",
   offline: "bg-slate-400",
   unknown: "bg-slate-400",
   error: "bg-red-600",
-};
+} satisfies Record<PrinterStatus, string>;
 
-const STATUS_PRIORITY: Record<string, number> = {
+const STATUS_PRIORITY = {
   printing: 0,
   paused: 1,
   error: 2,
   offline: 3,
   ready: 4,
   unknown: 5,
-};
+} satisfies Record<PrinterStatus, number>;
+
+/** Resolve a <select> value back to the setup kind it was rendered from. */
+function parseSetupKind(value: string): PrinterSetupKind | null {
+  return PRINTER_SETUP_OPTIONS.find((option) => option.value === value)?.value ?? null;
+}
 
 export function PrintersPage() {
   const { user } = useAuth();
@@ -725,50 +732,44 @@ function AddPrinterModal({ onClose, onCreated }: { onClose: () => void; onCreate
     setSubmitting(true);
     setErr(null);
     try {
-      await createPrinter({
+      // Only the chosen provider's credentials are sent; each branch adds the
+      // fields that provider actually has.
+      const payload: PrinterCreate = {
         name: name.trim(),
         ...setupProviderFields(setupKind),
-        ...(setupKind === "moonraker" || setupKind === "elegoo_neptune4"
-          ? {
-              moonraker_url: url.trim(),
-              api_key: moonrakerKey || undefined,
-            }
-          : {}),
-        ...(setupKind === "bambu_lan"
-          ? {
-              bambu_host: url.trim(),
-              bambu_serial: bambuSerial.trim(),
-              bambu_access_code: bambuAccessCode,
-            }
-          : {}),
-        ...(setupKind === "prusalink"
-          ? {
-              prusalink_url: url.trim(),
-              prusalink_auth_mode: prusaAuthMode,
-              prusalink_username: prusaAuthMode === "digest" ? prusaUsername.trim() : undefined,
-              prusalink_password: prusaAuthMode === "digest" ? prusaSecret : undefined,
-              prusalink_api_key: prusaAuthMode === "api_key" ? prusaSecret : undefined,
-            }
-          : {}),
-        ...(setupKind === "elegoo_centauri_carbon" || setupKind === "elegoo_centauri_carbon_2"
-          ? {
-              elegoo_centauri_host: url.trim(),
-              elegoo_centauri_access_code:
-                setupKind === "elegoo_centauri_carbon_2" ? centauriAccessCode : undefined,
-              elegoo_centauri_mainboard_id:
-                setupKind === "elegoo_centauri_carbon"
-                  ? centauriMainboardId.trim() || undefined
-                  : undefined,
-            }
-          : {}),
-        ...(setupKind === "octoprint"
-          ? {
-              octoprint_url: url.trim(),
-              octoprint_api_key: octoprintApiKey,
-            }
-          : {}),
         notes: notes || undefined,
-      });
+      };
+      if (setupKind === "moonraker" || setupKind === "elegoo_neptune4") {
+        payload.moonraker_url = url.trim();
+        payload.api_key = moonrakerKey || undefined;
+      } else if (setupKind === "bambu_lan") {
+        payload.bambu_host = url.trim();
+        payload.bambu_serial = bambuSerial.trim();
+        payload.bambu_access_code = bambuAccessCode;
+      } else if (setupKind === "prusalink") {
+        payload.prusalink_url = url.trim();
+        payload.prusalink_auth_mode = prusaAuthMode;
+        if (prusaAuthMode === "digest") {
+          payload.prusalink_username = prusaUsername.trim();
+          payload.prusalink_password = prusaSecret;
+        } else {
+          payload.prusalink_api_key = prusaSecret;
+        }
+      } else if (
+        setupKind === "elegoo_centauri_carbon" ||
+        setupKind === "elegoo_centauri_carbon_2"
+      ) {
+        payload.elegoo_centauri_host = url.trim();
+        if (setupKind === "elegoo_centauri_carbon_2") {
+          payload.elegoo_centauri_access_code = centauriAccessCode;
+        } else {
+          payload.elegoo_centauri_mainboard_id = centauriMainboardId.trim() || undefined;
+        }
+      } else if (setupKind === "octoprint") {
+        payload.octoprint_url = url.trim();
+        payload.octoprint_api_key = octoprintApiKey;
+      }
+      await createPrinter(payload);
       toast.success(`Printer "${name.trim()}" added`);
       onCreated();
     } catch (e: unknown) {
@@ -815,7 +816,9 @@ function AddPrinterModal({ onClose, onCreated }: { onClose: () => void; onCreate
               id="printer-integration"
               value={setupKind}
               onChange={(e) => {
-                setSetupKind(e.target.value as PrinterSetupKind);
+                const kind = parseSetupKind(e.target.value);
+                if (kind === null) return;
+                setSetupKind(kind);
                 setUrl("");
               }}
               className="w-full bg-background text-foreground text-sm border border-border rounded px-3 py-[7px]"
@@ -931,7 +934,7 @@ function AddPrinterModal({ onClose, onCreated }: { onClose: () => void; onCreate
                   id="prusalink-auth"
                   value={prusaAuthMode}
                   onChange={(e) => {
-                    setPrusaAuthMode(e.target.value as "digest" | "api_key");
+                    setPrusaAuthMode(e.target.value === "api_key" ? "api_key" : "digest");
                     setPrusaSecret("");
                   }}
                   className="w-full bg-background text-foreground text-sm border border-border rounded px-3 py-[7px]"

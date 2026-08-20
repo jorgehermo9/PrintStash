@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import ts from "typescript";
+import { parseSync, Visitor } from "oxc-parser";
 import { expect, it } from "vitest";
 
 import { hasUiTranslation } from "@/components/ui/localized";
@@ -67,31 +67,25 @@ const TRANSLATABLE_ATTRIBUTES = new Set([
 ]);
 
 function uiLiterals(file: string): string[] {
-  const source = ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX,
-  );
+  const parsed = parseSync(file, readFileSync(file, "utf8"), { lang: "tsx" });
   const values = new Set<string>();
   const add = (value: string) => {
     const normalized = value.replace(/\s+/g, " ").trim();
     if (normalized.length > 1 && /[A-Za-z]/.test(normalized)) values.add(normalized);
   };
-  const visit = (node: ts.Node) => {
-    if (ts.isJsxText(node)) add(node.getText(source));
-    if (
-      ts.isJsxAttribute(node) &&
-      ts.isIdentifier(node.name) &&
-      TRANSLATABLE_ATTRIBUTES.has(node.name.text) &&
-      node.initializer &&
-      ts.isStringLiteral(node.initializer)
-    )
-      add(node.initializer.text);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
+  new Visitor({
+    JSXText(node) {
+      // Raw source text, so HTML entities stay encoded and match the catalog keys.
+      add(node.raw ?? node.value);
+    },
+    JSXAttribute(node) {
+      if (node.name.type !== "JSXIdentifier") return;
+      if (!TRANSLATABLE_ATTRIBUTES.has(node.name.name)) return;
+      // `JSXAttributeValue` narrows `"Literal"` to `StringLiteral`, so `value` is a string.
+      if (node.value?.type !== "Literal") return;
+      add(node.value.value);
+    },
+  }).visit(parsed.program);
   return [...values];
 }
 

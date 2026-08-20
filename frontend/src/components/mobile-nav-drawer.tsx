@@ -2,7 +2,17 @@
 
 import { Link } from "@/lib/navigation";
 import { usePathname } from "@/lib/navigation";
-import { Box, SlidersHorizontal, LogIn, LogOut, Printer, Settings, User, X } from "lucide-react";
+import {
+  Box,
+  SlidersHorizontal,
+  LogIn,
+  LogOut,
+  Printer,
+  Settings,
+  User,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { BrandMark } from "@/components/brand-mark";
 import { Drawer } from "@/components/ui/drawer";
@@ -13,13 +23,20 @@ interface MobileNavDrawerProps {
   onClose: () => void;
 }
 
-const mainItems = [
+type NavItem = {
+  href: string;
+  labelKey: MessageKey;
+  icon: LucideIcon;
+  adminOnly?: boolean;
+};
+
+const mainItems: NavItem[] = [
   { href: "/", labelKey: "nav.vault", icon: Box },
   { href: "/printers", labelKey: "nav.printers", icon: Printer, adminOnly: true },
   { href: "/profiles", labelKey: "nav.profiles", icon: SlidersHorizontal },
 ];
 
-const bottomItems = [{ href: "/settings", labelKey: "nav.settings", icon: Settings }];
+const bottomItems: NavItem[] = [{ href: "/settings", labelKey: "nav.settings", icon: Settings }];
 
 export function MobileNavDrawer({ open, onClose }: MobileNavDrawerProps) {
   const pathname = usePathname();
@@ -69,9 +86,7 @@ export function MobileNavDrawer({ open, onClose }: MobileNavDrawerProps) {
               }`}
             >
               <item.icon className="h-5 w-5" />
-              <span className="font-mono text-xs tracking-wider uppercase">
-                {t(item.labelKey as MessageKey)}
-              </span>
+              <span className="font-mono text-xs tracking-wider uppercase">{t(item.labelKey)}</span>
             </Link>
           );
         })}
@@ -127,9 +142,7 @@ export function MobileNavDrawer({ open, onClose }: MobileNavDrawerProps) {
               }`}
             >
               <item.icon className="h-5 w-5" />
-              <span className="font-mono text-xs tracking-wider uppercase">
-                {t(item.labelKey as MessageKey)}
-              </span>
+              <span className="font-mono text-xs tracking-wider uppercase">{t(item.labelKey)}</span>
             </Link>
           );
         })}

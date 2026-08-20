@@ -27,6 +27,89 @@ type DragPayload =
   | { type: "model"; model: OutlinerModelRead }
   | { type: "collection"; collection: CollectionRead };
 
+/** Data every collection drop target in this sidebar registers with dnd-kit. */
+interface CollectionDropData {
+  /** Destination collection, or null for the "All Models" root. */
+  collectionPath: string | null;
+  collectionId: number | null;
+  collectionParentId?: number | null;
+}
+
+/**
+ * The payload of the drag in flight, or null when dnd-kit reports no active
+ * data. dnd-kit types `data.current` as an open bag, so it is narrowed back
+ * here — once — instead of at every read.
+ */
+function activeDragPayload(event: DragStartEvent | DragEndEvent): DragPayload | null {
+  const data = event.active.data.current;
+  if (data === undefined) return null;
+  // SAFETY: the only `useDraggable` calls in this file are DraggableModelLeaf
+  // and the collection row, and both build their `data` with
+  // `satisfies DragPayload`, so an active drag always carries one variant.
+  return data as DragPayload;
+}
+
+/**
+ * The collection under the pointer, or null when the drag ended outside one of
+ * this sidebar's drop targets.
+ */
+function collectionDropTarget(event: DragEndEvent): CollectionDropData | null {
+  const data = event.over?.data.current;
+  if (data === undefined || !("collectionPath" in data)) return null;
+  // SAFETY: `collectionPath` is registered by exactly two `useDroppable` calls
+  // in this file — a collection row and the "All Models" root — and both build
+  // their `data` with `satisfies CollectionDropData`.
+  return data as CollectionDropData;
+}
+
+const EXPANDED_KEY = "ps-filter-expanded";
+const ALL_EXPANDED_KEY = "ps-filter-all-expanded";
+
+/** The expanded collection paths persisted this session, or null if none are. */
+function readExpandedPaths(): Set<string> | null {
+  try {
+    const saved = sessionStorage.getItem(EXPANDED_KEY);
+    if (!saved) return null;
+    const parsed: unknown = JSON.parse(saved);
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Is the "All Models" group expanded? Open unless this session closed it. */
+function readAllModelsExpanded(): boolean {
+  try {
+    return sessionStorage.getItem(ALL_EXPANDED_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * First-visit expansion: open every collection that has children or models, so
+ * a fresh session doesn't start fully collapsed.
+ */
+function autoExpandedPaths(
+  collections: CollectionRead[],
+  modelsByCollection: ReadonlyMap<string, OutlinerModelRead[]>,
+): Set<string> {
+  const expanded = new Set<string>();
+  const parentIds = new Set(collections.map((c) => c.parent_id).filter((id) => id != null));
+  for (const collection of collections) {
+    if (parentIds.has(collection.id) || modelsByCollection.has(collection.path)) {
+      expanded.add(collection.path);
+    }
+  }
+  return expanded;
+}
+
+/** The paths that must be open for `path` to be visible in the tree. */
+function ancestorPaths(path: string): string[] {
+  const parts = path.split("/");
+  return parts.slice(1).map((_, index) => parts.slice(0, index + 1).join("/"));
+}
+
 function buildTree(cats: CollectionRead[]): CollectionNode[] {
   const byId = new Map<number, CollectionNode>();
   for (const c of cats) byId.set(c.id, { cat: c, children: [] });
@@ -125,7 +208,7 @@ function CollectionTreeRow({
       collectionPath: node.cat.path,
       collectionId: node.cat.id,
       collectionParentId: node.cat.parent_id,
-    },
+    } satisfies CollectionDropData,
   });
 
   const rowRef = (el: HTMLDivElement | null) => {
@@ -345,7 +428,7 @@ function DroppableAllModels({
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: "collection-root",
-    data: { collectionPath: null, collectionId: null },
+    data: { collectionPath: null, collectionId: null } satisfies CollectionDropData,
   });
 
   const displayModels = visibleModelIds
@@ -508,21 +591,14 @@ export function FilterSidebarContent({
     [models],
   );
 
-  const autoExpandDoneRef = useRef(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    try {
-      const saved = sessionStorage.getItem("ps-filter-expanded");
-      if (saved) return new Set(JSON.parse(saved));
-    } catch {}
-    return new Set();
+    const initial = readExpandedPaths() ?? autoExpandedPaths(collections, modelsByCollection);
+    if (selectedCollection) {
+      for (const ancestor of ancestorPaths(selectedCollection)) initial.add(ancestor);
+    }
+    return initial;
   });
-  const [allModelsExpanded, setAllModelsExpanded] = useState(() => {
-    try {
-      const saved = sessionStorage.getItem("ps-filter-all-expanded");
-      if (saved !== null) return JSON.parse(saved) as boolean;
-    } catch {}
-    return true;
-  });
+  const [allModelsExpanded, setAllModelsExpanded] = useState(readAllModelsExpanded);
   const [tagFilter, setTagFilter] = useState("");
   const [showAllTags, setShowAllTags] = useState(false);
   const [printerExpanded, setPrinterExpanded] = useState(false);
@@ -540,50 +616,27 @@ export function FilterSidebarContent({
   const hiddenCount = filteredTags.length - 10;
 
   useEffect(() => {
-    if (autoExpandDoneRef.current) return;
     try {
-      if (sessionStorage.getItem("ps-filter-expanded")) {
-        autoExpandDoneRef.current = true;
-        return;
-      }
-    } catch {}
-    if (collections.length === 0) return;
-    autoExpandDoneRef.current = true;
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      const parentIds = new Set(collections.map((c) => c.parent_id).filter((id) => id != null));
-      for (const collection of collections) {
-        if (parentIds.has(collection.id) || modelsByCollection.has(collection.path)) {
-          next.add(collection.path);
-        }
-      }
-      return next;
-    });
-  }, [collections, modelsByCollection]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem("ps-filter-expanded", JSON.stringify([...expanded]));
+      sessionStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded]));
     } catch {}
   }, [expanded]);
 
   useEffect(() => {
     try {
-      sessionStorage.setItem("ps-filter-all-expanded", JSON.stringify(allModelsExpanded));
+      sessionStorage.setItem(ALL_EXPANDED_KEY, JSON.stringify(allModelsExpanded));
     } catch {}
   }, [allModelsExpanded]);
 
-  useEffect(() => {
-    if (!selectedCollection) return;
-    const parts = selectedCollection.split("/");
-    const ancestors = new Set<string>();
-    for (let i = 1; i < parts.length; i++) ancestors.add(parts.slice(0, i).join("/"));
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      ancestors.forEach((a) => next.add(a));
-      return next;
-    });
-  }, [selectedCollection]);
+  // Selecting a nested collection reveals it: open its ancestors as the
+  // selection changes, rather than re-syncing from an effect.
+  const [revealedSelection, setRevealedSelection] = useState(selectedCollection);
+  if (revealedSelection !== selectedCollection) {
+    setRevealedSelection(selectedCollection);
+    if (selectedCollection) {
+      const ancestors = ancestorPaths(selectedCollection);
+      setExpanded((prev) => new Set([...prev, ...ancestors]));
+    }
+  }
 
   function toggleTag(slug: string) {
     if (selectedTags.includes(slug)) onTagsChange(selectedTags.filter((t) => t !== slug));
@@ -600,20 +653,17 @@ export function FilterSidebarContent({
   }
 
   function handleDragStart(event: DragStartEvent) {
-    setDragging(event.active.data.current as DragPayload);
+    setDragging(activeDragPayload(event));
   }
 
   function handleDragEnd(event: DragEndEvent) {
     setDragging(null);
-    const payload = event.active.data.current as DragPayload | undefined;
-    if (!payload || !event.over) return;
+    const payload = activeDragPayload(event);
+    const target = collectionDropTarget(event);
+    if (!payload || !target) return;
 
-    const targetCollectionPath = event.over.data.current?.collectionPath as
-      | string
-      | null
-      | undefined;
-    const targetCollectionId = event.over.data.current?.collectionId as number | null | undefined;
-    if (targetCollectionPath === undefined) return;
+    const targetCollectionPath = target.collectionPath;
+    const targetCollectionId = target.collectionId;
 
     if (payload.type === "model") {
       if (targetCollectionPath === (payload.model.collection ?? null)) return;

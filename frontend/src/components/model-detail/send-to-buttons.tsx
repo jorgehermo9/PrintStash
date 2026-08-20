@@ -33,12 +33,42 @@ import { ConfirmModal } from "@/components/ui/confirm-modal";
 const selectClassName =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
+/** Decode a `<select>` value into the routing strategy it names, or nothing. */
+function parseRoutingStrategy(value: string): RoutingStrategy | null {
+  return value === "manual" || value === "default" || value === "least_busy" ? value : null;
+}
+
+/** Decode a `<select>` value into the queue priority it names, or nothing. */
+function parseJobPriority(value: string): JobPriority | null {
+  return value === "low" || value === "normal" || value === "rush" ? value : null;
+}
+
+/**
+ * The four fleet commands this panel issues. Named as a seam so a test can
+ * drive the panel and observe the submitted payload without a network; app
+ * code never passes it and gets the real API client.
+ */
+export interface SendToCommands {
+  checkFleetCompatibility: typeof checkFleetCompatibility;
+  createFleetBatch: typeof createFleetBatch;
+  enqueueFleetJob: typeof enqueueFleetJob;
+  sendToPrinter: typeof sendToPrinter;
+}
+
+const API_COMMANDS: SendToCommands = {
+  checkFleetCompatibility,
+  createFleetBatch,
+  enqueueFleetJob,
+  sendToPrinter,
+};
+
 export function SendToButtons({
   gcodeFiles,
   printerFiles,
   open,
   onOpenChange,
   preselectFileId,
+  commands = API_COMMANDS,
 }: {
   gcodeFiles: Pick<
     FileRead,
@@ -54,6 +84,7 @@ export function SendToButtons({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   preselectFileId?: number;
+  commands?: SendToCommands;
 }) {
   const auth = useRequireAuth();
   const { user } = useAuth();
@@ -154,7 +185,7 @@ export function SendToButtons({
         : [];
     if (!allowMismatch && targetPrinterIds.length > 0) {
       try {
-        const report = await checkFleetCompatibility(selectedFile, targetPrinterIds);
+        const report = await commands.checkFleetCompatibility(selectedFile, targetPrinterIds);
         setCompatibility(report);
         if (
           report.printers.some((row) => row.verdict === "mismatch") &&
@@ -188,15 +219,17 @@ export function SendToButtons({
           target_group: targetGroup.trim() || null,
           compatibility_policy: allowMismatch ? ("allow_mismatch" as const) : ("safe" as const),
         };
-        if (quantity > 1)
-          await createFleetBatch({
-            ...payload,
-            quantity,
-            ...(routingStrategy === "manual"
-              ? {}
-              : { spool_id: null, spool_name: null, spool_filament_id: null }),
-          });
-        else await enqueueFleetJob(payload);
+        if (quantity > 1) {
+          const batch = { ...payload, quantity };
+          // An auto-routed batch spreads copies over printers the user never
+          // picked, so a spool chosen for one of them cannot travel with it.
+          if (routingStrategy !== "manual") {
+            batch.spool_id = null;
+            batch.spool_name = null;
+            batch.spool_filament_id = null;
+          }
+          await commands.createFleetBatch(batch);
+        } else await commands.enqueueFleetJob(payload);
         setShowSend(false);
         toast.success(quantity > 1 ? `Created ${quantity}-copy batch` : "Added to fleet queue");
       } catch (e: any) {
@@ -226,10 +259,10 @@ export function SendToButtons({
         selectedPrinters.map(async (printer) => {
           const spool =
             selectedSpoolId !== "" ? spools.find((s) => s.id === selectedSpoolId) : undefined;
-          const job = await sendToPrinter(printer.id, {
+          const job = await commands.sendToPrinter(printer.id, {
             file_id: selectedFile,
             start_print: startPrint,
-            spool_id: selectedSpoolId === "" ? null : (selectedSpoolId as number),
+            spool_id: selectedSpoolId === "" ? null : selectedSpoolId,
             spool_name: spool ? spool.filament_name || spool.name || `Spool ${spool.id}` : null,
             spool_filament_id: spool ? spool.filament_id : null,
             compatibility_policy: allowMismatch ? "allow_mismatch" : "safe",
@@ -470,7 +503,10 @@ export function SendToButtons({
                   Routing
                   <select
                     value={routingStrategy}
-                    onChange={(event) => setRoutingStrategy(event.target.value as RoutingStrategy)}
+                    onChange={(event) => {
+                      const strategy = parseRoutingStrategy(event.target.value);
+                      if (strategy) setRoutingStrategy(strategy);
+                    }}
                     className={selectClassName}
                   >
                     {user?.is_superuser && (
@@ -495,7 +531,10 @@ export function SendToButtons({
                   <select
                     className={selectClassName}
                     value={priority}
-                    onChange={(event) => setPriority(event.target.value as JobPriority)}
+                    onChange={(event) => {
+                      const next = parseJobPriority(event.target.value);
+                      if (next) setPriority(next);
+                    }}
                   >
                     <option value="low">Low</option>
                     <option value="normal">Normal</option>

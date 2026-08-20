@@ -26,21 +26,27 @@ function item(name: string, relPath = "", size = 4): BulkItem {
   return { file: makeFile(name, "", size), relPath };
 }
 
-function fileEntry(fullPath: string): FileSystemEntry {
+function fileEntry(fullPath: string): FileSystemFileEntry {
   const name = fullPath.split("/").pop() ?? "";
+  // SAFETY: walkEntry reads only isFile/isDirectory/fullPath/name and invokes
+  // file(resolve); it never touches `filesystem` or `getParent`, the two
+  // members of the DOM interface this literal omits.
   return {
     isFile: true,
     isDirectory: false,
     fullPath,
     name,
     file: (resolve: (f: File) => void) => resolve(makeFile(name)),
-  } as unknown as FileSystemEntry;
+  } as FileSystemFileEntry;
 }
 
 // Directory whose reader yields `batches` in sequence, then an empty batch —
 // exercising the "keep reading until drained" loop.
-function dirEntry(fullPath: string, batches: FileSystemEntry[][]): FileSystemEntry {
+function dirEntry(fullPath: string, batches: FileSystemEntry[][]): FileSystemDirectoryEntry {
   let i = 0;
+  // SAFETY: walkEntry reads only isFile/isDirectory/fullPath/name and calls
+  // createReader().readEntries(resolve); `filesystem`, `getParent`, `getFile`
+  // and `getDirectory` are never reached, so omitting them is safe.
   return {
     isFile: false,
     isDirectory: true,
@@ -51,7 +57,7 @@ function dirEntry(fullPath: string, batches: FileSystemEntry[][]): FileSystemEnt
         resolve(i < batches.length ? batches[i++] : []);
       },
     }),
-  } as unknown as FileSystemEntry;
+  } as FileSystemDirectoryEntry;
 }
 
 // --- extensionOf ---------------------------------------------------------
@@ -183,7 +189,7 @@ describe("entriesFromDataTransfer", () => {
       { webkitGetAsEntry: () => a },
       { webkitGetAsEntry: () => null },
       {}, // no webkitGetAsEntry at all
-    ] as unknown as DataTransferItemList;
+    ];
     expect(entriesFromDataTransfer(fakeList)).toEqual([a]);
   });
 });

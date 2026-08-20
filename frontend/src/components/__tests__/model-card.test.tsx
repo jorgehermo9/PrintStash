@@ -1,20 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it } from "vitest";
 
 import { ModelCard } from "@/components/model-card";
 import type { ModelListItem } from "@/types";
-
-vi.mock("@/lib/navigation", () => ({
-  Link: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a {...props}>{children}</a>
-  ),
-  useRouter: () => ({ prefetch: vi.fn() }),
-}));
-
-vi.mock("@/lib/use-authenticated-asset-url", () => ({
-  useAuthenticatedAssetUrl: () => null,
-}));
 
 const model: ModelListItem = {
   id: 1,
@@ -38,7 +28,14 @@ const model: ModelListItem = {
 
 describe("model card revision badge", () => {
   it("shows revision status alongside a custom revision label", () => {
-    render(<ModelCard model={model} />);
+    // The card links to the model detail route and prefetches it on hover, so
+    // it needs a real router; `thumbnail_url: null` keeps the thumbnail hook
+    // from touching the network.
+    render(
+      <MemoryRouter>
+        <ModelCard model={model} />
+      </MemoryRouter>,
+    );
 
     expect(screen.getByLabelText("Revision status: Needs Test; label: a")).toHaveTextContent(
       "Needs Test·a",

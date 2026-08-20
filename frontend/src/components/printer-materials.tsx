@@ -14,15 +14,25 @@ import { Skeleton } from "@/components/ui/skeleton";
 const selectClassName =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
+/** Whether a manual feed is loaded with filament, known empty, or unreported. */
+type SlotState = "loaded" | "empty" | "unknown";
+
 type DraftSlot = {
   slot_key: string;
   label: string;
-  state: "loaded" | "empty" | "unknown";
+  state: SlotState;
   material_type: string;
   material_brand: string;
   color_hex: string;
   spool_id: number | null;
 };
+
+/** Decode the `<select>` value back into the feed state; anything else is unreported. */
+function parseSlotState(value: string): SlotState {
+  if (value === "loaded") return "loaded";
+  if (value === "empty") return "empty";
+  return "unknown";
+}
 
 function sourceLabel(slot: MaterialSlotRead): string {
   if (slot.stale) return "stale · treated as unknown";
@@ -247,7 +257,7 @@ export function PrinterMaterials({ printer }: { printer: PrinterRead }) {
                   className={selectClassName}
                   value={slot.state}
                   onChange={(event) =>
-                    patchSlot(index, { state: event.target.value as DraftSlot["state"] })
+                    patchSlot(index, { state: parseSlotState(event.target.value) })
                   }
                   disabled={!printer.access.can_print}
                 >

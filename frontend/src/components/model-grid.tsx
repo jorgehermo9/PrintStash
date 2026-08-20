@@ -10,6 +10,7 @@ import {
   ModelBatchResult,
   ModelListItem,
   ModelSort,
+  PrintJobState,
   PrinterRead,
   SavedViewRead,
   TagRead,
@@ -111,17 +112,87 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "cost-asc", label: "Lowest cost" },
 ];
 
+// Every model filter that lives in the URL as a repeated query parameter.
+const STRUCTURED_FILTER_KEYS = [
+  "file_type",
+  "material_type",
+  "slicer_name",
+  "printer_model",
+  "revision_status",
+  "print_outcome",
+  "storage",
+  "printed",
+] as const;
+type StructuredFilterKey = (typeof STRUCTURED_FILTER_KEYS)[number];
+
+const RECENT_FOLDERS_KEY = "ps-recent-folders";
+const RECENT_FOLDERS_LIMIT = 6;
+// A signed-out session has no saved views; a shared constant keeps the derived
+// list referentially stable across renders.
+const NO_SAVED_VIEWS: SavedViewRead[] = [];
+
+// The values each enum-valued filter accepts. The URL is user-editable, so a
+// `?file_type=nonsense` has to be dropped before it reaches a query.
+type StorageKind = NonNullable<ModelListFilters["storage"]>[number];
+const ARTIFACT_FILE_TYPES: readonly ArtifactFileType[] = ["stl", "3mf", "gcode", "obj", "step"];
+const FILE_REVISION_STATUSES: readonly FileRevisionStatus[] = [
+  "known_good",
+  "needs_test",
+  "failed",
+  "archived",
+];
+const PRINT_JOB_STATES: readonly PrintJobState[] = [
+  "queued",
+  "uploading",
+  "started",
+  "printing",
+  "paused",
+  "completed",
+  "cancelled",
+  "failed",
+];
+const STORAGE_KINDS: readonly StorageKind[] = ["vault", "external"];
+
+/** Keep the URL values the API recognises, in the order the URL listed them. */
+function parseFilterValues<T extends string>(values: string[], allowed: readonly T[]): T[] {
+  const parsed: T[] = [];
+  for (const value of values) {
+    const match = allowed.find((option) => option === value);
+    if (match !== undefined) parsed.push(match);
+  }
+  return parsed;
+}
+
 function readVaultPreference(key: string): string | null {
-  if (typeof window === "undefined") return null;
+  if (!("window" in globalThis)) return null;
   return localStorage.getItem(key);
 }
 
+/**
+ * The recent-folder list is a UI convenience written by this component. Paths are
+ * re-checked against the live collection list before they're offered (see
+ * `availableRecentFolders`), so decoding only has to survive edited JSON.
+ */
 function readRecentFolders(): string[] {
+  const raw = readVaultPreference(RECENT_FOLDERS_KEY);
+  if (raw === null) return [];
   try {
-    return JSON.parse(readVaultPreference("ps-recent-folders") ?? "[]") as string[];
+    const decoded: unknown = JSON.parse(raw);
+    return Array.isArray(decoded) ? decoded.map((entry) => String(entry)) : [];
   } catch {
     return [];
   }
+}
+
+function writeRecentFolders(paths: string[]): void {
+  if (!("window" in globalThis)) return;
+  localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(paths));
+}
+
+/** The remembered sort, resolved back to one of the options we render. */
+function readSortKey(): SortKey {
+  const stored = readVaultPreference("ps-vault-sort");
+  return SORT_OPTIONS.find((option) => option.value === stored)?.value ?? "date-desc";
 }
 
 function childCollections(
@@ -207,7 +278,9 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     },
   );
   const [favoritesOnly, setFavoritesOnly] = useState(searchParams.get("favorites") === "true");
-  const [savedViews, setSavedViews] = useState<SavedViewRead[]>([]);
+  const [loadedSavedViews, setLoadedSavedViews] = useState<SavedViewRead[]>([]);
+  // Saved views belong to an account, so a signed-out session simply has none.
+  const savedViews = auth.isAuthenticated ? loadedSavedViews : NO_SAVED_VIEWS;
   const [activeSavedViewId, setActiveSavedViewId] = useState<number | null>(null);
   const [saveViewOpen, setSaveViewOpen] = useState(false);
   const [saveViewName, setSaveViewName] = useState("");
@@ -215,9 +288,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   const [viewMode, setViewMode] = useState<ViewMode>(() =>
     readVaultPreference("ps-vault-view") === "list" ? "list" : "grid",
   );
-  const [sortKey, setSortKey] = useState<SortKey>(
-    () => (readVaultPreference("ps-vault-sort") as SortKey | null) ?? "date-desc",
-  );
+  const [sortKey, setSortKey] = useState<SortKey>(readSortKey);
   const [sortOpen, setSortOpen] = useState(false);
   const [displayOpen, setDisplayOpen] = useState(false);
   const [compact, setCompact] = useState(
@@ -232,6 +303,15 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     searchParams.get("v") === "docs" ? "docs" : readLastView(),
   );
   const [uploadOpen, setUploadOpen] = useState(false);
+  // `?upload=1` is a deep link into the upload dialog. Open it on the render that
+  // first sees the param; the effect below strips the param again so a reload (or
+  // a later deep link) behaves the same way.
+  const uploadRequested = searchParams.get("upload") === "1";
+  const [uploadDeepLinkSeen, setUploadDeepLinkSeen] = useState(false);
+  if (uploadDeepLinkSeen !== uploadRequested) {
+    setUploadDeepLinkSeen(uploadRequested);
+    if (uploadRequested) setUploadOpen(true);
+  }
   const [dropPreload, setDropPreload] = useState<{
     files: File[];
     items?: BulkItem[];
@@ -292,9 +372,9 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     setIsDragging(false);
     if (!canUploadToVault) return;
     const collPath =
-      (e.target as Element)
-        .closest("[data-collection-path]")
-        ?.getAttribute("data-collection-path") ?? null;
+      e.target instanceof Element
+        ? (e.target.closest("[data-collection-path]")?.getAttribute("data-collection-path") ?? null)
+        : null;
     const entries = entriesFromDataTransfer(e.dataTransfer.items);
     let bulkItems: BulkItem[] | undefined;
     let files: File[];
@@ -346,13 +426,10 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   }, [router, searchParams, selectedPrinterId, selectedPrinterPresence, selectedTags]);
 
   useEffect(() => {
-    if (!auth.isAuthenticated) {
-      setSavedViews([]);
-      return;
-    }
+    if (!auth.isAuthenticated) return;
     listSavedViews()
-      .then(setSavedViews)
-      .catch(() => setSavedViews([]));
+      .then(setLoadedSavedViews)
+      .catch(() => setLoadedSavedViews([]));
   }, [auth.isAuthenticated]);
 
   // Collection selection lives in the URL (`?c=<path>`) so it resets when the
@@ -362,20 +439,29 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // `keepPreviousData` holds the old cards on screen until the new page lands, so
   // there's no manual clearing or loading flash.
   const selectedCollection = searchParams.get("c") || null;
+  // Entering a folder pushes it onto the recent list on the render that first
+  // sees the new `?c=`, so the list is never a navigation behind the URL.
+  const [recordedCollection, setRecordedCollection] = useState<string | null>(null);
+  if (recordedCollection !== selectedCollection) {
+    setRecordedCollection(selectedCollection);
+    if (selectedCollection !== null)
+      setRecentFolders((current) =>
+        [selectedCollection, ...current.filter((item) => item !== selectedCollection)].slice(
+          0,
+          RECENT_FOLDERS_LIMIT,
+        ),
+      );
+  }
+
   useEffect(() => {
     // Remember the folder we're in so the logo / post-delete nav can return
     // here instead of resetting to the root once the `?c=` param is dropped.
     rememberLastCollection(selectedCollection);
-    if (selectedCollection)
-      setRecentFolders((current) => {
-        const next = [
-          selectedCollection,
-          ...current.filter((item) => item !== selectedCollection),
-        ].slice(0, 6);
-        localStorage.setItem("ps-recent-folders", JSON.stringify(next));
-        return next;
-      });
   }, [selectedCollection]);
+
+  useEffect(() => {
+    writeRecentFolders(recentFolders);
+  }, [recentFolders]);
 
   // Remember the active tab so the logo / Back return to it (e.g. opening a
   // document from the Documents tab and coming back).
@@ -393,19 +479,19 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   }
 
   useEffect(() => {
-    if (searchParams.get("upload") === "1") {
-      setUploadOpen(true);
-      const params = new URLSearchParams(searchParams.toString());
-      params.delete("upload");
-      const qs = params.toString();
-      router.replace(qs ? `/?${qs}` : "/", { scroll: false });
-    }
-  }, [searchParams, router]);
+    if (!uploadRequested) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("upload");
+    const qs = params.toString();
+    router.replace(qs ? `/?${qs}` : "/", { scroll: false });
+  }, [uploadRequested, searchParams, router]);
 
   const query = searchParams.get("q") ?? "";
   const searchQuery = query.trim() || undefined;
   const canViewPrinters = !!user?.is_superuser;
   const queryClient = useQueryClient();
+  // Raw URL values, one entry per filter key; `satisfies` makes a missing key a
+  // type error instead of a silently absent filter.
   const structured = {
     file_type: searchParams.getAll("file_type"),
     material_type: searchParams.getAll("material_type"),
@@ -415,9 +501,14 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     print_outcome: searchParams.getAll("print_outcome"),
     storage: searchParams.getAll("storage"),
     printed: searchParams.getAll("printed"),
-  };
+  } satisfies Record<StructuredFilterKey, string[]>;
+  // The enum-valued filters, parsed down to the values the API accepts.
+  const fileTypes = parseFilterValues(structured.file_type, ARTIFACT_FILE_TYPES);
+  const revisionStatuses = parseFilterValues(structured.revision_status, FILE_REVISION_STATUSES);
+  const printOutcomes = parseFilterValues(structured.print_outcome, PRINT_JOB_STATES);
+  const storageKinds = parseFilterValues(structured.storage, STORAGE_KINDS);
 
-  function setStructuredFilter(key: keyof typeof structured, values: string[]) {
+  function setStructuredFilter(key: StructuredFilterKey, values: string[]) {
     const params = new URLSearchParams(searchParams.toString());
     params.delete(key);
     values.forEach((value) => params.append(key, value));
@@ -427,7 +518,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
 
   function clearStructuredFilters() {
     const params = new URLSearchParams(searchParams.toString());
-    (Object.keys(structured) as (keyof typeof structured)[]).forEach((key) => params.delete(key));
+    STRUCTURED_FILTER_KEYS.forEach((key) => params.delete(key));
     params.delete("uploaded_after");
     params.delete("uploaded_before");
     const qs = params.toString();
@@ -444,13 +535,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
         ? (selectedPrinterPresence ?? undefined)
         : undefined,
     favorites: favoritesOnly || undefined,
-    file_type: structured.file_type as ArtifactFileType[],
+    file_type: fileTypes,
     material_type: structured.material_type,
     slicer_name: structured.slicer_name,
     printer_model: structured.printer_model,
-    revision_status: structured.revision_status as FileRevisionStatus[],
-    print_outcome: structured.print_outcome as ModelListFilters["print_outcome"],
-    storage: structured.storage as ModelListFilters["storage"],
+    revision_status: revisionStatuses,
+    print_outcome: printOutcomes,
+    storage: storageKinds,
     printed: structured.printed[0] ? structured.printed[0] === "yes" : undefined,
     uploaded_after: searchParams.get("uploaded_after") || undefined,
     uploaded_before: searchParams.get("uploaded_before") || undefined,
@@ -503,7 +594,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     setSaveViewBusy(true);
     try {
       const created = await createSavedView(name, currentViewFilters());
-      setSavedViews((current) =>
+      setLoadedSavedViews((current) =>
         [...current, created].sort((a, b) => a.name.localeCompare(b.name)),
       );
       setSaveViewOpen(false);
@@ -525,13 +616,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
       printer_id: selectedPrinterId,
       printer_presence: selectedPrinterPresence,
       favorites: favoritesOnly,
-      file_type: structured.file_type as ArtifactFileType[],
+      file_type: fileTypes,
       material_type: structured.material_type,
       slicer_name: structured.slicer_name,
       printer_model: structured.printer_model,
-      revision_status: structured.revision_status as FileRevisionStatus[],
-      print_outcome: structured.print_outcome as SavedViewRead["filters"]["print_outcome"],
-      storage: structured.storage as SavedViewRead["filters"]["storage"],
+      revision_status: revisionStatuses,
+      print_outcome: printOutcomes,
+      storage: storageKinds,
       printed: structured.printed[0] ? structured.printed[0] === "yes" : null,
       uploaded_after: searchParams.get("uploaded_after"),
       uploaded_before: searchParams.get("uploaded_before"),
@@ -557,7 +648,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   async function manageSavedView(action: () => Promise<SavedViewRead | void>, success: string) {
     try {
       await action();
-      setSavedViews(await listSavedViews());
+      setLoadedSavedViews(await listSavedViews());
       toast.success(success);
     } catch (error) {
       toast.error(error);
@@ -603,7 +694,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   const loadingMore = modelQuery.isFetchingNextPage;
   const hasMore = modelQuery.hasNextPage ?? false;
   const fetchNextPage = modelQuery.fetchNextPage;
-  const error = modelQuery.error ? (modelQuery.error as Error).message : null;
+  const error = modelQuery.error?.message ?? null;
   function loadMore() {
     if (hasMore && !loadingMore) fetchNextPage();
   }
@@ -722,8 +813,9 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
 
   useEffect(() => {
     function onShortcut(event: KeyboardEvent) {
-      const target = event.target as HTMLElement;
-      const typing = target.matches("input, textarea, select, [contenteditable=true]");
+      const typing =
+        event.target instanceof HTMLElement &&
+        event.target.matches("input, textarea, select, [contenteditable=true]");
       if (event.key === "/" && !typing) {
         event.preventDefault();
         document.querySelector<HTMLInputElement>('[aria-label="Search models"]')?.focus();
@@ -738,7 +830,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
 
   async function runCollectionBatch(
     verb: string,
-    operation: (collection: CollectionRead) => Promise<unknown>,
+    operation: (collection: CollectionRead) => Promise<CollectionRead>,
   ) {
     setBatchBusy(true);
     let succeeded = 0;
@@ -1079,13 +1171,14 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
         onRemove: () => setSelectedPrinterPresence(null),
       });
     }
-    for (const [key, values] of Object.entries(structured)) {
+    for (const key of STRUCTURED_FILTER_KEYS) {
+      const values = structured[key];
       for (const value of values) {
         items.push({
           label: `${key.replaceAll("_", " ")}: ${value.replaceAll("_", " ")}`,
           onRemove: () =>
             setStructuredFilter(
-              key as keyof typeof structured,
+              key,
               values.filter((item) => item !== value),
             ),
         });
@@ -1331,7 +1424,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                   role="menuitem"
                   onClick={() => {
                     setRecentFolders([]);
-                    localStorage.removeItem("ps-recent-folders");
                     setRecentFoldersOpen(false);
                   }}
                   className="mt-1 w-full border-t border-border px-2.5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-popover-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

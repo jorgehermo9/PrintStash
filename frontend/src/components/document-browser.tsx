@@ -20,6 +20,14 @@ function canEditItem(doc: DocumentListItem): boolean {
   return doc.effective_role === "edit" || doc.effective_role === "admin";
 }
 
+/** The documents one completed fetch returned, tagged with its collection. */
+interface LoadedDocuments {
+  path: string | null;
+  docs: DocumentListItem[];
+}
+
+const EMPTY_DOCUMENTS: DocumentListItem[] = [];
+
 export function DocumentBrowser({
   collectionId,
   collectionPath,
@@ -30,22 +38,32 @@ export function DocumentBrowser({
   canCreate: boolean;
 }) {
   const router = useRouter();
-  const [docs, setDocs] = useState<DocumentListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  // One state for "which collection these documents were loaded for", so the
+  // spinner is derived from the fetch that has actually completed instead of a
+  // flag flipped on every `collectionPath` change.
+  const [loaded, setLoaded] = useState<LoadedDocuments | null>(null);
   const [busy, setBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DocumentListItem | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  function load() {
-    setLoading(true);
-    listDocuments(collectionPath, { fresh: true })
-      .then(setDocs)
-      .catch(() => setDocs([]))
-      .finally(() => setLoading(false));
-  }
+  const loading = loaded === null || loaded.path !== collectionPath;
+  const docs = loading ? EMPTY_DOCUMENTS : loaded.docs;
 
-  useEffect(load, [collectionPath]);
+  useEffect(() => {
+    let current = true;
+    const settle = (items: DocumentListItem[]) => {
+      // A response for a collection the browser has already left must not
+      // claim to be this collection's list.
+      if (current) setLoaded({ path: collectionPath, docs: items });
+    };
+    listDocuments(collectionPath, { fresh: true })
+      .then(settle)
+      .catch(() => settle([]));
+    return () => {
+      current = false;
+    };
+  }, [collectionPath]);
 
   function newMarkdown() {
     // No DB row until the user saves — open the editor on the "new" route.
@@ -80,7 +98,9 @@ export function DocumentBrowser({
     setDeleteBusy(true);
     try {
       await deleteDocument(doc.id);
-      setDocs((ds) => ds.filter((d) => d.id !== doc.id));
+      setLoaded((prev) =>
+        prev === null ? prev : { ...prev, docs: prev.docs.filter((d) => d.id !== doc.id) },
+      );
       setDeleteTarget(null);
     } catch (err) {
       toast.error(err);

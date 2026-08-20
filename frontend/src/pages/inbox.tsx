@@ -33,6 +33,9 @@ import type { InboxItem } from "@/types";
 
 const ACTIVE = new Set(["captured", "resolving", "importing"]);
 
+/** The batch endpoint's request body; only some actions carry extra fields. */
+type BatchPayload = Parameters<typeof batchPendingImports>[0];
+
 function choices(item: InboxItem) {
   if (item.manifest.kind === "archive") return item.manifest.entries ?? [];
   if (item.manifest.kind === "model_files") return item.manifest.files ?? [];
@@ -53,15 +56,17 @@ export default function InboxPage() {
   const [bulkTags, setBulkTags] = useState("");
   const collections = useCollections().data ?? [];
 
-  const refresh = useCallback(async () => {
-    try {
-      setItems(await listPendingImports(true));
-    } catch (error) {
-      toast.error(error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // A promise chain rather than async/await: every state write happens in a
+  // continuation, so mounting the page (and each later refresh) never queues a
+  // render synchronously from the effect that started the fetch.
+  const refresh = useCallback(
+    () =>
+      listPendingImports(true)
+        .then(setItems)
+        .catch(toast.error)
+        .finally(() => setLoading(false)),
+    [],
+  );
 
   useEffect(() => {
     void refresh();
@@ -113,7 +118,7 @@ export default function InboxPage() {
     });
   }
 
-  async function action(task: () => Promise<unknown>, success?: string) {
+  async function action<T>(task: () => Promise<T>, success?: string) {
     try {
       await task();
       if (success) toast.success(success);
@@ -144,14 +149,11 @@ export default function InboxPage() {
       toast.error("Enter at least one tag to add");
       return;
     }
+    const payload: BatchPayload = { item_ids: [...bulkSelected], action: actionName };
+    if (actionName === "set_collection") payload.collection_id = collectionId;
+    if (actionName === "add_tags") payload.tags = tagValues;
     await action(
-      () =>
-        batchPendingImports({
-          item_ids: [...bulkSelected],
-          action: actionName,
-          ...(actionName === "set_collection" ? { collection_id: collectionId } : {}),
-          ...(actionName === "add_tags" ? { tags: tagValues } : {}),
-        }),
+      () => batchPendingImports(payload),
       `${bulkSelected.size} item${bulkSelected.size === 1 ? "" : "s"} updated`,
     );
     setBulkSelected(new Set());

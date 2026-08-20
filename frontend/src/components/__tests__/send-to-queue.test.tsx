@@ -1,55 +1,35 @@
 import "@testing-library/jest-dom/vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 
-import { SendToButtons } from "@/components/model-detail/send-to-buttons";
-import type { PrinterRead, SpoolRead } from "@/types";
+import { SendToButtons, type SendToCommands } from "@/components/model-detail/send-to-buttons";
+import { storeLogin } from "@/lib/auth";
+import { AuthContext, type AuthState } from "@/lib/auth-context";
+import { queryKeys } from "@/lib/query-client";
+import type {
+  MetadataRead,
+  PrintBatchRead,
+  PrinterRead,
+  PrintJobRead,
+  SpoolmanStatus,
+  SpoolRead,
+} from "@/types";
 
-const {
+// The panel's four fleet commands are injected, so the test observes the exact
+// payload the UI submits without a network in the way.
+const checkFleetCompatibility = vi.fn<SendToCommands["checkFleetCompatibility"]>();
+const createFleetBatch = vi.fn<SendToCommands["createFleetBatch"]>();
+const enqueueFleetJob = vi.fn<SendToCommands["enqueueFleetJob"]>();
+const sendToPrinter = vi.fn<SendToCommands["sendToPrinter"]>();
+const commands: SendToCommands = {
   checkFleetCompatibility,
   createFleetBatch,
   enqueueFleetJob,
-  mockUsePrinters,
-  mockUseSpoolmanStatus,
-  mockUseSpools,
-} = vi.hoisted(() => ({
-  checkFleetCompatibility: vi.fn(),
-  createFleetBatch: vi.fn(),
-  enqueueFleetJob: vi.fn(),
-  mockUsePrinters: vi.fn(),
-  mockUseSpoolmanStatus: vi.fn(() => ({ data: { enabled: false } })),
-  mockUseSpools: vi.fn(() => ({ data: [] as SpoolRead[] })),
-}));
-vi.mock("@/lib/api", () => ({
-  checkFleetCompatibility,
-  createFleetBatch,
-  enqueueFleetJob,
-  sendToPrinter: vi.fn(),
-}));
-vi.mock("@/lib/queries", () => ({
-  usePrinters: () => mockUsePrinters(),
-  useSpoolmanStatus: () => mockUseSpoolmanStatus(),
-  useSpools: () => mockUseSpools(),
-}));
-vi.mock("@/lib/use-require-auth", () => ({
-  useRequireAuth: () => ({ isAuthenticated: true, showAuthRequiredToast: vi.fn() }),
-}));
-vi.mock("@/lib/auth-context", () => ({
-  useAuth: () => ({
-    user: { id: 1, username: "admin", email: null, is_superuser: true },
-    loading: false,
-  }),
-}));
-vi.mock("@/lib/task-center", () => ({ createTask: vi.fn(), updateTask: vi.fn() }));
-vi.mock("@/lib/navigation", () => ({
-  Link: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a {...props}>{children}</a>
-  ),
-}));
-vi.mock("@/lib/toast", () => ({
-  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+  sendToPrinter,
+};
 
 const printer: PrinterRead = {
   id: 7,
@@ -85,11 +65,166 @@ const printer: PrinterRead = {
   updated_at: "2026-07-15T00:00:00Z",
 };
 
+const adminUser = { id: 1, username: "admin", email: null, is_superuser: true };
+
+// The panel reads the session through the real context; nothing in these cases
+// signs in or out, so the auth commands are inert.
+const adminAuth: AuthState = {
+  user: adminUser,
+  loading: false,
+  login: async () => {},
+  logout: async () => {},
+  refresh: async () => {},
+};
+
+const queuedJob: PrintJobRead = {
+  id: 1,
+  printer_id: 7,
+  file_id: 42,
+  model_id: 1,
+  remote_filename: "cube.gcode",
+  state: "queued",
+  progress: 0,
+  source: "vault",
+  external_display_name: null,
+  external_task_id: null,
+  external_subtask_id: null,
+  external_project_id: null,
+  external_profile_id: null,
+  external_gcode_file: null,
+  external_plate_index: null,
+  external_current_layer: null,
+  external_total_layers: null,
+  external_nozzle_diameter: null,
+  artifact_evidence: "vault",
+  artifact_capture_error: null,
+  error: null,
+  routing_strategy: "least_busy",
+  queue_position: 1,
+  provider_job_id: null,
+  blocked_reason: null,
+  dispatch_claimed_at: null,
+  dispatch_attempts: 0,
+  retryable: false,
+  requested_by: null,
+  spool_id: null,
+  spool_name: null,
+  started_at: null,
+  finished_at: null,
+  created_at: "2026-07-15T00:00:00Z",
+  updated_at: "2026-07-15T00:00:00Z",
+};
+
+const queuedBatch: PrintBatchRead = {
+  id: 1,
+  file_id: 42,
+  model_id: 1,
+  quantity: 1,
+  routing_strategy: "least_busy",
+  priority: "normal",
+  target_group: null,
+  compatibility_policy: "safe",
+  requested_by: null,
+  created_at: "2026-07-15T00:00:00Z",
+  updated_at: "2026-07-15T00:00:00Z",
+  jobs: [],
+};
+
+const NO_SLICER_METADATA: MetadataRead = {
+  slicer_name: null,
+  slicer_version: null,
+  printer_model: null,
+  nozzle_diameter_mm: null,
+  layer_height_mm: null,
+  first_layer_height_mm: null,
+  infill_percent: null,
+  wall_loops: null,
+  top_shell_layers: null,
+  bottom_shell_layers: null,
+  support_material: null,
+  nozzle_temperature_c: null,
+  bed_temperature_c: null,
+  estimated_time_s: null,
+  filament_weight_g: null,
+  filament_length_mm: null,
+  filament_cost: null,
+  material_type: null,
+  material_brand: null,
+  bbox_x_mm: null,
+  bbox_y_mm: null,
+  bbox_z_mm: null,
+  volume_mm3: null,
+  triangle_count: null,
+};
+
+/** Slicer metadata whose only interesting fact is the filament estimate. */
+function weighing(grams: number): MetadataRead {
+  return { ...NO_SLICER_METADATA, filament_weight_g: grams };
+}
+
+function spoolmanStatus(enabled: boolean): SpoolmanStatus {
+  return {
+    enabled,
+    base_url: null,
+    has_api_key: false,
+    write_enabled: false,
+    write_force: false,
+    connected: enabled,
+    version: null,
+    error: null,
+    native_hook_detected: false,
+  };
+}
+
+interface PanelOptions {
+  /** Slicer metadata on the single G-code revision the panel offers. */
+  metadata?: MetadataRead | null;
+  spools?: SpoolRead[];
+}
+
+// The shared reads (printers, Spoolman) go through the real query hooks against
+// a cache seeded with fresh data, so nothing refetches and the panel sees the
+// same shapes the API returns.
+function renderPanel({ metadata = null, spools }: PanelOptions = {}) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+  });
+  client.setQueryData(queryKeys.printers, [printer]);
+  client.setQueryData(queryKeys.spoolmanStatus, spoolmanStatus(spools !== undefined));
+  client.setQueryData(queryKeys.spools, spools ?? []);
+
+  return render(
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <AuthContext.Provider value={adminAuth}>
+          <SendToButtons
+            commands={commands}
+            gcodeFiles={[
+              {
+                id: 42,
+                original_filename: "cube.gcode",
+                version: 1,
+                gcode_revision_number: 1,
+                revision_label: null,
+                is_recommended: true,
+                metadata,
+              },
+            ]}
+            printerFiles={[]}
+          />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
+  // `useRequireAuth` gates the send buttons on a stored session.
+  storeLogin("", adminUser, { silent: true });
   enqueueFleetJob.mockReset();
-  enqueueFleetJob.mockResolvedValue({ id: 1 });
+  enqueueFleetJob.mockResolvedValue(queuedJob);
   createFleetBatch.mockReset();
-  createFleetBatch.mockResolvedValue({ id: 1, jobs: [] });
+  createFleetBatch.mockResolvedValue(queuedBatch);
   checkFleetCompatibility.mockReset();
   checkFleetCompatibility.mockResolvedValue({
     file_id: 42,
@@ -97,28 +232,10 @@ beforeEach(() => {
     nozzle_diameter_mm: null,
     printers: [],
   });
-  mockUsePrinters.mockReturnValue({ data: [printer], isLoading: false, error: null });
-  mockUseSpoolmanStatus.mockReturnValue({ data: { enabled: false } });
-  mockUseSpools.mockReturnValue({ data: [] });
 });
 
 it("adds selected G-code to least-busy fleet queue", async () => {
-  render(
-    <SendToButtons
-      gcodeFiles={[
-        {
-          id: 42,
-          original_filename: "cube.gcode",
-          version: 1,
-          gcode_revision_number: 1,
-          revision_label: null,
-          is_recommended: true,
-          metadata: null,
-        },
-      ]}
-      printerFiles={[]}
-    />,
-  );
+  renderPanel();
 
   await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
   await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));
@@ -136,9 +253,9 @@ it("adds selected G-code to least-busy fleet queue", async () => {
 });
 
 it("warns when the selected spool doesn't have enough filament left, but doesn't block sending", async () => {
-  mockUseSpoolmanStatus.mockReturnValue({ data: { enabled: true } });
-  mockUseSpools.mockReturnValue({
-    data: [
+  renderPanel({
+    metadata: weighing(250),
+    spools: [
       {
         id: 1,
         filament_id: null,
@@ -155,23 +272,6 @@ it("warns when the selected spool doesn't have enough filament left, but doesn't
     ],
   });
 
-  render(
-    <SendToButtons
-      gcodeFiles={[
-        {
-          id: 42,
-          original_filename: "cube.gcode",
-          version: 1,
-          gcode_revision_number: 1,
-          revision_label: null,
-          is_recommended: true,
-          metadata: { filament_weight_g: 250 } as import("@/types").MetadataRead,
-        },
-      ]}
-      printerFiles={[]}
-    />,
-  );
-
   await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
   await userEvent.selectOptions(screen.getByLabelText("Spool"), "1");
 
@@ -180,9 +280,9 @@ it("warns when the selected spool doesn't have enough filament left, but doesn't
 });
 
 it("warns when the spool has no tracked remaining weight instead of assuming it's plenty", async () => {
-  mockUseSpoolmanStatus.mockReturnValue({ data: { enabled: true } });
-  mockUseSpools.mockReturnValue({
-    data: [
+  renderPanel({
+    metadata: weighing(250),
+    spools: [
       {
         id: 1,
         filament_id: null,
@@ -198,23 +298,6 @@ it("warns when the spool has no tracked remaining weight instead of assuming it'
       },
     ],
   });
-
-  render(
-    <SendToButtons
-      gcodeFiles={[
-        {
-          id: 42,
-          original_filename: "cube.gcode",
-          version: 1,
-          gcode_revision_number: 1,
-          revision_label: null,
-          is_recommended: true,
-          metadata: { filament_weight_g: 250 } as import("@/types").MetadataRead,
-        },
-      ]}
-      printerFiles={[]}
-    />,
-  );
 
   await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
   await userEvent.selectOptions(screen.getByLabelText("Spool"), "1");
@@ -237,22 +320,7 @@ it("confirms a known manual mismatch and records the override policy", async () 
       },
     ],
   });
-  render(
-    <SendToButtons
-      gcodeFiles={[
-        {
-          id: 42,
-          original_filename: "cube.gcode",
-          version: 1,
-          gcode_revision_number: 1,
-          revision_label: null,
-          is_recommended: true,
-          metadata: null,
-        },
-      ]}
-      printerFiles={[]}
-    />,
-  );
+  renderPanel();
 
   await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
   await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));
@@ -272,22 +340,7 @@ it("confirms a known manual mismatch and records the override policy", async () 
 });
 
 it("creates an atomic batch when copies is greater than one", async () => {
-  render(
-    <SendToButtons
-      gcodeFiles={[
-        {
-          id: 42,
-          original_filename: "cube.gcode",
-          version: 1,
-          gcode_revision_number: 1,
-          revision_label: null,
-          is_recommended: true,
-          metadata: null,
-        },
-      ]}
-      printerFiles={[]}
-    />,
-  );
+  renderPanel();
 
   await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
   await userEvent.click(screen.getByRole("button", { name: "Add to queue" }));

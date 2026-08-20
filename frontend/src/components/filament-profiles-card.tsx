@@ -109,23 +109,25 @@ function printerDirty(profile: PrinterProfileRead, edit: PrinterEdit): boolean {
   );
 }
 
-const MATERIAL_COLORS: Record<string, string> = {
-  pla: "bg-emerald-500",
-  petg: "bg-primary",
-  abs: "bg-primary",
-  asa: "bg-teal-500",
-  tpu: "bg-purple-500",
-  flex: "bg-purple-400",
-  nylon: "bg-yellow-500",
-  pa: "bg-yellow-500",
-  resin: "bg-red-500",
-  pc: "bg-sky-500",
-  hips: "bg-amber-400",
-};
+// Material type is free-form user text, so the swatch lookup is a Map: an
+// unrecognised material reads back as `undefined` and takes the neutral swatch.
+const MATERIAL_COLORS = new Map([
+  ["pla", "bg-emerald-500"],
+  ["petg", "bg-primary"],
+  ["abs", "bg-primary"],
+  ["asa", "bg-teal-500"],
+  ["tpu", "bg-purple-500"],
+  ["flex", "bg-purple-400"],
+  ["nylon", "bg-yellow-500"],
+  ["pa", "bg-yellow-500"],
+  ["resin", "bg-red-500"],
+  ["pc", "bg-sky-500"],
+  ["hips", "bg-amber-400"],
+]);
 
 function materialColor(type: string): string {
   const key = type.toLowerCase().trim();
-  return MATERIAL_COLORS[key] ?? "bg-slate-400";
+  return MATERIAL_COLORS.get(key) ?? "bg-slate-400";
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -184,26 +186,23 @@ export function FilamentProfilesCard() {
   const [newPrinterNozzle, setNewPrinterNozzle] = useState("");
   const [newPrinterNotes, setNewPrinterNotes] = useState("");
 
-  async function refresh() {
-    try {
-      const [nextFilaments, nextPrinters] = await Promise.all([
-        listFilamentProfiles(),
-        listPrinterProfiles(),
-      ]);
-      setFilaments(nextFilaments);
-      setPrinters(nextPrinters);
-      setFilamentEdits(Object.fromEntries(nextFilaments.map((p) => [p.id, filamentEdit(p)])));
-      setPrinterEdits(Object.fromEntries(nextPrinters.map((p) => [p.id, printerEdit(p)])));
-      setError(null);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+  // Promise chain rather than async/await: the state updates then land in the
+  // resolution callback, so the mount effect below only starts the request.
+  function refresh(): Promise<void> {
+    return Promise.all([listFilamentProfiles(), listPrinterProfiles()])
+      .then(([nextFilaments, nextPrinters]) => {
+        setFilaments(nextFilaments);
+        setPrinters(nextPrinters);
+        setFilamentEdits(Object.fromEntries(nextFilaments.map((p) => [p.id, filamentEdit(p)])));
+        setPrinterEdits(Object.fromEntries(nextPrinters.map((p) => [p.id, printerEdit(p)])));
+        setError(null);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   }
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, []);
 
   function updateFilamentEdit(id: number, patch: Partial<FilamentEdit>) {
@@ -280,7 +279,7 @@ export function FilamentProfilesCard() {
 
   // Save when focus leaves the row entirely (not when tabbing between its fields).
   function handleRowBlur(e: React.FocusEvent<HTMLDivElement>, save: () => void) {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) save();
+    if (!e.currentTarget.contains(e.relatedTarget)) save();
   }
 
   async function handleSyncSpoolman() {

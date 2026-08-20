@@ -21,7 +21,7 @@ export interface StoredUser {
 }
 
 function isBrowser(): boolean {
-  return typeof window !== "undefined";
+  return "window" in globalThis;
 }
 
 function emit() {
@@ -32,11 +32,31 @@ export function getToken(): string | null {
   return null;
 }
 
+/**
+ * Decode the persisted user blob. localStorage is writable by anything running
+ * on the origin, so the stored JSON is a foreign document until decoded here;
+ * a blob missing the identity fields yields null rather than a half-built user.
+ */
+function parseStoredUser(raw: string): StoredUser | null {
+  const candidate: unknown = JSON.parse(raw);
+  if (!(candidate instanceof Object) || !("id" in candidate) || !("username" in candidate)) {
+    return null;
+  }
+  const id = Number(candidate.id);
+  if (!Number.isInteger(id)) return null;
+  return {
+    id,
+    username: String(candidate.username),
+    email: "email" in candidate && candidate.email !== null ? String(candidate.email) : null,
+    is_superuser: "is_superuser" in candidate && candidate.is_superuser === true,
+  };
+}
+
 export function getUser(): StoredUser | null {
   if (!isBrowser()) return null;
   try {
     const raw = localStorage.getItem(USER_KEY) ?? localStorage.getItem(LEGACY_USER_KEY);
-    return raw ? (JSON.parse(raw) as StoredUser) : null;
+    return raw ? parseStoredUser(raw) : null;
   } catch {
     return null;
   }

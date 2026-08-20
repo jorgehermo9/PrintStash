@@ -10,7 +10,8 @@ import { ModalShell } from "@/components/ui/modal";
 import { Localized } from "@/components/ui/localized";
 
 function shareUrl(path: string): string {
-  if (typeof window === "undefined") return path;
+  // Server-side rendering has no origin to prefix; the relative path is still usable.
+  if (!("window" in globalThis)) return path;
   return `${window.location.origin}${path}`;
 }
 
@@ -36,18 +37,28 @@ export function ShareDialog({
   const [copied, setCopied] = useState(false);
   const gcodeFiles = useMemo(() => files.filter((f) => f.file_type === "gcode"), [files]);
 
+  // Each open starts from a clean form. Adjusting state during the render that
+  // flips `open` (React's documented alternative to a reset effect) keeps the
+  // dialog from painting the previous session's selection for one frame.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      const recommended =
+        gcodeFiles.find((f) => f.is_recommended) ?? gcodeFiles[gcodeFiles.length - 1];
+      setRevisionScope("all");
+      setSelectedRevisionIds(recommended ? [recommended.id] : []);
+      setLoading(true);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
-    const recommended =
-      gcodeFiles.find((f) => f.is_recommended) ?? gcodeFiles[gcodeFiles.length - 1];
-    setRevisionScope("all");
-    setSelectedRevisionIds(recommended ? [recommended.id] : []);
-    setLoading(true);
     listModelShares(modelId)
       .then(setLinks)
       .catch((e) => toast.error(e))
       .finally(() => setLoading(false));
-  }, [open, modelId, gcodeFiles]);
+  }, [open, modelId]);
 
   async function doCreate() {
     setCreating(true);

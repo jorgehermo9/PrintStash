@@ -1,71 +1,89 @@
 import "@testing-library/jest-dom/vitest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 
 import { PrintersPage } from "@/components/printers-list";
 import { writePrinterCardImagePreference } from "@/lib/printer-card-display";
+import { AuthContext, type AuthState } from "@/lib/auth-context";
+import { invalidateApiCache } from "@/lib/api/request";
+import { queryKeys } from "@/lib/query-client";
+import type { Dashboard, FleetSummary, PrinterCreate, PrinterRead, PrinterUpdate } from "@/types";
 
-vi.mock("@/lib/api", () => ({
-  createPrinter: vi.fn().mockResolvedValue({}),
-  deletePrinter: vi.fn(),
-  updatePrinter: vi.fn().mockResolvedValue({}),
-}));
-const mockUsePrinters = vi.fn<
-  () => {
-    data: PrinterRead[];
-    isLoading: boolean;
-    error: Error | null;
-    refetch: () => void;
-  }
->(() => ({
-  data: [],
-  isLoading: false,
-  error: null,
-  refetch: vi.fn(),
-}));
-const mockUsePrinterDashboard = vi.fn<() => { data: Dashboard; refetch: () => void }>(() => ({
-  data: { total_printers: 0, status_counts: {}, active_jobs: 0, groups: [] },
-  refetch: vi.fn(),
-}));
-const mockUseFleetQueue = vi.fn(() => ({ data: [], isLoading: false, refetch: vi.fn() }));
-const mockUseFleetSummary = vi.fn(() => ({
-  data: {
-    total_printers: 0,
-    queued_jobs: 0,
-    active_jobs: 0,
-    draining_printers: 0,
-    maintenance_printers: 0,
-    attention_jobs: 0,
-  },
-  refetch: vi.fn(),
-}));
-vi.mock("@/lib/queries", () => ({
-  usePrinters: () => mockUsePrinters(),
-  usePrinterDashboard: () => mockUsePrinterDashboard(),
-  useFleetQueue: () => mockUseFleetQueue(),
-  useFleetSummary: () => mockUseFleetSummary(),
-}));
-vi.mock("@/lib/use-require-auth", () => ({
-  useRequireAuth: () => ({ isAuthenticated: true, showAuthRequiredToast: vi.fn() }),
-}));
-vi.mock("@/lib/auth-context", () => ({
-  useAuth: () => ({
-    user: { id: 1, username: "admin", email: null, is_superuser: true },
-    loading: false,
-  }),
-}));
-vi.mock("@/lib/navigation", () => ({
-  Link: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a {...props}>{children}</a>
-  ),
-}));
-vi.mock("@/lib/toast", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
-}));
+/**
+ * The page runs against its real collaborators here: the real query hooks over
+ * a pre-seeded cache, the real api client, the real auth context and router.
+ * Only `fetch` is stood in for, which is what lets these tests pin the exact
+ * HTTP request each setup form produces — the contract the backend router reads.
+ */
 
-import { createPrinter, updatePrinter } from "@/lib/api";
-import type { Dashboard, PrinterRead } from "@/types";
+const fetchMock = vi.fn<typeof fetch>();
+
+function printerResponse(printer: PrinterRead): Response {
+  return new Response(JSON.stringify(printer), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Requests the api client sent with the given verb, oldest first. */
+function requestsWithMethod(method: string) {
+  return fetchMock.mock.calls
+    .filter(([, init]) => init?.method === method)
+    .map(([input, init]) => ({ url: String(input), body: String(init?.body ?? "") }));
+}
+
+const EMPTY_DASHBOARD: Dashboard = {
+  total_printers: 0,
+  status_counts: {},
+  active_jobs: 0,
+  groups: [],
+};
+
+const EMPTY_FLEET_SUMMARY: FleetSummary = {
+  total_printers: 0,
+  queued_jobs: 0,
+  active_jobs: 0,
+  draining_printers: 0,
+  maintenance_printers: 0,
+  attention_jobs: 0,
+};
+
+const ADMIN_AUTH: AuthState = {
+  user: { id: 1, username: "admin", email: null, is_superuser: true },
+  loading: false,
+  login: vi.fn<AuthState["login"]>(),
+  logout: vi.fn<AuthState["logout"]>(),
+  refresh: vi.fn<AuthState["refresh"]>(),
+};
+
+/** FleetQueuePanel's history window is part of its query key. */
+const FLEET_QUEUE_HISTORY_LIMIT = 20;
+
+function renderPrintersPage(seed: { printers?: PrinterRead[]; dashboard?: Dashboard } = {}) {
+  const client = new QueryClient({
+    defaultOptions: {
+      // Seeded data must stay put: nothing here may fall back to the network.
+      queries: { retry: false, staleTime: Infinity, refetchOnWindowFocus: false },
+    },
+  });
+  client.setQueryData(queryKeys.printers, seed.printers ?? []);
+  client.setQueryData(queryKeys.printerDashboard, seed.dashboard ?? EMPTY_DASHBOARD);
+  client.setQueryData([...queryKeys.fleetQueue, FLEET_QUEUE_HISTORY_LIMIT], []);
+  client.setQueryData(queryKeys.fleetSummary, EMPTY_FLEET_SUMMARY);
+
+  return render(
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <AuthContext.Provider value={ADMIN_AUTH}>
+          <PrintersPage />
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+}
 
 function makePrinter(overrides: Partial<PrinterRead> = {}): PrinterRead {
   return {
@@ -105,28 +123,31 @@ function makePrinter(overrides: Partial<PrinterRead> = {}): PrinterRead {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  mockUsePrinters.mockReturnValue({ data: [], isLoading: false, error: null, refetch: vi.fn() });
-  mockUsePrinterDashboard.mockReturnValue({
-    data: { total_printers: 0, status_counts: {}, active_jobs: 0, groups: [] },
-    refetch: vi.fn(),
-  });
+  vi.stubGlobal("fetch", fetchMock);
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(() => Promise.resolve(printerResponse(makePrinter())));
+  invalidateApiCache();
   window.localStorage.clear();
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 async function openForm() {
-  render(<PrintersPage />);
+  renderPrintersPage();
   await userEvent.click(screen.getByRole("button", { name: /add printer/i }));
 }
 
 describe("printer setup", () => {
   it("submits only once when add is triggered twice before request resolves", async () => {
     let resolveCreate!: () => void;
-    vi.mocked(createPrinter).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveCreate = () => resolve({} as PrinterRead);
-        }),
+    fetchMock.mockImplementation((_input, init) =>
+      init?.method === "POST"
+        ? new Promise<Response>((resolve) => {
+            resolveCreate = () => resolve(printerResponse(makePrinter()));
+          })
+        : Promise.resolve(printerResponse(makePrinter())),
     );
     await openForm();
     await userEvent.type(screen.getByLabelText("Name"), "Voron");
@@ -139,7 +160,7 @@ describe("printer setup", () => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-    expect(createPrinter).toHaveBeenCalledTimes(1);
+    expect(requestsWithMethod("POST")).toHaveLength(1);
     resolveCreate();
     await waitFor(() => expect(screen.queryByText("Adding...")).not.toBeInTheDocument());
   });
@@ -152,21 +173,19 @@ describe("printer setup", () => {
     await userEvent.type(screen.getByLabelText("Password"), "secret");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() =>
-      expect(createPrinter).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: "Prusa MK4",
-          provider: "prusalink",
-          prusalink_url: "http://mk4.local",
-          prusalink_auth_mode: "digest",
-          prusalink_username: "maker",
-          prusalink_password: "secret",
-        }),
-      ),
-    );
-    expect(createPrinter).toHaveBeenCalledWith(
-      expect.not.objectContaining({ moonraker_url: expect.anything() }),
-    );
+    await waitFor(() => expect(requestsWithMethod("POST")).toHaveLength(1));
+    const posted = requestsWithMethod("POST")[0]!;
+    expect(posted.url).toBe("/api/v1/printers");
+    const payload: PrinterCreate = JSON.parse(posted.body);
+    expect(payload).toMatchObject({
+      name: "Prusa MK4",
+      provider: "prusalink",
+      prusalink_url: "http://mk4.local",
+      prusalink_auth_mode: "digest",
+      prusalink_username: "maker",
+      prusalink_password: "secret",
+    });
+    expect(payload).not.toHaveProperty("moonraker_url");
   });
 
   it("maps Elegoo Neptune 4 setup to Moonraker variant", async () => {
@@ -176,15 +195,13 @@ describe("printer setup", () => {
     await userEvent.type(screen.getByLabelText("Printer URL"), "http://neptune.local:7125");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() =>
-      expect(createPrinter).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "moonraker",
-          provider_variant: "elegoo_neptune4",
-          moonraker_url: "http://neptune.local:7125",
-        }),
-      ),
-    );
+    await waitFor(() => expect(requestsWithMethod("POST")).toHaveLength(1));
+    const payload: PrinterCreate = JSON.parse(requestsWithMethod("POST")[0]!.body);
+    expect(payload).toMatchObject({
+      provider: "moonraker",
+      provider_variant: "elegoo_neptune4",
+      moonraker_url: "http://neptune.local:7125",
+    });
   });
 
   it("explains that Centauri Carbon commands need the Mainboard ID while idle", async () => {
@@ -206,16 +223,14 @@ describe("printer setup", () => {
     await userEvent.type(screen.getByLabelText("Printer access code"), "ABC123");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() =>
-      expect(createPrinter).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "elegoo_centauri",
-          provider_variant: "elegoo_centauri_carbon_2",
-          elegoo_centauri_host: "192.168.1.51",
-          elegoo_centauri_access_code: "ABC123",
-        }),
-      ),
-    );
+    await waitFor(() => expect(requestsWithMethod("POST")).toHaveLength(1));
+    const payload: PrinterCreate = JSON.parse(requestsWithMethod("POST")[0]!.body);
+    expect(payload).toMatchObject({
+      provider: "elegoo_centauri",
+      provider_variant: "elegoo_centauri_carbon_2",
+      elegoo_centauri_host: "192.168.1.51",
+      elegoo_centauri_access_code: "ABC123",
+    });
   });
 
   it("submits OctoPrint URL and API key", async () => {
@@ -226,37 +241,30 @@ describe("printer setup", () => {
     await userEvent.type(screen.getByLabelText("API key"), "secret-key");
     await userEvent.click(screen.getAllByRole("button", { name: /^add printer$/i }).at(-1)!);
 
-    await waitFor(() =>
-      expect(createPrinter).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "octoprint",
-          octoprint_url: "http://octopi.local",
-          octoprint_api_key: "secret-key",
-        }),
-      ),
-    );
+    await waitFor(() => expect(requestsWithMethod("POST")).toHaveLength(1));
+    const payload: PrinterCreate = JSON.parse(requestsWithMethod("POST")[0]!.body);
+    expect(payload).toMatchObject({
+      provider: "octoprint",
+      octoprint_url: "http://octopi.local",
+      octoprint_api_key: "secret-key",
+    });
   });
 });
 
 describe("printer card", () => {
   it("switches to global queue empty state", async () => {
-    render(<PrintersPage />);
+    renderPrintersPage();
     await userEvent.click(screen.getByRole("tab", { name: "Queue" }));
     expect(screen.getByText("No queued print jobs")).toBeInTheDocument();
   });
 
   it("summarizes fleet health and filters by printer group", async () => {
-    mockUsePrinters.mockReturnValue({
-      data: [
+    renderPrintersPage({
+      printers: [
         makePrinter({ id: 1, name: "Workshop Voron", group: "Workshop", status: "printing" }),
         makePrinter({ id: 2, name: "Garage Prusa", group: "Garage", status: "offline" }),
       ],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    mockUsePrinterDashboard.mockReturnValue({
-      data: {
+      dashboard: {
         total_printers: 2,
         status_counts: { printing: 1, offline: 1 },
         active_jobs: 1,
@@ -265,10 +273,8 @@ describe("printer card", () => {
           { name: "Workshop", count: 1, status_counts: { printing: 1 } },
         ],
       },
-      refetch: vi.fn(),
     });
 
-    render(<PrintersPage />);
     expect(screen.getByLabelText("Fleet summary")).toHaveTextContent("1");
     await userEvent.click(screen.getByRole("button", { name: /Workshop1/ }));
     expect(screen.getByRole("link", { name: "Workshop Voron" })).toBeInTheDocument();
@@ -276,30 +282,17 @@ describe("printer card", () => {
   });
 
   it("shows optional printer artwork only when enabled in display settings", () => {
-    mockUsePrinters.mockReturnValue({
-      data: [makePrinter()],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    const plain = render(<PrintersPage />);
+    const plain = renderPrintersPage({ printers: [makePrinter()] });
     expect(screen.queryByAltText("Voron 2.4 printer")).not.toBeInTheDocument();
     plain.unmount();
 
     window.localStorage.setItem("printstash.printer-card.show-image", "true");
-    render(<PrintersPage />);
+    renderPrintersPage({ printers: [makePrinter()] });
     expect(screen.getByAltText("Voron 2.4 printer")).toBeInTheDocument();
   });
 
   it("updates a mounted printer page when the saved display preference changes", () => {
-    mockUsePrinters.mockReturnValue({
-      data: [makePrinter()],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    render(<PrintersPage />);
+    renderPrintersPage({ printers: [makePrinter()] });
     expect(screen.queryByAltText("Voron 2.4 printer")).not.toBeInTheDocument();
 
     act(() => writePrinterCardImagePreference(true));
@@ -308,51 +301,37 @@ describe("printer card", () => {
   });
 
   it("shows the detected model", () => {
-    mockUsePrinters.mockReturnValueOnce({
-      data: [makePrinter({ detected_model: "Bambu Lab X1 Carbon" })],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    render(<PrintersPage />);
+    renderPrintersPage({ printers: [makePrinter({ detected_model: "Bambu Lab X1 Carbon" })] });
 
     expect(screen.getByText("Bambu Lab X1 Carbon")).toBeInTheDocument();
   });
 
   it("lets the user pick a model from the list when nothing was detected", async () => {
-    mockUsePrinters.mockReturnValueOnce({
-      data: [makePrinter()],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    render(<PrintersPage />);
+    renderPrintersPage({ printers: [makePrinter()] });
 
     await userEvent.click(screen.getByText("Set model"));
     expect(screen.getByRole("dialog", { name: "Select printer model" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Voron 2.4" }));
     await userEvent.click(screen.getByRole("button", { name: "Save model" }));
 
-    await waitFor(() => expect(updatePrinter).toHaveBeenCalledWith(1, { model_name: "Voron 2.4" }));
+    await waitFor(() => expect(requestsWithMethod("PATCH")).toHaveLength(1));
+    const patched = requestsWithMethod("PATCH")[0]!;
+    expect(patched.url).toBe("/api/v1/printers/1");
+    const payload: PrinterUpdate = JSON.parse(patched.body);
+    expect(payload).toEqual({ model_name: "Voron 2.4" });
   });
 
   it("falls back to a custom text field for a model not in the list", async () => {
-    mockUsePrinters.mockReturnValueOnce({
-      data: [makePrinter()],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    render(<PrintersPage />);
+    renderPrintersPage({ printers: [makePrinter()] });
 
     await userEvent.click(screen.getByText("Set model"));
     await userEvent.type(screen.getByPlaceholderText("Enter model name"), "Homebrew CoreXY");
     await userEvent.click(screen.getByRole("button", { name: "Save model" }));
 
-    await waitFor(() =>
-      expect(updatePrinter).toHaveBeenCalledWith(1, {
-        model_name: "Homebrew CoreXY",
-      }),
-    );
+    await waitFor(() => expect(requestsWithMethod("PATCH")).toHaveLength(1));
+    const patched = requestsWithMethod("PATCH")[0]!;
+    expect(patched.url).toBe("/api/v1/printers/1");
+    const payload: PrinterUpdate = JSON.parse(patched.body);
+    expect(payload).toEqual({ model_name: "Homebrew CoreXY" });
   });
 });

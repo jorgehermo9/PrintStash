@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Area,
   AreaChart,
@@ -54,6 +54,9 @@ const CHROME = "var(--chart-grid)";
 const AXIS_TICK = { fill: CHROME } as const;
 const CURSOR_FILL = { fill: CHROME, fillOpacity: 0.18 } as const;
 const CURSOR_LINE = { stroke: ACCENT, strokeOpacity: 0.4 } as const;
+
+/** SVG presentation attributes recharts draws the tooltip cursor with. */
+type ChartCursor = typeof CURSOR_FILL | typeof CURSOR_LINE;
 
 function ChartTooltip({
   active,
@@ -168,6 +171,27 @@ const WIDGETS: { id: WidgetId; label: string }[] = [
   { id: "filaments", label: "Filament usage" },
   { id: "collections", label: "Top collections" },
 ];
+const ALL_WIDGET_IDS: readonly WidgetId[] = WIDGETS.map((widget) => widget.id);
+const WIDGET_PREFERENCE_KEY = "printstash:statistics-widgets";
+
+/**
+ * Parses the saved widget preference into the set of widgets to show.
+ *
+ * The stored value is whatever a previous build wrote, so it is treated as
+ * untrusted: anything that is not a JSON array of ids we still ship is
+ * discarded and every widget is shown, which is also the first-visit default.
+ */
+function loadVisibleWidgets(): Set<WidgetId> {
+  const saved = window.localStorage.getItem(WIDGET_PREFERENCE_KEY);
+  if (saved === null) return new Set(ALL_WIDGET_IDS);
+  try {
+    const parsed: unknown = JSON.parse(saved);
+    if (!Array.isArray(parsed)) return new Set(ALL_WIDGET_IDS);
+    return new Set(ALL_WIDGET_IDS.filter((id) => parsed.includes(id)));
+  } catch {
+    return new Set(ALL_WIDGET_IDS);
+  }
+}
 
 function RankingCard({
   title,
@@ -288,7 +312,7 @@ function TimeSeriesCard({ stats, currency }: { stats: PrintStatisticsRead; curre
       tickFormatter={(v) => formatValue(Number(v))}
     />
   );
-  const tooltip = (cursor: object) => (
+  const tooltip = (cursor: ChartCursor) => (
     <Tooltip
       content={<ChartTooltip valueLabel={localizedMetricLabel} formatValue={formatValue} />}
       cursor={cursor}
@@ -493,30 +517,17 @@ export default function StatisticsPage() {
   const { locale } = useI18n();
   const [period, setPeriod] = useState<StatsPeriod>("30d");
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [visibleWidgets, setVisibleWidgets] = useState<Set<WidgetId>>(
-    () => new Set(WIDGETS.map((widget) => widget.id)),
-  );
+  const [visibleWidgets, setVisibleWidgets] = useState<Set<WidgetId>>(loadVisibleWidgets);
   const { data, isLoading, isError } = usePrintStatistics(period);
   const { data: config } = useVaultConfig();
   const currency = config?.currency ?? "USD";
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("printstash:statistics-widgets");
-    if (saved) {
-      try {
-        setVisibleWidgets(new Set(JSON.parse(saved) as WidgetId[]));
-      } catch {
-        /* Ignore invalid old preference. */
-      }
-    }
-  }, []);
 
   function toggleWidget(id: WidgetId) {
     setVisibleWidgets((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      window.localStorage.setItem("printstash:statistics-widgets", JSON.stringify([...next]));
+      window.localStorage.setItem(WIDGET_PREFERENCE_KEY, JSON.stringify([...next]));
       return next;
     });
   }

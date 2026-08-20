@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState, useTransition } from "react";
+import { Suspense, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter, useSearchParams, usePathname } from "@/lib/navigation";
 import { Link } from "@/lib/navigation";
 import {
@@ -34,6 +34,14 @@ import {
 
 const WIKI_URL = "https://xiao-villamor.github.io/PrintStash/";
 
+// `lastVaultHref` reads the remembered collection out of localStorage — an
+// external store. Same-tab writes are picked up on the next render (a route
+// change re-renders the bar); the `storage` event covers other tabs.
+function subscribeLastVaultHref(onStoreChange: () => void): () => void {
+  window.addEventListener("storage", onStoreChange);
+  return () => window.removeEventListener("storage", onStoreChange);
+}
+
 function TopBarSearch() {
   const { t } = useI18n();
   const router = useRouter();
@@ -41,17 +49,22 @@ function TopBarSearch() {
   const searchParams = useSearchParams();
   const q = searchParams.get("q") ?? "";
   const [value, setValue] = useState(q);
+  const [syncedQuery, setSyncedQuery] = useState(q);
   const inputRef = useRef<HTMLInputElement>(null);
   const [, startTransition] = useTransition();
 
-  useEffect(() => {
+  // The URL owns the search term: a back/forward navigation or an inbound
+  // /?q=… link has to land in the box. Adjusting during render keeps the input
+  // from flashing the stale term for a frame.
+  if (syncedQuery !== q) {
+    setSyncedQuery(q);
     setValue(q);
-  }, [q]);
+  }
 
   useEffect(() => {
     if (pathname !== "/") return;
     function focusSearch(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
       if (
         event.key !== "/" ||
         event.metaKey ||
@@ -135,20 +148,15 @@ export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, loading, logout } = useAuth();
-  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [tasks, setTasks] = useState<TaskItem[]>(() => listTasks());
   const [tasksOpen, setTasksOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   // The logo returns to the model browser, restoring the last folder the user
-  // was in rather than always resetting to "All Models". Recomputed whenever the
-  // route changes (e.g. arriving on Settings) so it reflects the remembered
-  // collection at click time.
-  const [homeHref, setHomeHref] = useState("/");
-  useEffect(() => {
-    setHomeHref(lastVaultHref());
-  }, [pathname]);
+  // was in rather than always resetting to "All Models", so it reflects the
+  // remembered collection at click time.
+  const homeHref = useSyncExternalStore(subscribeLastVaultHref, lastVaultHref);
 
   useEffect(() => {
-    setTasks(listTasks());
     const unsubscribe = subscribeTasks(() => setTasks(listTasks()));
     const stopSync = startImportJobSync();
     return () => {

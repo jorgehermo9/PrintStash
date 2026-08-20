@@ -21,13 +21,25 @@ import { Localized } from "@/components/ui/localized";
 
 const RECENT_KEY = "ps-recent-saved-views";
 
-function readRecent(): number[] {
-  if (typeof window === "undefined") return [];
+/**
+ * Decode the persisted recent-view list. Anything that is not an integer id
+ * (hand-edited storage, a payload from an older schema) is discarded rather
+ * than trusted, so the rest of the component only ever sees view ids.
+ */
+function parseRecentIds(raw: string | null): number[] {
+  if (raw === null) return [];
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]") as number[];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => Number.isInteger(id));
   } catch {
     return [];
   }
+}
+
+function readRecent(): number[] {
+  if (!("localStorage" in globalThis)) return [];
+  return parseRecentIds(localStorage.getItem(RECENT_KEY));
 }
 
 export function SavedViewSelector({

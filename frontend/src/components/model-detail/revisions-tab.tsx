@@ -39,6 +39,18 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 
+const NO_OUTCOMES: ArtifactOutcomeRead[] = [];
+
+/** The revision statuses the edit form offers, in menu order; `""` is unmarked. */
+const REVISION_STATUS_CHOICES = ["", "known_good", "needs_test", "failed", "archived"] as const;
+
+type RevisionStatusChoice = (typeof REVISION_STATUS_CHOICES)[number];
+
+/** Read the status `<select>`'s value back as one of the offered choices. */
+function parseRevisionStatusChoice(value: string): RevisionStatusChoice {
+  return REVISION_STATUS_CHOICES.find((choice) => choice === value) ?? "";
+}
+
 export function RevisionsTab({
   modelId,
   gcodeFiles,
@@ -68,7 +80,7 @@ export function RevisionsTab({
   const [selectedRevisionIds, setSelectedRevisionIds] = useState<Set<number>>(new Set());
   const [batchLabel, setBatchLabel] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
-  const [outcomes, setOutcomes] = useState<ArtifactOutcomeRead[]>([]);
+  const [fetchedOutcomes, setFetchedOutcomes] = useState<ArtifactOutcomeRead[]>([]);
 
   // Compare selection — local to this tab.
   const [compareLeftId, setCompareLeftId] = useState<number>(allFiles.at(-1)?.id ?? 0);
@@ -80,15 +92,17 @@ export function RevisionsTab({
   const compareRight =
     allFiles.find((f) => f.id === compareRightId) ?? allFiles[allFiles.length - 2] ?? null;
 
+  // With nothing selected on both sides there is nothing to compare, so the
+  // empty outcome list is derived here instead of being cleared by the effect.
+  const hasComparePair = compareLeftId !== 0 && compareRightId !== 0;
+  const outcomes = hasComparePair ? fetchedOutcomes : NO_OUTCOMES;
+
   useEffect(() => {
-    if (!compareLeftId || !compareRightId) {
-      setOutcomes([]);
-      return;
-    }
+    if (!hasComparePair) return;
     getArtifactOutcomes(modelId, [compareLeftId, compareRightId])
-      .then(setOutcomes)
-      .catch(() => setOutcomes([]));
-  }, [modelId, compareLeftId, compareRightId]);
+      .then(setFetchedOutcomes)
+      .catch(() => setFetchedOutcomes([]));
+  }, [modelId, compareLeftId, compareRightId, hasComparePair]);
 
   function startRevisionEdit(file: FileRead) {
     if (!auth.isAuthenticated) {
@@ -357,15 +371,15 @@ export function RevisionsTab({
                       <select
                         value={revisionStatus}
                         onChange={(e) =>
-                          setRevisionStatus(e.target.value as FileRevisionStatus | "")
+                          setRevisionStatus(parseRevisionStatusChoice(e.target.value))
                         }
                         className="w-full bg-surface-container-lowest border border-outline-variant rounded px-3 py-2 font-mono text-xs text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
                       >
-                        <option value="">Unmarked</option>
-                        <option value="known_good">Known good</option>
-                        <option value="needs_test">Needs test</option>
-                        <option value="failed">Failed</option>
-                        <option value="archived">Archived</option>
+                        {REVISION_STATUS_CHOICES.map((choice) => (
+                          <option key={choice || "unmarked"} value={choice}>
+                            {revisionStatusLabel(choice || null)}
+                          </option>
+                        ))}
                       </select>
                       <textarea
                         value={revisionNotes}

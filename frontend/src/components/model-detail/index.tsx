@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { Link } from "@/lib/navigation";
 import { useRouter } from "@/lib/navigation";
 import {
@@ -36,11 +36,7 @@ import {
 } from "@/lib/api";
 import { useCollections, useTags } from "@/lib/queries";
 import { timeAgo } from "@/lib/format";
-import {
-  DEFAULT_METADATA_PREFERENCES,
-  MetadataPreferences,
-  readMetadataPreferences,
-} from "@/lib/metadata-preferences";
+import { readMetadataPreferences } from "@/lib/metadata-preferences";
 import { toast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth-context";
 import { useAuthenticatedAssetUrl } from "@/lib/use-authenticated-asset-url";
@@ -81,27 +77,42 @@ const GcodeViewer = lazy(() =>
 
 const ViewerFallback = <Loader2 className="h-8 w-8 animate-spin text-on-surface-variant" />;
 
-const PRINTER_BED_SIZES: Record<string, { x: number; y: number }> = {
-  default: { x: 235, y: 235 },
-};
+// The resizable sidebar publishes its width as a custom property so the
+// `md:[width:var(--detail-sidebar-width)]` class can pick it up on desktop only.
+// Custom properties aren't part of React's CSSProperties, so augment it the way
+// upload-modal augments InputHTMLAttributes rather than asserting at the callsite.
+declare module "react" {
+  interface CSSProperties {
+    "--detail-sidebar-width"?: string;
+  }
+}
+
+/** A printer's usable bed footprint in millimetres. */
+interface BedSize {
+  x: number;
+  y: number;
+}
+
+const DEFAULT_BED_SIZE: BedSize = { x: 235, y: 235 };
 
 const DETAIL_SIDEBAR_STORAGE_KEY = "ps-model-detail-sidebar-width";
 const DETAIL_SIDEBAR_DEFAULT_WIDTH = 480;
 const DETAIL_SIDEBAR_MIN_WIDTH = 400;
 const DETAIL_SIDEBAR_MAX_WIDTH = 800;
 
+const isBrowser = (): boolean => "window" in globalThis;
+
 function clampDetailSidebarWidth(width: number): number {
-  const viewportMax =
-    typeof window === "undefined"
-      ? DETAIL_SIDEBAR_MAX_WIDTH
-      : Math.max(DETAIL_SIDEBAR_MIN_WIDTH, window.innerWidth - 320);
+  const viewportMax = isBrowser()
+    ? Math.max(DETAIL_SIDEBAR_MIN_WIDTH, window.innerWidth - 320)
+    : DETAIL_SIDEBAR_MAX_WIDTH;
   return Math.round(
     Math.min(DETAIL_SIDEBAR_MAX_WIDTH, viewportMax, Math.max(DETAIL_SIDEBAR_MIN_WIDTH, width)),
   );
 }
 
-function getBedSize(printerModel: string | null | undefined): { x: number; y: number } {
-  if (!printerModel) return PRINTER_BED_SIZES.default;
+function getBedSize(printerModel: string | null | undefined): BedSize {
+  if (!printerModel) return DEFAULT_BED_SIZE;
   const m = printerModel.toLowerCase();
   if (m.includes("a1 mini") || (m.includes("bambu") && m.includes("mini")))
     return { x: 180, y: 180 };
@@ -116,7 +127,7 @@ function getBedSize(printerModel: string | null | undefined): { x: number; y: nu
   }
   if (m.includes("cr-10") || m.includes("cr10")) return { x: 300, y: 300 };
   if (m.includes("ender") || m.includes("k1")) return { x: 220, y: 220 };
-  return PRINTER_BED_SIZES.default;
+  return DEFAULT_BED_SIZE;
 }
 
 export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
@@ -140,13 +151,13 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
   // the app, refetched on focus + after any mutation).
   const { data: collections = [] } = useCollections();
   const { data: tags = [] } = useTags();
-  const [metadataPreferences, setMetadataPreferences] = useState<MetadataPreferences>(
-    DEFAULT_METADATA_PREFERENCES,
-  );
+  // Read once at mount; the panel that edits these lives on another route, so
+  // there is nothing to re-sync while this view is open.
+  const [metadataPreferences] = useState(readMetadataPreferences);
   const [addRevisionOpen, setAddRevisionOpen] = useState(false);
-  const [printerFiles, setPrinterFiles] = useState<ModelPrinterFileRead[]>([]);
-  const [printJobs, setPrintJobs] = useState<ModelPrintJobRead[]>([]);
-  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [fetchedPrinterFiles, setFetchedPrinterFiles] = useState<ModelPrinterFileRead[]>([]);
+  const [fetchedPrintJobs, setFetchedPrintJobs] = useState<ModelPrintJobRead[]>([]);
+  const [requestedTab, setRequestedTab] = useState<TabKey>("overview");
   const [displayMode, setDisplayMode] = useState<ViewerDisplayMode>("solid");
   const [detailSidebarWidth, setDetailSidebarWidth] = useState(() => {
     try {
@@ -170,6 +181,18 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
   const viewerControls = useRef<STLViewerControls | null>(null);
   const canEditModel = model.effective_role === "edit" || model.effective_role === "admin";
   const canViewPrinters = !!user?.is_superuser;
+  // Printer files, print jobs and the history tab are superuser-only. Gating
+  // them here — rather than clearing state from an effect when the permission
+  // disappears — keeps the fetch effect a pure fetch.
+  const printerFiles = useMemo(
+    () => (canViewPrinters ? fetchedPrinterFiles : []),
+    [canViewPrinters, fetchedPrinterFiles],
+  );
+  const printJobs = useMemo(
+    () => (canViewPrinters ? fetchedPrintJobs : []),
+    [canViewPrinters, fetchedPrintJobs],
+  );
+  const activeTab = !canViewPrinters && requestedTab === "history" ? "overview" : requestedTab;
   const visibleTabs = useMemo(
     () => TABS.filter((tab) => tab.key !== "history" || canViewPrinters),
     [canViewPrinters],
@@ -197,22 +220,14 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
   }
 
   useEffect(() => {
-    if (!canViewPrinters) {
-      setPrinterFiles([]);
-      setPrintJobs([]);
-      return;
-    }
+    if (!canViewPrinters) return;
     getModelPrinterFiles(model.id)
-      .then(setPrinterFiles)
+      .then(setFetchedPrinterFiles)
       .catch(() => {});
     getModelPrintJobs(model.id)
-      .then(setPrintJobs)
+      .then(setFetchedPrintJobs)
       .catch(() => {});
   }, [model.id, canViewPrinters]);
-
-  useEffect(() => {
-    setMetadataPreferences(readMetadataPreferences());
-  }, []);
 
   useEffect(() => {
     try {
@@ -254,10 +269,6 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
     window.addEventListener("pointercancel", onUp);
   }
 
-  useEffect(() => {
-    if (!canViewPrinters && activeTab === "history") setActiveTab("overview");
-  }, [activeTab, canViewPrinters]);
-
   async function doDelete() {
     setDeleting(true);
     try {
@@ -281,7 +292,7 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
     setEditTags([...model.tags]);
     setTagInput("");
     setCatOpen(false);
-    setActiveTab("overview");
+    setRequestedTab("overview");
     setEditing(true);
   }
 
@@ -750,7 +761,7 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
           {/* Right: Settings & Files Panel */}
           <div
             data-testid="model-detail-sidebar"
-            style={{ "--detail-sidebar-width": `${detailSidebarWidth}px` } as CSSProperties}
+            style={{ "--detail-sidebar-width": `${detailSidebarWidth}px` }}
             className="relative flex h-auto min-h-0 w-full shrink-0 flex-col border-l-0 border-t border-outline-variant bg-surface-container-lowest md:h-full md:[width:var(--detail-sidebar-width)] md:border-l md:border-t-0"
           >
             <div
@@ -800,7 +811,7 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                 ),
               }))}
               active={activeTab}
-              onChange={setActiveTab}
+              onChange={setRequestedTab}
               indicatorInset={8}
               className="shrink-0 border-b border-outline-variant bg-surface-container-lowest px-2 overflow-x-auto scrollbar-none [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
               tabClassName="flex-1 px-2 py-3 font-mono text-2xs uppercase tracking-wider whitespace-nowrap transition-colors text-on-surface-variant hover:text-on-surface"
@@ -839,7 +850,7 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                   revisionSaving={revisionUpdater.saving}
                   onSend={requestSend}
                   canSend={canViewPrinters}
-                  onCompare={() => setActiveTab("revisions")}
+                  onCompare={() => setRequestedTab("revisions")}
                   onMark={(file, patch) => void revisionUpdater.update(file, patch)}
                   onAddRevision={requestAddRevision}
                 />
@@ -871,7 +882,7 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                   jobs={printJobs}
                   modelId={model.id}
                   gcodeFiles={gcodeFiles}
-                  onJobCreated={(job) => setPrintJobs((p) => [job, ...p])}
+                  onJobCreated={(job) => setFetchedPrintJobs((jobs) => [job, ...jobs])}
                 />
               )}
             </div>

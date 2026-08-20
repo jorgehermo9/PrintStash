@@ -74,11 +74,18 @@ export function mergeBulkItems(existing: BulkItem[], incoming: BulkItem[]): Bulk
   return { items, added, skipped };
 }
 
+// Only the entry handle is read off each dropped item, and older engines ship
+// items without `webkitGetAsEntry` at all — so the seam names that slice rather
+// than demanding a whole DataTransferItemList.
+export interface DroppedItem {
+  webkitGetAsEntry?: () => FileSystemEntry | null;
+}
+
 // Synchronously pull FileSystemEntry handles out of a drop. Must run inside the
 // drop handler — the DataTransfer (and its items) is emptied once that returns;
 // the entries themselves stay valid for the async walk that follows.
 export function entriesFromDataTransfer(
-  items: DataTransferItemList | null | undefined,
+  items: ArrayLike<DroppedItem> | null | undefined,
 ): FileSystemEntry[] {
   if (!items) return [];
   const out: FileSystemEntry[] = [];
@@ -109,15 +116,26 @@ function readAllDirEntries(reader: FileSystemDirectoryReader): Promise<FileSyste
   });
 }
 
+// `isFile` / `isDirectory` are the File System API's own discriminators for a
+// FileSystemEntry; lib.dom declares them as plain booleans, so restate them as
+// type predicates and the two subtypes narrow without a cast.
+function isFileEntry(entry: FileSystemEntry): entry is FileSystemFileEntry {
+  return entry.isFile;
+}
+
+function isDirectoryEntry(entry: FileSystemEntry): entry is FileSystemDirectoryEntry {
+  return entry.isDirectory;
+}
+
 // Recursively walk a dropped file/dir entry into BulkItems, preserving the
 // folder path from `fullPath` (which looks like "/Lib/brackets/foo.stl").
 export async function walkEntry(entry: FileSystemEntry): Promise<BulkItem[]> {
-  if (entry.isFile) {
-    const file = await readEntryFile(entry as FileSystemFileEntry);
+  if (isFileEntry(entry)) {
+    const file = await readEntryFile(entry);
     return [{ file, relPath: dirOf(entry.fullPath.replace(/^\/+/, "")) }];
   }
-  if (entry.isDirectory) {
-    const children = await readAllDirEntries((entry as FileSystemDirectoryEntry).createReader());
+  if (isDirectoryEntry(entry)) {
+    const children = await readAllDirEntries(entry.createReader());
     const nested = await Promise.all(children.map(walkEntry));
     return nested.flat();
   }

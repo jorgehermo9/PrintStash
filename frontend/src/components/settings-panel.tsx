@@ -110,7 +110,6 @@ import {
 } from "@/lib/printer-card-display";
 import { CHANGELOG, GITHUB_REPO } from "@/lib/changelog";
 import {
-  DEFAULT_PREVIEW_PREFERENCES,
   readPreviewPreferences,
   writePreviewPreferences,
   type PreviewPreferences,
@@ -171,10 +170,54 @@ const SETTINGS_SECTIONS: {
   { id: "about", labelKey: "settings.about", icon: Info },
 ];
 
+/** True when the `?section=` value names one of the sections we ship. */
+function isSettingsSection(value: string | null): value is SettingsSection {
+  return SETTINGS_SECTIONS.some((section) => section.id === value);
+}
+
 function settingsSection(value: string | null): SettingsSection {
-  return SETTINGS_SECTIONS.some((section) => section.id === value)
-    ? (value as SettingsSection)
-    : "overview";
+  return isSettingsSection(value) ? value : "overview";
+}
+
+/**
+ * Resolve a `<select>` value back to the literal union it came from. The DOM hands
+ * back the option's value as a plain string, so matching it against the option list
+ * recovers the domain type without asserting. The fallback is only reachable if the
+ * rendered `<option>`s ever drift from the list passed here.
+ */
+function selectedOption<T extends number | string>(
+  options: readonly [T, ...T[]],
+  value: number | string,
+): T {
+  return options.find((option) => option === value) ?? options[0];
+}
+
+const COLLECTION_ROLES = ["view", "edit", "admin"] as const satisfies readonly CollectionRole[];
+const PRINTER_ROLES = [
+  "view",
+  "print",
+  "control",
+  "admin",
+] as const satisfies readonly PrinterRole[];
+const PREVIEW_QUALITIES = [
+  "performance",
+  "balanced",
+  "detail",
+] as const satisfies readonly PreviewQuality[];
+const SCREENSHOT_SCALES = [1, 2, 3] as const satisfies readonly ScreenshotScale[];
+/** Widths the vault offers; a legacy config value outside this list shows as "Custom". */
+const MODEL_THUMBNAIL_WIDTHS = [320, 640, 1280] as const;
+type ModelThumbnailWidth = (typeof MODEL_THUMBNAIL_WIDTHS)[number];
+
+/**
+ * What the trash panel is busy with: the id of the single model being purged, or a
+ * label for one of the bulk retention actions.
+ */
+type TrashOperation = number | "expired" | "settings";
+
+/** Only a per-model purge carries an id; the bulk actions carry their label instead. */
+function isModelPurge(operation: TrashOperation | null): operation is number {
+  return operation !== null && operation !== "expired" && operation !== "settings";
 }
 
 // Shared button styles — keep settings actions visually uniform and theme-aware.
@@ -258,9 +301,10 @@ export function SettingsPanel() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const latestRelease = CHANGELOG[0];
-  const [activeSection, setActiveSection] = useState<SettingsSection>(() =>
-    settingsSection(searchParams.get("section")),
-  );
+  // `?section=` is the single source of truth for the open section, so it is read
+  // during render; mirroring it into state needed an effect to re-sync on every
+  // deep link, back button, and replace.
+  const activeSection = settingsSection(searchParams.get("section"));
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [releaseStatus, setReleaseStatus] = useState<ReleaseStatus | null>(null);
   const [releaseChecking, setReleaseChecking] = useState(false);
@@ -269,7 +313,10 @@ export function SettingsPanel() {
   const stats = useVaultStats().data ?? null;
   const [exporting, setExporting] = useState<"json" | "csv" | null>(null);
   const [archiveBusy, setArchiveBusy] = useState<"export" | "import" | null>(null);
-  const [apiKeys, setApiKeys] = useState<ApiKeyRead[]>([]);
+  const [loadedApiKeys, setApiKeys] = useState<ApiKeyRead[]>([]);
+  // A signed-out visitor has no keys to list, so that is derived rather than cleared
+  // from an effect on sign-out.
+  const apiKeys = user ? loadedApiKeys : [];
   const [users, setUsers] = useState<UserRead[]>([]);
   const [usersBusy, setUsersBusy] = useState<number | "create" | null>(null);
   const [newUsername, setNewUsername] = useState("");
@@ -290,20 +337,22 @@ export function SettingsPanel() {
   const [accessPrinterId, setAccessPrinterId] = useState<number | "">("");
   const [printerAccessRole, setPrinterAccessRole] = useState<PrinterRole>("view");
   const [printerAccessBusy, setPrinterAccessBusy] = useState<"load" | "save" | string | null>(null);
-  const [newApiKey, setNewApiKey] = useState<string | null>(null);
+  const [mintedApiKey, setNewApiKey] = useState<string | null>(null);
+  // Likewise the one-time secret: signing out hides it without a reset effect.
+  const newApiKey = user ? mintedApiKey : null;
   const [keyName, setKeyName] = useState("Programmatic access");
   const [keyBusy, setKeyBusy] = useState(false);
   const [trashItems, setTrashItems] = useState<TrashedModelRead[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
-  const [trashBusy, setTrashBusy] = useState<number | "expired" | "settings" | null>(null);
+  const [trashBusy, setTrashBusy] = useState<TrashOperation | null>(null);
   const [trashRetentionDays, setTrashRetentionDays] = useState(30);
   const [autoMarkKnownGood, setAutoMarkKnownGood] = useState(true);
   const [autoMarkBusy, setAutoMarkBusy] = useState(false);
   const [currency, setCurrency] = useState("USD");
   const [currencyBusy, setCurrencyBusy] = useState(false);
-  const [previewPreferences, setPreviewPreferences] = useState<PreviewPreferences>(
-    DEFAULT_PREVIEW_PREFERENCES,
-  );
+  // Each reader falls back to its defaults when there is no `window`, so these are
+  // safe as lazy initialisers on the server as well as in the browser.
+  const [previewPreferences, setPreviewPreferences] = useState(readPreviewPreferences);
   const [modelThumbnailWidth, setModelThumbnailWidth] = useState(640);
   const [previewBusy, setPreviewBusy] = useState<"quality" | "rebuild" | null>(null);
   const [purgeTarget, setPurgeTarget] = useState<number | null>(null);
@@ -314,22 +363,15 @@ export function SettingsPanel() {
   const [restoringBackup, setRestoringBackup] = useState(false);
 
   const [downloadingBackup, setDownloadingBackup] = useState<string | null>(null);
-  const [metadataPrefs, setMetadataPrefs] = useState<MetadataPreferences>(
-    DEFAULT_METADATA_PREFERENCES,
-  );
-  const [cardMetrics, setCardMetrics] = useState<CardMetrics>(DEFAULT_CARD_METRICS);
+  const [metadataPrefs, setMetadataPrefs] = useState(readMetadataPreferences);
+  const [cardMetrics, setCardMetrics] = useState(readCardMetrics);
   const showPrinterCardImage = usePrinterCardImagePreference();
   const [printerImageWarningOpen, setPrinterImageWarningOpen] = useState(false);
   const visibleSettingsSections = SETTINGS_SECTIONS.filter(
     (section) => !["sso", "maintenance"].includes(section.id) || user?.is_superuser,
   );
 
-  useEffect(() => {
-    setActiveSection(settingsSection(searchParams.get("section")));
-  }, [searchParams]);
-
   function changeSection(section: SettingsSection) {
-    setActiveSection(section);
     const params = new URLSearchParams(searchParams.toString());
     if (section === "overview") params.delete("section");
     else params.set("section", section);
@@ -377,12 +419,6 @@ export function SettingsPanel() {
   }, [user]);
 
   useEffect(() => {
-    setMetadataPrefs(readMetadataPreferences());
-    setCardMetrics(readCardMetrics());
-    setPreviewPreferences(readPreviewPreferences());
-  }, []);
-
-  useEffect(() => {
     if (!user?.is_superuser) return;
     getHealthDetails<HealthResponse>()
       .then(setHealth)
@@ -405,19 +441,21 @@ export function SettingsPanel() {
   );
 
   useEffect(() => {
+    // `checkForUpdates` awaits the release feed; the only synchronous write is the flag
+    // that says a request is in flight, which is what this effect exists to start.
+    // oxlint-disable-next-line react/set-state-in-effect -- the release itself arrives asynchronously
     void checkForUpdates(false);
   }, [checkForUpdates]);
 
   useEffect(() => {
-    if (!user) {
-      setApiKeys([]);
-      setNewApiKey(null);
-      return;
-    }
+    if (!user) return;
     listApiKeys()
       .then(setApiKeys)
       .catch(() => {});
     if (user.is_superuser) {
+      // Each refresher awaits its admin endpoint before writing results; the rule follows
+      // the call but not the `await` inside it, and reads the in-flight flags as cascades.
+      // oxlint-disable-next-line react/set-state-in-effect -- results are applied after the fetch resolves
       refreshUsers().catch(() => {});
       refreshCollectionAccess().catch(() => {});
       refreshPrinterAccess().catch(() => {});
@@ -443,6 +481,9 @@ export function SettingsPanel() {
 
   useEffect(() => {
     if (activeSection === "trash") {
+      // Opening the Trash section is what starts the listing fetch; `loadTrash` writes the
+      // items only after awaiting the API, and synchronously sets just its loading flag.
+      // oxlint-disable-next-line react/set-state-in-effect -- fetch-on-open of an external listing
       loadTrash();
     }
   }, [activeSection, loadTrash]);
@@ -464,6 +505,9 @@ export function SettingsPanel() {
 
   useEffect(() => {
     if (activeSection === "storage") {
+      // Same shape as the trash listing above: opening Storage starts the backup fetch,
+      // and only the loading flag is written before the await.
+      // oxlint-disable-next-line react/set-state-in-effect -- fetch-on-open of an external listing
       loadBackups();
     }
   }, [activeSection, loadBackups]);
@@ -534,7 +578,7 @@ export function SettingsPanel() {
     toast.success("Preview settings saved for this browser.");
   }
 
-  async function saveModelThumbnailWidth(next: 320 | 640 | 1280) {
+  async function saveModelThumbnailWidth(next: ModelThumbnailWidth) {
     const previous = modelThumbnailWidth;
     setModelThumbnailWidth(next);
     setPreviewBusy("quality");
@@ -836,15 +880,14 @@ export function SettingsPanel() {
   }
 
   function setAllMetadataPreferences(visible: boolean) {
-    const next = Object.fromEntries(
-      METADATA_FIELDS.map((field) => [field.id, visible]),
-    ) as MetadataPreferences;
+    const next: MetadataPreferences = { ...metadataPrefs };
+    for (const field of METADATA_FIELDS) next[field.id] = visible;
     setMetadataPrefs(next);
     writeMetadataPreferences(next);
   }
 
   function updateCardMetric(slot: 0 | 1 | 2, id: CardMetricId) {
-    const next: CardMetrics = [...cardMetrics] as CardMetrics;
+    const next: CardMetrics = [cardMetrics[0], cardMetrics[1], cardMetrics[2]];
     next[slot] = id;
     setCardMetrics(next);
     writeCardMetrics(next);
@@ -1034,7 +1077,7 @@ export function SettingsPanel() {
           open={purgeTarget !== null}
           onClose={() => setPurgeTarget(null)}
           onConfirm={confirmPurge}
-          busy={typeof trashBusy === "number"}
+          busy={isModelPurge(trashBusy)}
           title="Permanently delete?"
           description="This will delete the model and all its files immediately. This cannot be undone."
           confirmLabel="Delete forever"
@@ -1510,7 +1553,7 @@ export function SettingsPanel() {
                           <select
                             value={accessRole}
                             onChange={(event) =>
-                              setAccessRole(event.target.value as CollectionRole)
+                              setAccessRole(selectedOption(COLLECTION_ROLES, event.target.value))
                             }
                             className={INPUT}
                             disabled={!accessUserId || !accessCollectionId || accessBusy === "load"}
@@ -1673,7 +1716,9 @@ export function SettingsPanel() {
                           <select
                             value={printerAccessRole}
                             onChange={(event) =>
-                              setPrinterAccessRole(event.target.value as PrinterRole)
+                              setPrinterAccessRole(
+                                selectedOption(PRINTER_ROLES, event.target.value),
+                              )
                             }
                             className={INPUT}
                             disabled={
@@ -2147,7 +2192,7 @@ export function SettingsPanel() {
                                 type="button"
                                 disabled={usedInOther}
                                 aria-pressed={isSelected}
-                                onClick={() => updateCardMetric(slot, opt.id as CardMetricId)}
+                                onClick={() => updateCardMetric(slot, opt.id)}
                                 className={`group flex items-center gap-2 px-3 py-2 rounded border text-sm transition-colors ${
                                   isSelected
                                     ? "border-transparent bg-accent text-accent-foreground"
@@ -2276,7 +2321,7 @@ export function SettingsPanel() {
                         value={previewPreferences.previewQuality}
                         onChange={(event) =>
                           savePreviewPreference({
-                            previewQuality: event.target.value as PreviewQuality,
+                            previewQuality: selectedOption(PREVIEW_QUALITIES, event.target.value),
                           })
                         }
                         className={INPUT}
@@ -2295,7 +2340,10 @@ export function SettingsPanel() {
                         value={previewPreferences.screenshotScale}
                         onChange={(event) =>
                           savePreviewPreference({
-                            screenshotScale: Number(event.target.value) as ScreenshotScale,
+                            screenshotScale: selectedOption(
+                              SCREENSHOT_SCALES,
+                              Number(event.target.value),
+                            ),
                           })
                         }
                         className={INPUT}
@@ -2322,7 +2370,9 @@ export function SettingsPanel() {
                         aria-label="Model image quality"
                         value={modelThumbnailWidth}
                         onChange={(event) =>
-                          saveModelThumbnailWidth(Number(event.target.value) as 320 | 640 | 1280)
+                          saveModelThumbnailWidth(
+                            selectedOption(MODEL_THUMBNAIL_WIDTHS, Number(event.target.value)),
+                          )
                         }
                         disabled={!user?.is_superuser || previewBusy !== null}
                         className={INPUT}

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import type { KeyboardEvent } from "react";
 
 export function useComboboxNav(
@@ -9,12 +9,12 @@ export function useComboboxNav(
     onClose?: () => void;
   },
 ) {
-  const [activeIndex, setActiveIndex] = useState(-1);
+  const [highlighted, setActiveIndex] = useState(-1);
   const listboxId = useId();
 
-  useEffect(() => {
-    if (activeIndex >= itemCount) setActiveIndex(itemCount - 1);
-  }, [itemCount, activeIndex]);
+  // The list shrinks as the user types, so a stored highlight can outrun it. Clamp
+  // during render instead of correcting it in an effect and re-rendering twice.
+  const activeIndex = highlighted >= itemCount ? itemCount - 1 : highlighted;
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown" && itemCount > 0) {

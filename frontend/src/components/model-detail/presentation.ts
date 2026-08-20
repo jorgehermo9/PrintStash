@@ -37,12 +37,12 @@ export function normalizeRecommendedGcodeFiles<
   );
 }
 
-const REVISION_STATUS_LABELS: Record<FileRevisionStatus, string> = {
+const REVISION_STATUS_LABELS = {
   known_good: "Known good",
   needs_test: "Needs test",
   failed: "Failed",
   archived: "Archived",
-};
+} satisfies Record<FileRevisionStatus, string>;
 
 export function revisionStatusClass(status: FileRevisionStatus | null): string {
   switch (status) {
@@ -69,17 +69,16 @@ export function headerStatusLabel(status: FileRevisionStatus | null): string {
 
 export type PrintJobTone = "success" | "error" | "progress";
 
-export const PRINT_JOB_PRESENTATION: Record<PrintJobState, { label: string; tone: PrintJobTone }> =
-  {
-    queued: { label: "Queued", tone: "progress" },
-    uploading: { label: "Uploading", tone: "progress" },
-    started: { label: "Started", tone: "progress" },
-    printing: { label: "Printing", tone: "progress" },
-    paused: { label: "Paused", tone: "progress" },
-    completed: { label: "Success", tone: "success" },
-    cancelled: { label: "Cancelled", tone: "error" },
-    failed: { label: "Failed", tone: "error" },
-  };
+export const PRINT_JOB_PRESENTATION = {
+  queued: { label: "Queued", tone: "progress" },
+  uploading: { label: "Uploading", tone: "progress" },
+  started: { label: "Started", tone: "progress" },
+  printing: { label: "Printing", tone: "progress" },
+  paused: { label: "Paused", tone: "progress" },
+  completed: { label: "Success", tone: "success" },
+  cancelled: { label: "Cancelled", tone: "error" },
+  failed: { label: "Failed", tone: "error" },
+} satisfies Record<PrintJobState, { label: string; tone: PrintJobTone }>;
 
 export function printJobToneClass(tone: PrintJobTone): string {
   switch (tone) {

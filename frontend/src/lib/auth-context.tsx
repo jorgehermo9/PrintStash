@@ -11,7 +11,20 @@ import {
 } from "@/lib/auth-store";
 import { login as apiLogin, logout as apiLogout, getMe } from "@/lib/api";
 
-interface AuthState {
+/**
+ * The auth calls the provider makes. Declared as a port so a test (or an
+ * embedded surface) can stand the provider up against a stub; production
+ * callers get {@link SERVER_AUTH_API}.
+ */
+export interface AuthApi {
+  login: typeof apiLogin;
+  logout: typeof apiLogout;
+  getMe: typeof getMe;
+}
+
+const SERVER_AUTH_API: AuthApi = { login: apiLogin, logout: apiLogout, getMe };
+
+export interface AuthState {
   user: StoredUser | null;
   loading: boolean;
   login: (username: string, password: string, remember_me?: boolean) => Promise<void>;
@@ -19,7 +32,11 @@ interface AuthState {
   refresh: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthState>({
+/**
+ * Exported so a test (or a future embedded surface) can supply an auth state
+ * directly instead of standing the whole provider up against the API.
+ */
+export const AuthContext = createContext<AuthState>({
   user: null,
   loading: true,
   login: async () => {},
@@ -27,9 +44,17 @@ const AuthContext = createContext<AuthState>({
   refresh: async () => {},
 });
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({
+  children,
+  api = SERVER_AUTH_API,
+}: {
+  children: React.ReactNode;
+  api?: AuthApi;
+}) {
   const [user, setUser] = useState<StoredUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Only a stored login has a session worth confirming with `getMe`; with no
+  // stored login there is nothing to await, so the provider is ready at once.
+  const [loading, setLoading] = useState(isLoggedIn);
 
   useEffect(() => {
     let alive = true;
@@ -37,12 +62,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(getUser());
     });
 
-    if (!isLoggedIn()) {
-      setLoading(false);
-      return off;
-    }
+    if (!isLoggedIn()) return off;
 
-    getMe()
+    api
+      .getMe()
       .then((u) => {
         if (!alive) return;
         const stored: StoredUser = {
@@ -66,14 +89,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       alive = false;
       off();
     };
-  }, []);
+  }, [api]);
 
   const login = useCallback(
     async (username: string, password: string, remember_me: boolean = false) => {
-      const token = await apiLogin({ username, password, remember_me });
+      const token = await api.login({ username, password, remember_me });
       storeLogin(token.access_token, { id: 0, username, email: null, is_superuser: false });
       try {
-        const me = await getMe();
+        const me = await api.getMe();
         const stored: StoredUser = {
           id: me.id,
           username: me.username,
@@ -87,21 +110,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw e;
       }
     },
-    [],
+    [api],
   );
 
   const logout = useCallback(async () => {
     try {
-      await apiLogout();
+      await api.logout();
     } finally {
       clearLogin();
       setUser(null);
     }
-  }, []);
+  }, [api]);
 
   const refresh = useCallback(async () => {
     try {
-      const me = await getMe();
+      const me = await api.getMe();
       const stored: StoredUser = {
         id: me.id,
         username: me.username,
@@ -115,7 +138,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       throw error;
     }
-  }, []);
+  }, [api]);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>

@@ -3,7 +3,10 @@ import { expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SavedViewSelector } from "@/components/saved-view-selector";
+import type { ComponentProps } from "react";
 import type { SavedViewRead } from "@/types";
+
+type SelectorProps = ComponentProps<typeof SavedViewSelector>;
 
 function view(id: number, name: string): SavedViewRead {
   return {
@@ -15,52 +18,43 @@ function view(id: number, name: string): SavedViewRead {
   };
 }
 
+/** One spy per selector callback, typed from the component's own props. */
+function handlerSpies() {
+  return {
+    onSelect: vi.fn<SelectorProps["onSelect"]>(),
+    onCreate: vi.fn<SelectorProps["onCreate"]>(),
+    onUpdate: vi.fn<SelectorProps["onUpdate"]>(),
+    onRename: vi.fn<SelectorProps["onRename"]>(),
+    onDuplicate: vi.fn<SelectorProps["onDuplicate"]>(),
+    onDelete: vi.fn<SelectorProps["onDelete"]>(),
+  };
+}
+
 it("searches a long saved-view list and applies the chosen view", async () => {
   const user = userEvent.setup();
-  const onSelect = vi.fn();
+  const handlers = handlerSpies();
   const views = [view(1, "Ready to print"), view(2, "Needs supports"), view(3, "Favorites")];
-  render(
-    <SavedViewSelector
-      views={views}
-      activeId={null}
-      onSelect={onSelect}
-      onCreate={vi.fn()}
-      onUpdate={vi.fn()}
-      onRename={vi.fn()}
-      onDuplicate={vi.fn()}
-      onDelete={vi.fn()}
-    />,
-  );
+  render(<SavedViewSelector views={views} activeId={null} {...handlers} />);
 
   await user.click(screen.getByRole("button", { name: /saved views/i }));
   await user.type(screen.getByRole("textbox", { name: /find a saved view/i }), "support");
   expect(screen.queryByText("Ready to print")).not.toBeInTheDocument();
   await user.click(screen.getByText("Needs supports"));
 
-  expect(onSelect).toHaveBeenCalledWith(views[1]);
+  expect(handlers.onSelect).toHaveBeenCalledWith(views[1]);
 });
 
 it("updates and renames saved views from the selector", async () => {
   const user = userEvent.setup();
   const saved = view(1, "Workshop");
-  const onUpdate = vi.fn().mockResolvedValue(undefined);
-  const onRename = vi.fn().mockResolvedValue(undefined);
-  render(
-    <SavedViewSelector
-      views={[saved]}
-      activeId={1}
-      onSelect={vi.fn()}
-      onCreate={vi.fn()}
-      onUpdate={onUpdate}
-      onRename={onRename}
-      onDuplicate={vi.fn()}
-      onDelete={vi.fn()}
-    />,
-  );
+  const handlers = handlerSpies();
+  handlers.onUpdate.mockResolvedValue(undefined);
+  handlers.onRename.mockResolvedValue(undefined);
+  render(<SavedViewSelector views={[saved]} activeId={1} {...handlers} />);
 
   await user.click(screen.getByRole("button", { name: /workshop/i }));
   await user.click(screen.getByRole("button", { name: "Update Workshop" }));
-  expect(onUpdate).toHaveBeenCalledWith(saved);
+  expect(handlers.onUpdate).toHaveBeenCalledWith(saved);
   await user.click(screen.getByRole("button", { name: "Rename Workshop" }));
   const input = screen.getByDisplayValue("Workshop");
   await user.clear(input);
@@ -70,43 +64,20 @@ it("updates and renames saved views from the selector", async () => {
       .getByRole("dialog", { name: /rename saved view/i })
       .querySelector('button[type="submit"]')!,
   );
-  expect(onRename).toHaveBeenCalledWith(saved, "Daily prints");
+  expect(handlers.onRename).toHaveBeenCalledWith(saved, "Daily prints");
 });
 
 it("starts saving current filters from the selector", async () => {
   const user = userEvent.setup();
-  const onCreate = vi.fn();
-  render(
-    <SavedViewSelector
-      views={[]}
-      activeId={null}
-      onSelect={vi.fn()}
-      onCreate={onCreate}
-      onUpdate={vi.fn()}
-      onRename={vi.fn()}
-      onDuplicate={vi.fn()}
-      onDelete={vi.fn()}
-    />,
-  );
+  const handlers = handlerSpies();
+  render(<SavedViewSelector views={[]} activeId={null} {...handlers} />);
   await user.click(screen.getByRole("button", { name: /saved views/i }));
   await user.click(screen.getByRole("button", { name: /save current view/i }));
-  expect(onCreate).toHaveBeenCalledTimes(1);
+  expect(handlers.onCreate).toHaveBeenCalledTimes(1);
 });
 
 it("marks an active saved view when current filters have changed", () => {
   const saved = view(1, "Workshop");
-  render(
-    <SavedViewSelector
-      views={[saved]}
-      activeId={1}
-      modified
-      onSelect={vi.fn()}
-      onCreate={vi.fn()}
-      onUpdate={vi.fn()}
-      onRename={vi.fn()}
-      onDuplicate={vi.fn()}
-      onDelete={vi.fn()}
-    />,
-  );
+  render(<SavedViewSelector views={[saved]} activeId={1} modified {...handlerSpies()} />);
   expect(screen.getByLabelText("Modified saved view")).toBeInTheDocument();
 });

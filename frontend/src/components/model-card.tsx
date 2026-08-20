@@ -29,11 +29,19 @@ function warmStl(meshFileId: number | null) {
   });
 }
 import {
+  CARD_METRIC_STORAGE_KEY,
   CardMetricId,
   CardMetrics,
-  DEFAULT_CARD_METRICS,
   readCardMetrics,
 } from "@/lib/card-metrics";
+
+/** An optimistic star toggle, remembered against the server value it overrode. */
+interface StarOverride {
+  /** The `model.starred` this override was made against. */
+  base: boolean;
+  /** What the card shows for as long as the override stands. */
+  value: boolean;
+}
 
 function formatTime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -42,7 +50,7 @@ function formatTime(seconds: number): string {
   return `${minutes}m`;
 }
 
-const REVISION_CONFIG: Record<FileRevisionStatus, { label: string; classes: string }> = {
+const REVISION_CONFIG = {
   known_good: {
     label: "Known Good",
     classes:
@@ -58,12 +66,9 @@ const REVISION_CONFIG: Record<FileRevisionStatus, { label: string; classes: stri
     classes: "bg-red-50 dark:bg-red-950/50 text-red-700 border-red-200 dark:border-red-800",
   },
   archived: { label: "Archived", classes: "bg-muted text-muted-foreground border-border" },
-};
+} satisfies Record<FileRevisionStatus, { label: string; classes: string }>;
 
-const METRIC_CONFIG: Record<
-  CardMetricId,
-  { abbr: string; getValue: (model: ModelListItem) => string }
-> = {
+const METRIC_CONFIG = {
   layer_height: {
     abbr: "LYR",
     getValue: (m) =>
@@ -97,7 +102,7 @@ const METRIC_CONFIG: Record<
     abbr: "FILES",
     getValue: (m) => `${m.file_count}`,
   },
-};
+} satisfies Record<CardMetricId, { abbr: string; getValue: (model: ModelListItem) => string }>;
 
 function RevisionBadge({
   status,
@@ -165,7 +170,15 @@ function ModelCardInner({
 }) {
   const router = useRouter();
   const [dragging, setDragging] = useState(false);
-  const [starred, setStarred] = useState(model.starred);
+  // The card owns an optimistic star only until the server says otherwise: a
+  // fresh `model.starred` (list refetch, or the star toggled on the detail
+  // page) no longer matches `base` and supersedes the override, so nothing has
+  // to copy the prop into state.
+  const [starOverride, setStarOverride] = useState<StarOverride | null>(null);
+  const starred =
+    starOverride !== null && starOverride.base === model.starred
+      ? starOverride.value
+      : model.starred;
   const [starBusy, setStarBusy] = useState(false);
   const thumb = useAuthenticatedAssetUrl(model.thumbnail_url);
   // Lazy thumbnails used to snap in at full opacity the instant their bytes
@@ -176,17 +189,16 @@ function ModelCardInner({
   const hasPrinter = printerPresence.length > 0;
   const ps = model.print_summary;
 
-  useEffect(() => setStarred(model.starred), [model.starred]);
-
   async function toggleStar() {
     if (starBusy) return;
     const next = !starred;
-    setStarred(next);
+    setStarOverride({ base: model.starred, value: next });
     setStarBusy(true);
     try {
       await (next ? starModel(model.id) : unstarModel(model.id));
     } catch (error) {
-      setStarred(!next);
+      // `!next` is exactly what the card showed before this toggle.
+      setStarOverride({ base: model.starred, value: !next });
       toast.error(error);
     } finally {
       setStarBusy(false);
@@ -384,12 +396,14 @@ export function ModelCard({
   onToggleSelect?: (id: number, range?: boolean) => void;
   draggable?: boolean;
 }) {
-  const [metrics, setMetrics] = useState<CardMetrics>(DEFAULT_CARD_METRICS);
+  // `readCardMetrics` already falls back to the defaults when there is no stored
+  // preference, so it is the correct initial value rather than something to
+  // re-read after mount.
+  const [metrics, setMetrics] = useState(readCardMetrics);
 
   useEffect(() => {
-    setMetrics(readCardMetrics());
     function onStorage(e: StorageEvent) {
-      if (e.key === "printstash.card.metrics") setMetrics(readCardMetrics());
+      if (e.key === CARD_METRIC_STORAGE_KEY) setMetrics(readCardMetrics());
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

@@ -382,6 +382,13 @@ class GcodeErrorBoundary extends React.Component<{ children: React.ReactNode }, 
 
 // ---- Public Component ----
 
+/** The outcome of one completed toolpath fetch, tagged with the url it was for. */
+interface LoadedToolpath {
+  url: string;
+  data: ToolpathData | null;
+  error: string | null;
+}
+
 export interface GcodeViewerProps {
   url: string;
   printerBedMm?: { x: number; y: number } | null;
@@ -390,18 +397,23 @@ export interface GcodeViewerProps {
 
 export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
   const previewPreferences = usePreviewPreferences();
-  const [data, setData] = useState<ToolpathData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // One state for the fetch that has actually completed, tagged with its url,
+  // so switching files derives "loading" during render instead of clearing the
+  // previous file's toolpath from an effect.
+  const [loaded, setLoaded] = useState<LoadedToolpath | null>(null);
   const [currentLayer, setCurrentLayer] = useState(0);
   const [showTravel, setShowTravel] = useState(false);
   const [showBed, setShowBed] = useState(true);
 
+  const current = loaded?.url === url ? loaded : null;
+  const loading = current === null;
+  const data = current?.data ?? null;
+  const error = current?.error ?? null;
+
   useEffect(() => {
-    setLoading(true);
-    setError(null);
-    setData(null);
-    setCurrentLayer(0);
+    // A response for a file the viewer has already left must not be shown as
+    // this url's toolpath.
+    let live = true;
 
     fetch(getUrl(url), { headers: authHeaders() })
       .then((r) => {
@@ -419,11 +431,22 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
           );
         }
         const parsed = parseGcode(text);
-        setData(parsed);
+        if (!live) return;
+        setLoaded({ url, data: parsed, error: null });
         setCurrentLayer(parsed.totalLayers - 1);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load G-code"))
-      .finally(() => setLoading(false));
+      .catch((cause: unknown) => {
+        if (!live) return;
+        setLoaded({
+          url,
+          data: null,
+          error: cause instanceof Error ? cause.message : "Failed to load G-code",
+        });
+      });
+
+    return () => {
+      live = false;
+    };
   }, [url]);
 
   if (loading) {

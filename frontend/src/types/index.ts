@@ -34,6 +34,7 @@ export type {
   ImportedPrintJobRead,
   IngestResponse,
   IngestJobStatus,
+  IngestJobResult,
   ArchiveEntry,
   ArchiveManifest,
   ModelFile,
@@ -67,6 +68,8 @@ export type {
 } from "./models";
 
 export type {
+  ProviderJsonValue,
+  ProviderJsonObject,
   PrinterStatus,
   PrinterProvider,
   PrinterCapabilities,
@@ -149,6 +152,7 @@ export type { SpoolmanStatus, SpoolmanUpdate, SpoolmanTestResult, SpoolRead } fr
 
 export type {
   VaultAuditFinding,
+  VaultAuditFindingDetails,
   VaultAuditMode,
   VaultAuditRun,
   BackupVerification,

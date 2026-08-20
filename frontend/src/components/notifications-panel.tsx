@@ -41,6 +41,11 @@ const TARGETS: { value: NotificationTarget; label: string }[] = [
   { value: "ntfy", label: "ntfy" },
 ];
 
+/** Decode a `<select>` value back into a target, ignoring anything not offered. */
+function parseNotificationTarget(value: string): NotificationTarget | null {
+  return TARGETS.find((target) => target.value === value)?.value ?? null;
+}
+
 const EVENTS: { value: NotificationEvent; label: string }[] = [
   { value: "print_completed", label: "Print completed" },
   { value: "print_failed", label: "Print failed" },
@@ -48,12 +53,19 @@ const EVENTS: { value: NotificationEvent; label: string }[] = [
   { value: "printer_offline", label: "Printer offline" },
 ];
 
+/** One editable entry of a channel's `config` map. */
+interface TargetField {
+  key: string;
+  label: string;
+  placeholder: string;
+  secret?: boolean;
+  optional?: boolean;
+}
+
 // Config fields rendered per target. `secret` fields are masked on read; an
-// existing value survives an edit when left blank.
-const TARGET_FIELDS: Record<
-  NotificationTarget,
-  { key: string; label: string; placeholder: string; secret?: boolean; optional?: boolean }[]
-> = {
+// existing value survives an edit when left blank. `satisfies` keeps the check
+// that every target has a form while leaving each entry's own shape intact.
+const TARGET_FIELDS = {
   webhook: [
     { key: "url", label: "Webhook URL", placeholder: "https://example.com/hook", secret: true },
     {
@@ -87,7 +99,7 @@ const TARGET_FIELDS: Record<
       optional: true,
     },
   ],
-};
+} satisfies Record<NotificationTarget, TargetField[]>;
 
 interface DraftState {
   id: number | null; // null => creating
@@ -111,7 +123,13 @@ function emptyDraft(): DraftState {
   };
 }
 
-function statusBadge(status: string | null): { text: string; cls: string } {
+/** Delivery-status chip: its wording plus the token classes that colour it. */
+interface StatusBadge {
+  text: string;
+  cls: string;
+}
+
+function statusBadge(status: string | null): StatusBadge {
   if (status === "sent")
     return { text: "Delivered", cls: "text-green-600 dark:text-green-400 border-green-600/40" };
   if (status === "failed")
@@ -121,7 +139,42 @@ function statusBadge(status: string | null): { text: string; cls: string } {
   return { text: "—", cls: "text-muted-foreground border-border" };
 }
 
-export function NotificationsPanel({ canEdit }: { canEdit: boolean }) {
+/**
+ * Everything the panel reaches outside itself: the notification endpoints and the
+ * toast surface. Injectable so a test can drive the panel with fakes instead of
+ * replacing the modules underneath it.
+ */
+export interface NotificationsPanelDeps {
+  getNotificationsSettings: typeof getNotificationsSettings;
+  setNotificationsEnabled: typeof setNotificationsEnabled;
+  createNotificationChannel: typeof createNotificationChannel;
+  updateNotificationChannel: typeof updateNotificationChannel;
+  deleteNotificationChannel: typeof deleteNotificationChannel;
+  testNotificationChannel: typeof testNotificationChannel;
+  listNotificationDeliveries: typeof listNotificationDeliveries;
+  listPrinters: typeof listPrinters;
+  toast: Pick<typeof toast, "error" | "success" | "warning">;
+}
+
+const LIVE_DEPS: NotificationsPanelDeps = {
+  getNotificationsSettings,
+  setNotificationsEnabled,
+  createNotificationChannel,
+  updateNotificationChannel,
+  deleteNotificationChannel,
+  testNotificationChannel,
+  listNotificationDeliveries,
+  listPrinters,
+  toast,
+};
+
+export function NotificationsPanel({
+  canEdit,
+  deps = LIVE_DEPS,
+}: {
+  canEdit: boolean;
+  deps?: NotificationsPanelDeps;
+}) {
   const [enabled, setEnabled] = useState(false);
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [printers, setPrinters] = useState<PrinterRead[]>([]);
@@ -130,39 +183,44 @@ export function NotificationsPanel({ canEdit }: { canEdit: boolean }) {
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [busy, setBusy] = useState<number | "save" | "switch" | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const [settings, printerList, deliveryList] = await Promise.all([
-        getNotificationsSettings(),
-        listPrinters().catch(() => []),
-        listNotificationDeliveries(25).catch(() => []),
-      ]);
-      setEnabled(settings.enabled);
-      setChannels(settings.channels);
-      setPrinters(printerList);
-      setDeliveries(deliveryList);
-    } catch (e) {
-      toast.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Promise chain rather than async/await: every state update then happens in a
+  // resolution callback, so the mount effect below only kicks off the requests.
+  const load = useCallback(
+    (): Promise<void> =>
+      Promise.all([
+        deps.getNotificationsSettings(),
+        deps.listPrinters().catch(() => []),
+        deps.listNotificationDeliveries(25).catch(() => []),
+      ])
+        .then(([settings, printerList, deliveryList]) => {
+          setEnabled(settings.enabled);
+          setChannels(settings.channels);
+          setPrinters(printerList);
+          setDeliveries(deliveryList);
+        })
+        .catch((e) => deps.toast.error(e))
+        .finally(() => setLoading(false)),
+    [deps],
+  );
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
-  const toggleEnabled = useCallback(async (next: boolean) => {
-    setBusy("switch");
-    try {
-      await setNotificationsEnabled(next);
-      setEnabled(next);
-    } catch (e) {
-      toast.error(e);
-    } finally {
-      setBusy(null);
-    }
-  }, []);
+  const toggleEnabled = useCallback(
+    async (next: boolean) => {
+      setBusy("switch");
+      try {
+        await deps.setNotificationsEnabled(next);
+        setEnabled(next);
+      } catch (e) {
+        deps.toast.error(e);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [deps],
+  );
 
   const startEdit = useCallback((ch: NotificationChannel) => {
     setDraft({
@@ -181,11 +239,11 @@ export function NotificationsPanel({ canEdit }: { canEdit: boolean }) {
   const saveDraft = useCallback(async () => {
     if (!draft) return;
     if (!draft.name.trim()) {
-      toast.error("Channel name is required.");
+      deps.toast.error("Channel name is required.");
       return;
     }
     if (draft.events.length === 0) {
-      toast.error("Select at least one event.");
+      deps.toast.error("Select at least one event.");
       return;
     }
     setBusy("save");
@@ -198,51 +256,51 @@ export function NotificationsPanel({ canEdit }: { canEdit: boolean }) {
         enabled: draft.enabled,
       };
       if (draft.id === null) {
-        await createNotificationChannel({ ...body, target: draft.target });
-        toast.success("Channel created.");
+        await deps.createNotificationChannel({ ...body, target: draft.target });
+        deps.toast.success("Channel created.");
       } else {
-        await updateNotificationChannel(draft.id, body);
-        toast.success("Channel updated.");
+        await deps.updateNotificationChannel(draft.id, body);
+        deps.toast.success("Channel updated.");
       }
       setDraft(null);
       await load();
     } catch (e) {
-      toast.error(e);
+      deps.toast.error(e);
     } finally {
       setBusy(null);
     }
-  }, [draft, load]);
+  }, [deps, draft, load]);
 
   const removeChannel = useCallback(
     async (id: number) => {
       setBusy(id);
       try {
-        await deleteNotificationChannel(id);
+        await deps.deleteNotificationChannel(id);
         await load();
       } catch (e) {
-        toast.error(e);
+        deps.toast.error(e);
       } finally {
         setBusy(null);
       }
     },
-    [load],
+    [deps, load],
   );
 
   const sendTest = useCallback(
     async (id: number) => {
       setBusy(id);
       try {
-        const res = await testNotificationChannel(id);
-        if (res.ok) toast.success("Test notification sent.");
-        else toast.warning("Test failed", res.error ?? undefined);
+        const res = await deps.testNotificationChannel(id);
+        if (res.ok) deps.toast.success("Test notification sent.");
+        else deps.toast.warning("Test failed", res.error ?? undefined);
         await load();
       } catch (e) {
-        toast.error(e);
+        deps.toast.error(e);
       } finally {
         setBusy(null);
       }
     },
-    [load],
+    [deps, load],
   );
 
   if (loading) {
@@ -452,7 +510,7 @@ function ChannelForm({
   onCancel: () => void;
   saving: boolean;
 }) {
-  const fields = TARGET_FIELDS[draft.target];
+  const fields: TargetField[] = TARGET_FIELDS[draft.target];
   const scoped = draft.printerIds !== null;
 
   return (
@@ -479,9 +537,10 @@ function ChannelForm({
             <select
               value={draft.target}
               disabled={draft.id !== null}
-              onChange={(e) =>
-                setDraft({ ...draft, target: e.target.value as NotificationTarget, config: {} })
-              }
+              onChange={(e) => {
+                const target = parseNotificationTarget(e.target.value);
+                if (target) setDraft({ ...draft, target, config: {} });
+              }}
               className={`${INPUT} disabled:opacity-60`}
             >
               {TARGETS.map((t) => (

@@ -15,17 +15,14 @@ import { invalidateApiCache } from "@/lib/api/request";
  * the spool selectors in the print flows.
  */
 
-function jsonResponse(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
+function jsonResponse<T>(data: T, status = 200): Response {
+  return new Response(JSON.stringify(data), {
     status,
-    json: async () => data,
-    text: async () => JSON.stringify(data),
-    headers: new Headers({ "content-type": "application/json" }),
-  } as unknown as Response;
+    headers: { "content-type": "application/json" },
+  });
 }
 
-const fetchMock = vi.fn();
+const fetchMock = vi.fn<typeof fetch>();
 
 const status = {
   enabled: true,
@@ -40,8 +37,8 @@ const status = {
 };
 
 function lastCall() {
-  const call = fetchMock.mock.calls.at(-1)!;
-  return { url: call[0] as string, init: call[1] as RequestInit };
+  const [input, init] = fetchMock.mock.calls.at(-1)!;
+  return { url: String(input), init: init ?? {} };
 }
 
 beforeEach(() => {

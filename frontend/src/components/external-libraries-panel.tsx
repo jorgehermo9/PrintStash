@@ -44,6 +44,21 @@ const WATCH_OPTIONS: { value: ExternalLibraryWatchMode; label: string }[] = [
   { value: "events", label: "On (force watching)" },
   { value: "off", label: "Off (schedule only)" },
 ];
+const COLLECTION_MODES = [
+  "mirror",
+  "single",
+] as const satisfies readonly ExternalLibraryCollectionMode[];
+
+// A <select> hands back a bare string. These decode it into the domain type at
+// that boundary; the elements only render the values below, so an unmatched
+// value can only come from a tampered DOM and falls back to the default mode.
+function parseWatchMode(value: string): ExternalLibraryWatchMode {
+  return WATCH_OPTIONS.find((option) => option.value === value)?.value ?? "auto";
+}
+
+function parseCollectionMode(value: string): ExternalLibraryCollectionMode {
+  return COLLECTION_MODES.find((collectionMode) => collectionMode === value) ?? "mirror";
+}
 
 function describeSchedule(cron: string): string {
   if (!cron) return "Manual only";
@@ -119,11 +134,44 @@ function formatDate(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
-async function pollScanJob(jobId: string): Promise<void> {
+/**
+ * The API this panel drives. Declared as a port so a test can render the panel
+ * against a stub; production callers get {@link VAULT_API}, which wires the real
+ * `@/lib/api` calls. The two config calls are narrowed to the one flag the panel
+ * cares about.
+ */
+export interface ExternalLibrariesApi {
+  isFeatureEnabled: () => Promise<boolean>;
+  setFeatureEnabled: (enabled: boolean) => Promise<void>;
+  list: typeof listExternalLibraries;
+  create: typeof createExternalLibrary;
+  update: typeof updateExternalLibrary;
+  remove: typeof deleteExternalLibrary;
+  scan: typeof scanExternalLibrary;
+  jobStatus: typeof getJobStatus;
+}
+
+const VAULT_API: ExternalLibrariesApi = {
+  isFeatureEnabled: async () => (await getVaultConfig()).external_libraries_enabled,
+  setFeatureEnabled: async (enabled) => {
+    await updateVaultConfig({ external_libraries_enabled: enabled });
+  },
+  list: listExternalLibraries,
+  create: createExternalLibrary,
+  update: updateExternalLibrary,
+  remove: deleteExternalLibrary,
+  scan: scanExternalLibrary,
+  jobStatus: getJobStatus,
+};
+
+async function pollScanJob(
+  jobId: string,
+  jobStatus: ExternalLibrariesApi["jobStatus"],
+): Promise<void> {
   // Mirrors the upload modal's polling: wait until the scan job terminates.
   const deadline = Date.now() + 15 * 60 * 1000;
   while (Date.now() < deadline) {
-    const job = await getJobStatus(jobId);
+    const job = await jobStatus(jobId);
     if (job.state === "completed") return;
     if (job.state === "failed") {
       throw new Error(job.error || "scan_failed");
@@ -133,7 +181,13 @@ async function pollScanJob(jobId: string): Promise<void> {
   throw new Error("scan_timeout");
 }
 
-export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
+export function ExternalLibrariesPanel({
+  canEdit,
+  api = VAULT_API,
+}: {
+  canEdit: boolean;
+  api?: ExternalLibrariesApi;
+}) {
   const [enabled, setEnabled] = useState(false);
   const [enableBusy, setEnableBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -151,32 +205,33 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
 
   const refresh = useCallback(async () => {
     try {
-      setLibraries(await listExternalLibraries());
+      setLibraries(await api.list());
     } catch (e) {
       toast.error(e);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     let cancelled = false;
-    getVaultConfig()
-      .then((cfg) => {
+    api
+      .isFeatureEnabled()
+      .then((featureEnabled) => {
         if (cancelled) return;
-        setEnabled(cfg.external_libraries_enabled);
+        setEnabled(featureEnabled);
         setLoaded(true);
-        if (cfg.external_libraries_enabled) refresh();
+        if (featureEnabled) refresh();
       })
       .catch(() => setLoaded(true));
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [api, refresh]);
 
   async function toggleFeature(next: boolean) {
     setEnableBusy(true);
     setEnabled(next);
     try {
-      await updateVaultConfig({ external_libraries_enabled: next });
+      await api.setFeatureEnabled(next);
       toast.success(next ? "Shared volumes enabled." : "Shared volumes disabled.");
       if (next) await refresh();
     } catch (e) {
@@ -194,7 +249,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
     }
     setBusyId("create");
     try {
-      await createExternalLibrary({
+      await api.create({
         name: name.trim(),
         root_path: rootPath.trim(),
         scan_schedule: scanSchedule,
@@ -218,9 +273,9 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   async function handleScan(lib: ExternalLibrary) {
     setBusyId(lib.id);
     try {
-      const resp = await scanExternalLibrary(lib.id);
+      const resp = await api.scan(lib.id);
       trackImportJob(resp.job_id, `Scan ${lib.name}`);
-      await pollScanJob(resp.job_id);
+      await pollScanJob(resp.job_id, api.jobStatus);
       toast.success(`Scan complete for "${lib.name}".`);
       await refresh();
     } catch (e) {
@@ -234,7 +289,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   async function handleToggleEnabled(lib: ExternalLibrary) {
     setBusyId(lib.id);
     try {
-      await updateExternalLibrary(lib.id, { enabled: !lib.enabled });
+      await api.update(lib.id, { enabled: !lib.enabled });
       await refresh();
     } catch (e) {
       toast.error(e);
@@ -249,7 +304,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   ) {
     setBusyId(lib.id);
     try {
-      await updateExternalLibrary(lib.id, patch);
+      await api.update(lib.id, patch);
       await refresh();
     } catch (e) {
       toast.error(e);
@@ -261,7 +316,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   async function handleDelete(lib: ExternalLibrary) {
     setBusyId(lib.id);
     try {
-      await deleteExternalLibrary(lib.id);
+      await api.remove(lib.id);
       toast.success(`Removed "${lib.name}". Files on the volume were not touched.`);
       await refresh();
     } catch (e) {
@@ -370,7 +425,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
                                 disabled={busy}
                                 onChange={(e) =>
                                   handleUpdate(lib, {
-                                    watch_mode: e.target.value as ExternalLibraryWatchMode,
+                                    watch_mode: parseWatchMode(e.target.value),
                                   })
                                 }
                               >
@@ -481,7 +536,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
                     className={INPUT}
                     value={watchMode}
                     disabled={!canEdit}
-                    onChange={(e) => setWatchMode(e.target.value as ExternalLibraryWatchMode)}
+                    onChange={(e) => setWatchMode(parseWatchMode(e.target.value))}
                   >
                     {WATCH_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
@@ -494,7 +549,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
                   className={INPUT}
                   value={mode}
                   disabled={!canEdit}
-                  onChange={(e) => setMode(e.target.value as ExternalLibraryCollectionMode)}
+                  onChange={(e) => setMode(parseCollectionMode(e.target.value))}
                 >
                   <option value="mirror">Mirror subfolders as collections</option>
                   <option value="single">Single collection (flat)</option>

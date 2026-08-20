@@ -1,5 +1,6 @@
 export function registerPwa(enabled = import.meta.env.PROD): void {
-  if (!enabled || typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+  // Feature detection, in order: opted in, running in a DOM, service workers supported.
+  if (!enabled || !("window" in globalThis) || !("serviceWorker" in navigator)) return;
   window.addEventListener(
     "load",
     () => {

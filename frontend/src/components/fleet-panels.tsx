@@ -24,7 +24,13 @@ import {
 } from "@/lib/api";
 import { useFleetQueue, useFleetSummary } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import type { MaintenanceLog, MaintenanceWindow, PrinterRead, PrintJobRead } from "@/types";
+import type {
+  FleetSummary,
+  MaintenanceLog,
+  MaintenanceWindow,
+  PrinterRead,
+  PrintJobRead,
+} from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
@@ -36,10 +42,60 @@ import { Localized } from "@/components/ui/localized";
 
 const ACTIVE = new Set(["uploading", "started", "printing", "paused"]);
 
-export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
+/** The part of a fleet-queue query result the panel reads. */
+export interface FleetQueueView {
+  data: PrintJobRead[] | undefined;
+  isLoading: boolean;
+  /** Started for its effect only; the panel never inspects the result. */
+  refetch: () => void;
+}
+
+/** The part of a fleet-summary query result the panel reads. */
+export interface FleetSummaryView {
+  data: FleetSummary | undefined;
+  refetch: () => void;
+}
+
+/**
+ * Everything `FleetQueuePanel` reaches for outside itself. Application code
+ * renders the panel without a `deps` prop and gets `REAL_FLEET_QUEUE_DEPS`; a
+ * test overrides the entries it wants to drive or observe.
+ *
+ * `useQueue`/`useSummary` are called as hooks, so an override has to keep a
+ * stable identity for as long as the panel stays mounted.
+ */
+export interface FleetQueueDeps {
+  useQueue: (options: { refetchInterval: number; historyLimit: number }) => FleetQueueView;
+  useSummary: (options: { refetchInterval: number }) => FleetSummaryView;
+  cancelJob: typeof cancelFleetJob;
+  updateJob: typeof updateFleetJob;
+  retryJob: typeof retryFleetJob;
+  decideOperatorGate: typeof decideFleetOperatorGate;
+}
+
+const REAL_FLEET_QUEUE_DEPS: FleetQueueDeps = {
+  useQueue: useFleetQueue,
+  useSummary: useFleetSummary,
+  cancelJob: cancelFleetJob,
+  updateJob: updateFleetJob,
+  retryJob: retryFleetJob,
+  decideOperatorGate: decideFleetOperatorGate,
+};
+
+export function FleetQueuePanel({
+  printers,
+  deps,
+}: {
+  printers: PrinterRead[];
+  deps?: Partial<FleetQueueDeps>;
+}) {
+  const { useQueue, useSummary, cancelJob, updateJob, retryJob, decideOperatorGate } = {
+    ...REAL_FLEET_QUEUE_DEPS,
+    ...deps,
+  };
   const [historyLimit, setHistoryLimit] = useState(20);
-  const queueQuery = useFleetQueue({ refetchInterval: 5_000, historyLimit });
-  const summaryQuery = useFleetSummary({ refetchInterval: 5_000 });
+  const queueQuery = useQueue({ refetchInterval: 5_000, historyLimit });
+  const summaryQuery = useSummary({ refetchInterval: 5_000 });
   const [cancelTarget, setCancelTarget] = useState<PrintJobRead | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const jobs = queueQuery.data ?? [];
@@ -51,7 +107,7 @@ export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
   const active = jobs.filter((job) => ACTIVE.has(job.state));
   const recent = jobs.filter((job) => !ACTIVE.has(job.state) && job.state !== "queued");
 
-  async function mutate(jobId: number, action: () => Promise<unknown>) {
+  async function mutate<T>(jobId: number, action: () => Promise<T>) {
     setBusy(jobId);
     try {
       await action();
@@ -97,7 +153,7 @@ export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
             if (!cancelTarget) return;
             const id = cancelTarget.id;
             setCancelTarget(null);
-            void mutate(id, () => cancelFleetJob(id));
+            void mutate(id, () => cancelJob(id));
           }}
           title="Cancel queued print?"
           description="This removes work from scheduling. It does not cancel an active printer."
@@ -203,9 +259,7 @@ export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
                       aria-label={`Move ${job.remote_filename} up`}
                       disabled={busy === job.id || laneIndex === 0}
                       onClick={() =>
-                        void mutate(job.id, () =>
-                          updateFleetJob(job.id, { queue_position: laneIndex }),
-                        )
+                        void mutate(job.id, () => updateJob(job.id, { queue_position: laneIndex }))
                       }
                     >
                       <ArrowUp className="h-3.5 w-3.5" />
@@ -217,7 +271,7 @@ export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
                       disabled={busy === job.id || laneIndex === lane.length - 1}
                       onClick={() =>
                         void mutate(job.id, () =>
-                          updateFleetJob(job.id, { queue_position: laneIndex + 2 }),
+                          updateJob(job.id, { queue_position: laneIndex + 2 }),
                         )
                       }
                     >
@@ -252,9 +306,7 @@ export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
                     variant="outline"
                     size="xs"
                     disabled={busy === job.id}
-                    onClick={() =>
-                      void mutate(job.id, () => decideFleetOperatorGate(job.id, "release"))
-                    }
+                    onClick={() => void mutate(job.id, () => decideOperatorGate(job.id, "release"))}
                   >
                     Release
                   </Button>
@@ -262,9 +314,7 @@ export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
                     variant="outline"
                     size="xs"
                     disabled={busy === job.id}
-                    onClick={() =>
-                      void mutate(job.id, () => decideFleetOperatorGate(job.id, "hold"))
-                    }
+                    onClick={() => void mutate(job.id, () => decideOperatorGate(job.id, "hold"))}
                   >
                     Hold
                   </Button>
@@ -275,7 +325,7 @@ export function FleetQueuePanel({ printers }: { printers: PrinterRead[] }) {
                   variant="outline"
                   size="xs"
                   disabled={busy === job.id}
-                  onClick={() => void mutate(job.id, () => retryFleetJob(job.id))}
+                  onClick={() => void mutate(job.id, () => retryJob(job.id))}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Retry
@@ -380,13 +430,42 @@ function QueueSection({
   );
 }
 
+/**
+ * Everything `FleetMaintenancePanel` reaches for outside itself, on the same
+ * terms as `FleetQueueDeps`: omit `deps` in application code, override entries
+ * in a test.
+ */
+export interface FleetMaintenanceDeps {
+  listWindows: typeof listMaintenanceWindows;
+  listLog: typeof listMaintenanceLog;
+  createWindow: typeof createMaintenanceWindow;
+  createLog: typeof createMaintenanceLog;
+  deleteWindow: typeof deleteMaintenanceWindow;
+  deleteLog: typeof deleteMaintenanceLog;
+  updateRouting: typeof updatePrinterRouting;
+}
+
+const REAL_FLEET_MAINTENANCE_DEPS: FleetMaintenanceDeps = {
+  listWindows: listMaintenanceWindows,
+  listLog: listMaintenanceLog,
+  createWindow: createMaintenanceWindow,
+  createLog: createMaintenanceLog,
+  deleteWindow: deleteMaintenanceWindow,
+  deleteLog: deleteMaintenanceLog,
+  updateRouting: updatePrinterRouting,
+};
+
 export function FleetMaintenancePanel({
   printers,
   onPrintersChanged,
+  deps,
 }: {
   printers: PrinterRead[];
   onPrintersChanged: () => void;
+  deps?: Partial<FleetMaintenanceDeps>;
 }) {
+  const { listWindows, listLog, createWindow, createLog, deleteWindow, deleteLog, updateRouting } =
+    { ...REAL_FLEET_MAINTENANCE_DEPS, ...deps };
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
   const [logs, setLogs] = useState<MaintenanceLog[]>([]);
   const [selected, setSelected] = useState<PrinterRead | null>(null);
@@ -400,19 +479,21 @@ export function FleetMaintenancePanel({
 
   async function load() {
     const [allWindows, allLogs] = await Promise.all([
-      Promise.all(printers.map((printer) => listMaintenanceWindows(printer.id))),
-      Promise.all(printers.map((printer) => listMaintenanceLog(printer.id))),
+      Promise.all(printers.map((printer) => listWindows(printer.id))),
+      Promise.all(printers.map((printer) => listLog(printer.id))),
     ]);
     setWindows(allWindows.flat());
     setLogs(allLogs.flat());
   }
   useEffect(() => {
+    // `load` awaits the maintenance API before it touches state; the rule follows the call but not the `await` inside it.
+    // oxlint-disable-next-line react/set-state-in-effect -- setState here is asynchronous, after the fetch resolves
     void load().catch(toast.error);
   }, [printers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function toggleRouting(printer: PrinterRead, field: "default" | "drain") {
     try {
-      await updatePrinterRouting(
+      await updateRouting(
         printer.id,
         field === "default"
           ? { is_default: !printer.is_default }
@@ -432,13 +513,13 @@ export function FleetMaintenancePanel({
     setBusy(true);
     try {
       if (mode === "window") {
-        await createMaintenanceWindow(selected.id, {
+        await createWindow(selected.id, {
           starts_at: new Date(startsAt).toISOString(),
           ends_at: new Date(endsAt).toISOString(),
           reason: reason || null,
         });
       } else {
-        await createMaintenanceLog(selected.id, { category, note });
+        await createLog(selected.id, { category, note });
       }
       setMode(null);
       setSelected(null);
@@ -592,9 +673,7 @@ export function FleetMaintenancePanel({
                           size="icon-sm"
                           aria-label="Delete maintenance window"
                           onClick={() =>
-                            void deleteMaintenanceWindow(printer.id, row.id)
-                              .then(load)
-                              .catch(toast.error)
+                            void deleteWindow(printer.id, row.id).then(load).catch(toast.error)
                           }
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -611,9 +690,7 @@ export function FleetMaintenancePanel({
                           size="icon-sm"
                           aria-label="Delete maintenance log"
                           onClick={() =>
-                            void deleteMaintenanceLog(printer.id, row.id)
-                              .then(load)
-                              .catch(toast.error)
+                            void deleteLog(printer.id, row.id).then(load).catch(toast.error)
                           }
                         >
                           <Trash2 className="h-3.5 w-3.5" />

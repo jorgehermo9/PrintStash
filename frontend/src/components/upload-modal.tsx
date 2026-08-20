@@ -57,9 +57,11 @@ import {
   CollectionManifest,
   CollectionRead,
   ExternalLibrary,
+  IngestJobResult,
   IngestJobStatus,
   ModelFilesManifest,
 } from "@/types";
+import { ApiError } from "@/lib/errors";
 
 // `webkitdirectory` enables folder selection on a file input but isn't in the
 // standard DOM typings — augment so the JSX attribute typechecks.
@@ -71,6 +73,30 @@ declare module "react" {
 }
 
 export type UploadMode = "files" | "bulk" | "url" | "zip";
+
+/**
+ * The open-time props the modal seeds its form from: files or bulk items handed
+ * over by a drag-and-drop on the vault grid, plus the tab they belong on.
+ */
+interface UploadSeed {
+  preloadFiles: File[] | null;
+  preloadItems: BulkItem[] | null;
+  initialMode: UploadMode | null;
+}
+
+/** Two preloads seed the same thing when they are the same list, or both empty. */
+function samePreload<T>(applied: T[] | null, next: T[] | null): boolean {
+  return applied === next || ((applied?.length ?? 0) === 0 && (next?.length ?? 0) === 0);
+}
+
+function sameSeed(applied: UploadSeed | null, next: UploadSeed): boolean {
+  return (
+    applied !== null &&
+    applied.initialMode === next.initialMode &&
+    samePreload(applied.preloadFiles, next.preloadFiles) &&
+    samePreload(applied.preloadItems, next.preloadItems)
+  );
+}
 
 const GCODE_ACCEPT = ".gcode,.g,.gco";
 
@@ -132,7 +158,6 @@ export function UploadModal({
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
   const reviewing = Boolean(manifest || filesManifest || collectionManifest);
   const [modelName, setModelName] = useState("");
-  const [collectionPath, setCollectionPath] = useState(defaultCollection ?? "");
   const [tagInput, setTagInput] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -154,18 +179,49 @@ export function UploadModal({
     }
   }
 
-  useEffect(() => {
-    if (!open) return;
-    if (defaultCollection) {
-      setCollectionPath(defaultCollection);
-      return;
+  function applySeed(seed: UploadSeed) {
+    if (seed.initialMode) setMode(seed.initialMode);
+    if (!seed.preloadFiles?.length && !seed.preloadItems?.length) return;
+    if (seed.initialMode === "bulk") {
+      setBulkFiles(
+        seed.preloadItems?.length ? seed.preloadItems : fileListToItems(seed.preloadFiles ?? []),
+      );
+    } else if (seed.initialMode === "zip") {
+      setZipFile(seed.preloadFiles?.[0] ?? null);
+    } else {
+      setMeshFile(null);
+      setGcodeFile(null);
+      setModelName("");
+      sortIntoSlots(seed.preloadFiles ?? []);
     }
-    if (!user?.is_superuser && writableCollections.length > 0) {
-      setCollectionPath(writableCollections[0].path);
-      return;
-    }
-    setCollectionPath("");
-  }, [open, defaultCollection, user?.is_superuser, writableCollections]);
+  }
+
+  // Where an upload lands unless the user picks another collection. Derived
+  // during render instead of pushed into state by an effect, so it is right on
+  // the first frame and still right when the writable-collection list arrives
+  // after the modal is already open — without overwriting a pick made since.
+  const suggestedCollection =
+    defaultCollection ||
+    (!user?.is_superuser && writableCollections.length > 0 ? writableCollections[0].path : "");
+  const [pickedCollection, setPickedCollection] = useState<string | null>(null);
+  const collectionPath = pickedCollection ?? suggestedCollection;
+
+  // Seeding the form from the props above is an adjustment to changed props,
+  // not synchronization with an external system, so it happens during render:
+  // the modal's first painted frame already shows the dropped files. Closing
+  // forgets the seed, so the next open re-applies it.
+  const [seeded, setSeeded] = useState<UploadSeed | null>(null);
+  const seed: UploadSeed = {
+    preloadFiles: preloadFiles ?? null,
+    preloadItems: preloadItems ?? null,
+    initialMode: initialMode ?? null,
+  };
+  if (!open && seeded !== null) setSeeded(null);
+  if (open && !sameSeed(seeded, seed)) {
+    setSeeded(seed);
+    setPickedCollection(null);
+    applySeed(seed);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -187,22 +243,6 @@ export function UploadModal({
       cancelled = true;
     };
   }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    if (initialMode) setMode(initialMode);
-    if (!preloadFiles?.length && !preloadItems?.length) return;
-    if (initialMode === "bulk") {
-      setBulkFiles(preloadItems?.length ? preloadItems : fileListToItems(preloadFiles ?? []));
-    } else if (initialMode === "zip") {
-      setZipFile(preloadFiles?.[0] ?? null);
-    } else {
-      setMeshFile(null);
-      setGcodeFile(null);
-      setModelName("");
-      sortIntoSlots(preloadFiles ?? []);
-    }
-  }, [open, preloadFiles, preloadItems, initialMode]);
 
   const filteredTags = useMemo(() => {
     const q = tagInput.toLowerCase().trim();
@@ -264,7 +304,7 @@ export function UploadModal({
     setReviewCollection(false);
     setSelectedEntries(new Set());
     setModelName("");
-    setCollectionPath(defaultCollection ?? "");
+    setPickedCollection(null);
     setSelectedTags([]);
     setTagInput("");
     setTargetLibraryId("");
@@ -531,12 +571,12 @@ export function UploadModal({
       if (status.state === "failed") {
         throw new Error(status.error || "Import failed");
       }
-      const result = (status.result ?? {}) as Record<string, unknown>;
+      const result: IngestJobResult = status.result ?? {};
       if (result.kind === "archive_manifest") {
         const m: ArchiveManifest = {
           archive_id: String(result.archive_id),
           archive_name: String(result.archive_name),
-          entries: (result.entries as ArchiveManifest["entries"]) ?? [],
+          entries: result.entries ?? [],
         };
         showManifest(m);
         setSubmitting(false);
@@ -546,7 +586,7 @@ export function UploadModal({
         const m: ModelFilesManifest = {
           files_token: String(result.files_token),
           page_title: String(result.page_title),
-          files: (result.files as ModelFilesManifest["files"]) ?? [],
+          files: result.files ?? [],
         };
         setFilesManifest(m);
         setSelectedEntries(new Set(m.files.map((f) => f.file_id)));
@@ -558,7 +598,7 @@ export function UploadModal({
           collection_token: String(result.collection_token),
           collection_name: String(result.collection_name),
           target_collection: String(result.target_collection),
-          members: (result.members as CollectionManifest["members"]) ?? [],
+          members: result.members ?? [],
         };
         setCollectionManifest(m);
         setSelectedEntries(new Set(m.members.map((mm) => mm.source_id)));
@@ -635,11 +675,11 @@ export function UploadModal({
       trackImportJob(response.job_id, `Inspect ${zipFile.name}`);
       const status = await waitForJobInline(response.job_id);
       if (status.state === "failed") throw new Error(status.error || "Archive inspection failed");
-      const result = (status.result ?? {}) as Record<string, unknown>;
+      const result: IngestJobResult = status.result ?? {};
       const m: ArchiveManifest = {
         archive_id: String(result.archive_id),
         archive_name: String(result.archive_name),
-        entries: (result.entries as ArchiveManifest["entries"]) ?? [],
+        entries: result.entries ?? [],
       };
       showManifest(m);
     } catch (err) {
@@ -755,13 +795,7 @@ export function UploadModal({
       setSelectedTags((p) => [...p, t.slug]);
     } catch (err) {
       // 401 is surfaced by AuthBanner; duplicate slug is harmless.
-      if (
-        err &&
-        typeof err === "object" &&
-        "status" in err &&
-        (err as { status: number }).status === 401
-      )
-        return;
+      if (err instanceof ApiError && err.isAuthError) return;
       toast.error(err);
     }
   }
@@ -1010,7 +1044,7 @@ export function UploadModal({
                   role="option"
                   aria-selected={collectionPath === ""}
                   onClick={() => {
-                    setCollectionPath("");
+                    setPickedCollection("");
                     setCatOpen(false);
                   }}
                   className="w-full text-left px-3 py-1.5 font-mono text-xs text-on-surface-variant hover:bg-surface-container-low"
@@ -1030,7 +1064,7 @@ export function UploadModal({
                     role="option"
                     aria-selected={collectionPath === c.path}
                     onClick={() => {
-                      setCollectionPath(c.path);
+                      setPickedCollection(c.path);
                       setCatOpen(false);
                     }}
                     className={`w-full text-left px-3 py-1.5 font-mono text-xs transition-colors ${

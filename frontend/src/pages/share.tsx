@@ -19,6 +19,7 @@ const GcodeViewer = lazy(() =>
 );
 
 const MESH_TYPES = new Set(["stl", "3mf", "obj", "step"]);
+const DISPLAY_MODES: readonly ViewerDisplayMode[] = ["solid", "xray", "wireframe"];
 type ShareViewerMode = "model" | "gcode";
 
 function value(value: string | number | null | undefined, suffix = "") {
@@ -40,9 +41,18 @@ export default function SharePage() {
   const [showGrid, setShowGrid] = useState(true);
   const viewerControls = useRef<STLViewerControls | null>(null);
 
+  // The share token comes from the route, so a new token is a new fetch: reset to
+  // the loading state (and back to the 3D view) on the render that first sees it
+  // rather than from an effect that would show the previous model in between.
+  const [fetchedToken, setFetchedToken] = useState(token);
+  if (fetchedToken !== token) {
+    setFetchedToken(token);
+    setLoading(true);
+    setViewerMode("model");
+  }
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     getSharedModel(token)
       .then((m) => {
         if (!cancelled) setModel(m);
@@ -78,11 +88,6 @@ export default function SharePage() {
   const canShowGcode = !!selectedGcode;
   const activeViewerMode: ShareViewerMode =
     viewerMode === "gcode" && canShowGcode ? "gcode" : canShowModel ? "model" : "gcode";
-
-  useEffect(() => {
-    if (!model) return;
-    setViewerMode(meshFile ? "model" : "gcode");
-  }, [model, meshFile]);
 
   if (loading) {
     return (
@@ -193,7 +198,7 @@ export default function SharePage() {
           {activeViewerMode === "model" && meshFile && (
             <div className="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-1.5">
               <div className="flex rounded border border-outline-variant bg-surface-container-lowest/90 backdrop-blur overflow-hidden shadow-sm">
-                {(["solid", "xray", "wireframe"] as ViewerDisplayMode[]).map((mode) => (
+                {DISPLAY_MODES.map((mode) => (
                   <button
                     key={mode}
                     type="button"

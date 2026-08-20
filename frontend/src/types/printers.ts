@@ -1,3 +1,22 @@
+/**
+ * One value inside a JSON blob a printer provider owns rather than PrintStash:
+ * a Moonraker/Klipper config dump or a live status snapshot. These are relayed
+ * verbatim and only ever read generically (rendered as text, JSON-stringified,
+ * deep-merged), so the contract is "JSON", not `any`. `undefined` is a member
+ * because provider payloads omit keys freely.
+ */
+export type ProviderJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly ProviderJsonValue[]
+  | { readonly [key: string]: ProviderJsonValue };
+
+/** A provider-owned JSON object relayed verbatim (see `ProviderJsonValue`). */
+export type ProviderJsonObject = Record<string, ProviderJsonValue>;
+
 export type PrinterStatus = "unknown" | "offline" | "ready" | "printing" | "paused" | "error";
 
 export type PrinterProvider =
@@ -131,10 +150,10 @@ export interface PrinterDiagnostics {
 
 export interface MoonrakerConfigRead {
   printer_id: number;
-  server_info: Record<string, any>;
-  printer_info: Record<string, any>;
-  moonraker_config: Record<string, any>;
-  klipper_config: Record<string, any>;
+  server_info: ProviderJsonObject;
+  printer_info: ProviderJsonObject;
+  moonraker_config: ProviderJsonObject;
+  klipper_config: ProviderJsonObject;
 }
 
 export interface PrinterFileRead {
@@ -307,7 +326,10 @@ export interface PrinterSnapshot {
   heater_bed?: { temperature?: number; target?: number };
   toolhead?: { position?: number[]; homed_axes?: string };
   webhooks?: { state?: string; state_message?: string };
-  [k: string]: any;
+  // Providers send more sections than the ones named above (and differ between
+  // Moonraker, Bambu and OctoPrint), so the snapshot stays open — but open to
+  // JSON, not to `any`.
+  [key: string]: ProviderJsonValue;
 }
 
 export interface PrinterStatusResponse {

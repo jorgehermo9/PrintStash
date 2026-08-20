@@ -32,7 +32,10 @@ export interface STLViewerProps {
   screenshotName?: string;
 }
 
-const DEFAULT_CAMERA_POSITION = new THREE.Vector3(12, 9, 14);
+// The camera needs both shapes: R3F takes the tuple as a JSX prop, the orbit
+// maths needs a Vector3. Derive the vector from the tuple so they cannot drift.
+const DEFAULT_CAMERA_POSITION: THREE.Vector3Tuple = [12, 9, 14];
+const DEFAULT_CAMERA_VECTOR = new THREE.Vector3(...DEFAULT_CAMERA_POSITION);
 const ZOOM_FACTOR = 0.75;
 // Mesh is normalized so its largest dimension equals this many world units.
 const NORMALIZED_SIZE = 10;
@@ -152,7 +155,7 @@ function Scene({
     resetView: () => {
       orbitRef.current?.reset();
       if (cameraRef.current) {
-        cameraRef.current.position.copy(DEFAULT_CAMERA_POSITION);
+        cameraRef.current.position.copy(DEFAULT_CAMERA_VECTOR);
         cameraRef.current.lookAt(0, 0, 0);
         orbitRef.current?.update();
       }
@@ -165,7 +168,7 @@ function Scene({
       const fov = (cam.fov * Math.PI) / 180;
       const distance = (maxDim / 2 / Math.tan(fov / 2)) * 1.7;
       const dir = cam.position.clone().normalize();
-      if (dir.lengthSq() === 0) dir.copy(DEFAULT_CAMERA_POSITION).normalize();
+      if (dir.lengthSq() === 0) dir.copy(DEFAULT_CAMERA_VECTOR).normalize();
       dir.multiplyScalar(distance);
       orbitRef.current?.target?.set(0, 0, 0);
       cam.position.copy(dir);
@@ -216,11 +219,7 @@ function Scene({
 
   return (
     <>
-      <PerspectiveCamera
-        ref={cameraRef}
-        makeDefault
-        position={DEFAULT_CAMERA_POSITION.toArray() as [number, number, number]}
-      />
+      <PerspectiveCamera ref={cameraRef} makeDefault position={DEFAULT_CAMERA_POSITION} />
       <ambientLight intensity={0.5} />
       <hemisphereLight args={["#d4e8ff", "#1a1a2e", 0.4]} />
       <directionalLight position={[8, 12, 6]} intensity={1.2} castShadow />
@@ -278,12 +277,11 @@ export function STLViewer({
   showGrid = true,
   screenshotName = "model",
 }: STLViewerProps) {
-  const [meshLoaded, setMeshLoaded] = useState(false);
+  // Tracking *which* url has loaded, rather than a bare boolean, makes the url
+  // swap reset the overlay during render instead of through a reset effect.
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const meshLoaded = loadedUrl === url;
   const previewPreferences = usePreviewPreferences();
-
-  useEffect(() => {
-    setMeshLoaded(false);
-  }, [url]);
 
   return (
     <div className="relative h-full w-full">
@@ -296,7 +294,7 @@ export function STLViewer({
           <Scene
             url={url}
             onControlsReady={onControlsReady}
-            onLoadedChange={setMeshLoaded}
+            onLoadedChange={(loaded) => setLoadedUrl(loaded ? url : null)}
             displayMode={displayMode}
             showGrid={showGrid}
             screenshotName={screenshotName}
