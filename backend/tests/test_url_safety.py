@@ -6,12 +6,14 @@ import socket
 
 import httpx
 import pytest
-from httpcore import AnyIOBackend
+from httpcore import AnyIOBackend, SyncBackend
 
 from app.core.url_safety import (
     UnsafeUrlError,
     is_public_ip,
     is_public_url,
+    normalize_http_url,
+    pinned_sync_transport,
     pinned_transport,
     resolve_public_target,
 )
@@ -26,7 +28,13 @@ from app.core.url_safety import (
         ("10.0.0.1", False),  # private
         ("192.168.1.5", False),  # private
         ("169.254.169.254", False),  # link-local (cloud metadata)
+        ("100.64.0.1", False),  # carrier-grade NAT
+        ("198.18.0.1", False),  # benchmark range
+        ("192.0.2.1", False),  # documentation range
         ("::1", False),  # ipv6 loopback
+        ("fc00::1", False),  # ipv6 unique-local
+        ("::ffff:127.0.0.1", False),  # ipv4-mapped loopback
+        ("::ffff:8.8.8.8", True),  # ipv4-mapped global
         ("not-an-ip", False),
     ],
 )
@@ -47,6 +55,19 @@ def test_is_public_ip(ip, expected):
 def test_is_public_url_blocks(url, expected):
     # Literal-IP and scheme/host cases resolve without touching real DNS.
     assert is_public_url(url) is expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://user:secret@example.com/spoolman",
+        "http://example.com/\x00spoolman",
+        "file:///etc/passwd",
+    ],
+)
+def test_normalize_http_url_rejects_unsafe_syntax(url):
+    with pytest.raises(UnsafeUrlError):
+        normalize_http_url(url)
 
 
 # ---------------------------------------------------------------------------
@@ -127,3 +148,22 @@ async def test_pinned_transport_dials_validated_ip_after_dns_flips(monkeypatch):
     assert dialled == [("93.184.216.34", 80)], (
         "connected to the rebound address instead of the validated one"
     )
+
+
+def test_pinned_sync_transport_dials_validated_ip_after_dns_flips(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    target = resolve_public_target("http://rebind.example/hook")
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("127.0.0.1"))
+
+    dialled: list[tuple[str, int]] = []
+
+    def _fake_connect(self, host, port, **kwargs):  # noqa: ANN001
+        dialled.append((host, port))
+        raise RuntimeError("stop after observing the peer")
+
+    monkeypatch.setattr(SyncBackend, "connect_tcp", _fake_connect)
+    with httpx.Client(transport=pinned_sync_transport(target)) as client:
+        with pytest.raises(Exception):  # noqa: B017
+            client.get(target.url)
+
+    assert dialled == [("93.184.216.34", 80)]
