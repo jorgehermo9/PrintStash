@@ -20,15 +20,28 @@ import os
 import tempfile
 import threading
 import time
-import unicodedata
 import uuid
-import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
 import httpx
+from printstash_core.files import (
+    ArchiveEntry,
+    ArchiveLimits,
+    ArchivePolicyError,
+    safe_entry_name,
+)
+from printstash_core.files import (
+    extract_selected as extract_selected_archive_entries,
+)
+from printstash_core.files import (
+    inspect_archive as inspect_archive_entries,
+)
+from printstash_core.files import (
+    safe_subdir as _safe_subdir,
+)
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -40,7 +53,6 @@ from app.core.url_safety import (
 )
 from app.db.models import SUFFIX_TO_FILE_TYPE
 from app.db.session import SessionFactory
-from app.services import storage
 from app.services.ingestion import ingest_mesh, ingest_orca_gcode
 from app.services.jobs import registry
 
@@ -164,95 +176,34 @@ def _content_disposition_name(resp) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class ArchiveEntry:
-    entry_id: str
-    name: str
-    size_bytes: int
-    file_type: Optional[str]  # FileType value if importable, else None
-    is_image: bool
-
-
 def _safe_entry_name(name: str) -> bool:
-    """Reject absolute paths, drive letters, and any '..' traversal.
-
-    Backslashes are normalised to '/' first so a Windows-style ``..\\..\\evil``
-    entry is caught on POSIX too (where ``\\`` is an ordinary filename char and
-    would otherwise hide the traversal from ``Path.parts``).
-    """
-    if not name or name.endswith(("/", "\\")):
-        return False
-    if name.startswith("/") or name.startswith("\\"):
-        return False
-    if len(name) > 2 and name[1] == ":":  # windows drive letter
-        return False
-    p = PurePosixPath(name.replace("\\", "/"))
-    if p.is_absolute() or ".." in p.parts:
-        return False
-    return True
-
-
-def _safe_subdir(rel_name: str) -> str:
-    """POSIX directory part of a (validated) entry; ``''`` for a root file."""
-    parent = PurePosixPath(rel_name.replace("\\", "/")).parent
-    return "" if str(parent) in (".", "") else str(parent)
+    """Compatibility wrapper for callers testing archive path policy."""
+    return safe_entry_name(name)
 
 
 def inspect_archive(path: Path) -> list[ArchiveEntry]:
     """List archive entries, enforcing zip-bomb caps. Importable + image only."""
-    max_entries = settings.max_archive_entries
-    max_entry = settings.max_archive_entry_mb * 1024 * 1024
-    max_total = settings.max_archive_uncompressed_mb * 1024 * 1024
-    out: list[ArchiveEntry] = []
     try:
-        with zipfile.ZipFile(path) as zf:
-            infos = zf.infolist()
-            if len(infos) > max_entries:
-                raise ImportError_("archive_too_many_entries")
-            central_size = max(path.stat().st_size - int(zf.start_dir), 0)
-            if central_size > settings.max_archive_central_directory_mb * 1024 * 1024:
-                raise ImportError_("archive_too_large")
-            total = 0
-            normalized_names: set[str] = set()
-            for index, info in enumerate(infos):
-                normalized = unicodedata.normalize(
-                    "NFC", info.filename.replace("\\", "/")
-                )
-                if len(normalized.encode("utf-8")) > settings.max_archive_path_bytes:
-                    raise ImportError_("archive_path_too_deep")
-                parts = PurePosixPath(normalized).parts
-                if len(parts) > settings.max_archive_depth + 1:
-                    raise ImportError_("archive_path_too_deep")
-                folded = normalized.casefold()
-                if folded in normalized_names:
-                    raise ImportError_("archive_duplicate_entry")
-                normalized_names.add(folded)
-                if not info.is_dir() and not _safe_entry_name(info.filename):
-                    raise ImportError_("archive_unsafe_entry")
-                if info.is_dir():
-                    continue
-                if info.file_size > max_entry:
-                    raise ImportError_("archive_entry_too_large")
-                total += info.file_size
-                if total > max_total:
-                    raise ImportError_("archive_too_large")
-                suffix = Path(info.filename).suffix.lower()
-                ft = SUFFIX_TO_FILE_TYPE.get(suffix)
-                is_image = suffix in _IMAGE_SUFFIXES
-                if ft is None and not is_image:
-                    continue
-                out.append(
-                    ArchiveEntry(
-                        entry_id=f"{index}:{info.CRC:08x}:{info.file_size}",
-                        name=info.filename,
-                        size_bytes=info.file_size,
-                        file_type=ft.value if ft else None,
-                        is_image=is_image,
-                    )
-                )
-    except zipfile.BadZipFile as exc:
-        raise ImportError_("archive_invalid") from exc
-    return out
+        return inspect_archive_entries(
+            path,
+            limits=ArchiveLimits(
+                max_entries=settings.max_archive_entries,
+                max_entry_bytes=settings.max_archive_entry_mb * 1024 * 1024,
+                max_total_bytes=settings.max_archive_uncompressed_mb * 1024 * 1024,
+                max_central_directory_bytes=(
+                    settings.max_archive_central_directory_mb * 1024 * 1024
+                ),
+                max_path_bytes=settings.max_archive_path_bytes,
+                max_depth=settings.max_archive_depth,
+            ),
+            file_types={
+                suffix: file_type.value
+                for suffix, file_type in SUFFIX_TO_FILE_TYPE.items()
+            },
+            image_suffixes=_IMAGE_SUFFIXES,
+        )
+    except ArchivePolicyError as exc:
+        raise ImportError_(exc.code) from exc
 
 
 def extract_selected(path: Path, names: list[str]) -> list[tuple[Path, str]]:
@@ -263,30 +214,17 @@ def extract_selected(path: Path, names: list[str]) -> list[tuple[Path, str]]:
     sub-collections; entries at the archive root have no separator and behave
     exactly as a bare filename did before.
     """
-    wanted = set(names)
-    extracted: list[tuple[Path, str]] = []
     max_entry = settings.max_archive_entry_mb * 1024 * 1024
     try:
-        with zipfile.ZipFile(path) as zf:
-            for info in zf.infolist():
-                if info.filename not in wanted or info.is_dir():
-                    continue
-                if not _safe_entry_name(info.filename):
-                    raise ImportError_("archive_unsafe_entry")
-                if info.file_size > max_entry:
-                    raise ImportError_("archive_entry_too_large")
-                suffix = Path(info.filename).suffix.lower()
-                if suffix not in _IMPORTABLE_SUFFIXES:
-                    continue
-                staged = settings.incoming_dir / f"{uuid.uuid4().hex}{suffix}"
-                with zf.open(info) as src:
-                    storage.stream_to_path(src, staged, max_bytes=max_entry)
-                extracted.append((staged, info.filename.replace("\\", "/")))
-    except Exception:
-        for staged, _name in extracted:
-            staged.unlink(missing_ok=True)
-        raise
-    return extracted
+        return extract_selected_archive_entries(
+            path,
+            names,
+            staging_dir=settings.incoming_dir,
+            max_entry_bytes=max_entry,
+            importable_suffixes=_IMPORTABLE_SUFFIXES,
+        )
+    except ArchivePolicyError as exc:
+        raise ImportError_(exc.code) from exc
 
 
 # ---------------------------------------------------------------------------

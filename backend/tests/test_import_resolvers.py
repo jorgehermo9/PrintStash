@@ -11,9 +11,33 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from printstash_core.imports import resolvers as core_resolvers
 
 from app.services import import_resolvers as r
 from app.services.importer import ImportError_
+
+
+def test_facade_preserves_pure_rule_api() -> None:
+    assert r.ModelFile is core_resolvers.ModelFile
+    assert r.CollectionMember is core_resolvers.CollectionMember
+    assert r.classify_page is core_resolvers.classify_page
+    assert r.classify_collection is core_resolvers.classify_collection
+    assert r._printables_id is core_resolvers.printables_id
+    assert r._makerworld_id is core_resolvers.makerworld_id
+    assert r._thingiverse_id is core_resolvers.thingiverse_id
+    assert r._collection_id is core_resolvers.collection_id
+    assert r._looks_like_download is core_resolvers.looks_like_download
+    assert r._first_download_url is core_resolvers.first_download_url
+    assert r._looks_like_challenge is core_resolvers.looks_like_challenge
+    assert r._extract_next_data is core_resolvers.extract_next_data
+    assert r._pick_printables_pack is core_resolvers.pick_printables_pack
+    assert r._printables_link_from_output is core_resolvers.printables_link_from_output
+    assert r._printables_links_from_output is core_resolvers.printables_links_from_output
+    assert r._printables_files_from_print is core_resolvers.printables_files_from_print
+    assert (
+        r._makerworld_collection_members
+        is core_resolvers.makerworld_collection_members
+    )
 
 
 # --------------------------------------------------------------------------- #

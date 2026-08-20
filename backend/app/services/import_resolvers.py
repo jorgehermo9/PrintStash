@@ -25,10 +25,9 @@ graceful degradation — is ours.
 from __future__ import annotations
 
 import json
-import re
-from dataclasses import dataclass
 from typing import Any, Optional
-from urllib.parse import urlsplit
+
+from printstash_core.imports import resolvers as _resolver_rules
 
 from app.core.http_client import get_http_client
 from app.core.logging import get_logger
@@ -44,172 +43,35 @@ _BROWSER_UA = (
 )
 _TIMEOUT = 30.0
 
-# Suffixes that mark a URL as pointing at a downloadable model/bundle.
-_MODEL_EXTS = (
-    ".zip",
-    ".3mf",
-    ".stl",
-    ".obj",
-    ".step",
-    ".stp",
-    ".gcode",
-    ".g",
-    ".gco",
-    ".bgcode",
-)
-
-_PRINTABLES_HOSTS = {"printables.com", "www.printables.com"}
-_THINGIVERSE_HOSTS = {"thingiverse.com", "www.thingiverse.com"}
 _PRINTABLES_GRAPHQL = "https://api.printables.com/graphql/"
 
-
-@dataclass
-class ModelFile:
-    """One selectable downloadable file on a model page."""
-
-    file_id: str
-    name: str
-    file_type: str  # Printables DownloadFileTypeEnum: stl / gcode / sla / other
-    size: Optional[int] = None
-
-
-@dataclass
-class CollectionMember:
-    """One model belonging to a collection (its page URL + display title)."""
-
-    page_url: str
-    title: str
-    source_id: str
-
-
-# --------------------------------------------------------------------------- #
-# Host classification + id extraction
-# --------------------------------------------------------------------------- #
-def _host(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
-
-
-def _printables_id(url: str) -> Optional[str]:
-    m = re.search(r"/model/(\d+)", urlsplit(url).path)
-    return m.group(1) if m else None
-
-
-def _makerworld_id(url: str) -> Optional[str]:
-    m = re.search(r"/models/(\d+)", urlsplit(url).path)
-    return m.group(1) if m else None
-
-
-def _thingiverse_id(url: str) -> Optional[str]:
-    path = urlsplit(url).path
-    m = re.search(r"thing:(\d+)", path) or re.search(r"/things/(\d+)", path)
-    return m.group(1) if m else None
-
-
-def _collection_id(url: str) -> Optional[str]:
-    m = re.search(r"/collections/(\d+)", urlsplit(url).path)
-    return m.group(1) if m else None
-
-
-def classify_collection(url: str) -> Optional[str]:
-    """Return the resolver name for a known *collection* URL, else ``None``.
-
-    Printables (``/@user/collections/<id>``) and MakerWorld
-    (``/collections/<id>-slug``) both carry the id under ``/collections/<id>``.
-    """
-    host = _host(url)
-    if host in _PRINTABLES_HOSTS and _collection_id(url):
-        return "printables"
-    if (host == "makerworld.com" or host.endswith(".makerworld.com")) and _collection_id(url):
-        return "makerworld"
-    return None
-
-
-def classify_page(url: str) -> Optional[str]:
-    """Return the resolver name for a known model *page*, else ``None``.
-
-    A host is only "known" when we can also pull a model id from the path, so a
-    direct ``files.printables.com`` blob URL (different host, no ``/model/<id>``)
-    is correctly treated as a direct download rather than a page.
-    """
-    host = _host(url)
-    if host in _PRINTABLES_HOSTS and _printables_id(url):
-        return "printables"
-    if (host == "makerworld.com" or host.endswith(".makerworld.com")) and _makerworld_id(url):
-        return "makerworld"
-    if host in _THINGIVERSE_HOSTS and _thingiverse_id(url):
-        return "thingiverse"
-    return None
-
-
-# --------------------------------------------------------------------------- #
-# Generic helpers
-# --------------------------------------------------------------------------- #
-def _looks_like_download(url: str) -> bool:
-    lower = url.split("?", 1)[0].lower()
-    return lower.endswith(_MODEL_EXTS) or "/download" in url.lower()
-
-
-def _first_download_url(data: Any) -> Optional[str]:
-    """Walk a JSON structure breadth-first for the first plausible file URL.
-
-    Direct ``url``/``downloadUrl`` keys win; otherwise any string value that
-    looks like a model download. Returns ``None`` if nothing qualifies.
-    """
-    stack: list[Any] = [data]
-    fallback: Optional[str] = None
-    while stack:
-        current = stack.pop(0)
-        if isinstance(current, dict):
-            for key in ("url", "downloadUrl", "download_url", "link"):
-                value = current.get(key)
-                if isinstance(value, str) and value.startswith(("http://", "https://")):
-                    return value
-            stack.extend(current.values())
-        elif isinstance(current, list):
-            stack.extend(current)
-        elif isinstance(current, str):
-            if (
-                fallback is None
-                and current.startswith(("http://", "https://"))
-                and _looks_like_download(current)
-            ):
-                fallback = current
-    return fallback
-
-
-# Markers Cloudflare embeds in its "Verify you are human" interstitial. We only
-# treat a page as challenged when the data we actually need (``__NEXT_DATA__``)
-# is absent, so a real page that merely mentions one of these strings is safe.
-_CHALLENGE_MARKERS = (
-    "just a moment",
-    "challenge-platform",
-    "cf-chl",
-    "verifying you are human",
-    "/cdn-cgi/challenge-platform/",
-)
-
-
-def _looks_like_challenge(html: str) -> bool:
-    """True when ``html`` is a Cloudflare bot-challenge page rather than content."""
-    if "__NEXT_DATA__" in html:
-        return False
-    lowered = html.lower()
-    return any(marker in lowered for marker in _CHALLENGE_MARKERS)
-
-
-def _extract_next_data(html: str) -> Optional[Any]:
-    """Pull the Next.js ``__NEXT_DATA__`` JSON blob out of a page's HTML."""
-    m = re.search(
-        r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
-        html,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(1).strip())
-    except json.JSONDecodeError:
-        return None
+# Compatibility aliases preserve the OSS resolver module's existing API and
+# patch points while delegating deterministic rules to the shared core.
+ModelFile = _resolver_rules.ModelFile
+CollectionMember = _resolver_rules.CollectionMember
+_MODEL_EXTS = _resolver_rules.MODEL_EXTENSIONS
+_PRINTABLES_HOSTS = _resolver_rules.PRINTABLES_HOSTS
+_THINGIVERSE_HOSTS = _resolver_rules.THINGIVERSE_HOSTS
+_CHALLENGE_MARKERS = _resolver_rules.CHALLENGE_MARKERS
+_PRINTABLES_FILE_CATEGORIES = _resolver_rules.PRINTABLES_FILE_CATEGORIES
+_host = _resolver_rules.host
+_printables_id = _resolver_rules.printables_id
+_makerworld_id = _resolver_rules.makerworld_id
+_thingiverse_id = _resolver_rules.thingiverse_id
+_collection_id = _resolver_rules.collection_id
+classify_collection = _resolver_rules.classify_collection
+classify_page = _resolver_rules.classify_page
+_looks_like_download = _resolver_rules.looks_like_download
+_first_download_url = _resolver_rules.first_download_url
+_looks_like_challenge = _resolver_rules.looks_like_challenge
+_extract_next_data = _resolver_rules.extract_next_data
+_pick_printables_pack = _resolver_rules.pick_printables_pack
+_printables_link_from_output = _resolver_rules.printables_link_from_output
+_printables_files_from_print = _resolver_rules.printables_files_from_print
+_printables_links_from_output = _resolver_rules.printables_links_from_output
+_makerworld_instance_id = _resolver_rules.makerworld_instance_id
+_makerworld_collection_title = _resolver_rules.makerworld_collection_title
+_makerworld_collection_members = _resolver_rules.makerworld_collection_members
 
 
 # --------------------------------------------------------------------------- #
@@ -252,30 +114,6 @@ async def _printables_graphql(query: str, variables: dict, referer: str) -> Any:
         raise ImportError_("printables_blocked")
     resp.raise_for_status()
     return resp.json()
-
-
-def _pick_printables_pack(packs: Any) -> Optional[str]:
-    """Prefer the all-model-files pack; fall back to any pack with an id."""
-    if not isinstance(packs, list):
-        return None
-    for pack in packs:
-        if isinstance(pack, dict) and pack.get("fileType") == "MODEL_FILES" and pack.get("id"):
-            return str(pack["id"])
-    for pack in packs:
-        if isinstance(pack, dict) and pack.get("id"):
-            return str(pack["id"])
-    return None
-
-
-def _printables_link_from_output(payload: Any) -> Optional[str]:
-    result = (payload or {}).get("data", {}).get("getDownloadLink") or {}
-    output = result.get("output") or {}
-    if isinstance(output.get("link"), str):
-        return output["link"]
-    for entry in output.get("files") or []:
-        if isinstance(entry, dict) and isinstance(entry.get("link"), str):
-            return entry["link"]
-    return None
 
 
 async def _resolve_printables(url: str) -> Optional[str]:
@@ -334,31 +172,6 @@ query ($id: ID!) {
 }
 """
 
-_PRINTABLES_FILE_CATEGORIES = (
-    ("stls", "stl"),
-    ("gcodes", "gcode"),
-    ("slas", "sla"),
-    ("otherFiles", "other"),
-)
-
-
-def _printables_files_from_print(print_obj: dict) -> list[ModelFile]:
-    files: list[ModelFile] = []
-    for field, file_type in _PRINTABLES_FILE_CATEGORIES:
-        for entry in print_obj.get(field) or []:
-            if isinstance(entry, dict) and entry.get("id"):
-                size = entry.get("fileSize")
-                files.append(
-                    ModelFile(
-                        file_id=str(entry["id"]),
-                        name=str(entry.get("name") or entry["id"]),
-                        file_type=file_type,
-                        size=size if isinstance(size, int) else None,
-                    )
-                )
-    return files
-
-
 async def _list_printables_files(url: str) -> Optional[tuple[str, list[ModelFile]]]:
     print_id = _printables_id(url)
     if not print_id:
@@ -369,22 +182,6 @@ async def _list_printables_files(url: str) -> Optional[tuple[str, list[ModelFile
         return None
     title = str(print_obj.get("name") or print_id)
     return title, _printables_files_from_print(print_obj)
-
-
-def _printables_links_from_output(payload: Any) -> list[str]:
-    """All per-file links from a getDownloadLink payload (else the single link)."""
-    result = (payload or {}).get("data", {}).get("getDownloadLink") or {}
-    output = result.get("output") or {}
-    links = [
-        entry["link"]
-        for entry in output.get("files") or []
-        if isinstance(entry, dict) and isinstance(entry.get("link"), str)
-    ]
-    if links:
-        return links
-    if isinstance(output.get("link"), str):
-        return [output["link"]]
-    return []
 
 
 async def _printables_download_links(url: str, files: list[ModelFile]) -> list[str]:
@@ -553,16 +350,8 @@ async def _resolve_makerworld(url: str, cookie: Optional[str]) -> Optional[str]:
         return None
     base = "https://makerworld.com/api/v1/design-service"
 
-    instance_id: Optional[str] = None
     design = await _makerworld_api_get(f"{base}/design/{design_id}", url, None, cookie)
-    if isinstance(design, dict):
-        if design.get("defaultInstanceId"):
-            instance_id = str(design["defaultInstanceId"])
-        else:
-            for inst in design.get("instances") or []:
-                if isinstance(inst, dict) and inst.get("id"):
-                    instance_id = str(inst["id"])
-                    break
+    instance_id = _makerworld_instance_id(design)
 
     if instance_id:
         api = f"{base}/instance/{instance_id}/f3mf?type=download&fileType=3mfstl"
@@ -575,59 +364,6 @@ async def _resolve_makerworld(url: str, cookie: Optional[str]) -> Optional[str]:
     api = f"https://makerworld.com/api/v1/models/{design_id}/download"
     data = await _makerworld_api_get(api, url, None, cookie)
     return _first_download_url(data) if data is not None else None
-
-
-def _makerworld_collection_members(next_data: Any) -> list[CollectionMember]:
-    """Best-effort: pull member models out of a collection page's hydration JSON.
-
-    MakerWorld is Cloudflare-gated and ships no public collection API, so we walk
-    ``__NEXT_DATA__`` for lists of design-like objects (an id + a title). The exact
-    shape is not contract-guaranteed; this degrades to an empty list if the page
-    cannot be parsed (the caller then reports ``*_collection_resolve_failed``).
-    """
-    try:
-        props = next_data["props"]["pageProps"]
-    except (KeyError, TypeError):
-        return []
-
-    members: list[CollectionMember] = []
-    seen: set[str] = set()
-
-    def consider(entry: Any) -> None:
-        if not isinstance(entry, dict):
-            return
-        design = entry.get("design") if isinstance(entry.get("design"), dict) else entry
-        design_id = design.get("id") or design.get("designId") or entry.get("designId")
-        title = design.get("title") or design.get("designTitle") or design.get("name")
-        if design_id is None or str(design_id) in seen:
-            return
-        seen.add(str(design_id))
-        members.append(
-            CollectionMember(
-                page_url=f"https://makerworld.com/en/models/{design_id}",
-                title=str(title or design_id),
-                source_id=str(design_id),
-            )
-        )
-
-    # MakerWorld embeds members under e.g. ``favoriteDesigns.hits`` / ``designs``.
-    _MEMBER_LIST_HINTS = (
-        "design", "model", "content", "hit", "item", "list", "record", "favorite",
-    )
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if isinstance(value, list) and any(h in key.lower() for h in _MEMBER_LIST_HINTS):
-                    for entry in value:
-                        consider(entry)
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(props)
-    return members
 
 
 async def _resolve_makerworld_collection(
@@ -643,16 +379,7 @@ async def _resolve_makerworld_collection(
     if next_data is None:
         return None
 
-    title = f"Collection {collection_id}"
-    try:
-        props = next_data["props"]["pageProps"]
-        # MakerWorld renamed collections to "favorites"; older pages used "collection".
-        meta = props.get("favorite") or props.get("collection") or {}
-        if isinstance(meta, dict) and (meta.get("title") or meta.get("name")):
-            title = str(meta.get("title") or meta.get("name"))
-    except (KeyError, TypeError):
-        pass
-
+    title = _makerworld_collection_title(next_data, collection_id)
     members = _makerworld_collection_members(next_data)
     return (title, members) if members else None
 

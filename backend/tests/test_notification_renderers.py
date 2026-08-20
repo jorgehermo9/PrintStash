@@ -7,8 +7,9 @@ boundary, with no network involved.
 from __future__ import annotations
 
 import pytest
+from printstash_core.notifications import NotificationTarget as CoreNotificationTarget
 
-from app.db.models import NotificationTarget
+from app.db.models import NotificationEventType, NotificationTarget
 from app.services import notification_renderers as r
 
 
@@ -49,10 +50,10 @@ def test_webhook_hmac_signature_when_secret_set():
     import hmac
 
     secret = "s3cr3t"
-    req = r.render_webhook(_ctx(), {"url": "https://example.com/hook", "secret": secret})
-    expected = hmac.new(
-        secret.encode(), req.data.encode(), hashlib.sha256
-    ).hexdigest()
+    req = r.render_webhook(
+        _ctx(), {"url": "https://example.com/hook", "secret": secret}
+    )
+    expected = hmac.new(secret.encode(), req.data.encode(), hashlib.sha256).hexdigest()
     assert req.headers["X-PrintStash-Signature"] == f"sha256={expected}"
 
 
@@ -91,6 +92,14 @@ def test_telegram_targets_bot_api_with_html():
         '<a href="https://www.printables.com/model/123-benchy">View model</a>'
         in req.json["text"]
     )
+
+
+def test_telegram_preserves_app_api_base_override(monkeypatch):
+    monkeypatch.setattr(r, "TELEGRAM_API_BASE", "http://telegram.test")
+
+    req = r.render_telegram(_ctx(), {"bot_token": "t", "chat_id": "c"})
+
+    assert req.url == "http://telegram.test/bott/sendMessage"
 
 
 def test_telegram_omits_link_when_no_model_url():
@@ -170,7 +179,9 @@ def test_duration_formatting_hours_minutes():
 
 
 def test_summary_skips_absent_optional_fields():
-    lines = r.summary_lines(_ctx(model_name=None, filament_used_g=None, duration_s=None))
+    lines = r.summary_lines(
+        _ctx(model_name=None, filament_used_g=None, duration_s=None)
+    )
     joined = "\n".join(lines)
     assert "Model:" not in joined
     assert "Filament:" not in joined
@@ -181,6 +192,15 @@ def test_summary_skips_absent_optional_fields():
 @pytest.mark.parametrize("target", list(NotificationTarget))
 def test_registry_covers_every_target(target):
     assert target in r.RENDERERS
+
+
+def test_facade_keeps_orm_enums_separate_from_core_contracts():
+    assert r.NotificationEventType is NotificationEventType
+    assert r.NotificationTarget is NotificationTarget
+    assert r.NotificationTarget is not CoreNotificationTarget
+    assert {target.value for target in r.RENDERERS} == {
+        target.value for target in CoreNotificationTarget
+    }
 
 
 @pytest.mark.parametrize(

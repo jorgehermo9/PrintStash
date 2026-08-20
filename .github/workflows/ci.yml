@@ -55,7 +55,7 @@ jobs:
           uv venv --python ${{ matrix.python }}
           uv pip install --python .venv/bin/python \
             --resolution ${{ matrix.resolution }} \
-            --editable ".[dev,printers-all]"
+            --editable ".[dev,mesh,printers-all,testkit]"
 
       - name: Test autonomous package
         run: .venv/bin/pytest tests -q

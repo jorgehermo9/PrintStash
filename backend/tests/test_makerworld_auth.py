@@ -10,8 +10,19 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from printstash_core.imports.makerworld import InMemoryPendingLoginStore
+from printstash_core.imports.makerworld import LoginResult as CoreLoginResult
+from printstash_core.imports.makerworld import (
+    MakerWorldAuthError as CoreMakerWorldAuthError,
+)
 
 from app.services import makerworld_auth as auth
+
+
+def test_facade_preserves_public_result_and_error_types() -> None:
+    assert auth.LoginResult is CoreLoginResult
+    assert auth.MakerWorldAuthError is CoreMakerWorldAuthError
+    assert isinstance(auth._pending_store, InMemoryPendingLoginStore)
 
 
 def _client_returning(*responses):
@@ -153,16 +164,18 @@ async def test_submit_code_missing_code() -> None:
 
 @pytest.mark.asyncio
 async def test_submit_code_prunes_expired_pending_logins() -> None:
+    now = 1_000.0
     client = _client_returning(
         _resp(json_body={"accessToken": "", "loginType": "verifyCode"})
     )
-    with patch.object(auth, "get_http_client", return_value=client):
+    with (
+        patch.object(auth, "get_http_client", return_value=client),
+        patch.object(auth, "_clock", side_effect=lambda: now),
+    ):
         begun = await auth.begin_login("a@b.com", "pw")
-    # Force the pending entry past its TTL so submit_code's _prune() drops it
-    # before the lookup, hitting the expiry-eviction branch.
-    auth._pending[begun.login_token].created_at -= auth._PENDING_TTL + 1
-    with pytest.raises(auth.MakerWorldAuthError) as exc:
-        await auth.submit_code(begun.login_token, "123456")
+        now += 601.0
+        with pytest.raises(auth.MakerWorldAuthError) as exc:
+            await auth.submit_code(begun.login_token, "123456")
     assert exc.value.code == "login_expired"
 
 
