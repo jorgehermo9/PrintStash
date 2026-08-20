@@ -7,6 +7,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/ui/package.json ./packages/ui/package.json
+COPY packages/domain/package.json ./packages/domain/package.json
 RUN pnpm install --no-frozen-lockfile --prod=false
 
 FROM base AS builder
