@@ -111,7 +111,10 @@ def render_mesh_thumbnail(
     """
     try:
         import numpy as np
-        from PIL import Image
+
+        # Pillow 10 does not ship the ``py.typed`` marker that later supported
+        # versions provide. Runtime imports are still valid across the matrix.
+        from PIL import Image  # pyright: ignore[reportMissingTypeStubs]
     except ImportError:
         if logger is not None:
             logger.error(
