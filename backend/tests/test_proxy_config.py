@@ -70,3 +70,15 @@ def test_backend_uv_toolchain_image_is_immutable() -> None:
         "sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded"
         in dockerfile
     )
+
+
+def test_backend_runtime_uv_fallback_uses_user_writable_cache() -> None:
+    dockerfile = (_root() / "backend" / "Dockerfile").read_text()
+    entrypoint = (_root() / "backend" / "docker-entrypoint.sh").read_text()
+
+    runtime_cache = "ENV UV_CACHE_DIR=/tmp/printstash-uv-cache"
+    assert runtime_cache in dockerfile
+    assert "UV_NO_SYNC=1" in dockerfile
+    assert dockerfile.index(runtime_cache) > dockerfile.index("useradd")
+    assert 'CMD ["/app/.venv/bin/uvicorn"' in dockerfile
+    assert "/app/.venv/bin/python -m app.db.migrate" in entrypoint
