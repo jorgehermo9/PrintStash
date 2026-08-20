@@ -32,6 +32,12 @@ RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin printstash \
  && mkdir -p /data/files /data/thumbs /data/staging /data/backups /data/db \
  && chown -R printstash:printstash /data
 
+# Keep any legacy/operator-supplied uv command away from the root-owned
+# build cache. The shipped entrypoint and CMD execute the virtualenv directly,
+# but older Compose overrides must still be able to start as printstash.
+ENV UV_CACHE_DIR=/tmp/printstash-uv-cache \
+    UV_NO_SYNC=1
+
 COPY --chown=printstash:printstash app ./app
 COPY --chown=printstash:printstash --chmod=0644 alembic.ini ./alembic.ini
 COPY --chown=printstash:printstash alembic ./alembic

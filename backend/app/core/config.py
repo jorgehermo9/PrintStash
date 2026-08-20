@@ -209,7 +209,7 @@ class Settings(BaseSettings):
     backup_s3_secret_key: str = ""
 
     app_name: str = "PrintStash"
-    app_version: str = "0.12.0"
+    app_version: str = "0.12.1"
 
     @model_validator(mode="after")
     def validate_numeric_relationships(self) -> Settings:
