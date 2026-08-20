@@ -1,7 +1,9 @@
 /** @type {import("tailwindcss").Config} */
 const config = {
   darkMode: "class",
+  presets: [require("@printstash/ui/tailwind-preset")],
   content: [
+    "./packages/ui/src/**/*.{js,ts,jsx,tsx}",
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
