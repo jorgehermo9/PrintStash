@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { PRINTER_SETUP_OPTIONS, setupProviderFields } from "@/lib/printer-providers";
-import { SHARED_PRINTER_CONTRACT } from "../printer-contracts";
+import {
+  SHARED_PRINTER_CONTRACT,
+  type SharedPrinterCapability,
+  type SharedPrinterProviderId,
+} from "../printer-contracts";
 
 const PROVIDER_IDS = [
   "moonraker",
@@ -33,10 +37,13 @@ describe("generated printer contracts", () => {
   });
 
   it("drives action visibility from declared capabilities", () => {
-    const supports = (provider: (typeof PROVIDER_IDS)[number], capability: string) =>
-      SHARED_PRINTER_CONTRACT.providers[provider].capabilities.includes(
-        capability as never,
-      );
+    const supports = (provider: SharedPrinterProviderId, capability: SharedPrinterCapability) => {
+      // Each provider declares its own narrower tuple of capabilities; read it back
+      // through the full capability union so membership is a plain lookup.
+      const declared: readonly SharedPrinterCapability[] =
+        SHARED_PRINTER_CONTRACT.providers[provider].capabilities;
+      return declared.includes(capability);
+    };
 
     expect(supports("moonraker", "send_gcode")).toBe(true);
     expect(supports("bambu_lan", "upload")).toBe(true);

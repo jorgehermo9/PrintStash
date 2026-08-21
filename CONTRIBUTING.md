@@ -48,7 +48,9 @@ uv run ruff format app/ tests/
 
 ```bash
 cd frontend
-pnpm lint
+pnpm lint          # oxlint
+pnpm format:check  # oxfmt
+pnpm typecheck     # TypeScript 7 native compiler
 ```
 
 ## Project Boundaries

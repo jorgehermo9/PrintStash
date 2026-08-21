@@ -28,10 +28,23 @@ file only routes and adds the checklist.
 
 ```bash
 cd frontend
-pnpm lint          # eslint — report the exact error/warning count from the run
-pnpm typecheck     # tsc --noEmit
+pnpm lint          # oxlint (+ vendored anti-slop plugin) — report the exact count from the run
+pnpm format:check  # oxfmt — formatting is a CI gate; `pnpm format` writes
+pnpm typecheck     # tsc --noEmit, root + both workspace packages
 pnpm test          # vitest, when logic changed
 ```
+
+The frontend lints with **oxlint**, formats with **oxfmt**, and typechecks with the
+**TypeScript 7 native compiler**. There is no ESLint and no prettier — do not
+reintroduce them, and do not hand-format: run `pnpm format`.
+
+`tools/oxlint/anti-slop/` is a vendored copy of the
+[anti-slop](https://github.com/dmmulroy/anti-slop) plugin. Its rules reject
+low-evidence typing: `unknown` in a contract, `as` chains, `Record<string,
+unknown>` dictionaries, `typeof` narrowing instead of boundary parsing, and
+`vi.mock` module mocks. When one fires, **fix the typing** — never add a cast, a
+blanket `SAFETY:` comment, or a rule suppression to get past it. A `SAFETY:`
+comment must state the specific checked invariant for that one site.
 
 To see edits live: `:3000` is the prebuilt Docker image (no HMR) — run
 `pnpm dev` on a spare port instead.

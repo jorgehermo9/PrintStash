@@ -54,14 +54,23 @@ test("comparing two revisions surfaces differing metadata", async ({ page }) => 
   // which is an implementation detail — pin them explicitly to rev1 vs rev2 so
   // the diff assertion below is deterministic.
   const selects = compare.locator("select");
-  const rev1Value = await selects.nth(0).locator("option", { hasText: "rev1.gcode" }).getAttribute("value");
-  const rev2Value = await selects.nth(1).locator("option", { hasText: "rev2.gcode" }).getAttribute("value");
+  const rev1Value = await selects
+    .nth(0)
+    .locator("option", { hasText: "rev1.gcode" })
+    .getAttribute("value");
+  const rev2Value = await selects
+    .nth(1)
+    .locator("option", { hasText: "rev2.gcode" })
+    .getAttribute("value");
   await selects.nth(0).selectOption(rev1Value!);
   await selects.nth(1).selectOption(rev2Value!);
 
   // Est. time differs between the two revisions — its right-hand value is
   // rendered in the diff-highlight style, distinct from a matching field.
-  const estTimeRow = compare.locator("div").filter({ hasText: /^Est\. time/ }).first();
+  const estTimeRow = compare
+    .locator("div")
+    .filter({ hasText: /^Est\. time/ })
+    .first();
   const [, leftValue, rightValue] = await estTimeRow.locator("span").allTextContents();
   expect(leftValue).not.toBe(rightValue);
 });

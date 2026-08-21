@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  ApiError,
-  getErrorMessage,
-  parseApiError,
-  userMessage,
-} from "@/lib/errors";
+import { ApiError, getErrorMessage, parseApiError, userMessage } from "@/lib/errors";
 
 describe("ApiError", () => {
   it("flags 401 as an auth error", () => {
@@ -27,9 +22,7 @@ describe("parseApiError", () => {
   });
 
   it("extracts status and the FastAPI detail code from an HTTP message", () => {
-    const err = parseApiError(
-      new Error('HTTP 404: {"detail":"model_not_found"}'),
-    );
+    const err = parseApiError(new Error('HTTP 404: {"detail":"model_not_found"}'));
     expect(err.status).toBe(404);
     expect(err.code).toBe("model_not_found");
   });
@@ -71,9 +64,7 @@ describe("parseApiError", () => {
 
 describe("getErrorMessage / userMessage", () => {
   it("maps known codes to friendly copy", () => {
-    expect(getErrorMessage("invalid_credentials")).toBe(
-      "Invalid username or password.",
-    );
+    expect(getErrorMessage("invalid_credentials")).toBe("Invalid username or password.");
     expect(getErrorMessage("collection_not_empty")).toMatch(/still has models/);
     expect(getErrorMessage("archive_blob_hash_mismatch")).toMatch(/Vault audit/);
   });
@@ -83,8 +74,8 @@ describe("getErrorMessage / userMessage", () => {
   });
 
   it("userMessage parses then maps in one step", () => {
-    expect(
-      userMessage(new Error('HTTP 401: {"detail":"invalid_credentials"}')),
-    ).toBe("Invalid username or password.");
+    expect(userMessage(new Error('HTTP 401: {"detail":"invalid_credentials"}'))).toBe(
+      "Invalid username or password.",
+    );
   });
 });

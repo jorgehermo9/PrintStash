@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  getUrl,
-  getWsUrl,
-  invalidateApiCache,
-} from "@/lib/api/request";
+import { getUrl, getWsUrl, invalidateApiCache } from "@/lib/api/request";
 import { getJson, sendJson, sendAction } from "@/lib/api/request";
 
 /**
@@ -14,17 +10,29 @@ import { getJson, sendJson, sendAction } from "@/lib/api/request";
  * `fresh` bypasses the cache, and any mutation clears it.
  */
 
-function jsonResponse(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
+/** Any payload the API can serialise as a JSON response body. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+/** A real Response, so `ok`/`status`/`json()`/`text()` behave exactly as in the browser. */
+function jsonResponse(data: JsonValue, status = 200): Response {
+  const bodyless = status === 204 || status === 205 || status === 304;
+  return new Response(bodyless ? null : JSON.stringify(data), {
     status,
-    json: async () => data,
-    text: async () => JSON.stringify(data),
-    headers: new Headers({ "content-type": "application/json" }),
-  } as unknown as Response;
+    headers: { "content-type": "application/json" },
+  });
 }
 
-const fetchMock = vi.fn();
+const fetchMock = vi.fn<typeof fetch>();
+
+/** A response body can only be read once, so every call gets a fresh Response. */
+function respondWith(data: JsonValue, status = 200): void {
+  fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(data, status)));
+}
+
+/** The request init of the nth fetch call, which request.ts always supplies. */
+function initOf(callIndex: number): RequestInit {
+  return fetchMock.mock.calls[callIndex][1] ?? {};
+}
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
@@ -51,7 +59,7 @@ describe("getUrl / getWsUrl", () => {
 
 describe("getJson caching", () => {
   it("serves a second call from cache without a second fetch", async () => {
-    fetchMock.mockResolvedValue(jsonResponse([{ id: 1 }]));
+    respondWith([{ id: 1 }]);
 
     const first = await getJson("/api/v1/models");
     const second = await getJson("/api/v1/models");
@@ -69,10 +77,7 @@ describe("getJson caching", () => {
       }),
     );
 
-    const both = Promise.all([
-      getJson("/api/v1/tags"),
-      getJson("/api/v1/tags"),
-    ]);
+    const both = Promise.all([getJson("/api/v1/tags"), getJson("/api/v1/tags")]);
     resolve(jsonResponse([{ id: 9 }]));
     const [a, b] = await both;
 
@@ -82,18 +87,18 @@ describe("getJson caching", () => {
   });
 
   it("bypasses the cache when { fresh: true } is passed", async () => {
-    fetchMock.mockResolvedValue(jsonResponse([]));
+    respondWith([]);
 
     await getJson("/api/v1/printers", { fresh: true });
     await getJson("/api/v1/printers", { fresh: true });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     // fresh reads must not be cached or served to non-fresh reads either.
-    expect(fetchMock.mock.calls[0][1]).toMatchObject({ cache: "no-store" });
+    expect(initOf(0)).toMatchObject({ cache: "no-store" });
   });
 
   it("refetches after invalidateApiCache clears the cache", async () => {
-    fetchMock.mockResolvedValue(jsonResponse([{ id: 1 }]));
+    respondWith([{ id: 1 }]);
 
     await getJson("/api/v1/models");
     invalidateApiCache("/api/v1/models");
@@ -106,49 +111,47 @@ describe("getJson caching", () => {
 describe("auth headers", () => {
   it("does not attach a browser-readable token from legacy storage", async () => {
     window.localStorage.setItem("printstash.token", "abc123");
-    fetchMock.mockResolvedValue(jsonResponse([]));
+    respondWith([]);
 
     await getJson("/api/v1/models", { fresh: true });
 
-    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
-    expect(headers.Authorization).toBeUndefined();
+    const headers = new Headers(initOf(0).headers);
+    expect(headers.get("Authorization")).toBeNull();
   });
 
   it("omits the Authorization header when there is no token", async () => {
-    fetchMock.mockResolvedValue(jsonResponse([]));
+    respondWith([]);
 
     await getJson("/api/v1/models", { fresh: true });
 
-    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
-    expect(headers.Authorization).toBeUndefined();
+    const headers = new Headers(initOf(0).headers);
+    expect(headers.get("Authorization")).toBeNull();
   });
 });
 
 describe("mutations", () => {
   it("sendJson issues the right method/body and clears the GET cache", async () => {
     // Prime the cache, then mutate and confirm a follow-up GET refetches.
-    fetchMock.mockResolvedValue(jsonResponse([{ id: 1 }]));
+    respondWith([{ id: 1 }]);
     await getJson("/api/v1/collections");
 
-    fetchMock.mockResolvedValue(jsonResponse({ id: 2, name: "New" }));
+    respondWith({ id: 2, name: "New" });
     const created = await sendJson("/api/v1/collections", "POST", { name: "New" });
     expect(created).toEqual({ id: 2, name: "New" });
 
-    const postCall = fetchMock.mock.calls.at(-1)!;
-    expect(postCall[1]).toMatchObject({ method: "POST" });
-    expect(postCall[1].body).toBe(JSON.stringify({ name: "New" }));
+    const postInit = initOf(fetchMock.mock.calls.length - 1);
+    expect(postInit).toMatchObject({ method: "POST" });
+    expect(postInit.body).toBe(JSON.stringify({ name: "New" }));
 
-    fetchMock.mockResolvedValue(jsonResponse([{ id: 1 }, { id: 2 }]));
+    respondWith([{ id: 1 }, { id: 2 }]);
     await getJson("/api/v1/collections");
     // 1 initial GET + 1 POST + 1 refetched GET = 3 (cache was busted).
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("sendAction sends a bare method and resolves void on 204", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(null, 204));
-    await expect(
-      sendAction("/api/v1/tags/5", "DELETE"),
-    ).resolves.toBeUndefined();
-    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "DELETE" });
+    respondWith(null, 204);
+    await expect(sendAction("/api/v1/tags/5", "DELETE")).resolves.toBeUndefined();
+    expect(initOf(0)).toMatchObject({ method: "DELETE" });
   });
 });

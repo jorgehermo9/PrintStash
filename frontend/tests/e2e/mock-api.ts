@@ -299,7 +299,7 @@ const snapshot = {
   webhooks: { state: "ready", state_message: "Printer is ready" },
 };
 
-function sendJson(res: ServerResponse, body: unknown, status = 200): void {
+function sendJson<T>(res: ServerResponse, body: T, status = 200): void {
   res.writeHead(status, {
     "content-type": "application/json",
     "access-control-allow-origin": "*",
@@ -585,29 +585,36 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (url.pathname === "/api/v1/ingest/jobs") {
-    sendJson(res, state.ingestJobQueued ? [{
-      job_id: "gcode-job-1",
-      state: "completed",
-      stage: "completed",
-      completion: "complete",
-      progress: 100,
-      processed: 1,
-      total: 1,
-      succeeded: 1,
-      deduplicated: 0,
-      skipped: 0,
-      failed: 0,
-      model_id: model.id,
-      file_id: 2,
-      error: null,
-      retryable: false,
-      thumbnail_status: "skipped",
-      thumbnail_reason: "not_mesh",
-      committed_at: now,
-      started_at: now,
-      finished_at: now,
-      updated_at: now,
-    }] : []);
+    sendJson(
+      res,
+      state.ingestJobQueued
+        ? [
+            {
+              job_id: "gcode-job-1",
+              state: "completed",
+              stage: "completed",
+              completion: "complete",
+              progress: 100,
+              processed: 1,
+              total: 1,
+              succeeded: 1,
+              deduplicated: 0,
+              skipped: 0,
+              failed: 0,
+              model_id: model.id,
+              file_id: 2,
+              error: null,
+              retryable: false,
+              thumbnail_status: "skipped",
+              thumbnail_reason: "not_mesh",
+              committed_at: now,
+              started_at: now,
+              finished_at: now,
+              updated_at: now,
+            },
+          ]
+        : [],
+    );
     return;
   }
 
@@ -649,7 +656,11 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
   }
   if (req.method === "POST" && url.pathname === "/api/v1/libraries/1/scan") {
     drainRequest(req, () => {
-      sendJson(res, { job_id: "scan-job-1", state: "pending", message: "library scan queued" }, 202);
+      sendJson(
+        res,
+        { job_id: "scan-job-1", state: "pending", message: "library scan queued" },
+        202,
+      );
     });
     return;
   }
@@ -698,9 +709,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/v1/spoolman/sync-filaments") {
-    drainRequest(req, () =>
-      sendJson(res, { created: 0, updated: 0, adopted: 0, unlinked: 0 }),
-    );
+    drainRequest(req, () => sendJson(res, { created: 0, updated: 0, adopted: 0, unlinked: 0 }));
     return;
   }
   if (url.pathname === "/api/v1/files/1/thumbnail") {

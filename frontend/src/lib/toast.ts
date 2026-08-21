@@ -22,9 +22,9 @@ import { userMessage, parseApiError } from "@/lib/errors";
 
 export const toast = {
   /** Show a red error toast with a description parsed from the thrown value. */
-  error(raw: unknown): void {
-    const msg = userMessage(raw);
-    console.debug("PrintStash API error", parseApiError(raw));
+  error(cause: unknown): void {
+    const msg = userMessage(cause);
+    console.debug("PrintStash API error", parseApiError(cause));
     sonner.error(msg, { duration: 6000 });
   },
 
@@ -36,7 +36,12 @@ export const toast = {
   undo(message: string, onUndo: () => void | Promise<void>): void {
     sonner.success(message, {
       duration: 6000,
-      action: { label: "Undo", onClick: () => { void onUndo(); } },
+      action: {
+        label: "Undo",
+        onClick: () => {
+          void onUndo();
+        },
+      },
     });
   },
 

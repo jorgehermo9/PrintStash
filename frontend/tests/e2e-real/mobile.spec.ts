@@ -6,8 +6,7 @@ test.use({ viewport: { width: 390, height: 844 } });
 
 // Scope to the bottom nav — the desktop sidebar has same-named links but is
 // display:none at this width, which would otherwise make role queries ambiguous.
-const bottomNav = (page: import("@playwright/test").Page) =>
-  page.locator("nav.fixed.bottom-0");
+const bottomNav = (page: import("@playwright/test").Page) => page.locator("nav.fixed.bottom-0");
 
 // The TanStack Query devtools overlay sits bottom-right in the dev build and
 // overlaps the bottom nav at phone width, intercepting taps. Hide it.

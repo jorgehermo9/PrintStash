@@ -5,7 +5,9 @@ import { test, expect } from "./helpers";
 // across a reload. `printstash.locale` lives in localStorage, shared across
 // this worker's serial specs, so this test restores English when it's done.
 
-test("switching to Spanish translates settings navigation and survives a reload", async ({ page }) => {
+test("switching to Spanish translates settings navigation and survives a reload", async ({
+  page,
+}) => {
   await page.goto("/settings");
   await expect(page.getByRole("button", { name: "Trash" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();

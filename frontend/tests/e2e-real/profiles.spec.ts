@@ -39,7 +39,9 @@ test("create, edit, and delete a filament preset", async ({ page }) => {
   await expect(nameInput).toBeVisible();
 
   // Edit cost; auto-saves on row blur (real PATCH).
-  await rowOf(nameInput).getByLabel(/Filament cost per kg/).fill("42");
+  await rowOf(nameInput)
+    .getByLabel(/Filament cost per kg/)
+    .fill("42");
   await Promise.all([
     page.waitForResponse(
       (r) => /\/api\/v1\/filament-profiles\/\d+/.test(r.url()) && r.request().method() === "PATCH",
@@ -53,7 +55,9 @@ test("create, edit, and delete a filament preset", async ({ page }) => {
   await expect(rowOf(reloaded).getByLabel(/Filament cost per kg/)).toHaveValue("42");
 
   // Delete it.
-  await rowOf(reloaded).getByRole("button", { name: `Delete filament preset ${name}` }).click();
+  await rowOf(reloaded)
+    .getByRole("button", { name: `Delete filament preset ${name}` })
+    .click();
   await expect
     .poll(async () => {
       const inputs = section.getByLabel(/^Filament preset name/);
@@ -82,7 +86,9 @@ test("create and delete a printer preset", async ({ page }) => {
   await page.reload();
   await page.getByRole("tab", { name: /Printers/ }).click();
   const reloaded = await inputByValue(section, /^Printer preset name/, name);
-  await rowOf(reloaded).getByRole("button", { name: `Delete printer preset ${name}` }).click();
+  await rowOf(reloaded)
+    .getByRole("button", { name: `Delete printer preset ${name}` })
+    .click();
   await expect
     .poll(async () => {
       const inputs = section.getByLabel(/^Printer preset name/);

@@ -12,10 +12,23 @@ export function capturePendingImport(payload: {
 }
 
 export function listPendingImports(includeCompleted = true): Promise<InboxItem[]> {
-  return getJson<InboxItem[]>(`/api/v1/inbox?include_completed=${includeCompleted}`, { fresh: true });
+  return getJson<InboxItem[]>(`/api/v1/inbox?include_completed=${includeCompleted}`, {
+    fresh: true,
+  });
 }
 
-export function updatePendingImport(id: number, payload: Record<string, unknown>): Promise<InboxItem> {
+/**
+ * Editable fields of a captured import, mirroring the backend's
+ * `InboxItemUpdate` schema (partial update; the API forbids extra keys).
+ */
+export interface PendingImportUpdate {
+  title?: string | null;
+  collection_id?: number | null;
+  tags?: string[];
+  selected_ids?: string[];
+}
+
+export function updatePendingImport(id: number, payload: PendingImportUpdate): Promise<InboxItem> {
   return sendJson<InboxItem>(`/api/v1/inbox/${id}`, "PATCH", payload);
 }
 

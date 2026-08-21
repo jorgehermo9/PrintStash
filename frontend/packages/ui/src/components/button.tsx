@@ -12,11 +12,9 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary-hover",
-        destructive:
-          "bg-destructive text-destructive-foreground hover:opacity-90",
+        destructive: "bg-destructive text-destructive-foreground hover:opacity-90",
         outline: "border border-input bg-background hover:bg-muted",
-        secondary:
-          "bg-secondary text-secondary-foreground hover:opacity-90",
+        secondary: "bg-secondary text-secondary-foreground hover:opacity-90",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
       },
@@ -37,8 +35,7 @@ const buttonVariants = cva(
 );
 
 export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   /** Shows a spinner and disables the button. Ignored with asChild. */
   loading?: boolean;
@@ -46,25 +43,12 @@ export interface ButtonProps
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   (
-    {
-      className,
-      variant,
-      size,
-      asChild = false,
-      loading = false,
-      disabled,
-      children,
-      ...props
-    },
+    { className, variant, size, asChild = false, loading = false, disabled, children, ...props },
     ref,
   ) => {
     if (asChild) {
       return (
-        <Slot
-          className={cn(buttonVariants({ variant, size, className }))}
-          ref={ref}
-          {...props}
-        >
+        <Slot className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props}>
           {children}
         </Slot>
       );
@@ -76,9 +60,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={disabled || loading}
         {...props}
       >
-        {loading && (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-        )}
+        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
         {children}
       </button>
     );

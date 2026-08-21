@@ -4,11 +4,7 @@ import { type ReactNode, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
-import {
-  DURATION,
-  useMountTransition,
-  useOverlayBehavior,
-} from "../lib/overlay";
+import { DURATION, useMountTransition, useOverlayBehavior } from "../lib/overlay";
 import { cn } from "../lib/utils";
 
 export interface ModalShellProps {
@@ -99,10 +95,7 @@ export function Modal({
       open={open}
       onClose={onClose}
       labelledBy={labelledBy ?? (title ? titleId : undefined)}
-      className={cn(
-        "w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg",
-        className,
-      )}
+      className={cn("w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg", className)}
     >
       {title ? (
         <div className="mb-4 flex items-center justify-between">

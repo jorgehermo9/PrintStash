@@ -121,8 +121,19 @@ export type Locale = keyof typeof messages;
 export type MessageKey = keyof typeof messages.en;
 export type MessageCatalog = Record<MessageKey, string>;
 export const messageCatalogs = messages satisfies Record<Locale, MessageCatalog>;
-export const SUPPORTED_LOCALES = Object.keys(messages) as Locale[];
+export const SUPPORTED_LOCALES =
+  // SAFETY: `Locale` is `keyof typeof messages`, and `Object.keys` enumerates
+  // exactly the own enumerable keys of that same literal object, so every
+  // element is a `Locale`. TypeScript widens `Object.keys` to `string[]`
+  // because its signature cannot express that no other keys exist.
+  Object.keys(messages) as Locale[];
 const STORAGE_KEY = "printstash.locale";
+const isBrowser = (): boolean => "window" in globalThis;
+
+/** Decode a persisted locale string; anything unrecognised is not a Locale. */
+function parseLocale(stored: string | null): Locale | null {
+  return SUPPORTED_LOCALES.find((locale) => locale === stored) ?? null;
+}
 
 type I18nValue = {
   locale: Locale;
@@ -133,11 +144,13 @@ type I18nValue = {
 const I18nContext = createContext<I18nValue | null>(null);
 
 function initialLocale(): Locale {
-  if (typeof window === "undefined") return "en";
+  if (!isBrowser()) return "en";
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (SUPPORTED_LOCALES.includes(stored as Locale)) return stored as Locale;
-  } catch { /* Storage can be unavailable in hardened/private contexts. */ }
+    const stored = parseLocale(localStorage.getItem(STORAGE_KEY));
+    if (stored !== null) return stored;
+  } catch {
+    /* Storage can be unavailable in hardened/private contexts. */
+  }
   return "en";
 }
 
@@ -146,20 +159,27 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = locale;
-    try { localStorage.setItem(STORAGE_KEY, locale); } catch { /* non-fatal */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, locale);
+    } catch {
+      /* non-fatal */
+    }
   }, [locale]);
 
-  const value = useMemo<I18nValue>(() => ({
-    locale,
-    setLocale: setLocaleState,
-    t(key, values) {
-      let message: string = messageCatalogs[locale][key] ?? messageCatalogs.en[key];
-      for (const [name, replacement] of Object.entries(values ?? {})) {
-        message = message.replaceAll(`{${name}}`, replacement);
-      }
-      return message;
-    },
-  }), [locale]);
+  const value = useMemo<I18nValue>(
+    () => ({
+      locale,
+      setLocale: setLocaleState,
+      t(key, values) {
+        let message: string = messageCatalogs[locale][key] ?? messageCatalogs.en[key];
+        for (const [name, replacement] of Object.entries(values ?? {})) {
+          message = message.replaceAll(`{${name}}`, replacement);
+        }
+        return message;
+      },
+    }),
+    [locale],
+  );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

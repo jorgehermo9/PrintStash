@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { Children, cloneElement, isValidElement, useEffect, useRef, type ReactElement, type ReactNode } from "react";
+import { Children, cloneElement, isValidElement, useEffect, useRef, type ReactNode } from "react";
 
 import { useI18n, useOptionalI18n, type Locale } from "@/lib/i18n";
 
@@ -9,8 +9,14 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["release needed", "liberación pendiente"],
   ["Batch #", "Lote n.º "],
   ["copies", "copias"],
-  ["Print with a known material mismatch?", "¿Imprimir con una incompatibilidad de material conocida?"],
-  ["The selected G-code material or nozzle does not match the printer’s known loaded state. Continuing records an audited override. Color differences alone do not block printing.", "El material o la boquilla del G-code no coincide con el estado cargado conocido de la impresora. Continuar registra una excepción auditada. Las diferencias de color no bloquean la impresión."],
+  [
+    "Print with a known material mismatch?",
+    "¿Imprimir con una incompatibilidad de material conocida?",
+  ],
+  [
+    "The selected G-code material or nozzle does not match the printer’s known loaded state. Continuing records an audited override. Color differences alone do not block printing.",
+    "El material o la boquilla del G-code no coincide con el estado cargado conocido de la impresora. Continuar registra una excepción auditada. Las diferencias de color no bloquean la impresión.",
+  ],
   ["Print anyway", "Imprimir de todos modos"],
   ["Copies", "Copias"],
   ["Priority", "Prioridad"],
@@ -20,20 +26,38 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Printer group", "Grupo de impresoras"],
   ["Any group", "Cualquier grupo"],
   ["Compatibility:", "Compatibilidad:"],
-  ["Unknown state remains usable and will not block this action.", "El estado desconocido sigue siendo utilizable y no bloqueará esta acción."],
+  [
+    "Unknown state remains usable and will not block this action.",
+    "El estado desconocido sigue siendo utilizable y no bloqueará esta acción.",
+  ],
   ["Provider material sync", "Sincronización de material del proveedor"],
-  ["Import supported AMS or active-Spoolman state. Turn off to use manual state exclusively.", "Importa el estado compatible de AMS o del carrete activo de Spoolman. Desactívalo para usar exclusivamente el estado manual."],
+  [
+    "Import supported AMS or active-Spoolman state. Turn off to use manual state exclusively.",
+    "Importa el estado compatible de AMS o del carrete activo de Spoolman. Desactívalo para usar exclusivamente el estado manual.",
+  ],
   ["Require operator release", "Requerir liberación del operador"],
-  ["After a managed print completes, block scheduling until an operator releases or holds the printer.", "Después de completar una impresión gestionada, bloquea la programación hasta que un operador libere o retenga la impresora."],
+  [
+    "After a managed print completes, block scheduling until an operator releases or holds the printer.",
+    "Después de completar una impresión gestionada, bloquea la programación hasta que un operador libere o retenga la impresora.",
+  ],
   ["Materials &amp; tools", "Materiales y herramientas"],
-  ["Loaded filament truth is kept here, independently from printer groups.", "El estado real del filamento cargado se mantiene aquí, independientemente de los grupos de impresoras."],
+  [
+    "Loaded filament truth is kept here, independently from printer groups.",
+    "El estado real del filamento cargado se mantiene aquí, independientemente de los grupos de impresoras.",
+  ],
   ["Save state", "Guardar estado"],
   ["Tool 0 nozzle diameter (mm)", "Diámetro de boquilla de la herramienta 0 (mm)"],
   ["Provider state", "Estado del proveedor"],
   ["Manual feeds", "Alimentaciones manuales"],
-  ["Selecting a tracked spool does not mark it loaded; use “Set as loaded” explicitly.", "Seleccionar un carrete seguido no lo marca como cargado; usa «Marcar como cargado» explícitamente."],
+  [
+    "Selecting a tracked spool does not mark it loaded; use “Set as loaded” explicitly.",
+    "Seleccionar un carrete seguido no lo marca como cargado; usa «Marcar como cargado» explícitamente.",
+  ],
   ["Add feed", "Añadir alimentación"],
-  ["No manual feeds. Add one for an external or unsupported filament path.", "No hay alimentaciones manuales. Añade una para una ruta de filamento externa o no compatible."],
+  [
+    "No manual feeds. Add one for an external or unsupported filament path.",
+    "No hay alimentaciones manuales. Añade una para una ruta de filamento externa o no compatible.",
+  ],
   ["Feed label", "Nombre de alimentación"],
   ["Empty", "Vacío"],
   ["Loaded", "Cargado"],
@@ -48,10 +72,16 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Loaded:", "Cargado:"],
   ["Current:", "Actual:"],
   ["Next:", "Siguiente:"],
-  ["Provider-reported nozzle is shown while fresh; saving creates the manual fallback.", "La boquilla informada por el proveedor se muestra mientras esté actualizada; guardar crea la alternativa manual."],
+  [
+    "Provider-reported nozzle is shown while fresh; saving creates the manual fallback.",
+    "La boquilla informada por el proveedor se muestra mientras esté actualizada; guardar crea la alternativa manual.",
+  ],
   ["Operator set", "Definido por el operador"],
   ["Interactive previews", "Vistas previas interactivas"],
-  ["Balance sharpness against GPU use in the 3D Model and G-code viewers. This preference is saved in this browser.", "Equilibra la nitidez y el uso de la GPU en los visores de modelos 3D y G-code. Esta preferencia se guarda en este navegador."],
+  [
+    "Balance sharpness against GPU use in the 3D Model and G-code viewers. This preference is saved in this browser.",
+    "Equilibra la nitidez y el uso de la GPU en los visores de modelos 3D y G-code. Esta preferencia se guarda en este navegador.",
+  ],
   ["Preview quality", "Calidad de la vista previa"],
   ["Performance · 1×", "Rendimiento · 1×"],
   ["Balanced · 1.5×", "Equilibrada · 1,5×"],
@@ -61,24 +91,57 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Sharp · 2×", "Nítida · 2×"],
   ["Print-ready · 3×", "Lista para imprimir · 3×"],
   ["Model preview images", "Imágenes de vista previa de modelos"],
-  ["Choose the resolution of generated Model card images. Higher settings take longer to render and use more memory and storage.", "Elige la resolución de las imágenes generadas para las tarjetas de modelo. Los ajustes más altos tardan más en renderizarse y usan más memoria y almacenamiento."],
+  [
+    "Choose the resolution of generated Model card images. Higher settings take longer to render and use more memory and storage.",
+    "Elige la resolución de las imágenes generadas para las tarjetas de modelo. Los ajustes más altos tardan más en renderizarse y usan más memoria y almacenamiento.",
+  ],
   ["Model image quality", "Calidad de imagen del modelo"],
   ["Compact · 320 × 240", "Compacta · 320 × 240"],
   ["Standard · 640 × 480", "Estándar · 640 × 480"],
   ["High · 1280 × 960", "Alta · 1280 × 960"],
   ["Custom", "Personalizada"],
   ["Recreate all images", "Recrear todas las imágenes"],
-  ["Quality changes apply to new images. Recreate all images to update existing Models in the background.", "Los cambios de calidad se aplican a las imágenes nuevas. Recrea todas las imágenes para actualizar los modelos existentes en segundo plano."],
-  ["Preview settings saved for this browser.", "Los ajustes de vista previa se guardaron para este navegador."],
-  ["Model image quality updated for new previews.", "La calidad de imagen del modelo se actualizó para las vistas previas nuevas."],
-  ["Model preview recreation queued. Follow it in Tasks.", "La recreación de vistas previas de modelos está en cola. Sigue el progreso en Tareas."],
+  [
+    "Quality changes apply to new images. Recreate all images to update existing Models in the background.",
+    "Los cambios de calidad se aplican a las imágenes nuevas. Recrea todas las imágenes para actualizar los modelos existentes en segundo plano.",
+  ],
+  [
+    "Preview settings saved for this browser.",
+    "Los ajustes de vista previa se guardaron para este navegador.",
+  ],
+  [
+    "Model image quality updated for new previews.",
+    "La calidad de imagen del modelo se actualizó para las vistas previas nuevas.",
+  ],
+  [
+    "Model preview recreation queued. Follow it in Tasks.",
+    "La recreación de vistas previas de modelos está en cola. Sigue el progreso en Tareas.",
+  ],
   ["Repair thumbnail", "Reparar miniatura"],
-  ["The backend will create these directories and probe them for writability before completing setup.", "El backend creará estos directorios y comprobará que se pueda escribir en ellos antes de completar la configuración."],
-  ["Vault configuration and display preferences", "Configuración de la bóveda y preferencias de visualización"],
-  ["Portable archive with models, metadata, print history, and original artifacts", "Archivo portátil con modelos, metadatos, historial de impresión y artefactos originales"],
-  ["Export a versioned archive for migration to another PrintStash installation. Accounts, credentials, settings, and trash are excluded.", "Exporta un archivo versionado para migrar a otra instalación de PrintStash. Se excluyen cuentas, credenciales, ajustes y papelera."],
-  ["Download your searchable library context for spreadsheets, audits, migrations, or local AI prompts.", "Descarga el contexto consultable de tu biblioteca para hojas de cálculo, auditorías, migraciones o IA local."],
-  ["Metadata only — no raw STL/3MF/G-code files", "Solo metadatos, sin archivos STL/3MF/G-code originales"],
+  [
+    "The backend will create these directories and probe them for writability before completing setup.",
+    "El backend creará estos directorios y comprobará que se pueda escribir en ellos antes de completar la configuración.",
+  ],
+  [
+    "Vault configuration and display preferences",
+    "Configuración de la bóveda y preferencias de visualización",
+  ],
+  [
+    "Portable archive with models, metadata, print history, and original artifacts",
+    "Archivo portátil con modelos, metadatos, historial de impresión y artefactos originales",
+  ],
+  [
+    "Export a versioned archive for migration to another PrintStash installation. Accounts, credentials, settings, and trash are excluded.",
+    "Exporta un archivo versionado para migrar a otra instalación de PrintStash. Se excluyen cuentas, credenciales, ajustes y papelera.",
+  ],
+  [
+    "Download your searchable library context for spreadsheets, audits, migrations, or local AI prompts.",
+    "Descarga el contexto consultable de tu biblioteca para hojas de cálculo, auditorías, migraciones o IA local.",
+  ],
+  [
+    "Metadata only — no raw STL/3MF/G-code files",
+    "Solo metadatos, sin archivos STL/3MF/G-code originales",
+  ],
   ["Server status and vault configuration", "Estado del servidor y configuración de la bóveda"],
   ["API server status and version", "Estado y versión del servidor API"],
   ["SQLite by default, Postgres optional", "SQLite por defecto; Postgres opcional"],
@@ -88,22 +151,61 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Flat tag vocabulary size", "Tamaño del vocabulario de etiquetas"],
   ["Live library entries", "Entradas activas de la biblioteca"],
   ["Configured devices", "Dispositivos configurados"],
-  ["File storage backend, S3 credentials, and backup retention", "Backend de archivos, credenciales S3 y retención de copias"],
-  ["Changes to the storage backend require an application restart.", "Cambiar el backend de almacenamiento requiere reiniciar la aplicación."],
-  ["Leave empty for AWS S3. Required for Cloudflare R2, SeaweedFS, MinIO, etc.", "Déjalo vacío para AWS S3. Es obligatorio para Cloudflare R2, SeaweedFS, MinIO, etc."],
-  ["Keys are stored in the vault database. Set via environment for production.", "Las claves se guardan en la base de datos. En producción, configúralas mediante variables de entorno."],
-  ["Set to 0 to keep backups forever. Old backups are purged after each new backup.", "Usa 0 para conservar las copias siempre. Las antiguas se eliminan después de cada copia nueva."],
-  ["Backups are always stored locally first. If configured here, they are also uploaded to cloud storage for off-site durability.", "Las copias siempre se guardan primero en local. Si lo configuras aquí, también se suben a la nube."],
-  ["Connect Authentik, Authelia, Keycloak, or another standards-compatible identity provider. Local login stays available.", "Conecta Authentik, Authelia, Keycloak u otro proveedor de identidad compatible. El acceso local seguirá disponible."],
-  ["Issuer URL and client ID are required before enabling SSO.", "La URL del emisor y el ID de cliente son obligatorios para activar SSO."],
-  ["Shows provider button on login page.", "Muestra el botón del proveedor en la página de acceso."],
+  [
+    "File storage backend, S3 credentials, and backup retention",
+    "Backend de archivos, credenciales S3 y retención de copias",
+  ],
+  [
+    "Changes to the storage backend require an application restart.",
+    "Cambiar el backend de almacenamiento requiere reiniciar la aplicación.",
+  ],
+  [
+    "Leave empty for AWS S3. Required for Cloudflare R2, SeaweedFS, MinIO, etc.",
+    "Déjalo vacío para AWS S3. Es obligatorio para Cloudflare R2, SeaweedFS, MinIO, etc.",
+  ],
+  [
+    "Keys are stored in the vault database. Set via environment for production.",
+    "Las claves se guardan en la base de datos. En producción, configúralas mediante variables de entorno.",
+  ],
+  [
+    "Set to 0 to keep backups forever. Old backups are purged after each new backup.",
+    "Usa 0 para conservar las copias siempre. Las antiguas se eliminan después de cada copia nueva.",
+  ],
+  [
+    "Backups are always stored locally first. If configured here, they are also uploaded to cloud storage for off-site durability.",
+    "Las copias siempre se guardan primero en local. Si lo configuras aquí, también se suben a la nube.",
+  ],
+  [
+    "Connect Authentik, Authelia, Keycloak, or another standards-compatible identity provider. Local login stays available.",
+    "Conecta Authentik, Authelia, Keycloak u otro proveedor de identidad compatible. El acceso local seguirá disponible.",
+  ],
+  [
+    "Issuer URL and client ID are required before enabling SSO.",
+    "La URL del emisor y el ID de cliente son obligatorios para activar SSO.",
+  ],
+  [
+    "Shows provider button on login page.",
+    "Muestra el botón del proveedor en la página de acceso.",
+  ],
   ["Clear stored client secret when saving", "Borrar el secreto de cliente guardado al guardar"],
-  ["Comma-separated group names granted superuser access.", "Grupos separados por comas que reciben acceso de superusuario."],
-  ["Leave blank unless reverse-proxy URL detection is incorrect.", "Déjalo vacío salvo que la detección de URL del proxy inverso sea incorrecta."],
+  [
+    "Comma-separated group names granted superuser access.",
+    "Grupos separados por comas que reciben acceso de superusuario.",
+  ],
+  [
+    "Leave blank unless reverse-proxy URL detection is incorrect.",
+    "Déjalo vacío salvo que la detección de URL del proxy inverso sea incorrecta.",
+  ],
   ["Allow HTTP issuer on trusted LAN", "Permitir emisor HTTP en una LAN de confianza"],
   ["Permanently delete?", "¿Eliminar permanentemente?"],
-  ["This will delete the model and all its files immediately. This cannot be undone.", "Esto eliminará inmediatamente el modelo y todos sus archivos. No se puede deshacer."],
-  ["This replaces the current database and stored files with the selected backup.", "Esto sustituirá la base de datos y los archivos actuales por la copia seleccionada."],
+  [
+    "This will delete the model and all its files immediately. This cannot be undone.",
+    "Esto eliminará inmediatamente el modelo y todos sus archivos. No se puede deshacer.",
+  ],
+  [
+    "This replaces the current database and stored files with the selected backup.",
+    "Esto sustituirá la base de datos y los archivos actuales por la copia seleccionada.",
+  ],
   ["Download third-party printer images?", "¿Descargar imágenes de impresoras de terceros?"],
   ["Export full library", "Exportar biblioteca completa"],
   ["Import archive", "Importar archivo"],
@@ -190,7 +292,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Uploaded after", "Subido después de"],
   ["Uploaded before", "Subido antes de"],
   ["Try clearing some filters.", "Prueba a borrar algunos filtros."],
-  ["Upload a model when you're ready, or skim the wiki first if this is a new install.", "Sube un modelo cuando quieras o consulta primero la wiki si es una instalación nueva."],
+  [
+    "Upload a model when you're ready, or skim the wiki first if this is a new install.",
+    "Sube un modelo cuando quieras o consulta primero la wiki si es una instalación nueva.",
+  ],
   ["Drag to reorder", "Arrastra para reordenar"],
   ["On a printer", "En una impresora"],
   ["On printer", "En impresora"],
@@ -223,7 +328,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Known good", "Conocida como buena"],
   ["Needs test", "Necesita pruebas"],
   ["Archived", "Archivada"],
-  ["Notes about print outcome, fit, filament, or what to try next", "Notas sobre el resultado, ajuste, filamento o qué probar después"],
+  [
+    "Notes about print outcome, fit, filament, or what to try next",
+    "Notas sobre el resultado, ajuste, filamento o qué probar después",
+  ],
   ["Result", "Resultado"],
   ["Started (opt.)", "Inicio (opcional)"],
   ["Finished (opt.)", "Fin (opcional)"],
@@ -235,7 +343,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Spool (opt.)", "Carrete (opcional)"],
   ["Measured", "Medido"],
   ["measured", "medido"],
-  ["Stored in a linked shared volume; synced both ways", "Guardado en un volumen compartido vinculado; sincronizado en ambos sentidos"],
+  [
+    "Stored in a linked shared volume; synced both ways",
+    "Guardado en un volumen compartido vinculado; sincronizado en ambos sentidos",
+  ],
   ["Model filters", "Filtros de modelos"],
   ["Filter values could not be loaded.", "No se pudieron cargar los valores de los filtros."],
   ["Loading filter values…", "Cargando valores de filtros…"],
@@ -262,36 +373,123 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Deleted models", "Modelos eliminados"],
   ["Latest changes", "Últimos cambios"],
   ["Check for updates", "Buscar actualizaciones"],
-  ["Create users, assign vault admins, disable accounts, and reset passwords.", "Crea usuarios, asigna administradores, desactiva cuentas y restablece contraseñas."],
-  ["Assign view, edit, or admin access per user. Child collections inherit parent grants.", "Asigna acceso de lectura, edición o administración por usuario. Las colecciones hijas heredan los permisos."],
-  ["Create credentials for scripts and integrations, then exchange them for a JWT at login.", "Crea credenciales para scripts e integraciones y canjéalas por un JWT al iniciar sesión."],
-  ["Copy this key now. It will only be shown once.", "Copia esta clave ahora. Solo se mostrará una vez."],
-  ["Create a full backup of the database and all stored files right now.", "Crea ahora una copia completa de la base de datos y los archivos guardados."],
-  ["Recover the vault database and stored files from a previous backup.", "Recupera la base de datos y los archivos desde una copia anterior."],
-  ["Mirror a folder — on the server or a NAS — in place: files are indexed where they live, never copied. Local folders can be watched in real time; all folders support scheduled and manual scans. Off by default.", "Refleja una carpeta del servidor o NAS sin copiarla: los archivos se indexan donde están. Las carpetas locales admiten vigilancia en tiempo real y todas admiten análisis programados o manuales. Desactivado por defecto."],
-  ["Watching gives near-real-time updates on local folders. Network folders (NAS over NFS/SMB) don't deliver file events, so they fall back to the schedule above.", "La vigilancia actualiza casi en tiempo real las carpetas locales. Las carpetas de red no emiten eventos y usan la programación indicada."],
-  ["Add a folder below to start mirroring it into your vault.", "Añade una carpeta para empezar a reflejarla en tu bóveda."],
-  ["Add a channel to start receiving print and printer alerts.", "Añade un canal para recibir alertas de impresiones e impresoras."],
-  ["Send webhook, Discord, Telegram, or ntfy alerts on print and printer events.", "Envía alertas por webhook, Discord, Telegram o ntfy sobre impresiones e impresoras."],
-  ["Only an administrator can manage notification channels.", "Solo un administrador puede gestionar canales de notificación."],
-  ["Track filament inventory and per-print consumption with a self-hosted Spoolman instance. Off by default.", "Controla inventario y consumo de filamento con una instancia propia de Spoolman. Desactivado por defecto."],
-  ["Only an administrator can configure Spoolman.", "Solo un administrador puede configurar Spoolman."],
-  ["Decrements the selected spool by measured filament when a print completes (Moonraker-measured prints only).", "Descuenta del carrete seleccionado el filamento medido al terminar una impresión (solo mediciones de Moonraker)."],
-  ["Connect a MakerWorld (Bambu) account so model &amp; collection imports can download files", "Conecta una cuenta de MakerWorld (Bambu) para descargar archivos al importar modelos y colecciones"],
-  ["Only an administrator can connect MakerWorld.", "Solo un administrador puede conectar MakerWorld."],
-  ["Your password is sent once to Bambu to obtain a session token and is never stored. MakerWorld usually emails a verification code next.", "La contraseña se envía una vez a Bambu para obtener un token de sesión y nunca se guarda. MakerWorld suele enviar después un código por correo."],
-  ["Sessions expire periodically — if imports start failing with a login error, disconnect and connect again.", "Las sesiones caducan periódicamente. Si las importaciones fallan por acceso, desconecta y vuelve a conectar."],
-  ["Choose whether printer cards include a visual. Plain cards remain more compact and information-dense.", "Elige si las tarjetas de impresora incluyen imagen. Sin imagen son más compactas."],
-  ["Adds a brand-neutral printer visual above each card.", "Añade una imagen neutral sobre cada tarjeta."],
-  ["Automatically promote a revision to known-good after its first successful print. A manual failed/archived verdict is never overridden.", "Marca automáticamente una revisión como válida tras su primera impresión correcta. Nunca sustituye un estado manual fallido o archivado."],
-  ["Currency used to display cost figures in statistics and filament pricing.", "Moneda usada para costes en estadísticas y precios de filamento."],
-  ["Choose which 3 stats appear on each model card in the grid.", "Elige las 3 estadísticas visibles en cada tarjeta de modelo."],
-  ["Choose which metadata fields appear on model detail pages.", "Elige los metadatos visibles en las páginas de modelo."],
-  ["Soft-deleted models stay restorable until the retention window expires.", "Los modelos eliminados se pueden restaurar hasta que venza la retención."],
-  ["Restore models or remove them permanently from storage.", "Restaura modelos o elimínalos permanentemente del almacenamiento."],
-  ["Self-hosted asset management for 3D printing workflows.", "Gestión autohospedada de recursos para impresión 3D."],
+  [
+    "Create users, assign vault admins, disable accounts, and reset passwords.",
+    "Crea usuarios, asigna administradores, desactiva cuentas y restablece contraseñas.",
+  ],
+  [
+    "Assign view, edit, or admin access per user. Child collections inherit parent grants.",
+    "Asigna acceso de lectura, edición o administración por usuario. Las colecciones hijas heredan los permisos.",
+  ],
+  [
+    "Create credentials for scripts and integrations, then exchange them for a JWT at login.",
+    "Crea credenciales para scripts e integraciones y canjéalas por un JWT al iniciar sesión.",
+  ],
+  [
+    "Copy this key now. It will only be shown once.",
+    "Copia esta clave ahora. Solo se mostrará una vez.",
+  ],
+  [
+    "Create a full backup of the database and all stored files right now.",
+    "Crea ahora una copia completa de la base de datos y los archivos guardados.",
+  ],
+  [
+    "Recover the vault database and stored files from a previous backup.",
+    "Recupera la base de datos y los archivos desde una copia anterior.",
+  ],
+  [
+    "Mirror a folder — on the server or a NAS — in place: files are indexed where they live, never copied. Local folders can be watched in real time; all folders support scheduled and manual scans. Off by default.",
+    "Refleja una carpeta del servidor o NAS sin copiarla: los archivos se indexan donde están. Las carpetas locales admiten vigilancia en tiempo real y todas admiten análisis programados o manuales. Desactivado por defecto.",
+  ],
+  [
+    "Watching gives near-real-time updates on local folders. Network folders (NAS over NFS/SMB) don't deliver file events, so they fall back to the schedule above.",
+    "La vigilancia actualiza casi en tiempo real las carpetas locales. Las carpetas de red no emiten eventos y usan la programación indicada.",
+  ],
+  [
+    "Add a folder below to start mirroring it into your vault.",
+    "Añade una carpeta para empezar a reflejarla en tu bóveda.",
+  ],
+  [
+    "Add a channel to start receiving print and printer alerts.",
+    "Añade un canal para recibir alertas de impresiones e impresoras.",
+  ],
+  [
+    "Send webhook, Discord, Telegram, or ntfy alerts on print and printer events.",
+    "Envía alertas por webhook, Discord, Telegram o ntfy sobre impresiones e impresoras.",
+  ],
+  [
+    "Only an administrator can manage notification channels.",
+    "Solo un administrador puede gestionar canales de notificación.",
+  ],
+  [
+    "Track filament inventory and per-print consumption with a self-hosted Spoolman instance. Off by default.",
+    "Controla inventario y consumo de filamento con una instancia propia de Spoolman. Desactivado por defecto.",
+  ],
+  [
+    "Only an administrator can configure Spoolman.",
+    "Solo un administrador puede configurar Spoolman.",
+  ],
+  [
+    "Decrements the selected spool by measured filament when a print completes (Moonraker-measured prints only).",
+    "Descuenta del carrete seleccionado el filamento medido al terminar una impresión (solo mediciones de Moonraker).",
+  ],
+  [
+    "Connect a MakerWorld (Bambu) account so model &amp; collection imports can download files",
+    "Conecta una cuenta de MakerWorld (Bambu) para descargar archivos al importar modelos y colecciones",
+  ],
+  [
+    "Only an administrator can connect MakerWorld.",
+    "Solo un administrador puede conectar MakerWorld.",
+  ],
+  [
+    "Your password is sent once to Bambu to obtain a session token and is never stored. MakerWorld usually emails a verification code next.",
+    "La contraseña se envía una vez a Bambu para obtener un token de sesión y nunca se guarda. MakerWorld suele enviar después un código por correo.",
+  ],
+  [
+    "Sessions expire periodically — if imports start failing with a login error, disconnect and connect again.",
+    "Las sesiones caducan periódicamente. Si las importaciones fallan por acceso, desconecta y vuelve a conectar.",
+  ],
+  [
+    "Choose whether printer cards include a visual. Plain cards remain more compact and information-dense.",
+    "Elige si las tarjetas de impresora incluyen imagen. Sin imagen son más compactas.",
+  ],
+  [
+    "Adds a brand-neutral printer visual above each card.",
+    "Añade una imagen neutral sobre cada tarjeta.",
+  ],
+  [
+    "Automatically promote a revision to known-good after its first successful print. A manual failed/archived verdict is never overridden.",
+    "Marca automáticamente una revisión como válida tras su primera impresión correcta. Nunca sustituye un estado manual fallido o archivado.",
+  ],
+  [
+    "Currency used to display cost figures in statistics and filament pricing.",
+    "Moneda usada para costes en estadísticas y precios de filamento.",
+  ],
+  [
+    "Choose which 3 stats appear on each model card in the grid.",
+    "Elige las 3 estadísticas visibles en cada tarjeta de modelo.",
+  ],
+  [
+    "Choose which metadata fields appear on model detail pages.",
+    "Elige los metadatos visibles en las páginas de modelo.",
+  ],
+  [
+    "Soft-deleted models stay restorable until the retention window expires.",
+    "Los modelos eliminados se pueden restaurar hasta que venza la retención.",
+  ],
+  [
+    "Restore models or remove them permanently from storage.",
+    "Restaura modelos o elimínalos permanentemente del almacenamiento.",
+  ],
+  [
+    "Self-hosted asset management for 3D printing workflows.",
+    "Gestión autohospedada de recursos para impresión 3D.",
+  ],
   ["What changed in the current release", "Cambios de la versión actual"],
-  ["Select a user to review collection grants.", "Selecciona un usuario para revisar permisos de colecciones."],
+  [
+    "Select a user to review collection grants.",
+    "Selecciona un usuario para revisar permisos de colecciones.",
+  ],
   ["Initial password: at least 8 characters.", "Contraseña inicial: mínimo 8 caracteres."],
   ["Sign in to create API keys.", "Inicia sesión para crear claves API."],
   ["Sign in to manage the trash.", "Inicia sesión para gestionar la papelera."],
@@ -351,7 +549,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Test connection", "Probar conexión"],
   ["Enable Spoolman integration", "Activar integración con Spoolman"],
   ["Write consumption back to Spoolman", "Registrar consumo en Spoolman"],
-  ["Only if Spoolman sits behind an authenticating proxy", "Solo si Spoolman está detrás de un proxy con autenticación"],
+  [
+    "Only if Spoolman sits behind an authenticating proxy",
+    "Solo si Spoolman está detrás de un proxy con autenticación",
+  ],
   ["Printer cards", "Tarjetas de impresora"],
   ["Display currency", "Moneda mostrada"],
   ["Auto-mark known good on successful print", "Marcar como válida tras una impresión correcta"],
@@ -382,9 +583,15 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Key name", "Nombre de clave"],
   ["Collection", "Colección"],
   ["Download", "Descargar"],
-  ["Printer artwork will load from OrcaSlicer's GitHub repository. Images may be copyrighted or trademarked by their creators or printer manufacturers and remain subject to their original licenses. PrintStash does not own or redistribute them. Continue only if this use is permitted where you live.", "Las imágenes de impresoras se cargarán desde el repositorio de OrcaSlicer. Pueden tener derechos de autor o marcas de sus creadores o fabricantes y conservan sus licencias originales. PrintStash no las posee ni redistribuye. Continúa solo si este uso está permitido donde vives."],
+  [
+    "Printer artwork will load from OrcaSlicer's GitHub repository. Images may be copyrighted or trademarked by their creators or printer manufacturers and remain subject to their original licenses. PrintStash does not own or redistribute them. Continue only if this use is permitted where you live.",
+    "Las imágenes de impresoras se cargarán desde el repositorio de OrcaSlicer. Pueden tener derechos de autor o marcas de sus creadores o fabricantes y conservan sus licencias originales. PrintStash no las posee ni redistribuye. Continúa solo si este uso está permitido donde vives.",
+  ],
   ["Leave empty for AWS S3.", "Déjalo vacío para AWS S3."],
-  ["Review release notes before updating your self-hosted installation.", "Revisa las notas de versión antes de actualizar tu instalación."],
+  [
+    "Review release notes before updating your self-hosted installation.",
+    "Revisa las notas de versión antes de actualizar tu instalación.",
+  ],
   ["Add channel", "Añadir canal"],
   ["Auto-disabled", "Desactivado automáticamente"],
   ["Backing up…", "Creando copia…"],
@@ -454,7 +661,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Vault", "Bóveda"],
   ["Pending Imports", "Importaciones pendientes"],
   ["Profiles", "Perfiles"],
-  ["Filament and printer presets for cost tracking and slicer defaults", "Perfiles de filamento e impresora para controlar costes y valores predeterminados del laminador"],
+  [
+    "Filament and printer presets for cost tracking and slicer defaults",
+    "Perfiles de filamento e impresora para controlar costes y valores predeterminados del laminador",
+  ],
   ["Settings", "Ajustes"],
   ["Wiki", "Wiki"],
   ["Sign in", "Iniciar sesión"],
@@ -485,15 +695,27 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Printer URL", "URL de la impresora"],
   ["Printer host or IP", "Host o IP de la impresora"],
   ["Leave blank if auth is disabled", "Déjalo vacío si la autenticación está desactivada"],
-  ["From printer discovery or diagnostics", "Desde el descubrimiento o diagnóstico de la impresora"],
-  ["Enable LAN Only in printer network settings before connecting.", "Activa LAN Only en los ajustes de red de la impresora antes de conectarla."],
+  [
+    "From printer discovery or diagnostics",
+    "Desde el descubrimiento o diagnóstico de la impresora",
+  ],
+  [
+    "Enable LAN Only in printer network settings before connecting.",
+    "Activa LAN Only en los ajustes de red de la impresora antes de conectarla.",
+  ],
   ["Could not add printer", "No se pudo añadir la impresora"],
-  ["Needed for reliable printer commands while idle, paused, or errored.", "Necesario para enviar comandos a la impresora de forma fiable cuando está inactiva, pausada o en error."],
+  [
+    "Needed for reliable printer commands while idle, paused, or errored.",
+    "Necesario para enviar comandos a la impresora de forma fiable cuando está inactiva, pausada o en error.",
+  ],
   ["Ranked by", "Ordenado por"],
   ["No data for this period", "No hay datos para este periodo"],
   ["Completed jobs in selected period", "Trabajos completados en el periodo seleccionado"],
   ["No completed prints in this period.", "No hay impresiones completadas en este periodo."],
-  ["7-day forecast uses selected period’s daily filament average.", "La previsión de 7 días usa la media diaria de filamento del periodo seleccionado."],
+  [
+    "7-day forecast uses selected period’s daily filament average.",
+    "La previsión de 7 días usa la media diaria de filamento del periodo seleccionado.",
+  ],
   ["Print hours", "Horas de impresión"],
   ["Filament weight", "Peso del filamento"],
   ["Visible ranking charts", "Gráficos de clasificación visibles"],
@@ -520,7 +742,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Printer preset name", "Nombre del perfil de impresora"],
   ["Printer nozzle diameter", "Diámetro de boquilla de la impresora"],
   ["Printer notes", "Notas de la impresora"],
-  ["Changes save automatically when leaving a row.", "Los cambios se guardan automáticamente al salir de una fila."],
+  [
+    "Changes save automatically when leaving a row.",
+    "Los cambios se guardan automáticamente al salir de una fila.",
+  ],
   ["Detected from", "Detectado desde"],
   ["used by", "usado por"],
   ["file", "archivo"],
@@ -611,12 +836,21 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Filaments", "Filamentos"],
   ["Filament presets", "Perfiles de filamento"],
   ["Printer presets", "Perfiles de impresora"],
-  ["Changes save automatically when leaving a row.", "Los cambios se guardan automáticamente al salir de una fila."],
+  [
+    "Changes save automatically when leaving a row.",
+    "Los cambios se guardan automáticamente al salir de una fila.",
+  ],
   ["Add preset", "Añadir perfil"],
   ["No filament presets", "No hay perfiles de filamento"],
   ["No printer presets", "No hay perfiles de impresora"],
-  ["Create one to track materials, brands, and costs.", "Crea uno para controlar materiales, marcas y costes."],
-  ["Create one to reuse machine and nozzle settings.", "Crea uno para reutilizar ajustes de máquina y boquilla."],
+  [
+    "Create one to track materials, brands, and costs.",
+    "Crea uno para controlar materiales, marcas y costes.",
+  ],
+  [
+    "Create one to reuse machine and nozzle settings.",
+    "Crea uno para reutilizar ajustes de máquina y boquilla.",
+  ],
   ["Manufacturer", "Fabricante"],
   ["Cost per kg", "Coste por kg"],
   ["Nozzle diameter", "Diámetro de boquilla"],
@@ -643,7 +877,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Avg / print", "Media / impresión"],
   ["Print time", "Tiempo de impresión"],
   ["7-day forecast", "Previsión de 7 días"],
-  ["Cost, filament and print activity from completed jobs", "Coste, filamento y actividad de impresión de trabajos completados"],
+  [
+    "Cost, filament and print activity from completed jobs",
+    "Coste, filamento y actividad de impresión de trabajos completados",
+  ],
   ["Capture now, organize later", "Captura ahora, organiza después"],
   ["Model URL", "URL del modelo"],
   ["Display title", "Título mostrado"],
@@ -730,16 +967,31 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Completed", "Completada"],
   ["Failed", "Fallida"],
   ["Cancelled", "Cancelada"],
-  ["No matching jobs found on this printer.", "No se encontraron trabajos coincidentes en esta impresora."],
+  [
+    "No matching jobs found on this printer.",
+    "No se encontraron trabajos coincidentes en esta impresora.",
+  ],
   ["Describe what went wrong…", "Describe qué salió mal…"],
   ["Source Files", "Archivos fuente"],
-  ["No source files (STL / 3MF / OBJ) for this model.", "No hay archivos fuente (STL / 3MF / OBJ) para este modelo."],
+  [
+    "No source files (STL / 3MF / OBJ) for this model.",
+    "No hay archivos fuente (STL / 3MF / OBJ) para este modelo.",
+  ],
   ["Recommended Print", "Impresión recomendada"],
   ["Print History", "Historial de impresión"],
-  ["No print settings recorded yet. Add a sliced G-code revision to capture them.", "Aún no hay ajustes de impresión registrados. Añade una revisión G-code laminada para capturarlos."],
+  [
+    "No print settings recorded yet. Add a sliced G-code revision to capture them.",
+    "Aún no hay ajustes de impresión registrados. Añade una revisión G-code laminada para capturarlos.",
+  ],
   ["No active print", "No hay ninguna impresión activa"],
-  ["Printer is offline. Print details will appear after it reconnects.", "La impresora está desconectada. Los detalles aparecerán cuando vuelva a conectarse."],
-  ["Start a file from the Files tab to see live progress and controls here.", "Inicia un archivo desde la pestaña Archivos para ver aquí el progreso y los controles en directo."],
+  [
+    "Printer is offline. Print details will appear after it reconnects.",
+    "La impresora está desconectada. Los detalles aparecerán cuando vuelva a conectarse.",
+  ],
+  [
+    "Start a file from the Files tab to see live progress and controls here.",
+    "Inicia un archivo desde la pestaña Archivos para ver aquí el progreso y los controles en directo.",
+  ],
   ["Browse files", "Explorar archivos"],
   ["Temperatures", "Temperaturas"],
   ["Preheat", "Precalentar"],
@@ -750,7 +1002,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Syncing", "Sincronizando"],
   ["Sync", "Sincronizar"],
   ["No printer files synced yet.", "Aún no se han sincronizado archivos de la impresora."],
-  ["Printer file inventory is not supported by this provider.", "Este proveedor no admite el inventario de archivos de la impresora."],
+  [
+    "Printer file inventory is not supported by this provider.",
+    "Este proveedor no admite el inventario de archivos de la impresora.",
+  ],
   ["Print history", "Historial de impresión"],
   ["No print jobs yet.", "Aún no hay trabajos de impresión."],
   ["Moonraker and Klipper config", "Configuración de Moonraker y Klipper"],
@@ -774,7 +1029,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Allow file download", "Permitir descargar archivos"],
   ["No share links yet.", "Aún no hay enlaces compartidos."],
   ["Model actions", "Acciones del modelo"],
-  ["Drag to resize · Double-click to reset", "Arrastra para cambiar el tamaño · Haz doble clic para restablecer"],
+  [
+    "Drag to resize · Double-click to reset",
+    "Arrastra para cambiar el tamaño · Haz doble clic para restablecer",
+  ],
   ["3D model view", "Vista del modelo 3D"],
   ["Reset view", "Restablecer vista"],
   ["Zoom in", "Acercar"],
@@ -816,15 +1074,24 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Compare", "Comparar"],
   ["Compare Artifacts", "Comparar artefactos"],
   ["Complete setup", "Completar configuración"],
-  ["Connect a supported printer to send files directly from the Vault.", "Conecta una impresora compatible para enviar archivos directamente desde la bóveda."],
+  [
+    "Connect a supported printer to send files directly from the Vault.",
+    "Conecta una impresora compatible para enviar archivos directamente desde la bóveda.",
+  ],
   ["Connection", "Conexión"],
   ["Connection issue:", "Problema de conexión:"],
   ["Control", "Control"],
   ["Cost / kg", "Coste / kg"],
   ["Create link", "Crear enlace"],
-  ["Create the first administrator account. You can add more users later.", "Crea la primera cuenta de administrador. Podrás añadir más usuarios después."],
+  [
+    "Create the first administrator account. You can add more users later.",
+    "Crea la primera cuenta de administrador. Podrás añadir más usuarios después.",
+  ],
   ["Create your admin account", "Crea tu cuenta de administrador"],
-  ["Credentials can stay empty when your runtime provides them.", "Las credenciales pueden quedar vacías si el entorno de ejecución las proporciona."],
+  [
+    "Credentials can stay empty when your runtime provides them.",
+    "Las credenciales pueden quedar vacías si el entorno de ejecución las proporciona.",
+  ],
   ["Current print", "Impresión actual"],
   ["Default", "Predeterminado"],
   ["Delete document", "Eliminar documento"],
@@ -834,8 +1101,14 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Delete printer file?", "¿Eliminar archivo de impresora?"],
   ["Deleted", "Eliminado"],
   ["Description", "Descripción"],
-  ["Discovering total… Safe to close this view.", "Calculando el total… Puedes cerrar esta vista sin problema."],
-  ["Downloads are disabled for this link — view only.", "Las descargas están desactivadas para este enlace; solo permite ver."],
+  [
+    "Discovering total… Safe to close this view.",
+    "Calculando el total… Puedes cerrar esta vista sin problema.",
+  ],
+  [
+    "Downloads are disabled for this link — view only.",
+    "Las descargas están desactivadas para este enlace; solo permite ver.",
+  ],
   ["Drop 3D models or a folder here", "Suelta aquí modelos 3D o una carpeta"],
   ["Drop a 3D model, a G-code, or both together", "Suelta un modelo 3D, un G-code o ambos"],
   ["e.g. Bracket v2", "p. ej., Soporte v2"],
@@ -851,7 +1124,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["External", "Externo"],
   ["Failed item details", "Detalles del elemento fallido"],
   ["Fetch & Import", "Obtener e importar"],
-  ["Fetch recent print history from a Moonraker printer and import jobs matching this model's G-code files.", "Obtén el historial reciente de una impresora Moonraker e importa los trabajos que coincidan con los archivos G-code de este modelo."],
+  [
+    "Fetch recent print history from a Moonraker printer and import jobs matching this model's G-code files.",
+    "Obtén el historial reciente de una impresora Moonraker e importa los trabajos que coincidan con los archivos G-code de este modelo.",
+  ],
   ["Filament", "Filamento"],
   ["FILE", "ARCHIVO"],
   ["Find destination", "Buscar destino"],
@@ -861,7 +1137,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["G-code revision", "Revisión G-code"],
   ["G-code Revisions", "Revisiones G-code"],
   ["G-code toolpath", "Trayectoria G-code"],
-  ["Grant access per printer. Roles build from view to print, machine control, and administration.", "Concede acceso por impresora. Los roles abarcan consulta, impresión, control de máquina y administración."],
+  [
+    "Grant access per printer. Roles build from view to print, machine control, and administration.",
+    "Concede acceso por impresora. Los roles abarcan consulta, impresión, control de máquina y administración.",
+  ],
   ["Grid", "Cuadrícula"],
   ["Group", "Grupo"],
   ["Hotend", "Hotend"],
@@ -869,7 +1148,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Ignore", "Ignorar"],
   ["Import", "Importar"],
   ["Import ready", "Importar listos"],
-  ["Keep the recommended local paths, or connect S3-compatible object storage.", "Mantén las rutas locales recomendadas o conecta almacenamiento de objetos compatible con S3."],
+  [
+    "Keep the recommended local paths, or connect S3-compatible object storage.",
+    "Mantén las rutas locales recomendadas o conecta almacenamiento de objetos compatible con S3.",
+  ],
   ["Klipper config", "Configuración de Klipper"],
   ["Layer", "Capa"],
   ["Leave blank to keep current value", "Déjalo vacío para conservar el valor actual"],
@@ -879,15 +1161,24 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Load older jobs", "Cargar trabajos anteriores"],
   ["Loading Pending Imports…", "Cargando importaciones pendientes…"],
   ["Loading…", "Cargando…"],
-  ["Local backups are kept for this many days.", "Las copias locales se conservan este número de días."],
+  [
+    "Local backups are kept for this many days.",
+    "Las copias locales se conservan este número de días.",
+  ],
   ["Mainboard ID", "ID de la placa principal"],
-  ["Makes this default revision for downloads and printer sends. Current recommendation will be replaced.", "Hace que esta sea la revisión predeterminada para descargas y envíos a impresora. Se sustituirá la recomendación actual."],
+  [
+    "Makes this default revision for downloads and printer sends. Current recommendation will be replaced.",
+    "Hace que esta sea la revisión predeterminada para descargas y envíos a impresora. Se sustituirá la recomendación actual.",
+  ],
   ["Mark as recommended G-code for this model", "Marcar como G-code recomendado para este modelo"],
   ["Mark failed", "Marcar como fallida"],
   ["Markdown · paste or drop images", "Markdown · pega o suelta imágenes"],
   ["Mesh Geometry", "Geometría de malla"],
   ["Model", "Modelo"],
-  ["Model page, collection, or direct .stl/.zip link", "Página de modelo, colección o enlace directo .stl/.zip"],
+  [
+    "Model page, collection, or direct .stl/.zip link",
+    "Página de modelo, colección o enlace directo .stl/.zip",
+  ],
   ["Moonraker config", "Configuración de Moonraker"],
   ["Move", "Mover"],
   ["Move here", "Mover aquí"],
@@ -897,34 +1188,58 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["No audit has run yet.", "Aún no se ha ejecutado ninguna auditoría."],
   ["No backups available.", "No hay copias disponibles."],
   ["No collection selected", "No hay ninguna colección seleccionada"],
-  ["No configured printer supports Vault upload/send.", "Ninguna impresora configurada admite subir o enviar desde la bóveda."],
+  [
+    "No configured printer supports Vault upload/send.",
+    "Ninguna impresora configurada admite subir o enviar desde la bóveda.",
+  ],
   ["No editable collections.", "No hay colecciones editables."],
   ["No findings in this category.", "No hay hallazgos en esta categoría."],
   ["No G-code file", "No hay archivo G-code"],
   ["No importable 3D files in this archive.", "No hay archivos 3D importables en este archivo."],
-  ["No previewable mesh or G-code in this share.", "No hay malla ni G-code que se pueda previsualizar en este enlace."],
-  ["No print history yet. Add a record manually or import from a printer.", "Aún no hay historial de impresión. Añade un registro manualmente o impórtalo desde una impresora."],
+  [
+    "No previewable mesh or G-code in this share.",
+    "No hay malla ni G-code que se pueda previsualizar en este enlace.",
+  ],
+  [
+    "No print history yet. Add a record manually or import from a printer.",
+    "Aún no hay historial de impresión. Añade un registro manualmente o impórtalo desde una impresora.",
+  ],
   ["No selected printer online", "No hay ninguna impresora seleccionada conectada"],
   ["No sliced G-code revisions yet.", "Aún no hay revisiones G-code laminadas."],
   ["None", "Ninguno"],
   ["None (root)", "Ninguna (raíz)"],
   ["Note", "Nota"],
-  ["Off by default. When enabled, selected printers begin printing after upload.", "Desactivado de forma predeterminada. Al activarlo, las impresoras seleccionadas empiezan a imprimir tras la subida."],
+  [
+    "Off by default. When enabled, selected printers begin printing after upload.",
+    "Desactivado de forma predeterminada. Al activarlo, las impresoras seleccionadas empiezan a imprimir tras la subida.",
+  ],
   ["Off-site backup", "Copia externa"],
   ["Open in slicer", "Abrir en el laminador"],
   ["Open login", "Abrir inicio de sesión"],
   ["Open Model", "Abrir modelo"],
   ["Optional farm grouping", "Agrupación opcional de granja"],
   ["Or select a folder", "O selecciona una carpeta"],
-  ["Paste a supported model page or direct file URL. PrintStash will resolve it safely and keep review choices across restarts.", "Pega una página de modelo compatible o la URL directa de un archivo. PrintStash la resolverá de forma segura y conservará las opciones de revisión tras reiniciar."],
-  ["Paste the value of the makerworld.com 'token' cookie", "Pega el valor de la cookie 'token' de makerworld.com"],
+  [
+    "Paste a supported model page or direct file URL. PrintStash will resolve it safely and keep review choices across restarts.",
+    "Pega una página de modelo compatible o la URL directa de un archivo. PrintStash la resolverá de forma segura y conservará las opciones de revisión tras reiniciar.",
+  ],
+  [
+    "Paste the value of the makerworld.com 'token' cookie",
+    "Pega el valor de la cookie 'token' de makerworld.com",
+  ],
   ["Preview", "Vista previa"],
   ["Print", "Imprimir"],
   ["Print Settings", "Ajustes de impresión"],
   ["Printer access", "Acceso a impresoras"],
-  ["Public, expiring, read-only links. Anyone with the link can view this model only.", "Enlaces públicos, temporales y de solo lectura. Cualquiera con el enlace solo puede ver este modelo."],
+  [
+    "Public, expiring, read-only links. Anyone with the link can view this model only.",
+    "Enlaces públicos, temporales y de solo lectura. Cualquiera con el enlace solo puede ver este modelo.",
+  ],
   ["Quick Audit", "Auditoría rápida"],
-  ["Read-only checks for owned Artifacts, thumbnails, Metadata, external links, and storage ownership.", "Comprobaciones de solo lectura para artefactos propios, miniaturas, metadatos, enlaces externos y propiedad del almacenamiento."],
+  [
+    "Read-only checks for owned Artifacts, thumbnails, Metadata, external links, and storage ownership.",
+    "Comprobaciones de solo lectura para artefactos propios, miniaturas, metadatos, enlaces externos y propiedad del almacenamiento.",
+  ],
   ["Reason", "Motivo"],
   ["Recommend", "Recomendar"],
   ["Recommended Rev", "Rev. recomendada"],
@@ -932,14 +1247,20 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Refresh printer access", "Actualizar acceso a impresoras"],
   ["Remember me", "Recordarme"],
   ["Remove printer access", "Quitar acceso a impresora"],
-  ["Remove upload-only printers to enable this option.", "Elimina las impresoras solo de subida para activar esta opción."],
+  [
+    "Remove upload-only printers to enable this option.",
+    "Elimina las impresoras solo de subida para activar esta opción.",
+  ],
   ["Repair", "Reparar"],
   ["Repair this finding?", "¿Reparar este hallazgo?"],
   ["Replace", "Sustituir"],
   ["Retry eligible", "Reintentar elegibles"],
   ["Rev", "Rev."],
   ["Review and retry", "Revisar y reintentar"],
-  ["Review collection items before importing", "Revisar los elementos de la colección antes de importar"],
+  [
+    "Review collection items before importing",
+    "Revisar los elementos de la colección antes de importar",
+  ],
   ["Revisions", "Revisiones"],
   ["Revoke", "Revocar"],
   ["Routing", "Enrutamiento"],
@@ -969,20 +1290,38 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Sync status", "Estado de sincronización"],
   ["Tasks", "Tareas"],
   ["This document is empty.", "Este documento está vacío."],
-  ["This halts the printer immediately and requires a firmware restart.", "Esto detiene la impresora de inmediato y requiere reiniciar el firmware."],
-  ["This removes work from scheduling. It does not cancel an active printer.", "Esto elimina el trabajo de la planificación. No cancela una impresora activa."],
-  ["This will move the model to trash. Files will be permanently removed after the retention period.", "Esto moverá el modelo a la papelera. Los archivos se eliminarán permanentemente después del período de retención."],
+  [
+    "This halts the printer immediately and requires a firmware restart.",
+    "Esto detiene la impresora de inmediato y requiere reiniciar el firmware.",
+  ],
+  [
+    "This removes work from scheduling. It does not cancel an active printer.",
+    "Esto elimina el trabajo de la planificación. No cancela una impresora activa.",
+  ],
+  [
+    "This will move the model to trash. Files will be permanently removed after the retention period.",
+    "Esto moverá el modelo a la papelera. Los archivos se eliminarán permanentemente después del período de retención.",
+  ],
   ["TOTAL", "TOTAL"],
   ["Travel", "Desplazamiento"],
   ["TRIANGLES", "TRIÁNGULOS"],
-  ["Two quick steps to prepare your self-hosted vault.", "Dos pasos rápidos para preparar tu bóveda autohospedada."],
+  [
+    "Two quick steps to prepare your self-hosted vault.",
+    "Dos pasos rápidos para preparar tu bóveda autohospedada.",
+  ],
   ["Unchanged", "Sin cambios"],
-  ["Upload another slice while keeping earlier settings and print history available.", "Sube otro laminado conservando los ajustes e historial de impresión anteriores."],
+  [
+    "Upload another slice while keeping earlier settings and print history available.",
+    "Sube otro laminado conservando los ajustes e historial de impresión anteriores.",
+  ],
   ["Upload model", "Subir modelo"],
   ["Upload PDF / file", "Subir PDF / archivo"],
   ["Uploading image…", "Subiendo imagen…"],
   ["Use 0 to keep forever", "Usa 0 para conservar siempre"],
-  ["Use this account to manage your library and invite other administrators later.", "Usa esta cuenta para gestionar tu biblioteca e invitar a otros administradores más adelante."],
+  [
+    "Use this account to manage your library and invite other administrators later.",
+    "Usa esta cuenta para gestionar tu biblioteca e invitar a otros administradores más adelante.",
+  ],
   ["Vault Audit", "Auditoría de bóveda"],
   ["Verify", "Verificar"],
   ["Viewing:", "Viendo:"],
@@ -1002,28 +1341,49 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["· G-code", "· G-code"],
   ["Endpoint", "Endpoint"],
   ["— use Download to open it.", "— usa Descargar para abrirlo."],
-  [". Review release notes before updating your self-hosted installation.", ". Revisa las notas de la versión antes de actualizar tu instalación autohospedada."],
-  [". The hook exchanges it for a JWT Bearer token, then uploads with the normal", ". El hook lo intercambia por un token JWT Bearer y después sube con la cabecera habitual"],
+  [
+    ". Review release notes before updating your self-hosted installation.",
+    ". Revisa las notas de la versión antes de actualizar tu instalación autohospedada.",
+  ],
+  [
+    ". The hook exchanges it for a JWT Bearer token, then uploads with the normal",
+    ". El hook lo intercambia por un token JWT Bearer y después sube con la cabecera habitual",
+  ],
   ["· Created", "· Creado"],
   ["· G-code", "· G-code"],
   ["· Last updated", "· Última actualización"],
   ["· Source", "· Origen"],
-  ["· subfolders become nested collections", "· las subcarpetas se convierten en colecciones anidadas"],
+  [
+    "· subfolders become nested collections",
+    "· las subcarpetas se convierten en colecciones anidadas",
+  ],
   ["(optional)", "(opcional)"],
   ["(recommended)", "(recomendado)"],
   ["(shared volume)", "(volumen compartido)"],
   ["A model page, a", "Una página de modelo, una"],
-  ["A short description of this collection. Markdown — paste or drop images.", "Una breve descripción de esta colección. Markdown: pega o suelta imágenes."],
+  [
+    "A short description of this collection. Markdown — paste or drop images.",
+    "Una breve descripción de esta colección. Markdown: pega o suelta imágenes.",
+  ],
   ["Absolute folder path (e.g. /mnt/nas/3d)", "Ruta absoluta de carpeta (p. ej., /mnt/nas/3d)"],
   ["Add a description for this collection", "Añade una descripción para esta colección"],
-  ["Add G-code from a model’s Send dialog to start building the fleet queue.", "Añade G-code desde el diálogo Enviar de un modelo para empezar a formar la cola de la granja."],
+  [
+    "Add G-code from a model’s Send dialog to start building the fleet queue.",
+    "Añade G-code desde el diálogo Enviar de un modelo para empezar a formar la cola de la granja.",
+  ],
   ["collection", "colección"],
   ["configuration", "configuración"],
-  ["cookie from DevTools → Application → Cookies. This is the way to connect a Google-linked account.", "cookie desde Herramientas de desarrollo → Aplicación → Cookies. Así puedes conectar una cuenta vinculada a Google."],
+  [
+    "cookie from DevTools → Application → Cookies. This is the way to connect a Google-linked account.",
+    "cookie desde Herramientas de desarrollo → Aplicación → Cookies. Así puedes conectar una cuenta vinculada a Google.",
+  ],
   ["Copy it from the API container logs", "Cópialo de los registros del contenedor de API"],
   ["expires", "caduca"],
   ["Fetch & Import", "Obtener e importar"],
-  ["Fetch recent print history from a Moonraker printer and import jobs matching this model's G-code files.", "Obtén el historial reciente de una impresora Moonraker e importa trabajos que coincidan con los archivos G-code de este modelo."],
+  [
+    "Fetch recent print history from a Moonraker printer and import jobs matching this model's G-code files.",
+    "Obtén el historial reciente de una impresora Moonraker e importa trabajos que coincidan con los archivos G-code de este modelo.",
+  ],
   ["files ·", "archivos ·"],
   ["Files (", "Archivos ("],
   ["has no direct printer access.", "no tiene acceso directo a la impresora."],
@@ -1032,25 +1392,55 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["is available", "está disponible"],
   ["is marked", "está marcado"],
   ["Living-room printer alerts", "Alertas de impresora del salón"],
-  ["Log in to makerworld.com in your browser (Google sign-in is fine), then copy the", "Inicia sesión en makerworld.com desde tu navegador (puedes usar Google) y luego copia la"],
+  [
+    "Log in to makerworld.com in your browser (Google sign-in is fine), then copy the",
+    "Inicia sesión en makerworld.com desde tu navegador (puedes usar Google) y luego copia la",
+  ],
   ["model", "modelo"],
-  ["Moonraker's native Spoolman integration is already decrementing the active spool, so PrintStash automatically skips its own write-back to avoid double-counting. Only override this if you have disabled Moonraker's hook and want PrintStash to count consumption.", "La integración nativa de Spoolman de Moonraker ya descuenta el carrete activo, por lo que PrintStash omite automáticamente su propia escritura para evitar el doble recuento. Anula este comportamiento solo si has desactivado el hook de Moonraker y quieres que PrintStash contabilice el consumo."],
+  [
+    "Moonraker's native Spoolman integration is already decrementing the active spool, so PrintStash automatically skips its own write-back to avoid double-counting. Only override this if you have disabled Moonraker's hook and want PrintStash to count consumption.",
+    "La integración nativa de Spoolman de Moonraker ya descuenta el carrete activo, por lo que PrintStash omite automáticamente su propia escritura para evitar el doble recuento. Anula este comportamiento solo si has desactivado el hook de Moonraker y quieres que PrintStash contabilice el consumo.",
+  ],
   ["Name (e.g. NAS models)", "Nombre (p. ej., modelos NAS)"],
-  ["NAS libraries write the file into the folder; revisions to a linked model always follow that model automatically.", "Las bibliotecas NAS escriben el archivo en la carpeta; las revisiones de un modelo vinculado siempre siguen automáticamente ese modelo."],
+  [
+    "NAS libraries write the file into the folder; revisions to a linked model always follow that model automatically.",
+    "Las bibliotecas NAS escriben el archivo en la carpeta; las revisiones de un modelo vinculado siempre siguen automáticamente ese modelo.",
+  ],
   ["online", "conectada"],
   ["Pick a known model or type your own", "Elige un modelo conocido o escribe uno propio"],
   ["printer", "impresora"],
-  ["PrintStash will apply the targeted repair and record the action in the audit log. Original Artifact bytes are never replaced by thumbnail or metadata repairs.", "PrintStash aplicará la reparación seleccionada y registrará la acción en la auditoría. Los bytes del artefacto original nunca se sustituyen por reparaciones de miniaturas o metadatos."],
+  [
+    "PrintStash will apply the targeted repair and record the action in the audit log. Original Artifact bytes are never replaced by thumbnail or metadata repairs.",
+    "PrintStash aplicará la reparación seleccionada y registrará la acción en la auditoría. Los bytes del artefacto original nunca se sustituyen por reparaciones de miniaturas o metadatos.",
+  ],
   ["Search or create — press Enter", "Busca o crea; pulsa Intro"],
-  ["Select a user to review printer grants.", "Selecciona un usuario para revisar los permisos de impresora."],
-  ["Setup runs once. Additional administrators and storage settings can be managed later.", "La configuración se ejecuta una vez. Más adelante podrás gestionar administradores y ajustes de almacenamiento adicionales."],
+  [
+    "Select a user to review printer grants.",
+    "Selecciona un usuario para revisar los permisos de impresora.",
+  ],
+  [
+    "Setup runs once. Additional administrators and storage settings can be managed later.",
+    "La configuración se ejecuta una vez. Más adelante podrás gestionar administradores y ajustes de almacenamiento adicionales.",
+  ],
   ["spool ·", "carrete ·"],
-  ["Streams each archive and checks safe paths, manifest, database member, member counts, and sizes.", "Procesa cada archivo y comprueba rutas seguras, manifiesto, miembro de base de datos, recuentos y tamaños."],
+  [
+    "Streams each archive and checks safe paths, manifest, database member, member counts, and sizes.",
+    "Procesa cada archivo y comprueba rutas seguras, manifiesto, miembro de base de datos, recuentos y tamaños.",
+  ],
   ["tags, comma separated", "etiquetas separadas por comas"],
-  ["These are private PrintStash storage and must be empty. Add existing NAS or Nextcloud folders later under Settings → External Libraries; those files stay in place.", "Estos directorios son almacenamiento privado de PrintStash y deben estar vacíos. Añade después las carpetas NAS o Nextcloud existentes en Configuración → Bibliotecas externas; esos archivos permanecerán en su ubicación."],
+  [
+    "These are private PrintStash storage and must be empty. Add existing NAS or Nextcloud folders later under Settings → External Libraries; those files stay in place.",
+    "Estos directorios son almacenamiento privado de PrintStash y deben estar vacíos. Añade después las carpetas NAS o Nextcloud existentes en Configuración → Bibliotecas externas; esos archivos permanecerán en su ubicación.",
+  ],
   ["Use your username with this API key on", "Usa tu nombre de usuario con esta clave API en"],
-  ["View: status and history · Print: send and start jobs · Control: pause, cancel, temperatures, homing, emergency stop · Admin: settings, files, routing, and maintenance", "Ver: estado e historial · Imprimir: enviar e iniciar trabajos · Control: pausar, cancelar, temperaturas, referencia y parada de emergencia · Administración: ajustes, archivos, enrutamiento y mantenimiento"],
-  ["Write back anyway (I disabled Moonraker's hook)", "Escribir de todos modos (he desactivado el hook de Moonraker)"],
+  [
+    "View: status and history · Print: send and start jobs · Control: pause, cancel, temperatures, homing, emergency stop · Admin: settings, files, routing, and maintenance",
+    "Ver: estado e historial · Imprimir: enviar e iniciar trabajos · Control: pausar, cancelar, temperaturas, referencia y parada de emergencia · Administración: ajustes, archivos, enrutamiento y mantenimiento",
+  ],
+  [
+    "Write back anyway (I disabled Moonraker's hook)",
+    "Escribir de todos modos (he desactivado el hook de Moonraker)",
+  ],
   ["PRINTER PROFILE", "PERFIL DE IMPRESORA"],
   ["MATERIAL", "MATERIAL"],
   ["FILAMENT PROFILE", "PERFIL DE FILAMENTO"],
@@ -1073,8 +1463,14 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["History", "Historial"],
   ["Uploading", "Subiendo"],
   ["Success", "Correcto"],
-  ["No revision is marked as recommended yet. Mark a known-good G-code as recommended.", "Aún no hay ninguna revisión marcada como recomendada. Marca un G-code conocido como bueno como recomendado."],
-  ["No sliced G-code yet. Add a revision to capture the settings that worked.", "Aún no hay ningún G-code laminado. Añade una revisión para capturar los ajustes que funcionaron."],
+  [
+    "No revision is marked as recommended yet. Mark a known-good G-code as recommended.",
+    "Aún no hay ninguna revisión marcada como recomendada. Marca un G-code conocido como bueno como recomendado.",
+  ],
+  [
+    "No sliced G-code yet. Add a revision to capture the settings that worked.",
+    "Aún no hay ningún G-code laminado. Añade una revisión para capturar los ajustes que funcionaron.",
+  ],
   ["Layer height", "Altura de capa"],
   ["File count", "Nº de archivos"],
   ["Printer profile", "Perfil de impresora"],
@@ -1095,16 +1491,34 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["source ·", "origen ·"],
   ["Choose printer user", "Elegir usuario de impresora"],
   ["MakerWorld browser import", "Importación de MakerWorld desde el navegador"],
-  ["Import authenticated models with the PrintStash browser extension", "Importa modelos autenticados con la extensión de navegador de PrintStash"],
-  ["PrintStash does not store your MakerWorld password, session token, or cookies. The extension downloads the selected package inside your signed-in browser and sends only the model file to Pending Imports.", "PrintStash no guarda tu contraseña, token de sesión ni cookies de MakerWorld. La extensión descarga el paquete seleccionado dentro del navegador con tu sesión iniciada y envía únicamente el archivo del modelo a Importaciones pendientes."],
-  ["Install the extension and configure this Vault with a named API key.", "Instala la extensión y configura este almacén con una clave API con nombre."],
-  ["Sign in to MakerWorld and open an individual model page.", "Inicia sesión en MakerWorld y abre la página de un modelo individual."],
-  ["Use the extension, then review the staged file in Pending Imports.", "Usa la extensión y revisa después el archivo preparado en Importaciones pendientes."],
-  ["MakerWorld collections are not supported; capture their model pages individually.", "Las colecciones de MakerWorld no son compatibles; captura las páginas de sus modelos individualmente."],
+  [
+    "Import authenticated models with the PrintStash browser extension",
+    "Importa modelos autenticados con la extensión de navegador de PrintStash",
+  ],
+  [
+    "PrintStash does not store your MakerWorld password, session token, or cookies. The extension downloads the selected package inside your signed-in browser and sends only the model file to Pending Imports.",
+    "PrintStash no guarda tu contraseña, token de sesión ni cookies de MakerWorld. La extensión descarga el paquete seleccionado dentro del navegador con tu sesión iniciada y envía únicamente el archivo del modelo a Importaciones pendientes.",
+  ],
+  [
+    "Install the extension and configure this Vault with a named API key.",
+    "Instala la extensión y configura este almacén con una clave API con nombre.",
+  ],
+  [
+    "Sign in to MakerWorld and open an individual model page.",
+    "Inicia sesión en MakerWorld y abre la página de un modelo individual.",
+  ],
+  [
+    "Use the extension, then review the staged file in Pending Imports.",
+    "Usa la extensión y revisa después el archivo preparado en Importaciones pendientes.",
+  ],
+  [
+    "MakerWorld collections are not supported; capture their model pages individually.",
+    "Las colecciones de MakerWorld no son compatibles; captura las páginas de sus modelos individualmente.",
+  ],
   ["Open extension source", "Abrir el código de la extensión"],
 ];
 
-const TRANSLATED_PROPS = new Set([
+const TRANSLATED_PROPS = [
   "aria-label",
   "aria-description",
   "description",
@@ -1114,14 +1528,26 @@ const TRANSLATED_PROPS = new Set([
   "title",
   "confirmLabel",
   "ariaLabel",
-]);
+] as const;
+
+type TranslatedProp = (typeof TRANSLATED_PROPS)[number];
+
+/**
+ * The props this boundary reads off an arbitrary element: the translatable ones
+ * plus children to recurse into. Every one is declared `ReactNode` because a
+ * caller may legitimately pass an element (an icon `label`, a rich `hint`);
+ * only the string ones are translated.
+ */
+type LocalizableProps = { [K in TranslatedProp]?: ReactNode } & { children?: ReactNode };
 
 // Legacy literals remain isolated by locale until their callers move to typed
 // message keys. Entries are intentionally exact: UI translation must never
 // rewrite model names, tag names, collection names, or other user content.
-const PHRASE_LOOKUPS: Partial<Record<Locale, ReadonlyMap<string, string>>> = {
+const PHRASE_LOOKUPS = {
+  // English is the source language, so its literals need no lookup at all.
+  en: undefined,
   es: new Map(ES_PHRASES),
-};
+} satisfies Record<Locale, ReadonlyMap<string, string> | undefined>;
 
 export function hasUiTranslation(locale: Locale, value: string): boolean {
   return PHRASE_LOOKUPS[locale]?.has(value.trim()) ?? false;
@@ -1137,8 +1563,7 @@ export function translateUiText(locale: Locale, value: string): string {
   const exact = catalog.get(message);
   if (exact) return `${leading}${exact}${trailing}`;
 
-  const dynamic = message
-    .match(/^(\d+) models? total$/i)?.[1];
+  const dynamic = message.match(/^(\d+) models? total$/i)?.[1];
   if (dynamic) return `${leading}${dynamic} modelos en total${trailing}`;
 
   const storedObjects = message.match(/^(\d+) stored objects?$/i)?.[1];
@@ -1162,24 +1587,29 @@ export function translateUiText(locale: Locale, value: string): string {
   return value;
 }
 
-function localizeNode(node: ReactNode, locale: Locale): ReactNode {
-  if (typeof node === "string") return translateUiText(locale, node);
-  if (Array.isArray(node)) return node.map((child) => localizeNode(child, locale));
-  if (!isValidElement(node)) return node;
+/**
+ * The one place a `ReactNode` is decoded into text. `ReactNode` is a structural
+ * union — strings carry no tag, and React exposes no predicate for them — so
+ * `typeof` is the only discriminator available, and it lives here alone.
+ */
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- ReactNode's string member has no runtime discriminator other than typeof, and React ships no parser for it; this is the single decode site.
+const nodeText = (node: ReactNode): string | null => (typeof node === "string" ? node : null);
 
-  const element = node as ReactElement<Record<string, unknown>>;
-  const props: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(element.props)) {
-    if (TRANSLATED_PROPS.has(name) && typeof value === "string") {
-      props[name] = translateUiText(locale, value);
-    }
+function localizeNode(node: ReactNode, locale: Locale): ReactNode {
+  const text = nodeText(node);
+  if (text !== null) return translateUiText(locale, text);
+  if (Array.isArray(node)) return node.map((child) => localizeNode(child, locale));
+  if (!isValidElement<LocalizableProps>(node)) return node;
+
+  const props: LocalizableProps = {};
+  for (const name of TRANSLATED_PROPS) {
+    const value = nodeText(node.props[name]);
+    if (value !== null) props[name] = translateUiText(locale, value);
   }
-  if ("children" in element.props) {
-    props.children = Children.map(element.props.children as ReactNode, (child) =>
-      localizeNode(child, locale),
-    );
+  if ("children" in node.props) {
+    props.children = Children.map(node.props.children, (child) => localizeNode(child, locale));
   }
-  return cloneElement(element, props);
+  return cloneElement(node, props);
 }
 
 export function Localized({ children }: { children: ReactNode }) {
@@ -1187,7 +1617,12 @@ export function Localized({ children }: { children: ReactNode }) {
   return <>{localizeNode(children, locale)}</>;
 }
 
-const DOM_TRANSLATED_ATTRIBUTES = ["title", "placeholder", "aria-label", "aria-description"] as const;
+const DOM_TRANSLATED_ATTRIBUTES = [
+  "title",
+  "placeholder",
+  "aria-label",
+  "aria-description",
+] as const;
 
 /**
  * Compatibility boundary for UI still using literal English inside nested
@@ -1205,10 +1640,14 @@ export function DomLocalization() {
 
     function localizeText(node: Text) {
       const parent = node.parentElement;
-      if (!parent || parent.closest("script, style, code, pre, textarea, [contenteditable='true']")) return;
+      if (!parent || parent.closest("script, style, code, pre, textarea, [contenteditable='true']"))
+        return;
       const previous = textSources.current.get(node);
       const expected = previous === undefined ? undefined : translateUiText(locale, previous);
-      const source = previous === undefined || (node.data !== previous && node.data !== expected) ? node.data : previous;
+      const source =
+        previous === undefined || (node.data !== previous && node.data !== expected)
+          ? node.data
+          : previous;
       textSources.current.set(node, source);
       const translated = translateUiText(locale, source);
       if (node.data !== translated) node.data = translated;
@@ -1220,7 +1659,10 @@ export function DomLocalization() {
       const sources = attributeSources.current.get(element) ?? new Map<string, string>();
       const previous = sources.get(name);
       const expected = previous === undefined ? undefined : translateUiText(locale, previous);
-      const source = previous === undefined || (current !== previous && current !== expected) ? current : previous;
+      const source =
+        previous === undefined || (current !== previous && current !== expected)
+          ? current
+          : previous;
       sources.set(name, source);
       attributeSources.current.set(element, sources);
       const translated = translateUiText(locale, source);
@@ -1228,9 +1670,9 @@ export function DomLocalization() {
     }
 
     function localizeTree(node: Node) {
-      if (node.nodeType === Node.TEXT_NODE) localizeText(node as Text);
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        for (const attribute of DOM_TRANSLATED_ATTRIBUTES) localizeAttribute(node as Element, attribute);
+      if (node instanceof Text) localizeText(node);
+      if (node instanceof Element) {
+        for (const attribute of DOM_TRANSLATED_ATTRIBUTES) localizeAttribute(node, attribute);
       }
       for (const child of node.childNodes) localizeTree(child);
     }
@@ -1238,8 +1680,14 @@ export function DomLocalization() {
     localizeTree(root);
     const observer = new MutationObserver((records) => {
       for (const record of records) {
-        if (record.type === "characterData") localizeText(record.target as Text);
-        if (record.type === "attributes" && record.attributeName) localizeAttribute(record.target as Element, record.attributeName);
+        if (record.type === "characterData" && record.target instanceof Text)
+          localizeText(record.target);
+        if (
+          record.type === "attributes" &&
+          record.attributeName &&
+          record.target instanceof Element
+        )
+          localizeAttribute(record.target, record.attributeName);
         for (const node of record.addedNodes) localizeTree(node);
       }
     });

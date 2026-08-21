@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-} from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getUser,
   isLoggedIn,
@@ -16,26 +10,21 @@ import {
   type StoredUser,
 } from "@/lib/auth-store";
 import { login as apiLogin, logout as apiLogout, getMe } from "@/lib/api";
+import { AuthContext, type AuthApi } from "@/lib/auth-context";
 
-interface AuthState {
-  user: StoredUser | null;
-  loading: boolean;
-  login: (username: string, password: string, remember_me?: boolean) => Promise<void>
-  logout: () => Promise<void>;
-  refresh: () => Promise<void>;
-}
+const SERVER_AUTH_API: AuthApi = { login: apiLogin, logout: apiLogout, getMe };
 
-const AuthContext = createContext<AuthState>({
-  user: null,
-  loading: true,
-  login: async () => {},
-  logout: async () => {},
-  refresh: async () => {},
-});
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({
+  children,
+  api = SERVER_AUTH_API,
+}: {
+  children: React.ReactNode;
+  api?: AuthApi;
+}) {
   const [user, setUser] = useState<StoredUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Only a stored login has a session worth confirming with `getMe`; with no
+  // stored login there is nothing to await, so the provider is ready at once.
+  const [loading, setLoading] = useState(isLoggedIn);
 
   useEffect(() => {
     let alive = true;
@@ -43,12 +32,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(getUser());
     });
 
-    if (!isLoggedIn()) {
-      setLoading(false);
-      return off;
-    }
+    if (!isLoggedIn()) return off;
 
-    getMe()
+    api
+      .getMe()
       .then((u) => {
         if (!alive) return;
         const stored: StoredUser = {
@@ -72,39 +59,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       alive = false;
       off();
     };
-  }, []);
+  }, [api]);
 
-  const login = useCallback(async (username: string, password: string, remember_me: boolean = false ) => {
-    const token = await apiLogin({ username, password, remember_me });
-    storeLogin(token.access_token, { id: 0, username, email: null, is_superuser: false });
-    try {
-      const me = await getMe();
-      const stored: StoredUser = {
-        id: me.id,
-        username: me.username,
-        email: me.email,
-        is_superuser: me.is_superuser,
-      };
-      storeLogin(token.access_token, stored, { silent: true });
-      setUser(stored);
-    } catch (e) {
-      clearLogin();
-      throw e;
-    }
-  }, []);
+  const login = useCallback(
+    async (username: string, password: string, remember_me: boolean = false) => {
+      const token = await api.login({ username, password, remember_me });
+      storeLogin(token.access_token, { id: 0, username, email: null, is_superuser: false });
+      try {
+        const me = await api.getMe();
+        const stored: StoredUser = {
+          id: me.id,
+          username: me.username,
+          email: me.email,
+          is_superuser: me.is_superuser,
+        };
+        storeLogin(token.access_token, stored, { silent: true });
+        setUser(stored);
+      } catch (e) {
+        clearLogin();
+        throw e;
+      }
+    },
+    [api],
+  );
 
   const logout = useCallback(async () => {
     try {
-      await apiLogout();
+      await api.logout();
     } finally {
       clearLogin();
       setUser(null);
     }
-  }, []);
+  }, [api]);
 
   const refresh = useCallback(async () => {
     try {
-      const me = await getMe();
+      const me = await api.getMe();
       const stored: StoredUser = {
         id: me.id,
         username: me.username,
@@ -118,15 +108,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       throw error;
     }
-  }, []);
+  }, [api]);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth(): AuthState {
-  return useContext(AuthContext);
 }

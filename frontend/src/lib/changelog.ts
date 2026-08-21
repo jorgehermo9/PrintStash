@@ -92,9 +92,7 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     version: "0.11.2",
     date: "Aug 2026",
-    changes: [
-      "The theme toggle now switches on the first click instead of needing two",
-    ],
+    changes: ["The theme toggle now switches on the first click instead of needing two"],
   },
   {
     version: "0.11.1",
@@ -163,7 +161,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Backup and restore actions are now recorded in the audit log",
       "Fixed audit-log entries leaking printer/storage/notification secrets in their change diffs",
       "Fixed S3/R2-compatible storage (including MinIO) failing to auto-create its bucket on first boot",
-      "Fixed a rejected send-to-printer leaving the print job stuck \"uploading\" forever",
+      'Fixed a rejected send-to-printer leaving the print job stuck "uploading" forever',
       "Fixed the send-to-printer picker keeping a deleted revision selected, and failed sends now show which printer failed and why",
       "Faster model versioning, permission checks, and profile usage counts; less database load from live print status syncing",
       "CI now scans dependencies for known vulnerabilities and verifies database upgrades on every change",
@@ -187,7 +185,7 @@ export const CHANGELOG: ChangelogEntry[] = [
     changes: [
       "Fixed the hourly cleanup job deleting uploaded document files (local storage only; S3/R2 was unaffected)",
       "Fixed backups omitting document files, so restoring a backup no longer silently loses them",
-      "Fixed S3/R2 existence checks hiding credential or permission errors as \"file does not exist\"",
+      'Fixed S3/R2 existence checks hiding credential or permission errors as "file does not exist"',
     ],
   },
   {

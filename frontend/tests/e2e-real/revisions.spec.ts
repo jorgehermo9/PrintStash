@@ -10,7 +10,9 @@ function revRow(page: import("@playwright/test").Page, n: number) {
     .last();
 }
 
-test("g-code revision workflow: auto-recommend, re-recommend, status, compare", async ({ page }) => {
+test("g-code revision workflow: auto-recommend, re-recommend, status, compare", async ({
+  page,
+}) => {
   const name = `e2e-rev-${Date.now()}`;
   await uploadGcodeModel(page, name);
   await modelCard(page, name).click();

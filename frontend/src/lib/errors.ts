@@ -34,26 +34,29 @@ export class ApiError extends Error {
 }
 
 /**
+ * Read the message out of a caught value: an Error carries one, and code (or a
+ * rejected promise) may hand over a bare string instead.
+ */
+function thrownMessage(cause: unknown): string {
+  if (cause instanceof Error) return cause.message;
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- this helper is the boundary: `throw`/`reject` accept any JS value, so there is no earlier point at which a bare string message could have been decoded.
+  if (typeof cause === "string") return cause;
+  return "Unknown error";
+}
+
+/**
  * Parse a caught error value into an ApiError.
  * Handles the message format produced by ``handleResponse`` and ``expectOk``:
  * ``"HTTP <status>: <body>"`` where ``<body>`` is a JSON string from FastAPI.
  */
-export function parseApiError(raw: unknown): ApiError {
-  if (raw instanceof ApiError) return raw;
+export function parseApiError(cause: unknown): ApiError {
+  if (cause instanceof ApiError) return cause;
 
-  if (
-    raw instanceof TypeError ||
-    (raw instanceof Error && raw.name === "AbortError")
-  ) {
-    return new ApiError(0, "network_unreachable", raw.message);
+  if (cause instanceof TypeError || (cause instanceof Error && cause.name === "AbortError")) {
+    return new ApiError(0, "network_unreachable", cause.message);
   }
 
-  const message =
-    raw instanceof Error
-      ? raw.message
-      : typeof raw === "string"
-        ? raw
-        : "Unknown error";
+  const message = thrownMessage(cause);
 
   const match = message.match(/^HTTP\s+(\d{3}):\s*([\s\S]+)$/);
   if (!match) {
@@ -70,6 +73,7 @@ export function parseApiError(raw: unknown): ApiError {
 
   try {
     const parsed = JSON.parse(body);
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- FastAPI puts a string code in `detail` for coded errors but a list of field objects for 422 validation errors; only the string form is a detail code, and this line is where that body gets decoded.
     const code = typeof parsed?.detail === "string" ? parsed.detail : String(status);
     return new ApiError(status, code, body);
   } catch {
@@ -78,7 +82,7 @@ export function parseApiError(raw: unknown): ApiError {
 }
 
 /** Human-readable error messages keyed by server detail codes. */
-const ERROR_MESSAGES: Record<string, string> = {
+const ERROR_MESSAGES = {
   // Auth
   invalid_api_key_or_token: "Authentication failed. Sign in again.",
   invalid_credentials: "Invalid username or password.",
@@ -160,23 +164,28 @@ const ERROR_MESSAGES: Record<string, string> = {
   thumb_dir_not_writable: "Cannot write to the thumbnail directory. Check filesystem permissions.",
   // General
   duplicate_slug: "An item with that name already exists.",
-  network_unreachable:
-    "Couldn't reach the server. Check that PrintStash is running and try again.",
+  network_unreachable: "Couldn't reach the server. Check that PrintStash is running and try again.",
   unknown:
     "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-};
+} satisfies Record<string, string>;
+
+/** A server detail code the vault ships copy for. */
+type KnownErrorCode = keyof typeof ERROR_MESSAGES;
+
+function isKnownErrorCode(code: string): code is KnownErrorCode {
+  return Object.hasOwn(ERROR_MESSAGES, code);
+}
 
 /** Return a user-presentable message for a given server detail code. */
 export function getErrorMessage(code: string): string {
-  const message = ERROR_MESSAGES[code];
-  if (message) return message;
+  if (isKnownErrorCode(code)) return ERROR_MESSAGES[code];
   const humanized = code.replace(/_/g, " ").trim();
   if (!humanized) return ERROR_MESSAGES.unknown;
   return `${humanized.charAt(0).toUpperCase()}${humanized.slice(1)}.`;
 }
 
 /** Return a user-presentable message for any caught error. */
-export function userMessage(raw: unknown): string {
-  const api = parseApiError(raw);
+export function userMessage(cause: unknown): string {
+  const api = parseApiError(cause);
   return getErrorMessage(api.code);
 }

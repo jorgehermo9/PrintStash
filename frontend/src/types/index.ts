@@ -34,6 +34,7 @@ export type {
   ImportedPrintJobRead,
   IngestResponse,
   IngestJobStatus,
+  IngestJobResult,
   ArchiveEntry,
   ArchiveManifest,
   ModelFile,
@@ -67,6 +68,8 @@ export type {
 } from "./models";
 
 export type {
+  ProviderJsonValue,
+  ProviderJsonObject,
   PrinterStatus,
   PrinterProvider,
   PrinterCapabilities,
@@ -145,12 +148,13 @@ export type {
   NotificationDelivery,
 } from "./notifications";
 
-export type {
-  SpoolmanStatus,
-  SpoolmanUpdate,
-  SpoolmanTestResult,
-  SpoolRead,
-} from "./spoolman";
+export type { SpoolmanStatus, SpoolmanUpdate, SpoolmanTestResult, SpoolRead } from "./spoolman";
 
-export type { VaultAuditFinding, VaultAuditMode, VaultAuditRun, BackupVerification } from "./maintenance";
+export type {
+  VaultAuditFinding,
+  VaultAuditFindingDetails,
+  VaultAuditMode,
+  VaultAuditRun,
+  BackupVerification,
+} from "./maintenance";
 export type { InboxItem, InboxItemState } from "./inbox";

@@ -1,4 +1,11 @@
-export type InboxItemState = "captured" | "resolving" | "review" | "importing" | "completed" | "failed" | "dismissed";
+export type InboxItemState =
+  | "captured"
+  | "resolving"
+  | "review"
+  | "importing"
+  | "completed"
+  | "failed"
+  | "dismissed";
 
 export interface InboxItem {
   id: number;

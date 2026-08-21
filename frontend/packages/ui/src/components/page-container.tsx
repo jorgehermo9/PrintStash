@@ -10,11 +10,7 @@ export interface PageContainerProps {
 }
 
 /** The standard document page frame and canonical content width. */
-export function PageContainer({
-  width = "default",
-  className,
-  children,
-}: PageContainerProps) {
+export function PageContainer({ width = "default", className, children }: PageContainerProps) {
   return (
     <div className="h-full overflow-y-auto [scrollbar-gutter:stable] bg-background px-4 py-6 pb-24 sm:px-6 lg:px-8 md:pb-6">
       <div

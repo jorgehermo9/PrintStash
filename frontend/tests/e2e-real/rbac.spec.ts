@@ -1,5 +1,11 @@
 import { test, expect, authBundleFor, authedContext } from "./helpers";
-import { clickModelAction, createCollectionViaVault, modelActionItem, modelCard, uploadModel } from "./util";
+import {
+  clickModelAction,
+  createCollectionViaVault,
+  modelActionItem,
+  modelCard,
+  uploadModel,
+} from "./util";
 
 const USER_PW = "userpass123";
 
@@ -13,13 +19,16 @@ async function grant(
   await page.goto("/settings?section=access");
   const card = page.getByRole("group", { name: "Collection access" });
   await expect(card).toBeVisible();
-  await card.getByRole("combobox")
+  await card
+    .getByRole("combobox")
     .filter({ has: page.getByRole("option", { name: "Select user" }) })
     .selectOption({ label: username });
-  await card.getByRole("combobox")
+  await card
+    .getByRole("combobox")
     .filter({ has: page.getByRole("option", { name: "Select collection" }) })
     .selectOption({ label: colName });
-  await card.getByRole("combobox")
+  await card
+    .getByRole("combobox")
     .filter({ has: page.getByRole("option", { name: "Admin", exact: true }) })
     .selectOption({ label: roleLabel });
   await Promise.all([
@@ -79,7 +88,10 @@ test("a non-admin user sees only collections granted to them", async ({ page, br
 
 // A view-role user can open a model but not edit or delete it; an edit-role
 // user can do both (Edit/Delete share the same canEditModel gate).
-test("collection role gates whether a user can edit or delete a model", async ({ page, browser }) => {
+test("collection role gates whether a user can edit or delete a model", async ({
+  page,
+  browser,
+}) => {
   const stamp = Date.now();
   const col = `rbac-edit-${stamp}`;
   const model = `rbac-model-${stamp}`;

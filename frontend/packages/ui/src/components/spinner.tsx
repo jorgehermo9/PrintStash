@@ -14,11 +14,7 @@ export interface SpinnerProps {
   label?: string;
 }
 
-export function Spinner({
-  size = "md",
-  className,
-  label = "Loading",
-}: SpinnerProps) {
+export function Spinner({ size = "md", className, label = "Loading" }: SpinnerProps) {
   return (
     <Loader2
       role="status"

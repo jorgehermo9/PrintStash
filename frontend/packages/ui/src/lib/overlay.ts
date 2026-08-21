@@ -6,27 +6,38 @@ export const DURATION = { press: 150, fast: 200, slow: 300 } as const;
 /**
  * Keeps an overlay mounted during its exit transition. `state` drives
  * data-state CSS; opening is deferred so the browser paints the closed styles.
+ *
+ * Both outputs are derived from `open` during render, so an overlay mounts in
+ * the same commit that opens it. The two pieces of state are the transitions
+ * themselves — the frame the enter styles land on, and the exit window that
+ * outlives `open` — and only their timer callbacks write them.
  */
 export function useMountTransition(open: boolean, exitMs: number) {
-  const [mounted, setMounted] = useState(open);
-  const [state, setState] = useState<"open" | "closed">("closed");
-  const timer = useRef<number | undefined>(undefined);
+  const [entered, setEntered] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const [previousOpen, setPreviousOpen] = useState(open);
+
+  if (previousOpen !== open) {
+    setPreviousOpen(open);
+    // Re-arm the enter transition on open; hold the panel in the tree while the
+    // exit transition plays on close.
+    setEntered(false);
+    setExiting(!open);
+  }
 
   useEffect(() => {
-    if (open) {
-      window.clearTimeout(timer.current);
-      setMounted(true);
-      const raf = requestAnimationFrame(() =>
-        requestAnimationFrame(() => setState("open")),
-      );
-      return () => cancelAnimationFrame(raf);
-    }
-    setState("closed");
-    timer.current = window.setTimeout(() => setMounted(false), exitMs);
-    return () => window.clearTimeout(timer.current);
-  }, [open, exitMs]);
+    if (!open) return;
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => setEntered(true)));
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
 
-  return { mounted, state };
+  useEffect(() => {
+    if (open || !exiting) return;
+    const timer = window.setTimeout(() => setExiting(false), exitMs);
+    return () => window.clearTimeout(timer);
+  }, [open, exiting, exitMs]);
+
+  return { mounted: open || exiting, state: open && entered ? "open" : "closed" } as const;
 }
 
 const FOCUSABLE =
@@ -48,7 +59,7 @@ export function useOverlayBehavior(
 
   useEffect(() => {
     if (!open) return;
-    const restoreTo = document.activeElement as HTMLElement | null;
+    const restoreTo = document.activeElement;
     const panel = panelRef.current;
     const initial = panel?.querySelector<HTMLElement>("[autofocus]") ?? panel;
     initial?.focus();
@@ -82,7 +93,7 @@ export function useOverlayBehavior(
     return () => {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
-      restoreTo?.focus();
+      if (restoreTo instanceof HTMLElement) restoreTo.focus();
     };
   }, [open, panelRef]);
 }

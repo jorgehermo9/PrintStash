@@ -44,9 +44,5 @@ export function updateVaultConfig(body: VaultConfigUpdate): Promise<VaultConfigR
 }
 
 export function rebuildModelThumbnails(): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(
-    "/api/v1/files/thumbnails/rebuild?force=true",
-    "POST",
-    {},
-  );
+  return sendJson<IngestResponse>("/api/v1/files/thumbnails/rebuild?force=true", "POST", {});
 }

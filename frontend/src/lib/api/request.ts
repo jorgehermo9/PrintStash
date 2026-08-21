@@ -6,7 +6,9 @@ const API_BASE = import.meta.env.VITE_API_URL || "";
 const WS_BASE = import.meta.env.VITE_WS_URL || "";
 
 function isBrowser(): boolean {
-  return typeof window !== "undefined";
+  // `"window" in globalThis` rather than a `typeof` probe: the question is
+  // "am I running in a document?", which the global's presence answers.
+  return "window" in globalThis;
 }
 
 function browserBase(): string {
@@ -50,10 +52,7 @@ export async function getAuthenticatedBlob(path: string): Promise<Blob> {
  * token, so reads gated behind auth (post-RBAC) 401. Fetch the blob with the
  * token, then trigger a save via a temporary object URL.
  */
-export async function downloadAuthenticatedFile(
-  path: string,
-  filename?: string,
-): Promise<void> {
+export async function downloadAuthenticatedFile(path: string, filename?: string): Promise<void> {
   const res = await fetch(getUrl(path), {
     headers: authHeaders(),
     cache: "no-store",
@@ -72,10 +71,7 @@ export async function downloadAuthenticatedFile(
 
 export function getWsUrl(path: string): string {
   if (!isBrowser()) {
-    const base = (WS_BASE || API_BASE || "http://localhost:8000").replace(
-      /\/$/,
-      "",
-    );
+    const base = (WS_BASE || API_BASE || "http://localhost:8000").replace(/\/$/, "");
     return base.replace(/^http/, "ws") + path;
   }
   if (WS_BASE) {
@@ -89,13 +85,29 @@ export function getWsUrl(path: string): string {
   return `${proto}//${window.location.host}${path}`;
 }
 
-function errorCode(status: number, body: string): string {
+/**
+ * Decode FastAPI's error envelope. Coded errors arrive as
+ * `{"detail": "model_not_found"}`; 422s put a list of field objects in
+ * `detail`, and a proxy can return HTML instead of JSON. Only the string form
+ * is a detail code — everything else has none.
+ */
+function parseDetailCode(body: string): string | null {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(body);
-    return typeof parsed?.detail === "string" ? parsed.detail : String(status);
+    parsed = JSON.parse(body);
   } catch {
-    return String(status);
+    return null;
   }
+  if (!(parsed instanceof Object) || !("detail" in parsed)) return null;
+  // Stringifying leaves a value identical to itself only when it already was a
+  // string, so this accepts the string form of `detail` and nothing else — the
+  // same test a `typeof` probe would make on this still-unvalidated member.
+  const detail = String(parsed.detail);
+  return Object.is(detail, parsed.detail) ? detail : null;
+}
+
+function errorCode(status: number, body: string): string {
+  return parseDetailCode(body) ?? String(status);
 }
 
 async function parseError(res: Response): Promise<ApiError> {
@@ -106,8 +118,17 @@ async function parseError(res: Response): Promise<ApiError> {
 
 export async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) throw await parseError(res);
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  if (res.status === 204) {
+    // SAFETY: a 204 carries no body at all, so `undefined` is the only value
+    // this branch can produce (`res.json()` would throw on the empty payload).
+    // The endpoints that answer 204 are the void ones, whose callers declare
+    // `T` as `void`/`undefined`.
+    return undefined as T;
+  }
+  // `Response.json()` is typed `Promise<any>` by lib.dom, so `T` — the response
+  // contract the calling wrapper in `src/lib/api` declares for this endpoint —
+  // flows through without an assertion.
+  return res.json();
 }
 
 export async function expectOk(res: Response): Promise<void> {
@@ -115,16 +136,14 @@ export async function expectOk(res: Response): Promise<void> {
 }
 
 export function authHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
   const token = getStoredToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export function jsonHeaders(): Record<string, string> {
-  return { "Content-Type": "application/json", ...authHeaders() };
+  const headers = authHeaders();
+  headers["Content-Type"] = "application/json";
+  return headers;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,10 +170,10 @@ const inflight = new Map<string, Promise<unknown>>();
 export function invalidateApiCache(path?: string): void {
   responseCache.clear();
   inflight.clear();
-  if (typeof path === "string") {
-    invalidateQueriesForPath(path);
-  } else {
+  if (path === undefined) {
     queryClient.invalidateQueries();
+  } else {
+    invalidateQueriesForPath(path);
   }
 }
 
@@ -173,10 +192,7 @@ export interface GetJsonOptions {
   fresh?: boolean;
 }
 
-export async function getJson<T>(
-  path: string,
-  options?: GetJsonOptions,
-): Promise<T> {
+export async function getJson<T>(path: string, options?: GetJsonOptions): Promise<T> {
   if (!isBrowser() || options?.fresh) {
     const res = await fetch(getUrl(path), {
       headers: authHeaders(),
@@ -188,10 +204,16 @@ export async function getJson<T>(
   const now = Date.now();
   const cached = responseCache.get(path);
   if (cached && cached.expires > now) {
+    // SAFETY: the cache is keyed by request path and is only written below, with
+    // the body `handleResponse<T>` just produced for that same path — so a live
+    // entry for `path` holds exactly what a cache miss would have returned.
     return cached.value as T;
   }
   const pending = inflight.get(path);
   if (pending) {
+    // SAFETY: the in-flight entry for `path` is the promise created below for
+    // that same path, i.e. `handleResponse<T>` on this endpoint's response;
+    // sharing it is what makes concurrent readers issue one request.
     return pending as Promise<T>;
   }
   const request = (async () => {
@@ -214,6 +236,12 @@ export async function getJson<T>(
 export async function sendJson<T>(
   path: string,
   method: "POST" | "PUT" | "PATCH",
+  // The outbound side of the boundary has nothing to parse: the typed wrapper in
+  // `src/lib/api` owns the endpoint's request DTO and this transport only serialises
+  // it. A `JsonValue` union cannot express that either, because TypeScript never
+  // accepts an `interface` — which every DTO in `@/types` is — as assignable to an
+  // index signature (microsoft/TypeScript#15300).
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- outbound payload, owned and typed by the calling wrapper
   body: unknown,
 ): Promise<T> {
   const res = await fetch(getUrl(path), {
@@ -225,10 +253,7 @@ export async function sendJson<T>(
   return handleResponse<T>(res);
 }
 
-export async function sendForm<T>(
-  path: string,
-  formData: FormData,
-): Promise<T> {
+export async function sendForm<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(getUrl(path), {
     method: "POST",
     headers: authHeaders(),
@@ -238,10 +263,7 @@ export async function sendForm<T>(
   return handleResponse<T>(res);
 }
 
-export async function sendAction(
-  path: string,
-  method: "POST" | "DELETE",
-): Promise<void> {
+export async function sendAction(path: string, method: "POST" | "DELETE"): Promise<void> {
   const res = await fetch(getUrl(path), {
     method,
     headers: authHeaders(),

@@ -1,10 +1,4 @@
-import {
-  authHeaders,
-  expectOk,
-  getJson,
-  getUrl,
-  sendJson,
-} from "@/lib/api/request";
+import { authHeaders, expectOk, getJson, getUrl, sendJson } from "@/lib/api/request";
 
 export interface BackupMeta {
   backup_id: string;
@@ -38,19 +32,15 @@ export function restoreBackup(backupId: string): Promise<BackupRestoreResult> {
 }
 
 export async function downloadBackup(backupId: string): Promise<void> {
-  const res = await fetch(
-    getUrl(`/api/v1/backups/${encodeURIComponent(backupId)}/download`),
-    {
-      headers: authHeaders(),
-      cache: "no-store",
-    },
-  );
+  const res = await fetch(getUrl(`/api/v1/backups/${encodeURIComponent(backupId)}/download`), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
   await expectOk(res);
   const blob = await res.blob();
   const disposition = res.headers.get("content-disposition") ?? "";
   const filename =
-    disposition.match(/filename="([^"]+)"/)?.[1] ??
-    `printstash-backup-${backupId}.tar.gz`;
+    disposition.match(/filename="([^"]+)"/)?.[1] ?? `printstash-backup-${backupId}.tar.gz`;
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

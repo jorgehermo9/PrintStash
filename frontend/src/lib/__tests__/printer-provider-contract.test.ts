@@ -4,11 +4,25 @@ import {
   PRINTER_SETUP_OPTIONS,
   providerLabel,
   setupProviderFields,
+  type PrinterSetupKind,
 } from "../printer-providers";
 import type { PrinterProvider } from "@/types";
 import type { PrinterVariant } from "@/types/printers";
 
-const EXPECTED_SETUP_CATALOG = [
+/**
+ * One frozen row of the public setup catalog: the setup kind a user picks, the label
+ * shown in the picker, the transport it maps to, and the label a printer on that
+ * transport displays.
+ */
+type SetupCatalogRow = readonly [
+  kind: PrinterSetupKind,
+  setupLabel: string,
+  provider: PrinterProvider,
+  variant: PrinterVariant | null,
+  displayLabel: string,
+];
+
+const EXPECTED_SETUP_CATALOG: readonly SetupCatalogRow[] = [
   ["moonraker", "Moonraker / Klipper", "moonraker", null, "Moonraker"],
   [
     "elegoo_neptune4",
@@ -34,7 +48,7 @@ const EXPECTED_SETUP_CATALOG = [
     "Elegoo Centauri Carbon 2",
   ],
   ["bambu_lan", "Bambu LAN (beta)", "bambu_lan", null, "Bambu LAN"],
-] as const;
+];
 
 describe("printer provider public contract", () => {
   it("keeps setup kinds, labels, and transport mappings stable", () => {
@@ -64,12 +78,7 @@ describe("printer provider public contract", () => {
   it.each(EXPECTED_SETUP_CATALOG)(
     "keeps the display label for %s stable",
     (kind, _setupLabel, provider, variant, displayLabel) => {
-      expect(
-        providerLabel({
-          provider: provider as PrinterProvider,
-          provider_variant: variant as PrinterVariant | null,
-        }),
-      ).toBe(displayLabel);
+      expect(providerLabel({ provider, provider_variant: variant })).toBe(displayLabel);
     },
   );
 });

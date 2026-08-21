@@ -12,29 +12,40 @@ export const CARD_METRIC_OPTIONS = [
 export type CardMetricId = (typeof CARD_METRIC_OPTIONS)[number]["id"];
 export type CardMetrics = [CardMetricId, CardMetricId, CardMetricId];
 
-export const DEFAULT_CARD_METRICS: CardMetrics = [
-  "layer_height",
-  "print_time",
-  "filament_weight",
-];
+export const DEFAULT_CARD_METRICS: CardMetrics = ["layer_height", "print_time", "filament_weight"];
+
+/**
+ * Match one decoded JSON entry against the known metric options. The stored
+ * value is user-editable browser storage, so an entry only becomes a
+ * `CardMetricId` by equalling one of the ids we ship.
+ */
+function toCardMetricId(entries: readonly unknown[], index: number): CardMetricId | null {
+  const entry = entries[index];
+  return CARD_METRIC_OPTIONS.find((option) => option.id === entry)?.id ?? null;
+}
+
+/** Decode a stored selection; returns null for anything that isn't three known ids. */
+function parseCardMetrics(raw: string): CardMetrics | null {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(decoded) || decoded.length !== 3) return null;
+  const entries: readonly unknown[] = decoded;
+  const first = toCardMetricId(entries, 0);
+  const second = toCardMetricId(entries, 1);
+  const third = toCardMetricId(entries, 2);
+  if (first === null || second === null || third === null) return null;
+  return [first, second, third];
+}
 
 export function readCardMetrics(): CardMetrics {
-  if (typeof window === "undefined") return DEFAULT_CARD_METRICS;
+  if (!("window" in globalThis)) return DEFAULT_CARD_METRICS;
   const raw = window.localStorage.getItem(CARD_METRIC_STORAGE_KEY);
   if (!raw) return DEFAULT_CARD_METRICS;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (
-      Array.isArray(parsed) &&
-      parsed.length === 3 &&
-      parsed.every((id: unknown) =>
-        CARD_METRIC_OPTIONS.some((option) => option.id === id),
-      )
-    ) {
-      return parsed as CardMetrics;
-    }
-  } catch {}
-  return DEFAULT_CARD_METRICS;
+  return parseCardMetrics(raw) ?? DEFAULT_CARD_METRICS;
 }
 
 export function writeCardMetrics(metrics: CardMetrics): void {

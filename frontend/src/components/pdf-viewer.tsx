@@ -55,7 +55,12 @@ export function PdfViewer({ file }: { file: string }) {
           <ChevronRight className="w-4 h-4" />
         </button>
         <div className="ml-auto flex items-center gap-2">
-          <button className={btn} onClick={() => zoom(-0.25)} disabled={scale <= 0.5} title="Zoom out">
+          <button
+            className={btn}
+            onClick={() => zoom(-0.25)}
+            disabled={scale <= 0.5}
+            title="Zoom out"
+          >
             <ZoomOut className="w-4 h-4" />
           </button>
           <span className="text-xs font-mono text-muted-foreground tabular-nums w-10 text-center">
@@ -82,11 +87,7 @@ export function PdfViewer({ file }: { file: string }) {
           error={<p className="py-16 text-sm text-muted-foreground">Could not render this PDF.</p>}
         >
           {pageWidth && (
-            <Page
-              pageNumber={page}
-              width={pageWidth}
-              className="shadow-lg [&>canvas]:rounded-sm"
-            />
+            <Page pageNumber={page} width={pageWidth} className="shadow-lg [&>canvas]:rounded-sm" />
           )}
         </Document>
       </div>

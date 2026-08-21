@@ -23,18 +23,20 @@ function tag(over: Partial<TagRead> = {}): TagRead {
   return { id: 1, name: "draft", slug: "draft", model_count: 2, ...over };
 }
 
-function setup(overrides: Partial<React.ComponentProps<typeof BatchToolbar>> = {}) {
+type BatchToolbarProps = React.ComponentProps<typeof BatchToolbar>;
+
+function setup(overrides: Partial<BatchToolbarProps> = {}) {
   const props = {
     modelCount: 2,
     selectedCollections: [],
     collections: [collection()],
     tags: [tag()],
     busy: false,
-    onMoveSelection: vi.fn(),
-    onRenameCollections: vi.fn(),
-    onApplyTags: vi.fn(),
-    onDeleteSelection: vi.fn(),
-    onClear: vi.fn(),
+    onMoveSelection: vi.fn<BatchToolbarProps["onMoveSelection"]>(),
+    onRenameCollections: vi.fn<BatchToolbarProps["onRenameCollections"]>(),
+    onApplyTags: vi.fn<BatchToolbarProps["onApplyTags"]>(),
+    onDeleteSelection: vi.fn<BatchToolbarProps["onDeleteSelection"]>(),
+    onClear: vi.fn<BatchToolbarProps["onClear"]>(),
     ...overrides,
   };
   render(<BatchToolbar {...props} />);
@@ -126,7 +128,11 @@ describe("BatchToolbar", () => {
     const selected = collection({ id: 1, path: "projects" });
     const child = collection({ id: 2, path: "projects/archive", parent_id: 1 });
     const target = collection({ id: 3, name: "Storage", path: "storage" });
-    setup({ modelCount: 0, selectedCollections: [selected], collections: [selected, child, target] });
+    setup({
+      modelCount: 0,
+      selectedCollections: [selected],
+      collections: [selected, child, target],
+    });
 
     await user.click(screen.getByRole("button", { name: /move/i }));
     expect(screen.queryByText("projects/archive", { exact: false })).not.toBeInTheDocument();

@@ -1,5 +1,1 @@
-export {
-  DURATION,
-  useMountTransition,
-  useOverlayBehavior,
-} from "@printstash/ui";
+export { DURATION, useMountTransition, useOverlayBehavior } from "@printstash/ui";

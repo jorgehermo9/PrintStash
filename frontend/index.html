@@ -7,10 +7,7 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-light.svg" />
     <title>PrintStash</title>
-    <meta
-      name="description"
-      content="Self-hosted asset management for 3D printing workflows"
-    />
+    <meta name="description" content="Self-hosted asset management for 3D printing workflows" />
     <!-- Pre-paint theme + favicon application to avoid FOUC. -->
     <script>
       (function () {
@@ -18,8 +15,7 @@
           var t =
             localStorage.getItem("printstash.theme") ||
             localStorage.getItem("nexus3d.theme") ||
-            (window.matchMedia &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches
+            (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
               ? "dark"
               : "light");
           if (t === "dark") {

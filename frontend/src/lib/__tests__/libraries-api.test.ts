@@ -16,17 +16,30 @@ import { invalidateApiCache } from "@/lib/api/request";
  * A drift here is a silent break of the whole NAS settings/upload UI.
  */
 
-function jsonResponse(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-    text: async () => JSON.stringify(data),
-    headers: new Headers({ "content-type": "application/json" }),
-  } as unknown as Response;
+/** One value inside a JSON body the fake backend below hands back. */
+type WireValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly WireValue[]
+  | { readonly [key: string]: WireValue };
+
+function jsonResponse(data: WireValue, status = 200): Response {
+  // A 204 carries no body at all, and `new Response` rejects one outright.
+  const body = status === 204 ? null : JSON.stringify(data);
+  return new Response(body, { status, headers: { "content-type": "application/json" } });
 }
 
-const fetchMock = vi.fn();
+const fetchMock = vi.fn<typeof fetch>();
+
+/**
+ * Answer every fetch with a freshly built response. A `Response` body can only
+ * be read once, so a single shared instance would break the repeat-call tests.
+ */
+function respondWith(data: WireValue, status = 200) {
+  fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(data, status)));
+}
 
 const library = {
   id: 7,
@@ -42,8 +55,8 @@ const library = {
 };
 
 function lastCall() {
-  const call = fetchMock.mock.calls.at(-1)!;
-  return { url: call[0] as string, init: call[1] as RequestInit };
+  const [url, init] = fetchMock.mock.calls.at(-1)!;
+  return { url, init: init! };
 }
 
 beforeEach(() => {
@@ -59,7 +72,7 @@ afterEach(() => {
 
 describe("listExternalLibraries", () => {
   it("GETs the libraries collection and bypasses the cache (fresh)", async () => {
-    fetchMock.mockResolvedValue(jsonResponse([library]));
+    respondWith([library]);
 
     const result = await listExternalLibraries();
 
@@ -70,7 +83,7 @@ describe("listExternalLibraries", () => {
   });
 
   it("re-fetches on every call rather than serving a stale cache", async () => {
-    fetchMock.mockResolvedValue(jsonResponse([]));
+    respondWith([]);
 
     await listExternalLibraries();
     await listExternalLibraries();
@@ -81,7 +94,7 @@ describe("listExternalLibraries", () => {
 
 describe("createExternalLibrary", () => {
   it("POSTs the create body and returns the created library", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(library));
+    respondWith(library);
 
     const body = {
       name: "nas-main",
@@ -101,7 +114,7 @@ describe("createExternalLibrary", () => {
 
 describe("updateExternalLibrary", () => {
   it("PATCHes the addressed library with a partial body", async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ ...library, enabled: false }));
+    respondWith({ ...library, enabled: false });
 
     const updated = await updateExternalLibrary(7, { enabled: false });
 
@@ -115,7 +128,7 @@ describe("updateExternalLibrary", () => {
 
 describe("deleteExternalLibrary", () => {
   it("DELETEs the addressed library and resolves void on 204", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(null, 204));
+    respondWith(null, 204);
 
     await expect(deleteExternalLibrary(7)).resolves.toBeUndefined();
     const { url, init } = lastCall();
@@ -126,9 +139,7 @@ describe("deleteExternalLibrary", () => {
 
 describe("scanExternalLibrary", () => {
   it("POSTs to the scan endpoint and returns the queued job", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({ job_id: "scan-1", state: "pending", message: "library scan queued" }, 202),
-    );
+    respondWith({ job_id: "scan-1", state: "pending", message: "library scan queued" }, 202);
 
     const resp = await scanExternalLibrary(7);
 
@@ -142,9 +153,7 @@ describe("scanExternalLibrary", () => {
 
 describe("vault config — external libraries flag", () => {
   it("reads external_libraries_enabled from GET /api/v1/config", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({ storage_backend: "local", external_libraries_enabled: true }),
-    );
+    respondWith({ storage_backend: "local", external_libraries_enabled: true });
 
     const cfg = await getVaultConfig();
 
@@ -153,9 +162,7 @@ describe("vault config — external libraries flag", () => {
   });
 
   it("PUTs a toggle of external_libraries_enabled", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({ storage_backend: "local", external_libraries_enabled: false }),
-    );
+    respondWith({ storage_backend: "local", external_libraries_enabled: false });
 
     const cfg = await updateVaultConfig({ external_libraries_enabled: false });
 

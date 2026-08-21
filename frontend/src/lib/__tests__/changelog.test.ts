@@ -12,10 +12,15 @@ import { APP_VERSION, CHANGELOG } from "@/lib/changelog";
  * test rather than a stale About tab in production.
  */
 
-// vitest runs from the frontend package root, so package.json sits at cwd.
-const pkg = JSON.parse(
-  readFileSync(join(process.cwd(), "package.json"), "utf8"),
-) as { version: string };
+// vitest runs from the frontend package root, so package.json sits at cwd. The
+// version is read out of the text the same way the backend files are, so a
+// missing field fails loudly here instead of surfacing as `undefined` later.
+const frontendPackageJson = readFileSync(join(process.cwd(), "package.json"), "utf8");
+const frontendVersionMatch = frontendPackageJson.match(/^ {2}"version": "([^"]+)"/m);
+if (!frontendVersionMatch) {
+  throw new Error("could not find version in frontend/package.json");
+}
+const frontendVersion = frontendVersionMatch[1];
 
 // Version bumps are a triple (backend/pyproject.toml, config.py's
 // app_version, frontend/package.json) — this only guards the frontend/backend
@@ -33,9 +38,7 @@ const backendConfig = readFileSync(
   join(process.cwd(), "..", "backend", "app", "core", "config.py"),
   "utf8",
 );
-const backendConfigVersionMatch = backendConfig.match(
-  /^\s*app_version: str = "([^"]+)"/m,
-);
+const backendConfigVersionMatch = backendConfig.match(/^\s*app_version: str = "([^"]+)"/m);
 if (!backendConfigVersionMatch) {
   throw new Error("could not find app_version in backend/app/core/config.py");
 }
@@ -49,15 +52,15 @@ describe("changelog ↔ package.json", () => {
   it("the newest changelog entry matches the shipped app version", () => {
     // Bumping package.json without adding the matching changelog entry (or vice
     // versa) breaks here — keep them in lockstep on every release.
-    expect(CHANGELOG[0].version).toBe(pkg.version);
+    expect(CHANGELOG[0].version).toBe(frontendVersion);
   });
 
   it("frontend package.json matches backend/pyproject.toml", () => {
-    expect(pkg.version).toBe(backendVersion);
+    expect(frontendVersion).toBe(backendVersion);
   });
 
   it("the backend runtime version matches the package versions", () => {
-    expect(backendConfigVersion).toBe(pkg.version);
+    expect(backendConfigVersion).toBe(frontendVersion);
   });
 });
 

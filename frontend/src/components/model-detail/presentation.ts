@@ -2,12 +2,7 @@
  * Presentation maps and derived-row builders shared by the model-detail tabs.
  */
 
-import {
-  FileRead,
-  FileRevisionStatus,
-  MetadataRead,
-  PrintJobState,
-} from "@/types";
+import { FileRead, FileRevisionStatus, MetadataRead, PrintJobState } from "@/types";
 import {
   formatCost,
   formatDuration,
@@ -42,12 +37,12 @@ export function normalizeRecommendedGcodeFiles<
   );
 }
 
-const REVISION_STATUS_LABELS: Record<FileRevisionStatus, string> = {
+const REVISION_STATUS_LABELS = {
   known_good: "Known good",
   needs_test: "Needs test",
   failed: "Failed",
   archived: "Archived",
-};
+} satisfies Record<FileRevisionStatus, string>;
 
 export function revisionStatusClass(status: FileRevisionStatus | null): string {
   switch (status) {
@@ -74,10 +69,7 @@ export function headerStatusLabel(status: FileRevisionStatus | null): string {
 
 export type PrintJobTone = "success" | "error" | "progress";
 
-export const PRINT_JOB_PRESENTATION: Record<
-  PrintJobState,
-  { label: string; tone: PrintJobTone }
-> = {
+export const PRINT_JOB_PRESENTATION = {
   queued: { label: "Queued", tone: "progress" },
   uploading: { label: "Uploading", tone: "progress" },
   started: { label: "Started", tone: "progress" },
@@ -86,7 +78,7 @@ export const PRINT_JOB_PRESENTATION: Record<
   completed: { label: "Success", tone: "success" },
   cancelled: { label: "Cancelled", tone: "error" },
   failed: { label: "Failed", tone: "error" },
-};
+} satisfies Record<PrintJobState, { label: string; tone: PrintJobTone }>;
 
 export function printJobToneClass(tone: PrintJobTone): string {
   switch (tone) {
@@ -159,9 +151,9 @@ export function buildPrintSettingRows(
   }
 
   if (
-    preferences.supports
-    && meta?.support_material !== null
-    && meta?.support_material !== undefined
+    preferences.supports &&
+    meta?.support_material !== null &&
+    meta?.support_material !== undefined
   ) {
     rows.push({ label: "SUPPORTS", value: meta.support_material ? "Yes" : "No" });
   }

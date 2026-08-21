@@ -121,7 +121,9 @@ test("auto-mark-known-good toggle persists across reload", async ({ page }) => {
 
   await page.reload();
   await page.getByRole("button", { name: "Design" }).click();
-  await expect(page.getByRole("switch", { name: "Auto-mark known good on successful print" })).toHaveAttribute("aria-checked", after!);
+  await expect(
+    page.getByRole("switch", { name: "Auto-mark known good on successful print" }),
+  ).toHaveAttribute("aria-checked", after!);
 
   // Restore the original so the shared DB doesn't drift for later runs.
   await Promise.all([

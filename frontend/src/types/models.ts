@@ -27,11 +27,7 @@ export interface MetadataRead {
   triangle_count: number | null;
 }
 
-export type FileRevisionStatus =
-  | "known_good"
-  | "needs_test"
-  | "failed"
-  | "archived";
+export type FileRevisionStatus = "known_good" | "needs_test" | "failed" | "archived";
 
 export type CollectionRole = "view" | "edit" | "admin";
 
@@ -326,8 +322,17 @@ export interface IngestJobStatus {
   total_steps?: number | null;
   label?: string | null;
   progress?: number | null;
-  result?: Record<string, unknown> | null;
-  stage?: "resolving" | "downloading" | "inspecting" | "extracting" | "hashing" | "ingesting" | "thumbnailing" | "completed" | null;
+  result?: IngestJobResult | null;
+  stage?:
+    | "resolving"
+    | "downloading"
+    | "inspecting"
+    | "extracting"
+    | "hashing"
+    | "ingesting"
+    | "thumbnailing"
+    | "completed"
+    | null;
   current_item?: string | null;
   processed?: number;
   total?: number | null;
@@ -340,6 +345,48 @@ export interface IngestJobStatus {
   thumbnail_reason?: string | null;
   retryable?: boolean;
   failed_items?: Array<{ name: string; reason: string; retryable: boolean }>;
+}
+
+/** One member/file outcome inside a multi-item import result. */
+export interface IngestJobResultItem {
+  model_id?: number | null;
+  file_id?: number | null;
+  name?: string;
+  member?: string;
+  deduplicated?: boolean;
+  error?: string | null;
+}
+
+/**
+ * The job-kind-specific payload a finished ingest job carries. Which keys arrive
+ * depends on `kind`: the review flows stage one of the manifests, a collection
+ * import reports counts plus per-member outcomes, and a plain single-artifact
+ * ingest reports whether it created a new Model.
+ */
+export interface IngestJobResult {
+  kind?: "archive_manifest" | "model_files_manifest" | "collection_manifest" | "collection_import";
+  // kind === "archive_manifest"
+  archive_id?: string;
+  archive_name?: string;
+  entries?: ArchiveEntry[];
+  // kind === "model_files_manifest"
+  files_token?: string;
+  page_title?: string;
+  files?: ModelFile[];
+  // kind === "collection_manifest"
+  collection_token?: string;
+  collection_name?: string;
+  target_collection?: string;
+  members?: CollectionMember[];
+  // kind === "collection_import"
+  collection?: string | null;
+  imported?: number;
+  total?: number;
+  items?: IngestJobResultItem[];
+  // Plain single-artifact ingest.
+  created?: boolean;
+  resumed?: boolean;
+  name?: string;
 }
 
 export interface ArchiveEntry {
@@ -492,8 +539,7 @@ export interface OutlinerModelRead {
   collection_id: number | null;
 }
 
-export interface ListModelPageParams
-  extends Omit<ListModelsParams, "offset"> {
+export interface ListModelPageParams extends Omit<ListModelsParams, "offset"> {
   sort?: ModelSort;
   cursor?: string;
 }
@@ -544,7 +590,10 @@ export interface SavedViewRead {
   updated_at: string;
 }
 
-export interface ModelStarRead { model_id: number; starred: boolean }
+export interface ModelStarRead {
+  model_id: number;
+  starred: boolean;
+}
 
 export interface CollectionCreate {
   name: string;

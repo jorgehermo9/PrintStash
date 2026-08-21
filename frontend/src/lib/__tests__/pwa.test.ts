@@ -2,10 +2,21 @@ import { registerPwa } from "@/lib/pwa";
 import { readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 
+/** The only message `registerPwa` posts to a waiting worker. */
+type SkipWaitingMessage = { type: "SKIP_WAITING" };
+
+/** The slice of `ServiceWorkerRegistration` that `registerPwa` actually touches. */
+type StubRegistration = {
+  update: () => Promise<void>;
+  waiting: { postMessage: (message: SkipWaitingMessage) => void };
+};
+
+type RegisterStub = (scriptURL: string, options?: RegistrationOptions) => Promise<StubRegistration>;
+
 it("registers and checks the production service worker without HTTP cache", async () => {
-  const update = vi.fn().mockResolvedValue(undefined);
-  const waiting = { postMessage: vi.fn() };
-  const register = vi.fn().mockResolvedValue({ update, waiting });
+  const update = vi.fn<StubRegistration["update"]>().mockResolvedValue(undefined);
+  const waiting = { postMessage: vi.fn<StubRegistration["waiting"]["postMessage"]>() };
+  const register = vi.fn<RegisterStub>().mockResolvedValue({ update, waiting });
   Object.defineProperty(navigator, "serviceWorker", {
     configurable: true,
     value: { register },
@@ -23,7 +34,7 @@ it("registers and checks the production service worker without HTTP cache", asyn
 });
 
 it("does not register when disabled", () => {
-  const register = vi.fn();
+  const register = vi.fn<RegisterStub>();
   Object.defineProperty(navigator, "serviceWorker", {
     configurable: true,
     value: { register },
@@ -35,10 +46,7 @@ it("does not register when disabled", () => {
 });
 
 it("uses versioned caches, offline navigation fallback, and revalidation", () => {
-  const source = readFileSync(
-    `${process.cwd()}/public/sw.js`,
-    "utf8",
-  );
+  const source = readFileSync(`${process.cwd()}/public/sw.js`, "utf8");
 
   expect(source).toContain('const CACHE = "printstash-shell-v2"');
   expect(source).toContain('caches.match("/offline.html")');

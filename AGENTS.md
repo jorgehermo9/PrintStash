@@ -17,7 +17,7 @@ work; that detail lives there, not here, so this file stays small.
 
 ## Commands
 - Backend: `cd backend && uv run pytest tests -v` · lint `uv run ruff check app/ tests/` · run `uv run uvicorn app.main:app --reload` · migrate `uv run alembic upgrade head`
-- Frontend: `cd frontend && pnpm dev|test|lint|typecheck`
+- Frontend: `cd frontend && pnpm dev|test|lint|format|typecheck` — oxlint + oxfmt + TypeScript 7 (no ESLint, no prettier)
 - Full stack: `docker compose -f docker-compose.light.yml up` (prebuilt image — src edits need vite dev server).
 
 ## Testing

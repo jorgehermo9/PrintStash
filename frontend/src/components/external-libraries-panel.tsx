@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  FolderSync,
-  Plus,
-  RefreshCw,
-  Trash2,
-  HardDrive,
-  AlertTriangle,
-} from "lucide-react";
+import { FolderSync, Plus, RefreshCw, Trash2, HardDrive, AlertTriangle } from "lucide-react";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import {
   createExternalLibrary,
@@ -51,6 +44,21 @@ const WATCH_OPTIONS: { value: ExternalLibraryWatchMode; label: string }[] = [
   { value: "events", label: "On (force watching)" },
   { value: "off", label: "Off (schedule only)" },
 ];
+const COLLECTION_MODES = [
+  "mirror",
+  "single",
+] as const satisfies readonly ExternalLibraryCollectionMode[];
+
+// A <select> hands back a bare string. These decode it into the domain type at
+// that boundary; the elements only render the values below, so an unmatched
+// value can only come from a tampered DOM and falls back to the default mode.
+function parseWatchMode(value: string): ExternalLibraryWatchMode {
+  return WATCH_OPTIONS.find((option) => option.value === value)?.value ?? "auto";
+}
+
+function parseCollectionMode(value: string): ExternalLibraryCollectionMode {
+  return COLLECTION_MODES.find((collectionMode) => collectionMode === value) ?? "mirror";
+}
 
 function describeSchedule(cron: string): string {
   if (!cron) return "Manual only";
@@ -66,10 +74,8 @@ function watchStatus(lib: ExternalLibrary): string {
       : "Watching (real-time)";
   }
   if (lib.watch_mode === "off") return "Watching off — scheduled scans only";
-  if (lib.fs_kind === "network")
-    return "Network folder — scheduled scans only";
-  if (lib.fs_kind === "unknown")
-    return "Unknown filesystem — scheduled scans only";
+  if (lib.fs_kind === "network") return "Network folder — scheduled scans only";
+  if (lib.fs_kind === "unknown") return "Unknown filesystem — scheduled scans only";
   return "Scheduled scans only";
 }
 
@@ -128,11 +134,44 @@ function formatDate(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
-async function pollScanJob(jobId: string): Promise<void> {
+/**
+ * The API this panel drives. Declared as a port so a test can render the panel
+ * against a stub; production callers get {@link VAULT_API}, which wires the real
+ * `@/lib/api` calls. The two config calls are narrowed to the one flag the panel
+ * cares about.
+ */
+export interface ExternalLibrariesApi {
+  isFeatureEnabled: () => Promise<boolean>;
+  setFeatureEnabled: (enabled: boolean) => Promise<void>;
+  list: typeof listExternalLibraries;
+  create: typeof createExternalLibrary;
+  update: typeof updateExternalLibrary;
+  remove: typeof deleteExternalLibrary;
+  scan: typeof scanExternalLibrary;
+  jobStatus: typeof getJobStatus;
+}
+
+const VAULT_API: ExternalLibrariesApi = {
+  isFeatureEnabled: async () => (await getVaultConfig()).external_libraries_enabled,
+  setFeatureEnabled: async (enabled) => {
+    await updateVaultConfig({ external_libraries_enabled: enabled });
+  },
+  list: listExternalLibraries,
+  create: createExternalLibrary,
+  update: updateExternalLibrary,
+  remove: deleteExternalLibrary,
+  scan: scanExternalLibrary,
+  jobStatus: getJobStatus,
+};
+
+async function pollScanJob(
+  jobId: string,
+  jobStatus: ExternalLibrariesApi["jobStatus"],
+): Promise<void> {
   // Mirrors the upload modal's polling: wait until the scan job terminates.
   const deadline = Date.now() + 15 * 60 * 1000;
   while (Date.now() < deadline) {
-    const job = await getJobStatus(jobId);
+    const job = await jobStatus(jobId);
     if (job.state === "completed") return;
     if (job.state === "failed") {
       throw new Error(job.error || "scan_failed");
@@ -142,7 +181,13 @@ async function pollScanJob(jobId: string): Promise<void> {
   throw new Error("scan_timeout");
 }
 
-export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
+export function ExternalLibrariesPanel({
+  canEdit,
+  api = VAULT_API,
+}: {
+  canEdit: boolean;
+  api?: ExternalLibrariesApi;
+}) {
   const [enabled, setEnabled] = useState(false);
   const [enableBusy, setEnableBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -160,35 +205,34 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
 
   const refresh = useCallback(async () => {
     try {
-      setLibraries(await listExternalLibraries());
+      setLibraries(await api.list());
     } catch (e) {
       toast.error(e);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     let cancelled = false;
-    getVaultConfig()
-      .then((cfg) => {
+    api
+      .isFeatureEnabled()
+      .then((featureEnabled) => {
         if (cancelled) return;
-        setEnabled(cfg.external_libraries_enabled);
+        setEnabled(featureEnabled);
         setLoaded(true);
-        if (cfg.external_libraries_enabled) refresh();
+        if (featureEnabled) refresh();
       })
       .catch(() => setLoaded(true));
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [api, refresh]);
 
   async function toggleFeature(next: boolean) {
     setEnableBusy(true);
     setEnabled(next);
     try {
-      await updateVaultConfig({ external_libraries_enabled: next });
-      toast.success(
-        next ? "Shared volumes enabled." : "Shared volumes disabled.",
-      );
+      await api.setFeatureEnabled(next);
+      toast.success(next ? "Shared volumes enabled." : "Shared volumes disabled.");
       if (next) await refresh();
     } catch (e) {
       setEnabled(!next);
@@ -205,7 +249,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
     }
     setBusyId("create");
     try {
-      await createExternalLibrary({
+      await api.create({
         name: name.trim(),
         root_path: rootPath.trim(),
         scan_schedule: scanSchedule,
@@ -229,9 +273,9 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   async function handleScan(lib: ExternalLibrary) {
     setBusyId(lib.id);
     try {
-      const resp = await scanExternalLibrary(lib.id);
+      const resp = await api.scan(lib.id);
       trackImportJob(resp.job_id, `Scan ${lib.name}`);
-      await pollScanJob(resp.job_id);
+      await pollScanJob(resp.job_id, api.jobStatus);
       toast.success(`Scan complete for "${lib.name}".`);
       await refresh();
     } catch (e) {
@@ -245,7 +289,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   async function handleToggleEnabled(lib: ExternalLibrary) {
     setBusyId(lib.id);
     try {
-      await updateExternalLibrary(lib.id, { enabled: !lib.enabled });
+      await api.update(lib.id, { enabled: !lib.enabled });
       await refresh();
     } catch (e) {
       toast.error(e);
@@ -260,7 +304,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   ) {
     setBusyId(lib.id);
     try {
-      await updateExternalLibrary(lib.id, patch);
+      await api.update(lib.id, patch);
       await refresh();
     } catch (e) {
       toast.error(e);
@@ -272,7 +316,7 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
   async function handleDelete(lib: ExternalLibrary) {
     setBusyId(lib.id);
     try {
-      await deleteExternalLibrary(lib.id);
+      await api.remove(lib.id);
       toast.success(`Removed "${lib.name}". Files on the volume were not touched.`);
       await refresh();
     } catch (e) {
@@ -287,279 +331,263 @@ export function ExternalLibrariesPanel({ canEdit }: { canEdit: boolean }) {
 
   return (
     <Localized>
-    <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-      <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3 min-w-0">
-          <div className="w-8 h-8 rounded bg-muted flex items-center justify-center text-muted-foreground flex-shrink-0">
-            <FolderSync className="h-4 w-4" />
-          </div>
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">
-              Shared volumes
-            </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Mirror a folder — on the server or a NAS — in place: files are indexed
-              where they live, never copied. Local folders can be watched in real
-              time; all folders support scheduled and manual scans. Off by default.
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          disabled={!canEdit || enableBusy}
-          onClick={() => toggleFeature(!enabled)}
-          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-            enabled ? "bg-primary" : "bg-outline-variant"
-          }`}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              enabled ? "translate-x-6" : "translate-x-1"
-            }`}
-          />
-        </button>
-      </div>
-
-      {enabled && (
-        <div className="p-4 sm:p-5 space-y-5">
-          {/* Existing libraries */}
-          {libraries.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-6 py-8 text-center">
-              <FolderSync className="h-7 w-7 text-muted-foreground/50" />
-              <p className="text-sm font-medium text-foreground">No shared volumes yet</p>
-              <p className="text-xs text-muted-foreground">Add a folder below to start mirroring it into your vault.</p>
+      <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+        <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-8 h-8 rounded bg-muted flex items-center justify-center text-muted-foreground flex-shrink-0">
+              <FolderSync className="h-4 w-4" />
             </div>
-          ) : (
-            <ul className="space-y-3">
-              {libraries.map((lib) => {
-                const busy = busyId === lib.id;
-                const s = lib.last_scan_summary;
-                return (
-                  <li
-                    key={lib.id}
-                    className="rounded border border-border bg-background p-3 sm:p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="text-sm font-medium text-foreground truncate">
-                            {lib.name}
-                          </span>
-                          {!lib.enabled && (
-                            <span className="font-mono text-3xs uppercase tracking-wider text-muted-foreground/70 border border-border rounded px-1.5 py-0.5">
-                              paused
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-foreground">Shared volumes</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Mirror a folder — on the server or a NAS — in place: files are indexed where they
+                live, never copied. Local folders can be watched in real time; all folders support
+                scheduled and manual scans. Off by default.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            disabled={!canEdit || enableBusy}
+            onClick={() => toggleFeature(!enabled)}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+              enabled ? "bg-primary" : "bg-outline-variant"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                enabled ? "translate-x-6" : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
+
+        {enabled && (
+          <div className="p-4 sm:p-5 space-y-5">
+            {/* Existing libraries */}
+            {libraries.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-6 py-8 text-center">
+                <FolderSync className="h-7 w-7 text-muted-foreground/50" />
+                <p className="text-sm font-medium text-foreground">No shared volumes yet</p>
+                <p className="text-xs text-muted-foreground">
+                  Add a folder below to start mirroring it into your vault.
+                </p>
+              </div>
+            ) : (
+              <ul className="space-y-3">
+                {libraries.map((lib) => {
+                  const busy = busyId === lib.id;
+                  const s = lib.last_scan_summary;
+                  return (
+                    <li
+                      key={lib.id}
+                      className="rounded border border-border bg-background p-3 sm:p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="text-sm font-medium text-foreground truncate">
+                              {lib.name}
                             </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-muted-foreground font-mono mt-1 truncate">
-                          {lib.root_path}
-                        </p>
-                        <p className="text-2xs text-muted-foreground mt-1">
-                          {lib.collection_mode === "mirror"
-                            ? "Mirrors subfolders → collections"
-                            : "Single collection"}{" "}
-                          · {describeSchedule(lib.scan_schedule)} · last scan{" "}
-                          {formatDate(lib.last_scanned_at)}
-                        </p>
-                        <p className="text-2xs text-muted-foreground mt-0.5">
-                          {watchStatus(lib)}
-                        </p>
-                        {canEdit && (
-                          <div className="mt-2 grid gap-2 sm:grid-cols-2 max-w-md">
-                            <ScheduleControl
-                              value={lib.scan_schedule}
-                              disabled={busy}
-                              inputClass={`${INPUT} !py-1.5 text-xs`}
-                              onChange={(cron) =>
-                                handleUpdate(lib, { scan_schedule: cron })
-                              }
-                            />
-                            <select
-                              className={`${INPUT} !py-1.5 text-xs self-start`}
-                              value={lib.watch_mode}
-                              disabled={busy}
-                              onChange={(e) =>
-                                handleUpdate(lib, {
-                                  watch_mode: e.target
-                                    .value as ExternalLibraryWatchMode,
-                                })
-                              }
-                            >
-                              {WATCH_OPTIONS.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.label}
-                                </option>
-                              ))}
-                            </select>
+                            {!lib.enabled && (
+                              <span className="font-mono text-3xs uppercase tracking-wider text-muted-foreground/70 border border-border rounded px-1.5 py-0.5">
+                                paused
+                              </span>
+                            )}
                           </div>
-                        )}
-                        {lib.last_scan_status === "error" && (
-                          <p className="mt-1 inline-flex items-center gap-1 text-2xs text-destructive">
-                            <AlertTriangle className="h-3 w-3" />
-                            {s?.error || "Last scan failed"}
+                          <p className="text-xs text-muted-foreground font-mono mt-1 truncate">
+                            {lib.root_path}
                           </p>
-                        )}
-                        {(lib.last_scan_status === "ok" ||
-                          lib.last_scan_status === "partial") &&
-                          s && (
-                            <p className="text-2xs text-muted-foreground mt-1">
-                              +{s.added} added · {s.updated} updated · {s.removed}{" "}
-                              removed
-                              {s.errors.length > 0
-                                ? ` · ${s.errors.length} errors`
-                                : ""}
+                          <p className="text-2xs text-muted-foreground mt-1">
+                            {lib.collection_mode === "mirror"
+                              ? "Mirrors subfolders → collections"
+                              : "Single collection"}{" "}
+                            · {describeSchedule(lib.scan_schedule)} · last scan{" "}
+                            {formatDate(lib.last_scanned_at)}
+                          </p>
+                          <p className="text-2xs text-muted-foreground mt-0.5">
+                            {watchStatus(lib)}
+                          </p>
+                          {canEdit && (
+                            <div className="mt-2 grid gap-2 sm:grid-cols-2 max-w-md">
+                              <ScheduleControl
+                                value={lib.scan_schedule}
+                                disabled={busy}
+                                inputClass={`${INPUT} !py-1.5 text-xs`}
+                                onChange={(cron) => handleUpdate(lib, { scan_schedule: cron })}
+                              />
+                              <select
+                                className={`${INPUT} !py-1.5 text-xs self-start`}
+                                value={lib.watch_mode}
+                                disabled={busy}
+                                onChange={(e) =>
+                                  handleUpdate(lib, {
+                                    watch_mode: parseWatchMode(e.target.value),
+                                  })
+                                }
+                              >
+                                {WATCH_OPTIONS.map((o) => (
+                                  <option key={o.value} value={o.value}>
+                                    {o.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {lib.last_scan_status === "error" && (
+                            <p className="mt-1 inline-flex items-center gap-1 text-2xs text-destructive">
+                              <AlertTriangle className="h-3 w-3" />
+                              {s?.error || "Last scan failed"}
                             </p>
                           )}
-                        {lib.last_scan_status === "partial" && (
-                          <p className="mt-1 inline-flex items-center gap-1 text-2xs text-destructive">
-                            <AlertTriangle className="h-3 w-3" />
-                            Some files could not be indexed
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex flex-shrink-0 items-center gap-1.5">
-                        <button
-                          type="button"
-                          disabled={!canEdit || busy}
-                          onClick={() => handleScan(lib)}
-                          className={BTN_SECONDARY}
-                        >
-                          <RefreshCw
-                            className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`}
-                          />
-                          {busy ? "Scanning" : "Scan now"}
-                        </button>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={lib.enabled}
-                          aria-label="Auto-scan enabled"
-                          disabled={!canEdit || busy}
-                          onClick={() => handleToggleEnabled(lib)}
-                          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-                            lib.enabled
-                              ? "bg-primary"
-                              : "bg-outline-variant"
-                          }`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                              lib.enabled ? "translate-x-6" : "translate-x-1"
+                          {(lib.last_scan_status === "ok" || lib.last_scan_status === "partial") &&
+                            s && (
+                              <p className="text-2xs text-muted-foreground mt-1">
+                                +{s.added} added · {s.updated} updated · {s.removed} removed
+                                {s.errors.length > 0 ? ` · ${s.errors.length} errors` : ""}
+                              </p>
+                            )}
+                          {lib.last_scan_status === "partial" && (
+                            <p className="mt-1 inline-flex items-center gap-1 text-2xs text-destructive">
+                              <AlertTriangle className="h-3 w-3" />
+                              Some files could not be indexed
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex flex-shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={!canEdit || busy}
+                            onClick={() => handleScan(lib)}
+                            className={BTN_SECONDARY}
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
+                            {busy ? "Scanning" : "Scan now"}
+                          </button>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={lib.enabled}
+                            aria-label="Auto-scan enabled"
+                            disabled={!canEdit || busy}
+                            onClick={() => handleToggleEnabled(lib)}
+                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                              lib.enabled ? "bg-primary" : "bg-outline-variant"
                             }`}
-                          />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!canEdit || busy}
-                          onClick={() => setDeleteTarget(lib)}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded border border-border text-muted-foreground hover:bg-muted hover:text-destructive transition-colors disabled:opacity-50"
-                          aria-label="Remove library"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                lib.enabled ? "translate-x-6" : "translate-x-1"
+                              }`}
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canEdit || busy}
+                            onClick={() => setDeleteTarget(lib)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded border border-border text-muted-foreground hover:bg-muted hover:text-destructive transition-colors disabled:opacity-50"
+                            aria-label="Remove library"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
 
-          {/* Add a library */}
-          <div className="rounded border border-dashed border-border p-3 sm:p-4 space-y-3">
-            <p className="text-2xs font-mono uppercase tracking-wider text-primary">
-              Add a folder
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <input
-                className={INPUT}
-                placeholder="Name (e.g. NAS models)"
-                value={name}
-                disabled={!canEdit}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <input
-                className={INPUT}
-                placeholder="Absolute folder path (e.g. /mnt/nas/3d)"
-                value={rootPath}
-                disabled={!canEdit}
-                onChange={(e) => setRootPath(e.target.value)}
-              />
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                Scan schedule
-                <ScheduleControl
-                  value={scanSchedule}
+            {/* Add a library */}
+            <div className="rounded border border-dashed border-border p-3 sm:p-4 space-y-3">
+              <p className="text-2xs font-mono uppercase tracking-wider text-primary">
+                Add a folder
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input
+                  className={INPUT}
+                  placeholder="Name (e.g. NAS models)"
+                  value={name}
                   disabled={!canEdit}
-                  inputClass={INPUT}
-                  onChange={setScanSchedule}
+                  onChange={(e) => setName(e.target.value)}
                 />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                Real-time watching
+                <input
+                  className={INPUT}
+                  placeholder="Absolute folder path (e.g. /mnt/nas/3d)"
+                  value={rootPath}
+                  disabled={!canEdit}
+                  onChange={(e) => setRootPath(e.target.value)}
+                />
+                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                  Scan schedule
+                  <ScheduleControl
+                    value={scanSchedule}
+                    disabled={!canEdit}
+                    inputClass={INPUT}
+                    onChange={setScanSchedule}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                  Real-time watching
+                  <select
+                    className={INPUT}
+                    value={watchMode}
+                    disabled={!canEdit}
+                    onChange={(e) => setWatchMode(parseWatchMode(e.target.value))}
+                  >
+                    {WATCH_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <select
                   className={INPUT}
-                  value={watchMode}
+                  value={mode}
                   disabled={!canEdit}
-                  onChange={(e) =>
-                    setWatchMode(e.target.value as ExternalLibraryWatchMode)
-                  }
+                  onChange={(e) => setMode(parseCollectionMode(e.target.value))}
                 >
-                  {WATCH_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
+                  <option value="mirror">Mirror subfolders as collections</option>
+                  <option value="single">Single collection (flat)</option>
                 </select>
-              </label>
-              <select
-                className={INPUT}
-                value={mode}
-                disabled={!canEdit}
-                onChange={(e) =>
-                  setMode(e.target.value as ExternalLibraryCollectionMode)
-                }
-              >
-                <option value="mirror">Mirror subfolders as collections</option>
-                <option value="single">Single collection (flat)</option>
-              </select>
-            </div>
-            <p className="text-2xs text-muted-foreground">
-              Watching gives near-real-time updates on local folders. Network
-              folders (NAS over NFS/SMB) don't deliver file events, so they fall
-              back to the schedule above.
-            </p>
-            <div className="flex justify-end">
-              <button
-                type="button"
-                disabled={!canEdit || busyId === "create"}
-                onClick={handleCreate}
-                className={BTN_PRIMARY}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                {busyId === "create" ? "Adding" : "Add library"}
-              </button>
+              </div>
+              <p className="text-2xs text-muted-foreground">
+                Watching gives near-real-time updates on local folders. Network folders (NAS over
+                NFS/SMB) don't deliver file events, so they fall back to the schedule above.
+              </p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  disabled={!canEdit || busyId === "create"}
+                  onClick={handleCreate}
+                  className={BTN_PRIMARY}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {busyId === "create" ? "Adding" : "Add library"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <ConfirmModal
-        open={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        title="Remove external library?"
-        description={
-          deleteTarget
-            ? `"${deleteTarget.name}" will be removed and its indexed models moved to trash. The files on the shared volume are never touched.`
-            : ""
-        }
-        confirmLabel="Remove"
-        busy={deleteTarget !== null && busyId === deleteTarget.id}
-        onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
-      />
-    </div>
+        <ConfirmModal
+          open={deleteTarget !== null}
+          onClose={() => setDeleteTarget(null)}
+          title="Remove external library?"
+          description={
+            deleteTarget
+              ? `"${deleteTarget.name}" will be removed and its indexed models moved to trash. The files on the shared volume are never touched.`
+              : ""
+          }
+          confirmLabel="Remove"
+          busy={deleteTarget !== null && busyId === deleteTarget.id}
+          onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
+        />
+      </div>
     </Localized>
   );
 }

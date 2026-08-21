@@ -9,9 +9,7 @@ import RootLayout from "@/root-layout";
 // Reload once to pick up the fresh index.html/chunk map; a session flag
 // stops an infinite reload loop if the import keeps failing for another
 // reason.
-function lazyImport<T extends { default: React.ComponentType }>(
-  factory: () => Promise<T>,
-) {
+function lazyImport<T extends { default: React.ComponentType }>(factory: () => Promise<T>) {
   const key = "chunk-reload";
   return lazy(() =>
     factory()
@@ -46,11 +44,7 @@ const NotFound = lazyImport(() => import("@/pages/not-found"));
 
 function RouteChunk({ children }: { children: React.ReactNode }) {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen w-full bg-background" aria-busy="true" />
-      }
-    >
+    <Suspense fallback={<div className="min-h-screen w-full bg-background" aria-busy="true" />}>
       {children}
     </Suspense>
   );
@@ -59,22 +53,113 @@ function RouteChunk({ children }: { children: React.ReactNode }) {
 export const router = createBrowserRouter([
   // Public, unauthenticated share viewer — deliberately mounted OUTSIDE
   // RootLayout so it bypasses auth/setup gating and the app chrome.
-  { path: "share/:token", element: <RouteChunk><SharePage /></RouteChunk> },
+  {
+    path: "share/:token",
+    element: (
+      <RouteChunk>
+        <SharePage />
+      </RouteChunk>
+    ),
+  },
   {
     element: <RootLayout />,
     children: [
-      { index: true, element: <RouteChunk><HomePage /></RouteChunk> },
-      { path: "models/:id", element: <RouteChunk><ModelDetailPage /></RouteChunk> },
-      { path: "documents/:id", element: <RouteChunk><DocumentDetailPage /></RouteChunk> },
-      { path: "login", element: <RouteChunk><LoginPage /></RouteChunk> },
-      { path: "setup", element: <RouteChunk><SetupPage /></RouteChunk> },
-      { path: "profiles", element: <RouteChunk><ProfilesPage /></RouteChunk> },
-      { path: "statistics", element: <RouteChunk><StatisticsPage /></RouteChunk> },
-      { path: "settings", element: <RouteChunk><SettingsPage /></RouteChunk> },
-      { path: "inbox", element: <RouteChunk><InboxPage /></RouteChunk> },
-      { path: "printers", element: <RouteChunk><PrintersRoute /></RouteChunk> },
-      { path: "printers/:id", element: <RouteChunk><PrinterDetailRoute /></RouteChunk> },
-      { path: "*", element: <RouteChunk><NotFound /></RouteChunk> },
+      {
+        index: true,
+        element: (
+          <RouteChunk>
+            <HomePage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "models/:id",
+        element: (
+          <RouteChunk>
+            <ModelDetailPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "documents/:id",
+        element: (
+          <RouteChunk>
+            <DocumentDetailPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "login",
+        element: (
+          <RouteChunk>
+            <LoginPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "setup",
+        element: (
+          <RouteChunk>
+            <SetupPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "profiles",
+        element: (
+          <RouteChunk>
+            <ProfilesPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "statistics",
+        element: (
+          <RouteChunk>
+            <StatisticsPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "settings",
+        element: (
+          <RouteChunk>
+            <SettingsPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "inbox",
+        element: (
+          <RouteChunk>
+            <InboxPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "printers",
+        element: (
+          <RouteChunk>
+            <PrintersRoute />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "printers/:id",
+        element: (
+          <RouteChunk>
+            <PrinterDetailRoute />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "*",
+        element: (
+          <RouteChunk>
+            <NotFound />
+          </RouteChunk>
+        ),
+      },
     ],
   },
 ]);

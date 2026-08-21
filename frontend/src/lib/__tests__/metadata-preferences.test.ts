@@ -21,10 +21,7 @@ describe("metadata preferences persistence", () => {
   });
 
   it("merges stored partial prefs over defaults (missing keys stay visible)", () => {
-    window.localStorage.setItem(
-      METADATA_PREFERENCE_STORAGE_KEY,
-      JSON.stringify({ infill: false }),
-    );
+    window.localStorage.setItem(METADATA_PREFERENCE_STORAGE_KEY, JSON.stringify({ infill: false }));
     const prefs = readMetadataPreferences();
     expect(prefs.infill).toBe(false);
     // A field not present in storage keeps the default (true).

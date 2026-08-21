@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { Button, ConfirmModal, Modal, cn } from "../index";
+import { Button, ConfirmModal, Modal, cn, type ConfirmModalProps } from "../index";
 
 describe("@printstash/ui public API", () => {
   it("exports class merging and the shared button primitive", () => {
@@ -19,14 +19,12 @@ describe("@printstash/ui public API", () => {
       </Modal>,
     );
 
-    expect(
-      screen.getByRole("button", { name: "Dismiss dialog" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss dialog" })).toBeInTheDocument();
   });
 
   it("uses injected confirmation labels and preserves actions", () => {
-    const onClose = vi.fn();
-    const onConfirm = vi.fn();
+    const onClose = vi.fn<ConfirmModalProps["onClose"]>();
+    const onConfirm = vi.fn<ConfirmModalProps["onConfirm"]>();
     render(
       <ConfirmModal
         open
