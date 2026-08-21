@@ -1,7 +1,10 @@
 import {
+  BROWSER_EXTENSION_SETUP_STORAGE_KEY,
   captureModelPage,
   classifyModelPage,
+  isLocalVault,
   normalizeVault,
+  parseBrowserExtensionSetup,
   verifyVaultConnection,
 } from "./core.mjs";
 
@@ -88,7 +91,10 @@ function fillConnectionForm(config) {
 }
 
 function permissionOrigin(config) {
-  return `${new URL(config.vault).origin}/*`;
+  const vault = new URL(config.vault);
+  return isLocalVault(config.vault)
+    ? `${vault.protocol}//${vault.hostname}/*`
+    : `${vault.origin}/*`;
 }
 
 function connectionHost(config) {
@@ -131,7 +137,7 @@ function renderConnection(state, { config, profile, detail } = {}) {
     connectionDetail.textContent = detail || "Review the URL and credentials below.";
   } else {
     connectionTitle.textContent = "Not connected";
-    connectionDetail.textContent = "Connect a PrintStash vault to start importing.";
+    connectionDetail.textContent = detail || "Connect a PrintStash vault to start importing.";
   }
 
   const showConnectedActions = state === "connected";
@@ -264,6 +270,25 @@ async function ensureOriginPermission(origin) {
   if (!granted) throw new Error("Permission to download this MakerWorld file was not granted.");
 }
 
+async function takePreparedSetup(page) {
+  if (!Number.isInteger(page?.id) || !/^https?:/i.test(page?.url || "")) return null;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: page.id },
+      world: "MAIN",
+      func: (storageKey) => {
+        const value = window.sessionStorage.getItem(storageKey);
+        if (value) window.sessionStorage.removeItem(storageKey);
+        return value;
+      },
+      args: [BROWSER_EXTENSION_SETUP_STORAGE_KEY],
+    });
+    return parseBrowserExtensionSetup(results[0]?.result, page.url);
+  } catch {
+    return null;
+  }
+}
+
 connectionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -304,6 +329,7 @@ cancelButton.addEventListener("click", () => {
 
 disconnectButton.addEventListener("click", async () => {
   const previous = connectedConfig;
+  const loopbackPermission = previous ? isLocalVault(previous.vault) : false;
   try {
     await chrome.storage.local.remove(["apiKey"]);
   } catch (error) {
@@ -312,7 +338,7 @@ disconnectButton.addEventListener("click", async () => {
   }
 
   let permissionStillGranted = false;
-  if (previous) {
+  if (previous && !loopbackPermission) {
     const origins = [permissionOrigin(previous)];
     try {
       await chrome.permissions.remove({ origins });
@@ -335,7 +361,9 @@ disconnectButton.addEventListener("click", async () => {
   showStatus(
     permissionStillGranted
       ? "Disconnected and removed the stored API key, but Chrome kept the vault permission. Remove it from the extension's site access settings."
-      : "Disconnected. The stored API key and vault permission were removed from this browser.",
+      : loopbackPermission
+        ? "Disconnected. The stored API key was removed; built-in loopback access contains no credentials."
+        : "Disconnected. The stored API key and vault permission were removed from this browser.",
     permissionStillGranted ? "error" : "success",
   );
 });
@@ -405,6 +433,28 @@ async function initialize() {
   ]);
   activePage = tabs[0] || null;
   renderActivePage();
+  const prepared = await takePreparedSetup(activePage);
+  if (prepared) {
+    fillConnectionForm(prepared);
+    connectionPanel.hidden = false;
+    renderConnection("disconnected", {
+      detail: "Setup received from this PrintStash tab.",
+    });
+    connectButton.textContent = "Finish setup";
+    const origins = [permissionOrigin(prepared)];
+    const alreadyAllowed = await chrome.permissions.contains({ origins }).catch(() => false);
+    if (alreadyAllowed) {
+      try {
+        await establishConnection(prepared, { requestPermission: false, persist: true });
+        showStatus("Extension setup completed and connection verified.", "success");
+      } catch {
+        showStatus();
+      }
+    } else {
+      showStatus("Setup received. Choose Finish setup to approve access to this vault.", "success");
+    }
+    return;
+  }
   fillConnectionForm(stored);
 
   if (!stored.vault || !stored.username || !stored.apiKey) {

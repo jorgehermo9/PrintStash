@@ -242,6 +242,25 @@ test("settings sections are deep-linkable and preserve navigation state", async 
   await expect(page.getByRole("heading", { name: "Latest changes" })).toBeVisible();
 });
 
+test("settings prepares a one-time browser extension setup", async ({ page }) => {
+  await page.goto("/settings?section=access");
+
+  await page.getByRole("button", { name: "Set up extension" }).click();
+
+  await expect(page.getByRole("button", { name: "Setup prepared" })).toBeDisabled();
+  await expect(
+    page.getByText("Open the PrintStash extension on this tab to finish the verified connection."),
+  ).toBeVisible();
+  const setup = await page.evaluate(() =>
+    sessionStorage.getItem("printstash.browser-extension-setup:v1"),
+  );
+  expect(setup).not.toBeNull();
+  expect(setup).toContain('"version":1');
+  expect(setup).toContain(`"vault":"${new URL(page.url()).origin}"`);
+  expect(setup).toContain('"username":"tester"');
+  expect(setup).toContain('"apiKey":"psk_browser_setup_secret"');
+});
+
 test("preview settings persist quality choices and queue image recreation", async ({ page }) => {
   await page.goto("/settings?section=previews");
 

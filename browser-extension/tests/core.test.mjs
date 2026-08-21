@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  BROWSER_EXTENSION_SETUP_STORAGE_KEY,
   captureModelPage,
   classifyModelPage,
+  isLocalVault,
   makerWorldDownload,
   normalizeVault,
+  parseBrowserExtensionSetup,
   verifyVaultConnection,
 } from "../core.mjs";
 
@@ -70,6 +73,52 @@ test("normalizes a self-hosted Vault URL without accepting credentials", () => {
   assert.equal(normalizeVault(" https://prints.example.com/app/ "), "https://prints.example.com/app");
   assert.throws(() => normalizeVault("ftp://prints.example.com"), /HTTP or HTTPS/);
   assert.throws(() => normalizeVault("https://admin:secret@prints.example.com"), /credentials/);
+});
+
+test("defaults localhost and private Vault addresses to HTTP", () => {
+  assert.equal(normalizeVault("localhost:8000"), "http://localhost:8000");
+  assert.equal(normalizeVault("127.0.0.1:3000/"), "http://127.0.0.1:3000");
+  assert.equal(normalizeVault("192.168.1.20:8080"), "http://192.168.1.20:8080");
+  assert.equal(normalizeVault("prints.example.com"), "https://prints.example.com");
+  assert.equal(isLocalVault("http://localhost:8000"), true);
+  assert.equal(isLocalVault("https://prints.example.com"), false);
+});
+
+test("accepts only fresh same-origin setup packages from the active PrintStash tab", () => {
+  const now = Date.UTC(2026, 7, 21, 12, 0, 0);
+  const payload = JSON.stringify({
+    version: 1,
+    vault: "http://localhost:3000",
+    username: " owner ",
+    apiKey: " psk_browser ",
+    expiresAt: now + 5 * 60 * 1000,
+  });
+  assert.equal(BROWSER_EXTENSION_SETUP_STORAGE_KEY, "printstash.browser-extension-setup:v1");
+  assert.deepEqual(parseBrowserExtensionSetup(payload, "http://localhost:3000/settings", now), {
+    vault: "http://localhost:3000",
+    username: "owner",
+    apiKey: "psk_browser",
+  });
+  assert.equal(parseBrowserExtensionSetup(payload, "https://attacker.example/settings", now), null);
+  assert.equal(parseBrowserExtensionSetup(payload, "http://localhost:3000/settings", now + 6 * 60 * 1000), null);
+});
+
+test("connects a scheme-less loopback Vault over HTTP", async () => {
+  const calls = [];
+  await verifyVaultConnection({
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/health")) return Response.json({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/auth/login")) return Response.json({ access_token: "jwt" });
+      return Response.json({ username: "owner", is_superuser: true });
+    },
+    vault: "localhost:8000",
+    username: "owner",
+    apiKey: "psk_browser",
+  });
+
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].url, /^http:\/\/localhost:8000\//);
 });
 
 test("verifies the PrintStash service and authenticated user before connecting", async () => {

@@ -199,12 +199,14 @@ const state = {
   externalLibrariesEnabled: false,
   ingestJobQueued: false,
   thumbnailRebuildQueued: false,
+  apiKeySequence: 0,
 };
 
 export function resetMockApiState(): void {
   state.externalLibrariesEnabled = false;
   state.ingestJobQueued = false;
   state.thumbnailRebuildQueued = false;
+  state.apiKeySequence = 0;
 }
 
 export function setExternalLibrariesEnabled(value: boolean): void {
@@ -349,6 +351,24 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
       created_at: now,
       updated_at: now,
     });
+    return;
+  }
+  if (url.pathname === "/api/v1/auth/api-keys") {
+    if (req.method === "POST") {
+      drainRequest(req, () => {
+        state.apiKeySequence += 1;
+        sendJson(res, {
+          id: state.apiKeySequence,
+          name: "Browser extension",
+          prefix: "psk_browser",
+          created_at: now,
+          last_used_at: null,
+          api_key: "psk_browser_setup_secret",
+        });
+      });
+      return;
+    }
+    sendJson(res, []);
     return;
   }
   if (url.pathname === "/api/v1/admin/users") {

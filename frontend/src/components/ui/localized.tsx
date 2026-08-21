@@ -503,6 +503,17 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Collection access", "Acceso a colecciones"],
   ["API keys", "Claves API"],
   ["API key", "Clave API"],
+  ["Browser importer", "Importador del navegador"],
+  [
+    "Create a dedicated key and prepare this vault in the browser extension.",
+    "Crea una clave dedicada y prepara esta bóveda en la extensión del navegador.",
+  ],
+  ["Set up extension", "Configurar extensión"],
+  ["Setup prepared", "Configuración preparada"],
+  [
+    "Open the PrintStash extension on this tab to finish the verified connection.",
+    "Abre la extensión de PrintStash en esta pestaña para completar la conexión verificada.",
+  ],
   ["Initial password", "Contraseña inicial"],
   ["New password", "Nueva contraseña"],
   ["Reset password", "Restablecer contraseña"],

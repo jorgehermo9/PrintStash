@@ -10,6 +10,11 @@
     "128": "icon-128.png"
   },
   "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://[::1]/*"
+  ],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "action": {
     "default_title": "Import model to PrintStash",

@@ -19,6 +19,17 @@ instance.
 5. Review the detected files in **Pending Imports** before completing the
    import.
 
+For faster setup, open **Settings → Users & Access** in PrintStash and choose
+**Set up extension** in the API keys card. Then open the extension on that same
+tab. The one-time setup package expires after five minutes and is removed from
+the page as soon as the extension reads it. Chrome still asks for explicit
+approval before granting a new vault host permission.
+
+Local vaults may be entered as `localhost:8000`, `127.0.0.1:3000`, or a private
+LAN address without a scheme; the extension selects HTTP automatically. Its
+manifest grants network access only to loopback addresses up front, while LAN
+and remote Vaults continue to request a per-host permission when connected.
+
 The extension verifies the public PrintStash health endpoint before sending
 credentials, exchanges the named API key for a short-lived token, and confirms
 the authenticated profile. Invalid settings are not saved. On later opens it

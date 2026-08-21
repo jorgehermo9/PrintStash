@@ -24,6 +24,7 @@ import {
   Loader2,
   Palette,
   Printer,
+  Puzzle,
   ShieldCheck,
   RefreshCw,
   RotateCcw,
@@ -117,6 +118,7 @@ import {
   type ScreenshotScale,
 } from "@/lib/preview-preferences";
 import { trackImportJob } from "@/lib/task-center";
+import { prepareBrowserExtensionSetup } from "@/lib/browser-extension-setup";
 import type {
   ApiKeyRead,
   CollectionPermissionRead,
@@ -342,6 +344,7 @@ export function SettingsPanel() {
   const newApiKey = user ? mintedApiKey : null;
   const [keyName, setKeyName] = useState("Programmatic access");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [extensionSetupReady, setExtensionSetupReady] = useState(false);
   const [trashItems, setTrashItems] = useState<TrashedModelRead[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const [trashBusy, setTrashBusy] = useState<TrashOperation | null>(null);
@@ -692,6 +695,23 @@ export function SettingsPanel() {
       setNewApiKey(created.api_key);
       setApiKeys((current) => [created, ...current]);
       toast.success("API key created. Copy it now; it will not be shown again.");
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+
+  async function setupBrowserExtension() {
+    if (!user) return;
+    setKeyBusy(true);
+    try {
+      const created = await createApiKey("Browser extension");
+      setNewApiKey(created.api_key);
+      setApiKeys((current) => [created, ...current]);
+      prepareBrowserExtensionSetup(window.location.origin, user.username, created.api_key);
+      setExtensionSetupReady(true);
+      toast.success("Extension setup prepared. Open the browser extension on this tab.");
     } catch (e) {
       toast.error(e);
     } finally {
@@ -1823,6 +1843,41 @@ export function SettingsPanel() {
                       <p className="text-sm text-muted-foreground">Sign in to create API keys.</p>
                     ) : (
                       <>
+                        <div className="rounded border border-border bg-muted/40 p-3">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-foreground">
+                                Browser importer
+                              </p>
+                              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                                Create a dedicated key and prepare this vault in the browser
+                                extension.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={setupBrowserExtension}
+                              disabled={keyBusy || extensionSetupReady}
+                              className={BTN_SECONDARY}
+                            >
+                              {keyBusy ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : extensionSetupReady ? (
+                                <Check className="h-3.5 w-3.5" />
+                              ) : (
+                                <Puzzle className="h-3.5 w-3.5" />
+                              )}
+                              {extensionSetupReady ? "Setup prepared" : "Set up extension"}
+                            </button>
+                          </div>
+                          {extensionSetupReady && (
+                            <p className="mt-3 text-xs font-medium text-success" role="status">
+                              Open the PrintStash extension on this tab to finish the verified
+                              connection.
+                            </p>
+                          )}
+                        </div>
+
                         <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                           <label className="block space-y-1">
                             <span className="block font-mono text-3xs uppercase tracking-wider text-muted-foreground">

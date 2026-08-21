@@ -18,9 +18,67 @@ const SOURCE_RULES = [
 
 const DIRECT_FILE_PATH = /\.(?:zip|3mf|stl|obj|step|stp|gcode|g|gco|bgcode)$/i;
 
+export const BROWSER_EXTENSION_SETUP_STORAGE_KEY = "printstash.browser-extension-setup:v1";
+
+const BROWSER_EXTENSION_SETUP_MAX_AGE_MS = 10 * 60 * 1000;
+
+function hostnameFromUnqualifiedVault(value) {
+  const authority = value.split(/[/?#]/, 1)[0];
+  if (authority.startsWith("[")) return authority.slice(1, authority.indexOf("]"));
+  return authority.replace(/:\d+$/, "");
+}
+
+function isPrivateIpv4(hostname) {
+  const octets = hostname.split(".").map(Number);
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return false;
+  }
+  return (
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+function isLocalHostname(value) {
+  const hostname = String(value ?? "")
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "")
+    .toLowerCase();
+  if (!hostname) return false;
+  if (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname === "::1"
+  ) {
+    return true;
+  }
+  if (isPrivateIpv4(hostname)) return true;
+  if (hostname.includes(":")) {
+    return hostname.startsWith("fc") || hostname.startsWith("fd") || /^fe[89ab]/.test(hostname);
+  }
+  return !hostname.includes(".");
+}
+
+export function isLocalVault(value) {
+  try {
+    return isLocalHostname(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeVault(value) {
-  const raw = String(value ?? "").trim();
+  let raw = String(value ?? "").trim();
   if (!raw) throw new Error("Vault URL is required.");
+  if (!/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
+    const hostname = hostnameFromUnqualifiedVault(raw);
+    raw = `${isLocalHostname(hostname) ? "http" : "https"}://${raw}`;
+  }
   let parsed;
   try {
     parsed = new URL(raw);
@@ -37,6 +95,42 @@ export function normalizeVault(value) {
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   return parsed.toString().replace(/\/$/, "");
+}
+
+export function parseBrowserExtensionSetup(value, activePageUrl, now = Date.now()) {
+  if (typeof value !== "string" || !value) return null;
+  let payload;
+  try {
+    payload = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (
+    !payload ||
+    payload.version !== 1 ||
+    typeof payload.vault !== "string" ||
+    typeof payload.username !== "string" ||
+    typeof payload.apiKey !== "string" ||
+    typeof payload.expiresAt !== "number" ||
+    payload.expiresAt <= now ||
+    payload.expiresAt > now + BROWSER_EXTENSION_SETUP_MAX_AGE_MS
+  ) {
+    return null;
+  }
+
+  try {
+    const vault = normalizeVault(payload.vault);
+    const activePage = new URL(activePageUrl);
+    if (new URL(vault).origin !== activePage.origin) return null;
+    requireCredentials(payload.username, payload.apiKey);
+    return {
+      vault,
+      username: payload.username.trim(),
+      apiKey: payload.apiKey.trim(),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function classifyModelPage(value) {
@@ -74,11 +168,14 @@ function requireCredentials(username, apiKey) {
 }
 
 async function fetchVault(fetchImpl, base, path, options = {}) {
+  const local = isLocalVault(base);
   try {
     return await fetchImpl(`${base}${path}`, options);
   } catch {
     throw new Error(
-      `Couldn't reach PrintStash at ${new URL(base).host}. Check the Vault URL, network, and HTTPS certificate.`,
+      local
+        ? `Couldn't reach PrintStash at ${new URL(base).host}. Check that PrintStash is running and that this address opens in Chrome.`
+        : `Couldn't reach PrintStash at ${new URL(base).host}. Check the Vault URL, network, and HTTPS certificate.`,
     );
   }
 }
