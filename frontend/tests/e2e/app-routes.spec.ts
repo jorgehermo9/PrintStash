@@ -247,7 +247,9 @@ test("settings prepares a one-time browser extension setup", async ({ page }) =>
 
   await page.getByRole("button", { name: "Set up extension" }).click();
 
-  await expect(page.getByRole("button", { name: "Setup prepared" })).toBeDisabled();
+  const apiKeys = page.getByRole("group", { name: "API keys" });
+  await expect(apiKeys.getByRole("status")).toHaveText("Setup prepared");
+  await expect(page.getByRole("button", { name: "Set up extension" })).toHaveCount(0);
   await expect(
     page.getByText("Open the PrintStash extension on this tab to finish the verified connection."),
   ).toBeVisible();

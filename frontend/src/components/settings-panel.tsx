@@ -36,7 +36,8 @@ import {
 } from "lucide-react";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { PageHeader } from "@/components/ui/page-header";
-import { buttonVariants } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { TabBar } from "@/components/ui/tabs";
 import { inputClasses } from "@/components/ui/input";
 import { Localized, translateUiText } from "@/components/ui/localized";
@@ -1854,24 +1855,30 @@ export function SettingsPanel() {
                                 extension.
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              onClick={setupBrowserExtension}
-                              disabled={keyBusy || extensionSetupReady}
-                              className={BTN_SECONDARY}
-                            >
-                              {keyBusy ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : extensionSetupReady ? (
-                                <Check className="h-3.5 w-3.5" />
-                              ) : (
+                            {extensionSetupReady ? (
+                              <Badge
+                                variant="success"
+                                className="h-8 gap-1.5 border border-success/30 bg-success/10 px-3 font-mono text-success uppercase tracking-wider"
+                                role="status"
+                              >
+                                <Check className="h-3.5 w-3.5" aria-hidden />
+                                Setup prepared
+                              </Badge>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="xs"
+                                onClick={setupBrowserExtension}
+                                loading={keyBusy}
+                                className="font-mono uppercase tracking-wider"
+                              >
                                 <Puzzle className="h-3.5 w-3.5" />
-                              )}
-                              {extensionSetupReady ? "Setup prepared" : "Set up extension"}
-                            </button>
+                                Set up extension
+                              </Button>
+                            )}
                           </div>
                           {extensionSetupReady && (
-                            <p className="mt-3 text-xs font-medium text-success" role="status">
+                            <p className="mt-3 text-xs font-medium text-muted-foreground">
                               Open the PrintStash extension on this tab to finish the verified
                               connection.
                             </p>
