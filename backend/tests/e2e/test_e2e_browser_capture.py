@@ -15,8 +15,42 @@ pytestmark = pytest.mark.e2e
 
 
 @pytest.mark.asyncio
-async def test_named_api_key_captures_printables_page_for_pending_imports(
-    api, superuser_headers, e2e_db, monkeypatch
+async def test_named_api_key_verifies_browser_extension_connection(
+    api, superuser_headers, e2e_db
+) -> None:
+    del superuser_headers
+    owner = e2e_db.exec(select(User).where(User.username == "e2e-admin")).one()
+    _record, raw_key = create_api_key(e2e_db, owner.id, "Browser connection")
+
+    health = await api.get("/api/v1/health")
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok", "name": "PrintStash"}
+
+    login = await api.post(
+        "/api/v1/auth/login",
+        json={"username": owner.username, "api_key": raw_key, "remember_me": False},
+    )
+    assert login.status_code == 200, login.text
+    profile = await api.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+    assert profile.status_code == 200, profile.text
+    assert profile.json()["username"] == owner.username
+    assert profile.json()["is_superuser"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("page_url", "title"),
+    [
+        ("https://www.printables.com/model/3161-3d-benchy/files", "3DBenchy"),
+        ("https://www.thingiverse.com/thing:763622/files", "Whistle"),
+        ("https://cdn.example.com/models/calibration-cube.stl", "Calibration cube"),
+    ],
+)
+async def test_named_api_key_captures_supported_browser_source_for_pending_imports(
+    api, superuser_headers, e2e_db, monkeypatch, page_url: str, title: str
 ) -> None:
     del superuser_headers  # seeds the same account the extension logs in as
     owner = e2e_db.exec(select(User).where(User.username == "e2e-admin")).one()
@@ -37,13 +71,12 @@ async def test_named_api_key_captures_printables_page_for_pending_imports(
     )
     assert login.status_code == 200, login.text
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-    page_url = "https://www.printables.com/model/3161-3d-benchy/files"
     captured = await api.post(
         "/api/v1/inbox",
         headers=headers,
         json={
             "url": page_url,
-            "title": "3DBenchy",
+            "title": title,
             "source_kind": "browser",
         },
     )
@@ -52,7 +85,7 @@ async def test_named_api_key_captures_printables_page_for_pending_imports(
     assert captured.json()["source_kind"] == "browser"
     listed = (await api.get("/api/v1/inbox", headers=headers)).json()
     assert [(row["source_url"], row["display_title"]) for row in listed] == [
-        (page_url, "3DBenchy")
+        (page_url, title)
     ]
     assert e2e_db.exec(select(InboxItem)).one().owner_user_id == owner.id
 

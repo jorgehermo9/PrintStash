@@ -6,15 +6,22 @@ import {
   classifyModelPage,
   makerWorldDownload,
   normalizeVault,
+  verifyVaultConnection,
 } from "../core.mjs";
 
-test("recognizes MakerWorld model pages and Printables model and collection pages", () => {
+test("recognizes supported provider pages and direct model downloads", () => {
   assert.equal(classifyModelPage("https://makerworld.com/en/models/1234-widget"), "MakerWorld");
   assert.equal(classifyModelPage("https://www.makerworld.com/en/collections/42-parts"), null);
   assert.equal(classifyModelPage("https://www.printables.com/model/3161-3d-benchy/files"), "Printables");
   assert.equal(classifyModelPage("https://www.printables.com/@user/collections/77"), "Printables");
+  assert.equal(classifyModelPage("https://www.thingiverse.com/thing:763622/files"), "Thingiverse");
+  assert.equal(classifyModelPage("https://thingiverse.com/things/763622"), "Thingiverse");
+  assert.equal(classifyModelPage("https://cdn.example.com/models/widget.3mf?download=1"), "Direct file");
+  assert.equal(classifyModelPage("https://cdn.example.com/archive/parts.ZIP#files"), "Direct file");
   assert.equal(classifyModelPage("https://example.com/model/3161"), null);
   assert.equal(classifyModelPage("https://evilmakerworld.com/models/123"), null);
+  assert.equal(classifyModelPage("https://evilthingiverse.com/thing:763622"), null);
+  assert.equal(classifyModelPage("https://cdn.example.com/models/widget.pdf"), null);
 });
 
 test("resolves the MakerWorld package inside the authenticated page", async () => {
@@ -65,6 +72,100 @@ test("normalizes a self-hosted Vault URL without accepting credentials", () => {
   assert.throws(() => normalizeVault("https://admin:secret@prints.example.com"), /credentials/);
 });
 
+test("verifies the PrintStash service and authenticated user before connecting", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/health")) {
+      return Response.json({ status: "ok", name: "PrintStash" });
+    }
+    if (url.endsWith("/auth/login")) {
+      return Response.json({ access_token: "jwt", scope: "admin" });
+    }
+    return Response.json({
+      id: 7,
+      username: "owner",
+      email: null,
+      is_superuser: true,
+      is_active: true,
+      oidc_managed: false,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+  };
+
+  const result = await verifyVaultConnection({
+    fetchImpl,
+    vault: "https://prints.example.com/",
+    username: " owner ",
+    apiKey: " psk_secret ",
+  });
+
+  assert.equal(result.base, "https://prints.example.com");
+  assert.equal(result.accessToken, "jwt");
+  assert.equal(result.user.username, "owner");
+  assert.equal(result.user.is_superuser, true);
+  assert.deepEqual(calls.map((call) => call.url), [
+    "https://prints.example.com/api/v1/health",
+    "https://prints.example.com/api/v1/auth/login",
+    "https://prints.example.com/api/v1/auth/me",
+  ]);
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    username: "owner",
+    api_key: "psk_secret",
+    remember_me: false,
+  });
+  assert.equal(calls[2].options.headers.Authorization, "Bearer jwt");
+});
+
+test("does not send credentials when the configured URL is not PrintStash", async () => {
+  const calls = [];
+  await assert.rejects(
+    verifyVaultConnection({
+      fetchImpl: async (url, options = {}) => {
+        calls.push({ url, options });
+        return Response.json({ status: "ok", name: "Another service" });
+      },
+      vault: "https://wrong.example.com",
+      username: "owner",
+      apiKey: "psk_secret",
+    }),
+    /not a PrintStash server/,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.body, undefined);
+});
+
+test("turns API login codes and network failures into actionable connection errors", async () => {
+  const health = () => Response.json({ status: "ok", name: "PrintStash" });
+  let request = 0;
+  await assert.rejects(
+    verifyVaultConnection({
+      fetchImpl: async () => {
+        request += 1;
+        return request === 1
+          ? health()
+          : Response.json({ detail: "invalid_credentials" }, { status: 401 });
+      },
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "wrong",
+    }),
+    /username or API key is incorrect/,
+  );
+
+  await assert.rejects(
+    verifyVaultConnection({
+      fetchImpl: async () => { throw new TypeError("fetch failed"); },
+      vault: "https://offline.example.com",
+      username: "owner",
+      apiKey: "psk_secret",
+    }),
+    /Couldn't reach PrintStash at offline\.example\.com/,
+  );
+});
+
 test("logs in with a named API key and captures the browser source", async () => {
   const calls = [];
   const fetchImpl = async (url, options) => {
@@ -94,6 +195,66 @@ test("logs in with a named API key and captures the browser source", async () =>
     source_kind: "browser",
   });
   assert.equal(calls[1].options.headers.Authorization, "Bearer jwt");
+});
+
+test("captures Thingiverse and direct-file URLs through the server resolver", async () => {
+  for (const [pageUrl, source] of [
+    ["https://www.thingiverse.com/thing:763622/files", "Thingiverse"],
+    ["https://cdn.example.com/models/widget.stl?download=1", "Direct file"],
+  ]) {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/auth/login")) {
+        return new Response(JSON.stringify({ access_token: "jwt" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ id: 11, state: "captured" }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const result = await captureModelPage({
+      fetchImpl,
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_secret",
+      pageUrl,
+      title: "Captured model",
+    });
+
+    assert.equal(result.source, source);
+    assert.equal(calls[1].url, "https://prints.example.com/api/v1/inbox");
+    assert.deepEqual(JSON.parse(calls[1].options.body), {
+      url: pageUrl,
+      title: "Captured model",
+      source_kind: "browser",
+    });
+  }
+});
+
+test("reuses an already verified access token for capture", async () => {
+  const calls = [];
+  const result = await captureModelPage({
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return Response.json({ id: 12, state: "captured" }, { status: 202 });
+    },
+    vault: "https://prints.example.com",
+    username: "owner",
+    apiKey: "psk_secret",
+    accessToken: "verified-jwt",
+    pageUrl: "https://www.thingiverse.com/thing:763622/files",
+    title: "Whistle",
+  });
+
+  assert.equal(result.item.id, 12);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://prints.example.com/api/v1/inbox");
+  assert.equal(calls[0].options.headers.Authorization, "Bearer verified-jwt");
 });
 
 test("uploads MakerWorld bytes without sending site cookies to the Vault", async () => {
@@ -155,7 +316,7 @@ test("rejects unsupported pages before sending credentials", async () => {
       apiKey: "psk_secret",
       pageUrl: "https://example.com/model/1",
     }),
-    /MakerWorld model or Printables/,
+    /supported model page or direct model file/,
   );
   assert.equal(called, false);
 });
