@@ -1,7 +1,7 @@
 const SOURCE_RULES = [
   {
     source: "Printables",
-    host: (hostname) => hostname === "printables.com" || hostname.endsWith(".printables.com"),
+    host: (hostname) => hostname === "printables.com" || hostname === "www.printables.com",
     path: /^\/(?:[^/]+\/)?(?:model|collections)\/\d+(?:[-/]|$)/,
   },
   {
@@ -9,7 +9,14 @@ const SOURCE_RULES = [
     host: (hostname) => hostname === "makerworld.com" || hostname.endsWith(".makerworld.com"),
     path: /^\/(?:[^/]+\/)?models\/\d+(?:[-/]|$)/,
   },
+  {
+    source: "Thingiverse",
+    host: (hostname) => hostname === "thingiverse.com" || hostname === "www.thingiverse.com",
+    path: /^\/(?:thing:\d+|things\/\d+)(?:[-/]|$)/,
+  },
 ];
+
+const DIRECT_FILE_PATH = /\.(?:zip|3mf|stl|obj|step|stp|gcode|g|gco|bgcode)$/i;
 
 export function normalizeVault(value) {
   const raw = String(value ?? "").trim();
@@ -42,13 +49,38 @@ export function classifyModelPage(value) {
   if (!['http:', 'https:'].includes(parsed.protocol)) return null;
   const hostname = parsed.hostname.toLowerCase();
   const rule = SOURCE_RULES.find((candidate) => candidate.host(hostname) && candidate.path.test(parsed.pathname));
-  return rule?.source ?? null;
+  if (rule) return rule.source;
+  return DIRECT_FILE_PATH.test(parsed.pathname) ? "Direct file" : null;
 }
 
 async function responseDetail(response, fallback) {
   const body = await response.json().catch(() => ({}));
-  if (typeof body.detail === "string") return body.detail;
+  if (typeof body.detail === "string") {
+    const messages = {
+      invalid_credentials: "The username or API key is incorrect.",
+      not_authenticated: "The PrintStash connection expired. Reconnect and try again.",
+      insufficient_scope: "This PrintStash user does not have import permission.",
+      provide_password_or_api_key: "Enter a username and named API key.",
+    };
+    return messages[body.detail] || body.detail;
+  }
   return fallback;
+}
+
+function requireCredentials(username, apiKey) {
+  if (!String(username ?? "").trim() || !String(apiKey ?? "").trim()) {
+    throw new Error("Username and named API key are required.");
+  }
+}
+
+async function fetchVault(fetchImpl, base, path, options = {}) {
+  try {
+    return await fetchImpl(`${base}${path}`, options);
+  } catch {
+    throw new Error(
+      `Couldn't reach PrintStash at ${new URL(base).host}. Check the Vault URL, network, and HTTPS certificate.`,
+    );
+  }
 }
 
 function findValue(payload, keys) {
@@ -158,9 +190,10 @@ export async function makerWorldDownload({ pageUrl, requestPageJson }) {
 }
 
 async function vaultLogin({ fetchImpl, base, username, apiKey }) {
-  const login = await fetchImpl(`${base}/api/v1/auth/login`, {
+  const login = await fetchVault(fetchImpl, base, "/api/v1/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "omit",
     body: JSON.stringify({
       username: String(username).trim(),
       api_key: String(apiKey).trim(),
@@ -170,11 +203,49 @@ async function vaultLogin({ fetchImpl, base, username, apiKey }) {
   if (!login.ok) {
     throw new Error(await responseDetail(login, `PrintStash login returned ${login.status}.`));
   }
-  const loginBody = await login.json();
+  const loginBody = await login.json().catch(() => null);
   if (typeof loginBody.access_token !== "string" || !loginBody.access_token) {
     throw new Error("PrintStash did not return an access token.");
   }
   return loginBody.access_token;
+}
+
+export async function verifyVaultConnection({
+  fetchImpl = fetch,
+  vault,
+  username,
+  apiKey,
+}) {
+  const base = normalizeVault(vault);
+  requireCredentials(username, apiKey);
+
+  const health = await fetchVault(fetchImpl, base, "/api/v1/health", {
+    headers: { Accept: "application/json" },
+    credentials: "omit",
+    cache: "no-store",
+  });
+  const healthBody = await health.json().catch(() => null);
+  if (!health.ok || healthBody?.status !== "ok" || healthBody?.name !== "PrintStash") {
+    throw new Error("That URL is not a PrintStash server.");
+  }
+
+  const accessToken = await vaultLogin({ fetchImpl, base, username, apiKey });
+  const profile = await fetchVault(fetchImpl, base, "/api/v1/auth/me", {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    credentials: "omit",
+    cache: "no-store",
+  });
+  if (!profile.ok) {
+    throw new Error(await responseDetail(profile, `PrintStash profile check returned ${profile.status}.`));
+  }
+  const user = await profile.json().catch(() => null);
+  if (!user || typeof user.username !== "string" || typeof user.is_superuser !== "boolean") {
+    throw new Error("PrintStash returned an invalid user profile.");
+  }
+  return { base, accessToken, user };
 }
 
 export async function captureModelPage({
@@ -182,6 +253,7 @@ export async function captureModelPage({
   vault,
   username,
   apiKey,
+  accessToken,
   pageUrl,
   title,
   requestPageJson,
@@ -189,12 +261,10 @@ export async function captureModelPage({
 }) {
   const base = normalizeVault(vault);
   const source = classifyModelPage(pageUrl);
-  if (!source) throw new Error("Open a MakerWorld model or Printables model or collection page first.");
-  if (!String(username ?? "").trim() || !String(apiKey ?? "").trim()) {
-    throw new Error("Username and named API key are required.");
-  }
+  if (!source) throw new Error("Open a supported model page or direct model file first.");
+  requireCredentials(username, apiKey);
 
-  const accessToken = await vaultLogin({ fetchImpl, base, username, apiKey });
+  const token = accessToken || await vaultLogin({ fetchImpl, base, username, apiKey });
 
   if (source === "MakerWorld") {
     const resolved = await makerWorldDownload({ pageUrl, requestPageJson });
@@ -211,9 +281,9 @@ export async function captureModelPage({
     form.append("source_url", pageUrl);
     if (String(title ?? "").trim()) form.append("title", String(title).trim());
     form.append("file", blob, filename);
-    const uploaded = await fetchImpl(`${base}/api/v1/inbox/browser-upload`, {
+    const uploaded = await fetchVault(fetchImpl, base, "/api/v1/inbox/browser-upload", {
       method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${token}` },
       body: form,
     });
     if (!uploaded.ok) {
@@ -222,10 +292,10 @@ export async function captureModelPage({
     return { source, item: await uploaded.json(), inboxUrl: `${base}/inbox` };
   }
 
-  const captured = await fetchImpl(`${base}/api/v1/inbox`, {
+  const captured = await fetchVault(fetchImpl, base, "/api/v1/inbox", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
