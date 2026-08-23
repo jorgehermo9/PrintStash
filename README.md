@@ -360,3 +360,12 @@ in [Reverse proxy with TLS](https://www.printstash.org/docs/getting-started/inst
 ## License
 
 PrintStash is licensed under the [GNU AGPL-3.0](./LICENSE).
+
+## Trademark
+
+PrintStash is the name and mark of this self-hosted, open-source project, published here at
+[xiao-villamor/PrintStash](https://github.com/xiao-villamor/PrintStash) and
+[printstash.org](https://www.printstash.org). The project is not affiliated with, endorsed by,
+or connected to any separately hosted service using the PrintStash name. If you run a
+service that reuses the name, please distinguish it clearly from the self-hosted project so
+users are not misled.
