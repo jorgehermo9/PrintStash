@@ -53,6 +53,7 @@ from app.services.printer_provider import build_provider_registry, get_provider_
 from app.services.runtime_config import apply_overlay, ensure_jwt_secret, is_configured
 from app.services.setup_token import current_setup_token
 from app.services.storage_backend import init_backend
+from app.services.task_queue import LocalTaskQueue
 from app.services.trash import gc_soft_deleted
 
 logger = get_logger(__name__)
@@ -147,12 +148,16 @@ async def lifespan(app: FastAPI):
     app.state.printer_hub = hub
     watcher = LibraryWatcher()
     app.state.library_watcher = watcher
+    task_queue = LocalTaskQueue()
+    app.state.task_queue = task_queue
     app.state.gc_task = asyncio.create_task(
         _gc_loop(storage_maintenance_enabled=configured)
     )
     app.state.external_scan_task = asyncio.create_task(_external_scan_loop())
     app.state.notification_task = asyncio.create_task(run_dispatcher_loop())
-    app.state.fleet_scheduler_task = asyncio.create_task(run_fleet_scheduler())
+    app.state.fleet_scheduler_task = asyncio.create_task(
+        run_fleet_scheduler(task_queue)
+    )
     await hub.start_all()
     # Real-time folder watching is best-effort: never let it block startup.
     try:

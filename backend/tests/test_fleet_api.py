@@ -7,6 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 from sqlmodel import Session, select
@@ -606,6 +607,7 @@ def test_ambiguous_restart_cannot_be_retried_automatically(
 
 
 def test_fleet_enqueue_notifies_task_queue(
+    app: FastAPI,
     client: TestClient,
     auth_headers: dict[str, str],
     db_session: Session,
@@ -617,13 +619,13 @@ def test_fleet_enqueue_notifies_task_queue(
     db_session.commit()
     artifact = _gcode(db_session)
     enqueue = AsyncMock()
+    app.state.task_queue.enqueue = enqueue
 
-    with patch("app.api.v1.fleet.task_queue.enqueue", enqueue):
-        response = client.post(
-            "/api/v1/fleet/queue",
-            headers=auth_headers,
-            json={"file_id": artifact.id, "strategy": "least_busy"},
-        )
+    response = client.post(
+        "/api/v1/fleet/queue",
+        headers=auth_headers,
+        json={"file_id": artifact.id, "strategy": "least_busy"},
+    )
 
     assert response.status_code == 201
     enqueue.assert_awaited_once()

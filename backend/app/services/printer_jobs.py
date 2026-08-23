@@ -28,7 +28,7 @@ from app.services import fleet, printer_rbac, rbac
 from app.services.printer_files import upsert_printer_file
 from app.services.printer_provider import ProviderError, get_provider_client
 from app.services.storage_backend import get_backend
-from app.services.task_queue import task_queue
+from app.services.task_queue import TaskQueue
 
 logger = get_logger(__name__)
 
@@ -430,7 +430,7 @@ async def _dispatch_claimed(job_id: int) -> None:
     await asyncio.to_thread(_mark_dispatch_started, job_id, context)
 
 
-async def run_fleet_scheduler() -> None:
+async def run_fleet_scheduler(task_queue: TaskQueue) -> None:
     from app.services.backup import begin_mutating_operation, end_mutating_operation
 
     scheduler_status.running = True

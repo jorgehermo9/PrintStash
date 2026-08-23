@@ -33,7 +33,7 @@ from app.schemas.fleet import (
 from app.schemas.materials import CompatibilityRead, CompatibilityRequest
 from app.schemas.printers import PrintJobRead
 from app.services import fleet, materials, printer_rbac, rbac
-from app.services.task_queue import TaskEnvelope, task_queue
+from app.services.task_queue import TaskEnvelope, TaskQueue, get_task_queue
 
 router = APIRouter(prefix="/fleet", tags=["fleet"])
 
@@ -73,6 +73,7 @@ async def create_queue_job(
     payload: QueueJobCreate,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
+    task_queue: TaskQueue = Depends(get_task_queue),
 ) -> PrintJobRead:
     if not current_user.is_superuser:
         if payload.strategy != RoutingStrategy.MANUAL or payload.printer_id is None:
@@ -140,6 +141,7 @@ async def create_batch(
     payload: BatchCreate,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
+    task_queue: TaskQueue = Depends(get_task_queue),
 ) -> PrintBatchRead:
     if not current_user.is_superuser:
         if payload.strategy != RoutingStrategy.MANUAL or payload.printer_id is None:
@@ -246,6 +248,7 @@ async def retry_queue_job(
     job_id: int,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
+    task_queue: TaskQueue = Depends(get_task_queue),
 ) -> PrintJobRead:
     _require_queue_job_role(session, current_user, job_id, PrinterRole.PRINT)
     try:
@@ -264,6 +267,7 @@ async def decide_operator_release(
     payload: OperatorDecision,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
+    task_queue: TaskQueue = Depends(get_task_queue),
 ) -> PrintJobRead:
     _require_queue_job_role(session, current_user, job_id, PrinterRole.PRINT)
     try:

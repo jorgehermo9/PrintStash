@@ -51,13 +51,6 @@ def test_lifespan_starts_background_tasks_and_shuts_down_cleanly(
     _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.main import app
-    from app.services import printer_jobs
-    from app.services.task_queue import LocalTaskQueue
-
-    # The production queue is process-wide and may already be bound to an
-    # event loop used by an earlier scheduler test. Give this real lifespan a
-    # fresh local queue so its scheduler can bind and shut down on this loop.
-    monkeypatch.setattr(printer_jobs, "task_queue", LocalTaskQueue())
 
     user = User(
         username="lifespan-admin",
@@ -81,6 +74,7 @@ def test_lifespan_starts_background_tasks_and_shuts_down_cleanly(
             "external_scan_task",
             "notification_task",
             "fleet_scheduler_task",
+            "task_queue",
         ):
             assert hasattr(app.state, attr), f"app.state.{attr} not set by lifespan"
         assert not app.state.fleet_scheduler_task.done()
@@ -345,15 +339,9 @@ def test_lifespan_logs_reconciliation_warnings_and_survives_watcher_failure(
 
     monkeypatch.setattr(library_watcher.LibraryWatcher, "start_all", _boom_start_all)
 
-    # This test isn't exercising the fleet scheduler, and starting a second
-    # real run_fleet_scheduler() task in this process trips a pre-existing
-    # hazard: app.services.task_queue.task_queue is a module-level singleton
-    # whose asyncio.Queue binds to the first event loop that calls get()/put()
-    # on it — a second TestClient lifespan on a different loop (as
-    # test_lifespan_starts_background_tasks_and_shuts_down_cleanly does in
-    # this same file) then fails with "bound to a different event loop".
-    # Stub it out here rather than touching that production singleton.
-    async def _noop_scheduler() -> None:
+    # This test isn't exercising the fleet scheduler; keep it from racing the
+    # warning assertions while retaining the production composition signature.
+    async def _noop_scheduler(_task_queue) -> None:
         return None
 
     monkeypatch.setattr(app_main, "run_fleet_scheduler", _noop_scheduler)

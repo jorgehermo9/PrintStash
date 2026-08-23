@@ -311,9 +311,11 @@ def app() -> FastAPI:
     """Return the FastAPI app with in-memory DB, printer hub attached."""
     from app.main import app as _app
     from app.services.printer_hub import PrinterHub
+    from app.services.task_queue import LocalTaskQueue
 
     hub = PrinterHub()
     _app.state.printer_hub = hub
+    _app.state.task_queue = LocalTaskQueue()
     return _app
 
 

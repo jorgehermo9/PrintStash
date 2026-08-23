@@ -345,20 +345,15 @@ def test_run_fleet_scheduler_dispatches_then_waits_on_task_queue(
         return result
 
     class _NeverReadyQueue:
-        # The real module-level task_queue's asyncio.Queue is a singleton
-        # that can end up bound to a previous test's (now-closed) event
-        # loop; stub it out so this test only exercises run_fleet_scheduler's
-        # own tick logic, not that cross-loop hazard.
         async def dequeue(self):  # noqa: ANN201 - never resolves before the 2s timeout
             await asyncio.sleep(10)
 
     monkeypatch.setattr(printer_jobs, "dispatch_next", fake_dispatch_next)
-    monkeypatch.setattr(printer_jobs, "task_queue", _NeverReadyQueue())
     printer_jobs.scheduler_status.running = False
     printer_jobs.scheduler_status.last_dispatch_at = None
 
     async def _run() -> None:
-        task = asyncio.create_task(printer_jobs.run_fleet_scheduler())
+        task = asyncio.create_task(printer_jobs.run_fleet_scheduler(_NeverReadyQueue()))
         # Let it dispatch once, then fall into the task_queue.dequeue() wait
         # (2s timeout) at least once before cancelling.
         await asyncio.sleep(0.05)
@@ -382,18 +377,15 @@ def test_run_fleet_scheduler_survives_a_bad_tick(
         raise RuntimeError("simulated tick failure")
 
     class _NeverReadyQueue:
-        # See test_run_fleet_scheduler_dispatches_then_waits_on_task_queue —
-        # isolates this test from the real task_queue singleton's cross-loop hazard.
         async def dequeue(self):  # noqa: ANN201
             await asyncio.sleep(10)
 
     monkeypatch.setattr(printer_jobs, "dispatch_next", failing_dispatch_next)
-    monkeypatch.setattr(printer_jobs, "task_queue", _NeverReadyQueue())
     printer_jobs.scheduler_status.running = False
     printer_jobs.scheduler_status.last_error = None
 
     async def _run() -> None:
-        task = asyncio.create_task(printer_jobs.run_fleet_scheduler())
+        task = asyncio.create_task(printer_jobs.run_fleet_scheduler(_NeverReadyQueue()))
         await asyncio.sleep(0.05)
         assert printer_jobs.scheduler_status.last_error == "RuntimeError"
         assert printer_jobs.scheduler_status.running is True  # loop kept going
