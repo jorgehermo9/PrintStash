@@ -89,8 +89,9 @@ def backup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Back
     SQLModel.metadata.create_all(engine)
     override_session_factory(SQLiteSessionFactory(engine))
 
-    # Reset cached singletons so they pick up our overlay.
-    monkeypatch.setattr(storage_backend, "_backend", None, raising=False)
+    # The application composition root binds storage after applying the
+    # runtime overlay. This fixture owns an equivalent isolated composition.
+    storage_backend.bind_backend(storage_backend.LocalStorageBackend())
     monkeypatch.setattr(backup, "_backup_s3", None, raising=False)
     # Real restores wait a grace period for in-flight jobs to finish; tests
     # don't need to pay that wall-clock cost.
