@@ -239,6 +239,12 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     _overlay["secrets_key"] = "printstash-test-secrets-key"
     _reset_test_storage()
     _truncate_all()
+    # Production binds storage during lifespan. Unit tests exercise services
+    # directly, so bind the local adapter explicitly after every reset instead
+    # of letting get_backend() construct infrastructure on first access.
+    from app.services.storage_backend import LocalStorageBackend, bind_backend
+
+    bind_backend(LocalStorageBackend())
     # Drop the process-wide httpx client so a test that drives async egress in
     # its own asyncio.run() loop doesn't inherit one bound to a prior (closed)
     # loop — the cache only rebinds on is_closed, which a closed loop doesn't

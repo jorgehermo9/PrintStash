@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.db.models import Model
 from app.db.scopes import live, trashed
+from app.services import storage_backend
 from app.services.storage_backend import (
     CreationReceipt,
     LocalStorageBackend,
@@ -47,6 +48,50 @@ class _FakeRemoteBackend(LocalStorageBackend):
 
     def create_stream(self, src, key: str):
         return LocalStorageBackend().create_stream(src, str(self._resolve(key)))
+
+
+def test_get_backend_requires_explicit_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(storage_backend, "_backend", None)
+
+    with pytest.raises(RuntimeError, match="storage_backend_not_bound"):
+        storage_backend.get_backend()
+
+    bound = LocalStorageBackend()
+    assert storage_backend.bind_backend(bound) is bound
+    assert storage_backend.get_backend() is bound
+
+
+def test_create_backend_selects_adapter_without_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Local:
+        pass
+
+    class _S3:
+        pass
+
+    monkeypatch.setattr(storage_backend, "LocalStorageBackend", _Local)
+    monkeypatch.setattr(storage_backend, "S3StorageBackend", _S3)
+
+    assert isinstance(storage_backend.create_backend("local"), _Local)
+    assert isinstance(storage_backend.create_backend("s3"), _S3)
+    assert isinstance(storage_backend.create_backend("unexpected"), _Local)
+
+
+def test_init_backend_validates_before_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    class _Backend:
+        def ensure_setup(self) -> None:
+            events.append("validated")
+
+    backend = _Backend()
+    monkeypatch.setattr(storage_backend, "_backend", None)
+    monkeypatch.setattr(storage_backend, "create_backend", lambda _name: backend)
+
+    assert storage_backend.init_backend() is backend
+    assert events == ["validated"]
+    assert storage_backend.get_backend() is backend
 
 
 def test_local_backend_local_path_yields_real_path(tmp_path: Path) -> None:

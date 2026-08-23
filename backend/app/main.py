@@ -52,7 +52,11 @@ from app.services.printer_jobs import reconcile_stranded_dispatches, run_fleet_s
 from app.services.printer_provider import build_provider_registry, get_provider_client
 from app.services.runtime_config import apply_overlay, ensure_jwt_secret, is_configured
 from app.services.setup_token import current_setup_token
-from app.services.storage_backend import init_backend
+from app.services.storage_backend import (
+    LocalStorageBackend,
+    S3StorageBackend,
+    bind_backend,
+)
 from app.services.task_queue import LocalTaskQueue
 from app.services.trash import gc_soft_deleted
 
@@ -123,8 +127,14 @@ async def lifespan(app: FastAPI):
     stranded_dispatches = reconcile_stranded_dispatches()
     if stranded_dispatches:
         logger.warning("reconciled %d stranded fleet dispatch(es)", stranded_dispatches)
-    # Initialise storage backend (creates dirs or validates S3 bucket).
-    _backend = init_backend()
+    # Compose storage explicitly after the runtime overlay is active.  The
+    # compatibility facade is bound only after setup validation succeeds.
+    if settings.storage_backend == "s3":
+        storage_backend = S3StorageBackend()
+    else:
+        storage_backend = LocalStorageBackend()
+    storage_backend.ensure_setup()
+    _backend = bind_backend(storage_backend)
     if not configured:
         logger.warning(
             "vault is unconfigured — open the web UI and enter this setup token: %s",
