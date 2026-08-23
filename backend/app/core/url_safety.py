@@ -20,6 +20,7 @@ def is_public_url(url: str) -> bool:
     """Return whether a URL resolves only to allowed public addresses."""
     return _networking.is_public_url(url, ip_validator=is_public_ip)
 
+
 __all__ = [
     "PinnedTarget",
     "UnsafeUrlError",

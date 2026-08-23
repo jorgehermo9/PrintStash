@@ -109,11 +109,17 @@ jobs:
       - name: Lint backend
         run: uv run ruff check app/ tests/
 
+      - name: Check backend formatting (ratcheted modules)
+        run: uv run ruff format --check app/core app/db app/schemas packages/printstash-core/src
+
       - name: Check dependency declarations
         run: uv run deptry app/
 
       - name: Typecheck critical backend modules
         run: uv run pyright
+
+      - name: Typecheck backend with ty (advisory)
+        run: uv run ty check app/ --exit-zero --quiet
 
       - name: Test backend
         run: uv run pytest tests -v --cov=app --cov-report=term-missing --cov-fail-under=95
@@ -336,6 +342,9 @@ jobs:
           curl --fail --show-error --silent
           --retry 5 --retry-delay 1 --retry-all-errors
           http://localhost:3000/api/v1/health
+
+      - name: Verify frontend text compression
+        run: ./scripts/check_frontend_compression.sh
 
       - name: Compose logs on failure
         if: failure()

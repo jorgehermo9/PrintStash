@@ -87,10 +87,7 @@ def is_valid_container(path: Path) -> bool:
 
                 output_limit = _output_limit(block_type)
                 if output_limit is not None:
-                    if (
-                        data_len > _MAX_BLOCK_DATA
-                        or uncompressed_size > output_limit
-                    ):
+                    if data_len > _MAX_BLOCK_DATA or uncompressed_size > output_limit:
                         return False
                     data = file.read(data_len)
                     if compression not in {_COMP_NONE, _COMP_DEFLATE}:

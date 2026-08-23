@@ -1,12 +1,20 @@
 import { defineConfig } from "vitest/config";
-import react from "@vitejs/plugin-react";
+import babel from "@rolldown/plugin-babel";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const API_TARGET = process.env.VITE_API_URL || "http://localhost:8000";
 
 // Client SPA. Dev-server proxy replaces the old next.config rewrites; in prod
 // the built `dist/` is served behind the same reverse proxy as the API.
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(({ mode }) => ({
+  plugins: [
+    tailwindcss(),
+    react(),
+    // Keep the normal Oxc transform path fast. The compiler is an explicit
+    // profiling build until it demonstrates a real interaction-time win.
+    ...(mode === "react-compiler" ? [babel({ presets: [reactCompilerPreset()] })] : []),
+  ],
   resolve: {
     tsconfigPaths: true,
   },
@@ -57,4 +65,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

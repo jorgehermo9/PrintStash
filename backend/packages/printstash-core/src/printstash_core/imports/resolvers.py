@@ -276,9 +276,7 @@ def makerworld_collection_members(next_data: Any) -> list[CollectionMember]:
             return
         design = cast(
             dict[Any, Any],
-            entry.get("design")
-            if isinstance(entry.get("design"), dict)
-            else entry,
+            entry.get("design") if isinstance(entry.get("design"), dict) else entry,
         )
         design_id = design.get("id") or design.get("designId") or entry.get("designId")
         title = design.get("title") or design.get("designTitle") or design.get("name")

@@ -17,6 +17,18 @@ def test_frontend_nginx_uses_runtime_upload_limit_template() -> None:
     assert "client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};" in conf
 
 
+def test_frontend_nginx_compresses_static_text_but_not_api_responses() -> None:
+    conf = (_root() / "frontend" / "nginx.conf").read_text()
+
+    assert "gzip on;" in conf
+    assert "gzip_vary on;" in conf
+    assert "application/javascript" in conf
+    assert "text/css" in conf
+    assert "font/woff2" not in conf
+    api_location = conf.split("location /api/v1/ {", 1)[1].split("}", 1)[0]
+    assert "gzip off;" in api_location
+
+
 def test_frontend_image_defaults_to_backend_upload_limit() -> None:
     dockerfile = (_root() / "frontend" / "Dockerfile").read_text()
 

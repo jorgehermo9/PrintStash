@@ -44,6 +44,8 @@ cd backend
 uv run pytest tests -v
 uv run ruff check app/ tests/
 uv run ruff format app/ tests/
+uv run pyright
+uv run ty check app/  # advisory while ty is pre-1.0
 ```
 
 ```bash
