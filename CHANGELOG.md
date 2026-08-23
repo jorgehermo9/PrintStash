@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Security
+
+- Delegated printer administrators can no longer redirect provider endpoints or
+  forward stored credentials, view-only shares no longer expose original G-code,
+  blank JWT secrets are replaced automatically, and optional Postgres, SeaweedFS,
+  and migration MinIO services stay off host interfaces by default.
+
 ### Changed
 
 - **Frontend toolchain moved to oxc.** ESLint and `typescript-eslint` are
@@ -29,7 +36,6 @@
   disable runtime environment synchronization. This prevents the unprivileged
   API process from crash-looping on the root-owned build cache
   ([#77](https://github.com/xiao-villamor/PrintStash/issues/77)).
-
 ## 0.12.0
 
 **Back up before upgrading. This release includes additive database migrations and deployment/dependency changes; PostgreSQL, MinIO, and lite-image users should review [UPGRADE.md](./UPGRADE.md).**

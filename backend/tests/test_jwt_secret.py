@@ -55,6 +55,26 @@ def test_env_supplied_secret_is_left_alone(
     assert get_or_create(db_session).jwt_secret is None, "must not persist env secrets"
 
 
+@pytest.mark.parametrize(
+    "unsafe_secret",
+    ["", " \t ", f" {DEFAULT_JWT_SECRET} "],
+)
+def test_blank_or_disguised_default_secret_is_replaced(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_secret: str,
+) -> None:
+    monkeypatch.setattr(settings._frozen, "jwt_secret", unsafe_secret)
+
+    ensure_jwt_secret(db_session)
+
+    stored = get_or_create(db_session).jwt_secret
+    assert stored
+    assert len(stored) >= 32
+    assert settings.jwt_secret == stored
+    assert settings.jwt_secret != unsafe_secret
+
+
 def test_two_installs_get_different_secrets(db_session: Session) -> None:
     ensure_jwt_secret(db_session)
     first = settings.jwt_secret

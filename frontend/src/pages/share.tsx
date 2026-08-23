@@ -85,9 +85,15 @@ export default function SharePage() {
     [gcodeFiles],
   );
   const canShowModel = !!meshFile;
-  const canShowGcode = !!selectedGcode;
-  const activeViewerMode: ShareViewerMode =
-    viewerMode === "gcode" && canShowGcode ? "gcode" : canShowModel ? "model" : "gcode";
+  const canShowGcode = !!selectedGcode && model?.allow_download === true;
+  const activeViewerMode: ShareViewerMode | null =
+    viewerMode === "gcode" && canShowGcode
+      ? "gcode"
+      : canShowModel
+        ? "model"
+        : canShowGcode
+          ? "gcode"
+          : null;
 
   if (loading) {
     return (

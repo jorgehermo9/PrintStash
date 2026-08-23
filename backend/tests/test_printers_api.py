@@ -192,6 +192,77 @@ class TestPrinterRbac:
         assert response.status_code == 200
         pause.assert_awaited_once()
 
+    @pytest.mark.parametrize(
+        "connection_update",
+        [
+            {"provider": "moonraker"},
+            {"moonraker_url": "http://attacker.invalid"},
+            {"api_key": "replacement"},
+            {"provider_variant": "generic"},
+            {"bambu_host": "attacker.invalid"},
+            {"bambu_serial": "serial"},
+            {"bambu_access_code": "code"},
+            {"prusalink_url": "http://attacker.invalid"},
+            {"prusalink_auth_mode": "api_key"},
+            {"prusalink_username": "username"},
+            {"prusalink_password": "password"},
+            {"prusalink_api_key": "replacement"},
+            {"elegoo_centauri_host": "attacker.invalid"},
+            {"elegoo_centauri_access_code": "code"},
+            {"elegoo_centauri_mainboard_id": "board"},
+            {"octoprint_url": "http://attacker.invalid"},
+            {"octoprint_api_key": "replacement"},
+        ],
+    )
+    def test_printer_admin_cannot_change_connection_settings(
+        self,
+        client: TestClient,
+        db_session: Session,
+        connection_update: dict[str, str],
+    ) -> None:
+        printer = Printer(
+            name="Shared",
+            moonraker_url="http://printer.local:7125",
+            api_key="original-secret",
+        )
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        headers = _user_headers(db_session, "delegated-admin")
+        _grant_printer(db_session, "delegated-admin", printer, PrinterRole.ADMIN)
+
+        response = client.patch(
+            f"/api/v1/printers/{printer.id}",
+            json=connection_update,
+            headers=headers,
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "admin_required"
+        db_session.refresh(printer)
+        assert printer.moonraker_url == "http://printer.local:7125"
+        assert printer.api_key == "original-secret"
+
+    def test_printer_admin_can_still_change_non_connection_metadata(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        printer = Printer(name="Shared", moonraker_url="http://printer.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        headers = _user_headers(db_session, "metadata-admin")
+        _grant_printer(db_session, "metadata-admin", printer, PrinterRole.ADMIN)
+
+        response = client.patch(
+            f"/api/v1/printers/{printer.id}",
+            json={"name": "Renamed", "notes": "Still delegated"},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "Renamed"
+        assert response.json()["notes"] == "Still delegated"
+
 
 class TestListPrinters:
     def test_list_empty(self, client: TestClient, auth_headers):

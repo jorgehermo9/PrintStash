@@ -41,6 +41,18 @@ def test_default_deployments_do_not_publish_api_port() -> None:
         assert api["expose"] == ["8000"]
 
 
+def test_optional_stateful_services_do_not_publish_host_ports() -> None:
+    root = _root()
+    default_config = yaml.safe_load((root / "docker-compose.yml").read_text())
+    for service_name in ("postgres", "seaweedfs"):
+        assert "ports" not in default_config["services"][service_name]
+
+    migration_config = yaml.safe_load(
+        (root / "docker-compose.migrate-minio.yml").read_text()
+    )
+    assert "ports" not in migration_config["services"]["minio"]
+
+
 def test_frontend_sets_browser_security_headers() -> None:
     conf = (_root() / "frontend" / "security-headers.conf").read_text()
 

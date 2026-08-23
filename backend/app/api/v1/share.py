@@ -106,6 +106,8 @@ def get_shared_gcode(
     f = share.share_file_or_404(session, link, file_id)
     if f.file_type != FileType.GCODE:
         raise HTTPException(status_code=404, detail="not_found")
+    if not link.allow_download:
+        raise HTTPException(status_code=403, detail="download_disabled")
     if not get_backend().exists(f.path):
         raise HTTPException(status_code=410, detail="file_blob_missing")
     return _serve_file(f.path, f.original_filename, media_type="text/plain")

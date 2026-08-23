@@ -121,7 +121,8 @@ def ensure_jwt_secret(session: Session) -> None:
     Refusing to boot instead would brick every existing install, since the
     compose files default ``VAULT_JWT_SECRET`` to the shipped value.
     """
-    if settings.jwt_secret != DEFAULT_JWT_SECRET:
+    configured_secret = settings.jwt_secret.strip()
+    if configured_secret and configured_secret != DEFAULT_JWT_SECRET:
         return
 
     config = get_or_create(session)

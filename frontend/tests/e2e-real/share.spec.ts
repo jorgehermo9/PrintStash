@@ -29,6 +29,7 @@ test("view-only vs downloadable public share links", async ({ page }) => {
   await expect(page.getByRole("heading", { name })).toBeVisible();
   await expect(page.getByText("Downloads are disabled for this link — view only.")).toBeVisible();
   await expect(page.getByRole("link", { name: /download/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "G-code" })).toBeDisabled();
 
   // Now a downloadable link.
   await openShareDialog(page, name);
@@ -38,6 +39,7 @@ test("view-only vs downloadable public share links", async ({ page }) => {
   await page.goto(downloadUrl);
   await expect(page.getByRole("heading", { name })).toBeVisible();
   await expect(page.getByRole("link", { name: /download/i }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "G-code" })).toBeEnabled();
 });
 
 test("revoking a share link breaks the public page", async ({ page }) => {

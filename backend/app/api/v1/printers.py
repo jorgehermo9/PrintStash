@@ -87,6 +87,38 @@ router = APIRouter(prefix="/printers", tags=["printers"])
 
 _DIAGNOSTIC_CHECK_TIMEOUT_SECONDS = 5.0
 
+_PRINTER_CONNECTION_FIELDS = frozenset(
+    {
+        "provider",
+        "moonraker_url",
+        "api_key",
+        "provider_variant",
+        "bambu_host",
+        "bambu_serial",
+        "bambu_access_code",
+        "prusalink_url",
+        "prusalink_auth_mode",
+        "prusalink_username",
+        "prusalink_password",
+        "prusalink_api_key",
+        "elegoo_centauri_host",
+        "elegoo_centauri_access_code",
+        "elegoo_centauri_mainboard_id",
+        "octoprint_url",
+        "octoprint_api_key",
+    }
+)
+
+
+def _require_superuser_for_connection_update(
+    payload: PrinterUpdate, current_user: User
+) -> None:
+    """Keep delegated printer admins inside the configured printer boundary."""
+    if current_user.is_superuser:
+        return
+    if payload.model_fields_set & _PRINTER_CONNECTION_FIELDS:
+        raise HTTPException(status_code=403, detail="admin_required")
+
 
 def _provider_client(request: Request, printer: Printer):
     """Build a provider using this application's explicitly composed registry."""
@@ -639,6 +671,7 @@ async def update_printer(
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.ADMIN
     )
+    _require_superuser_for_connection_update(payload, current_user)
     p = get_or_404(session, Printer, printer_id, "printer_not_found")
     if payload.provider is not None:
         p.provider = payload.provider

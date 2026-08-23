@@ -153,12 +153,40 @@ class TestSharedDownload:
 
 
 class TestSharedGcode:
+    def test_view_only_share_cannot_fetch_original_gcode(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        from app.services.storage_backend import get_backend
+
+        model = _make_model(db_session, slug="gcode-view-only", hash_="5a" * 32)
+        key = "share-gcode-view-only.gcode"
+        get_backend().write_bytes(b"G1 X0 Y0\n", key)
+        gcode_file = _make_file(
+            db_session,
+            model,
+            filename="private.gcode",
+            ftype="gcode",
+            path=key,
+        )
+        created = _create_share(
+            client, auth_headers, model.id, allow_download=False
+        )
+
+        resp = client.get(
+            f"/api/v1/share/{created['token']}/files/{gcode_file.id}/gcode"
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "download_disabled"
+
     def test_wrong_file_type_404(
         self, client: TestClient, db_session: Session, auth_headers
     ) -> None:
         model = _make_model(db_session, slug="gcode-wrong-type", hash_="6" * 64)
         stl_file = _make_file(db_session, model, filename="x.stl", ftype="stl")
-        created = _create_share(client, auth_headers, model.id)
+        created = _create_share(
+            client, auth_headers, model.id, allow_download=True
+        )
         resp = client.get(
             f"/api/v1/share/{created['token']}/files/{stl_file.id}/gcode"
         )
@@ -170,7 +198,9 @@ class TestSharedGcode:
     ) -> None:
         model = _make_model(db_session, slug="gcode-missing-blob", hash_="7" * 64)
         gcode_file = _make_file(db_session, model, filename="x.gcode", ftype="gcode")
-        created = _create_share(client, auth_headers, model.id)
+        created = _create_share(
+            client, auth_headers, model.id, allow_download=True
+        )
         resp = client.get(
             f"/api/v1/share/{created['token']}/files/{gcode_file.id}/gcode"
         )
@@ -186,7 +216,9 @@ class TestSharedGcode:
         key = "share-gcode-ok.gcode"
         get_backend().write_bytes(b"G1 X0 Y0\n", key)
         gcode_file = _make_file(db_session, model, filename="x.gcode", ftype="gcode", path=key)
-        created = _create_share(client, auth_headers, model.id)
+        created = _create_share(
+            client, auth_headers, model.id, allow_download=True
+        )
         resp = client.get(
             f"/api/v1/share/{created['token']}/files/{gcode_file.id}/gcode"
         )
