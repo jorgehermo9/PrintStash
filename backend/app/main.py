@@ -50,6 +50,7 @@ from app.services.notifications import run_dispatcher_loop
 from app.services.printer_hub import PrinterHub
 from app.services.printer_jobs import reconcile_stranded_dispatches, run_fleet_scheduler
 from app.services.printer_provider import build_provider_registry, get_provider_client
+from app.services.realtime import InProcessBus
 from app.services.runtime_config import apply_overlay, ensure_jwt_secret, is_configured
 from app.services.setup_token import current_setup_token
 from app.services.storage_backend import (
@@ -151,7 +152,11 @@ async def lifespan(app: FastAPI):
     printer_provider_registry = build_provider_registry()
     app.state.printer_provider_registry = printer_provider_registry
     provider_builder = partial(get_provider_client, registry=printer_provider_registry)
-    hub = PrinterHub(provider_builder=provider_builder)
+    hub = PrinterHub(
+        InProcessBus(),
+        session_factory=get_session_factory(),
+        provider_builder=provider_builder,
+    )
     app.state.printer_hub = hub
     watcher = LibraryWatcher()
     app.state.library_watcher = watcher

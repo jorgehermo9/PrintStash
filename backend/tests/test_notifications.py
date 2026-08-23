@@ -24,7 +24,6 @@ from app.db.models import (
     PrinterStatus,
 )
 from app.services import notifications
-from app.services.printer_hub import PrinterHub
 from app.services.runtime_config import set_notifications_enabled
 
 # --------------------------------------------------------------------------- #
@@ -541,7 +540,7 @@ async def test_run_dispatcher_loop_survives_tick_error(db_session):
 # --------------------------------------------------------------------------- #
 
 
-def test_offline_edge_fires_once_per_transition(db_session):
+def test_offline_edge_fires_once_per_transition(db_session, hub):
     set_notifications_enabled(db_session, True)
     p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.READY)
     db_session.add(p)
@@ -549,19 +548,19 @@ def test_offline_edge_fires_once_per_transition(db_session):
     db_session.refresh(p)
     _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
 
-    PrinterHub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
-    PrinterHub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)  # no re-fire
+    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
+    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)  # no re-fire
     db_session.expire_all()
     assert len(_deliveries(db_session)) == 1
 
     # Recover then drop again -> a second, distinct event.
-    PrinterHub._mark_status_db(p.id, PrinterStatus.READY, None)
-    PrinterHub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
+    hub._mark_status_db(p.id, PrinterStatus.READY, None)
+    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
     db_session.expire_all()
     assert len(_deliveries(db_session)) == 2
 
 
-def test_print_completed_fires_once_and_is_idempotent(db_session):
+def test_print_completed_fires_once_and_is_idempotent(db_session, hub):
     set_notifications_enabled(db_session, True)
     p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.PRINTING)
     db_session.add(p)
@@ -570,7 +569,6 @@ def test_print_completed_fires_once_and_is_idempotent(db_session):
     _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
 
     stats = {"total_duration": 3600, "filament_used": 1000, "filename": "x.gcode"}
-    hub = PrinterHub()
     hub._sync_active_job_db(p.id, "complete", "x.gcode", 1.0, stats)
     hub._sync_active_job_db(p.id, "complete", "x.gcode", 1.0, stats)  # idempotent
     db_session.expire_all()
@@ -580,7 +578,7 @@ def test_print_completed_fires_once_and_is_idempotent(db_session):
     assert deliveries[0].print_job_id is not None
 
 
-def test_cancelled_emits_distinct_event(db_session):
+def test_cancelled_emits_distinct_event(db_session, hub):
     set_notifications_enabled(db_session, True)
     p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.PRINTING)
     db_session.add(p)
@@ -590,7 +588,7 @@ def test_cancelled_emits_distinct_event(db_session):
     _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
 
     stats = {"filename": "y.gcode"}
-    PrinterHub()._sync_active_job_db(p.id, "cancelled", "y.gcode", 0.4, stats)
+    hub._sync_active_job_db(p.id, "cancelled", "y.gcode", 0.4, stats)
     db_session.expire_all()
     assert _deliveries(db_session) == []
 
@@ -938,7 +936,7 @@ def test_record_channel_test_noop_when_channel_missing():
     notifications._record_channel_test(999_999_999, True, None)
 
 
-def test_offline_not_fired_from_unknown(db_session):
+def test_offline_not_fired_from_unknown(db_session, hub):
     set_notifications_enabled(db_session, True)
     p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.UNKNOWN)
     db_session.add(p)
@@ -946,6 +944,6 @@ def test_offline_not_fired_from_unknown(db_session):
     db_session.refresh(p)
     _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
 
-    PrinterHub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
+    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
     db_session.expire_all()
     assert _deliveries(db_session) == []

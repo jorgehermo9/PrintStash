@@ -22,6 +22,7 @@ from app.core.config import _overlay
 from app.db.models import Printer, PrinterProvider, PrinterStatus, User
 from app.services import storage_backend
 from app.services.auth import create_access_token, hash_password
+from app.services.realtime import InProcessBus
 
 
 @pytest.fixture
@@ -77,6 +78,8 @@ def test_lifespan_starts_background_tasks_and_shuts_down_cleanly(
             "task_queue",
         ):
             assert hasattr(app.state, attr), f"app.state.{attr} not set by lifespan"
+        assert isinstance(app.state.printer_hub.bus, InProcessBus)
+        assert app.state.printer_hub._session_factory is app_main.get_session_factory()
         assert not app.state.fleet_scheduler_task.done()
         assert not app.state.gc_task.done()
 

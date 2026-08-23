@@ -20,10 +20,31 @@ from app.db.models import (
     PrintJob,
     PrintJobState,
 )
+from app.db.session import get_session_factory
 from app.services import printer_hub as printer_hub_module
 from app.services.printer_hub import PrinterHub
+from app.services.realtime import InProcessBus
 from app.services.spoolman import SpoolmanError
 from tests.test_fleet_api import _gcode
+
+
+def test_hub_uses_its_injected_session_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lifecycle database access stays behind the construction seam."""
+    factory = get_session_factory()
+    hub = PrinterHub(InProcessBus(), session_factory=factory)
+
+    def _unexpected_global_lookup():
+        raise AssertionError("global session lookup")
+
+    monkeypatch.setattr(
+        printer_hub_module,
+        "get_session_factory",
+        _unexpected_global_lookup,
+    )
+
+    asyncio.run(hub.start_all())
 
 
 def test_provider_material_state_sync_creates_updates_and_removes_rows(
@@ -393,11 +414,8 @@ class TestPrinterHubLifecycle:
             async def _sleep(_seconds: float) -> None:
                 stop.set()
 
+            hub._provider_builder = lambda _printer: FakeClient()
             with (
-                patch(
-                    "app.services.printer_hub.get_provider_client",
-                    return_value=FakeClient(),
-                ),
                 patch("app.services.printer_hub.asyncio.sleep", side_effect=_sleep),
             ):
                 await hub._run_printer(p.id, stop)
@@ -451,11 +469,8 @@ class TestPrinterHubChaosReconnect:
             async def _sleep(seconds: float) -> None:
                 sleep_calls.append(seconds)
 
+            hub._provider_builder = lambda _printer: FlakyClient()
             with (
-                patch(
-                    "app.services.printer_hub.get_provider_client",
-                    return_value=FlakyClient(),
-                ),
                 patch("app.services.printer_hub.asyncio.sleep", side_effect=_sleep),
             ):
                 await hub._run_printer(p.id, stop)

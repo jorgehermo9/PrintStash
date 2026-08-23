@@ -39,7 +39,7 @@ from app.db.models import (
     PrintJobState,
 )
 from app.db.scopes import live
-from app.db.session import get_session_factory
+from app.db.session import SessionFactory, get_session_factory
 from app.services import filament as filament_svc
 from app.services import (
     gcode_parser,
@@ -149,10 +149,17 @@ class PrinterHub:
         self,
         bus: RealtimeBus | None = None,
         *,
+        session_factory: SessionFactory | None = None,
         provider_builder: Callable[[Printer], PrinterProviderClient] | None = None,
     ) -> None:
         self.snapshots: Dict[int, Dict[str, Any]] = {}
+        # Runtime composition always supplies both adapters.  The defaults
+        # retain direct construction for extensions and focused tests; make
+        # them required once those callers use the composition root too.
         self.bus: RealtimeBus = bus if bus is not None else InProcessBus()
+        self._session_factory = (
+            session_factory if session_factory is not None else get_session_factory()
+        )
         self._provider_builder = provider_builder
         self.tasks: Dict[int, asyncio.Task] = {}
         self.stop_events: Dict[int, asyncio.Event] = {}
@@ -239,7 +246,7 @@ class PrinterHub:
         await self.add_printer(printer_id)
 
     async def start_all(self) -> None:
-        with get_session_factory().session() as session:
+        with self._session_factory.session() as session:
             ids = [
                 p.id
                 for p in session.exec(
@@ -262,7 +269,7 @@ class PrinterHub:
         # Load the printer row (re-load on each reconnect to pick up edits).
         reconnect_delay = 1.0
         while not stop.is_set():
-            with get_session_factory().session() as session:
+            with self._session_factory.session() as session:
                 printer = session.get(Printer, printer_id)
                 if printer is None:
                     logger.info("printer worker[%s] gone; exiting", printer_id)
@@ -397,9 +404,8 @@ class PrinterHub:
             {"type": "update", "printer_id": printer_id, "data": snap},
         )
 
-    @staticmethod
-    def _spoolman_config() -> tuple[str, str | None] | None:
-        with get_session_factory().session() as session:
+    def _spoolman_config(self) -> tuple[str, str | None] | None:
+        with self._session_factory.session() as session:
             if not runtime_config.spoolman_enabled(session):
                 return None
             config = runtime_config.spoolman_config(session)
@@ -454,13 +460,13 @@ class PrinterHub:
             )
         return normalized
 
-    @staticmethod
     def _sync_material_state_db(
+        self,
         printer_id: int,
         slots: list[dict[str, Any]],
         tools: list[object] | None = None,
     ) -> None:
-        with get_session_factory().session() as session:
+        with self._session_factory.session() as session:
             printer = session.get(Printer, printer_id)
             if printer is None or not printer.provider_material_sync_enabled:
                 return
@@ -604,11 +610,10 @@ class PrinterHub:
         finally:
             end_mutating_operation()
 
-    @staticmethod
     def _mark_status_db(
-        printer_id: int, status: PrinterStatus, error: str | None
+        self, printer_id: int, status: PrinterStatus, error: str | None
     ) -> None:
-        with get_session_factory().session() as session:
+        with self._session_factory.session() as session:
             p = session.get(Printer, printer_id)
             if p is None:
                 return
@@ -703,7 +708,7 @@ class PrinterHub:
         progress: float,
         print_stats: Dict[str, Any],
     ) -> tuple[int, str] | None:
-        with get_session_factory().session() as session:
+        with self._session_factory.session() as session:
             job = None
             provider_job_id = next(
                 (
@@ -984,14 +989,15 @@ class PrinterHub:
             )
             await asyncio.to_thread(self._mark_capture_failed, job_id, detail)
 
-    @staticmethod
-    def _persist_external_artifact(job_id: int, staged: Path, filename: str) -> None:
+    def _persist_external_artifact(
+        self, job_id: int, staged: Path, filename: str
+    ) -> None:
         lowered = filename.lower()
         file_type = FileType.THREE_MF if lowered.endswith(".3mf") else FileType.GCODE
         blob_hash = sha256_file(staged)
         meta = gcode_parser.parse(staged) if file_type == FileType.GCODE else {}
         thumb_bytes = thumbnail.extract(staged) if file_type == FileType.GCODE else None
-        with get_session_factory().session() as session:
+        with self._session_factory.session() as session:
             job = session.get(PrintJob, job_id)
             if job is None or job.source != "external":
                 return
@@ -1031,9 +1037,8 @@ class PrinterHub:
             session.add(job)
             session.commit()
 
-    @staticmethod
-    def _mark_capture_failed(job_id: int, error: str) -> None:
-        with get_session_factory().session() as session:
+    def _mark_capture_failed(self, job_id: int, error: str) -> None:
+        with self._session_factory.session() as session:
             job = session.get(PrintJob, job_id)
             if job is None or job.artifact_evidence not in (
                 "capture_pending",

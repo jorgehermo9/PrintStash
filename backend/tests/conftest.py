@@ -321,11 +321,14 @@ def app() -> FastAPI:
         build_provider_registry,
         get_provider_client,
     )
+    from app.services.realtime import InProcessBus
     from app.services.task_queue import LocalTaskQueue
 
     registry = build_provider_registry()
     _app.state.printer_provider_registry = registry
     hub = PrinterHub(
+        InProcessBus(),
+        session_factory=get_session_factory(),
         provider_builder=lambda printer: get_provider_client(printer, registry=registry)
     )
     _app.state.printer_hub = hub
@@ -340,7 +343,9 @@ def client(app: FastAPI) -> TestClient:
 
 @pytest.fixture
 def hub() -> PrinterHub:
-    return PrinterHub()
+    from app.services.realtime import InProcessBus
+
+    return PrinterHub(InProcessBus(), session_factory=get_session_factory())
 
 
 @pytest.fixture
