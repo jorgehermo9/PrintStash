@@ -5,6 +5,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from sqlalchemy import case, update
 from sqlmodel import select
@@ -26,11 +27,13 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.services import fleet, printer_rbac, rbac
 from app.services.printer_files import upsert_printer_file
-from app.services.printer_provider import ProviderError, get_provider_client
+from app.services.printer_provider import PrinterProviderClient, ProviderError
 from app.services.storage_backend import get_backend
 from app.services.task_queue import TaskQueue
 
 logger = get_logger(__name__)
+
+ProviderBuilder = Callable[[Printer], PrinterProviderClient]
 
 
 @dataclass
@@ -314,14 +317,14 @@ def _claim_next_sync() -> int | None:
         return int(candidate.id)
 
 
-async def dispatch_next() -> int | None:
+async def dispatch_next(provider_builder: ProviderBuilder) -> int | None:
     """Atomically claim and dispatch oldest eligible assigned fleet job."""
     job_id = await asyncio.to_thread(_claim_next_sync)
     if job_id is None:
         return None
 
     try:
-        await _dispatch_claimed(job_id)
+        await _dispatch_claimed(job_id, provider_builder)
         record_fleet_dispatch("started")
     except Exception as exc:  # noqa: BLE001 - terminal state must always persist
         code = (
@@ -395,13 +398,13 @@ def _mark_dispatch_started(job_id: int, context: DispatchContext) -> None:
         )
 
 
-async def _dispatch_claimed(job_id: int) -> None:
+async def _dispatch_claimed(job_id: int, provider_builder: ProviderBuilder) -> None:
     context = await asyncio.to_thread(_load_dispatch_context, job_id)
     printer = context.printer
     artifact = context.artifact
     remote_filename = context.remote_filename
 
-    provider = get_provider_client(printer)
+    provider = provider_builder(printer)
     if not provider.capabilities.can_upload or not provider.capabilities.can_start:
         raise ProviderError(
             "operation_not_supported_for_provider",
@@ -430,7 +433,9 @@ async def _dispatch_claimed(job_id: int) -> None:
     await asyncio.to_thread(_mark_dispatch_started, job_id, context)
 
 
-async def run_fleet_scheduler(task_queue: TaskQueue) -> None:
+async def run_fleet_scheduler(
+    task_queue: TaskQueue, provider_builder: ProviderBuilder
+) -> None:
     from app.services.backup import begin_mutating_operation, end_mutating_operation
 
     scheduler_status.running = True
@@ -441,7 +446,7 @@ async def run_fleet_scheduler(task_queue: TaskQueue) -> None:
                 continue
             scheduler_status.last_tick_at = utcnow()
             try:
-                dispatched = await dispatch_next()
+                dispatched = await dispatch_next(provider_builder)
                 scheduler_status.last_error = None
                 if dispatched is not None:
                     scheduler_status.last_dispatch_at = utcnow()

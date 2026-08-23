@@ -12,12 +12,14 @@ from app.services.elegoo_centauri import ElegooCentauriClient
 from app.services.printer_provider import (
     ElegooCentauriProvider,
     ProviderError,
+    build_provider_registry,
     get_provider_client,
 )
 from tests.e2e.fakes.mock_centauri import make_connector, start_cc1_server
 from tests.e2e.fakes.print_sim import PrintSim
 
 REMOTE = "demo.gcode"
+REGISTRY = build_provider_registry()
 
 
 def test_cc1_real_sdcp_websocket_round_trip(monkeypatch) -> None:
@@ -141,7 +143,7 @@ def test_carbon2_missing_access_code_rejected_at_build() -> None:
         elegoo_centauri_access_code=None,
     )
     with pytest.raises(ProviderError) as exc_info:
-        get_provider_client(printer)
+        get_provider_client(printer, registry=REGISTRY)
     assert exc_info.value.code == "provider_credentials_missing"
 
 

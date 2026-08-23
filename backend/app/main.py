@@ -150,11 +150,8 @@ async def lifespan(app: FastAPI):
     install_audit_listeners()
     printer_provider_registry = build_provider_registry()
     app.state.printer_provider_registry = printer_provider_registry
-    hub = PrinterHub(
-        provider_builder=partial(
-            get_provider_client, registry=printer_provider_registry
-        )
-    )
+    provider_builder = partial(get_provider_client, registry=printer_provider_registry)
+    hub = PrinterHub(provider_builder=provider_builder)
     app.state.printer_hub = hub
     watcher = LibraryWatcher()
     app.state.library_watcher = watcher
@@ -166,7 +163,7 @@ async def lifespan(app: FastAPI):
     app.state.external_scan_task = asyncio.create_task(_external_scan_loop())
     app.state.notification_task = asyncio.create_task(run_dispatcher_loop())
     app.state.fleet_scheduler_task = asyncio.create_task(
-        run_fleet_scheduler(task_queue)
+        run_fleet_scheduler(task_queue, provider_builder)
     )
     await hub.start_all()
     # Real-time folder watching is best-effort: never let it block startup.

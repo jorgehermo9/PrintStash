@@ -31,6 +31,15 @@ from app.db.models import (
 )
 from app.services import fleet
 from app.services.auth import create_access_token, hash_password
+from app.services.printer_provider import PrinterProviderClient
+
+
+def _provider_builder(provider: PrinterProviderClient):
+    return lambda _printer: provider
+
+
+def _unused_provider_builder(_printer: Printer) -> PrinterProviderClient:
+    raise AssertionError("provider construction should not be reached")
 
 
 def _gcode(session: Session) -> File:
@@ -274,12 +283,11 @@ def test_scheduler_dispatches_queued_job_once(
     provider.capabilities = capabilities_for_provider(printer.provider)
     with (
         patch("app.services.printer_jobs.get_backend", return_value=Backend()),
-        patch("app.services.printer_jobs.get_provider_client", return_value=provider),
     ):
         from app.services.printer_jobs import dispatch_next
 
-        assert asyncio.run(dispatch_next()) == queued["id"]
-        assert asyncio.run(dispatch_next()) is None
+        assert asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]
+        assert asyncio.run(dispatch_next(_provider_builder(provider))) is None
 
     job = client.get("/api/v1/fleet/queue", headers=auth_headers).json()[0]
     assert job["state"] == "started"
@@ -313,7 +321,7 @@ def test_scheduler_rechecks_drain_before_dispatch(
 
     from app.services.printer_jobs import dispatch_next
 
-    assert asyncio.run(dispatch_next()) is None
+    assert asyncio.run(dispatch_next(_unused_provider_builder)) is None
     job = next(
         row
         for row in client.get("/api/v1/fleet/queue", headers=auth_headers).json()
@@ -396,7 +404,9 @@ def test_dispatch_sql_does_not_block_the_event_loop(monkeypatch) -> None:
     monkeypatch.setattr(printer_jobs, "_claim_next_sync", _slow_claim)
 
     async def _run() -> None:
-        dispatch = asyncio.create_task(printer_jobs.dispatch_next())
+        dispatch = asyncio.create_task(
+            printer_jobs.dispatch_next(_unused_provider_builder)
+        )
         started = time.monotonic()
         await asyncio.sleep(0.02)
         assert time.monotonic() - started < 0.1
@@ -494,7 +504,7 @@ def test_failed_dispatch_can_be_retried(
     ).json()
     from app.services.printer_jobs import dispatch_next
 
-    assert asyncio.run(dispatch_next()) == queued["id"]
+    assert asyncio.run(dispatch_next(_unused_provider_builder)) == queued["id"]
     retried = client.post(
         f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
     )
@@ -529,7 +539,7 @@ def test_ambiguous_live_dispatch_cannot_be_retried_automatically(
         "app.services.printer_jobs._dispatch_claimed",
         AsyncMock(side_effect=DispatchOutcomeUnknownError()),
     ):
-        assert asyncio.run(dispatch_next()) == queued["id"]
+        assert asyncio.run(dispatch_next(_unused_provider_builder)) == queued["id"]
 
     db_session.expire_all()
     failed = db_session.get(PrintJob, queued["id"])
@@ -668,9 +678,8 @@ def test_dispatched_job_reuses_same_row_through_completion(
     provider.capabilities = capabilities_for_provider(printer.provider)
     with (
         patch("app.services.printer_jobs.get_backend", return_value=Backend()),
-        patch("app.services.printer_jobs.get_provider_client", return_value=provider),
     ):
-        assert asyncio.run(dispatch_next()) == queued["id"]
+        assert asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]
 
     hub = PrinterHub()
     hub._sync_active_job_db(  # noqa: SLF001 - lifecycle integration seam

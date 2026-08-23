@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -121,6 +122,11 @@ class TestProviderFactory:
             provider.value for provider in PrinterProvider
         }
 
+    def test_provider_client_requires_a_composed_registry(self):
+        parameter = inspect.signature(get_provider_client).parameters["registry"]
+
+        assert parameter.default is inspect.Parameter.empty
+
     def test_orm_record_is_copied_to_neutral_config(self):
         p = Printer(
             name="mk",
@@ -145,13 +151,17 @@ class TestProviderFactory:
 
         assert isinstance(client, MoonrakerProvider)
 
+    @pytest.fixture(autouse=True)
+    def _registry(self):
+        self.registry = build_provider_registry()
+
     def test_get_moonraker_provider(self):
         p = Printer(
             name="mk",
             provider=PrinterProvider.MOONRAKER,
             moonraker_url="http://10.0.0.1:7125",
         )
-        client = get_provider_client(p)
+        client = get_provider_client(p, registry=self.registry)
         assert isinstance(client, MoonrakerProvider)
 
     def test_get_bambu_provider(self):
@@ -163,7 +173,7 @@ class TestProviderFactory:
             bambu_serial="SN123",
             bambu_access_code="acc",
         )
-        client = get_provider_client(p)
+        client = get_provider_client(p, registry=self.registry)
         assert isinstance(client, BambuLanProvider)
 
     def test_get_prusalink_digest_provider(self):
@@ -175,7 +185,7 @@ class TestProviderFactory:
             prusalink_username="maker",
             prusalink_password="secret",
         )
-        client = get_provider_client(p)
+        client = get_provider_client(p, registry=self.registry)
         assert isinstance(client, PrusaLinkProvider)
 
     def test_prusalink_missing_credentials_rejected(self):
@@ -187,7 +197,7 @@ class TestProviderFactory:
             prusalink_username="maker",
         )
         with pytest.raises(ProviderError) as exc:
-            get_provider_client(p)
+            get_provider_client(p, registry=self.registry)
         assert exc.value.code == "provider_credentials_missing"
 
     def test_get_centauri_carbon_provider(self):
@@ -197,7 +207,7 @@ class TestProviderFactory:
             provider_variant="elegoo_centauri_carbon",
             elegoo_centauri_host="192.168.1.50",
         )
-        assert isinstance(get_provider_client(p), ElegooCentauriProvider)
+        assert isinstance(get_provider_client(p, registry=self.registry), ElegooCentauriProvider)
 
     def test_centauri_carbon_2_requires_access_code(self):
         p = Printer(
@@ -207,7 +217,7 @@ class TestProviderFactory:
             elegoo_centauri_host="192.168.1.51",
         )
         with pytest.raises(ProviderError) as exc:
-            get_provider_client(p)
+            get_provider_client(p, registry=self.registry)
         assert exc.value.code == "provider_credentials_missing"
 
     def test_missing_bambu_creds_raises(self):
@@ -217,7 +227,7 @@ class TestProviderFactory:
             moonraker_url="",
         )
         with pytest.raises(ProviderError, match="provider_credentials_missing"):
-            get_provider_client(p)
+            get_provider_client(p, registry=self.registry)
 
     def test_get_octoprint_provider(self):
         p = Printer(
@@ -226,7 +236,7 @@ class TestProviderFactory:
             octoprint_url="http://octopi.local",
             octoprint_api_key="key-123",
         )
-        client = get_provider_client(p)
+        client = get_provider_client(p, registry=self.registry)
         assert isinstance(client, OctoPrintProvider)
 
     def test_octoprint_missing_credentials_rejected(self):
@@ -236,7 +246,7 @@ class TestProviderFactory:
             octoprint_url="http://octopi.local",
         )
         with pytest.raises(ProviderError) as exc:
-            get_provider_client(p)
+            get_provider_client(p, registry=self.registry)
         assert exc.value.code == "provider_credentials_missing"
 
 

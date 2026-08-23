@@ -341,7 +341,7 @@ def test_lifespan_logs_reconciliation_warnings_and_survives_watcher_failure(
 
     # This test isn't exercising the fleet scheduler; keep it from racing the
     # warning assertions while retaining the production composition signature.
-    async def _noop_scheduler(_task_queue) -> None:
+    async def _noop_scheduler(_task_queue, _provider_builder) -> None:
         return None
 
     monkeypatch.setattr(app_main, "run_fleet_scheduler", _noop_scheduler)

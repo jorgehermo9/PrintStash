@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import get_session_factory
 from app.services.printer_hub import PrinterHub
+from app.services.printer_provider import build_provider_registry, get_provider_client
 from tests.e2e.fakes.mock_printer import create_app
 from tests.e2e.fakes.server import start_server
 
@@ -41,6 +42,13 @@ class _Backend:
     def download_to_path(self, _key: str, target: Path) -> Path:
         target.write_text("G28\n")
         return target
+
+
+REGISTRY = build_provider_registry()
+
+
+def _provider_builder(printer: Printer):
+    return get_provider_client(printer, registry=REGISTRY)
 
 
 def _gcode(session: Session, slug: str) -> File:
@@ -64,7 +72,7 @@ def _gcode(session: Session, slug: str) -> File:
 
 
 async def _run_hub(printer_id: int, body) -> None:
-    hub = PrinterHub()
+    hub = PrinterHub(provider_builder=_provider_builder)
     stop = asyncio.Event()
     task = asyncio.create_task(hub._run_printer(printer_id, stop))
     try:
@@ -148,8 +156,8 @@ def test_dispatch_to_two_emulated_printers_both_complete(
                 # Keep the pooled HTTP client and both printer hubs on the event
                 # loop that created them. Splitting this flow across separate
                 # asyncio.run() calls can reuse a client bound to a closed loop.
-                first = await dispatch_next()
-                second = await dispatch_next()
+                first = await dispatch_next(_provider_builder)
+                second = await dispatch_next(_provider_builder)
 
                 with get_session_factory().session() as s:
                     row1 = s.get(PrintJob, job1["id"])
@@ -157,7 +165,7 @@ def test_dispatch_to_two_emulated_printers_both_complete(
                     assert row1.printer_id == printer_a.id
                     assert row2.printer_id == printer_b.id
 
-                hub = PrinterHub()
+                hub = PrinterHub(provider_builder=_provider_builder)
                 stop = asyncio.Event()
                 tasks = [
                     asyncio.create_task(hub._run_printer(printer_a.id, stop)),
@@ -228,7 +236,7 @@ def test_draining_printer_is_skipped_by_least_busy_routing(
         with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
             from app.services.printer_jobs import dispatch_next
 
-            dispatched = asyncio.run(dispatch_next())
+            dispatched = asyncio.run(dispatch_next(_provider_builder))
             assert dispatched == queued["id"]
 
         with get_session_factory().session() as s:

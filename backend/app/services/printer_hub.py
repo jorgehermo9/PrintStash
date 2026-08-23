@@ -54,7 +54,6 @@ from app.services.hashing import sha256_file
 from app.services.printer_provider import (
     PrinterProviderClient,
     ProviderError,
-    get_provider_client,
 )
 from app.services.realtime import InProcessBus, RealtimeBus
 from app.services.runtime_config import auto_mark_known_good_enabled
@@ -269,11 +268,11 @@ class PrinterHub:
                     logger.info("printer worker[%s] gone; exiting", printer_id)
                     return
                 try:
-                    client = (
-                        self._provider_builder(printer)
-                        if self._provider_builder is not None
-                        else get_provider_client(printer)
-                    )
+                    if self._provider_builder is None:
+                        raise RuntimeError(
+                            "PrinterHub requires a provider builder from the composition root"
+                        )
+                    client = self._provider_builder(printer)
                 except ProviderError as exc:
                     await self._mark_status(
                         printer_id,

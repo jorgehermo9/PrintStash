@@ -27,7 +27,11 @@ from app.db.models import (
 )
 from app.db.session import get_session_factory
 from app.services.printer_hub import PrinterHub
-from app.services.printer_provider import ProviderError, get_provider_client
+from app.services.printer_provider import (
+    ProviderError,
+    build_provider_registry,
+    get_provider_client,
+)
 from tests.e2e.fakes.mock_prusalink import create_app
 from tests.e2e.fakes.server import start_server
 
@@ -43,6 +47,7 @@ def _use_threaded_db(threaded_hub_db: None) -> None:
 
 REMOTE = "demo.gcode"
 API_KEY = "prusa-test-key"
+REGISTRY = build_provider_registry()
 USERNAME = "maker"
 PASSWORD = "s3cret"
 
@@ -98,7 +103,9 @@ def _seed(db_session: Session, base_url: str, *, auth_mode: str) -> tuple[int, i
 
 
 async def _run_hub(printer_id: int, body) -> None:
-    hub = PrinterHub()
+    hub = PrinterHub(
+        provider_builder=lambda printer: get_provider_client(printer, registry=REGISTRY)
+    )
     stop = asyncio.Event()
     task = asyncio.create_task(hub._run_printer(printer_id, stop))
     try:
@@ -149,7 +156,9 @@ def test_send_print_completes(db_session: Session, auth_mode: str) -> None:
 
         async def _drive() -> None:
             with get_session_factory().session() as session:
-                provider = get_provider_client(session.get(Printer, printer_id))
+                provider = get_provider_client(
+                    session.get(Printer, printer_id), registry=REGISTRY
+                )
             await provider.start(REMOTE)
             await _run_hub(
                 printer_id, lambda: _wait_job_state(job_id, PrintJobState.COMPLETED)
@@ -178,7 +187,9 @@ def test_pause_then_resume_runs_to_completion(db_session: Session) -> None:
 
         async def _drive() -> None:
             with get_session_factory().session() as session:
-                provider = get_provider_client(session.get(Printer, printer_id))
+                provider = get_provider_client(
+                    session.get(Printer, printer_id), registry=REGISTRY
+                )
             await provider.start(REMOTE)
 
             async def body() -> None:
@@ -212,7 +223,9 @@ def test_cancel_marks_job_cancelled(db_session: Session) -> None:
 
         async def _drive() -> None:
             with get_session_factory().session() as session:
-                provider = get_provider_client(session.get(Printer, printer_id))
+                provider = get_provider_client(
+                    session.get(Printer, printer_id), registry=REGISTRY
+                )
             await provider.start(REMOTE)
 
             async def body() -> None:
@@ -260,7 +273,7 @@ def test_invalid_credentials_raise_authentication_error(
             prusalink_username=kwargs.get("username"),
             prusalink_password=kwargs.get("password"),
         )
-        client = get_provider_client(printer)
+        client = get_provider_client(printer, registry=REGISTRY)
 
         async def _query() -> None:
             with pytest.raises(ProviderError) as exc_info:

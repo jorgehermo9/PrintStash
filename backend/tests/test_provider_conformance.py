@@ -22,6 +22,7 @@ from app.services.printer_provider import (
     DelegatingProvider,
     PrinterProviderClient,
     ProviderError,
+    build_provider_registry,
     capabilities_for_provider,
     get_provider_client,
     provider_diagnostic_summary,
@@ -69,6 +70,7 @@ METHOD_ARGS: dict[str, tuple] = {
 }
 
 ALL_PROVIDERS = list(PrinterProvider)
+REGISTRY = build_provider_registry()
 
 
 def _printer(provider: PrinterProvider, **overrides) -> Printer:
@@ -77,7 +79,7 @@ def _printer(provider: PrinterProvider, **overrides) -> Printer:
 
 
 def _build(provider: PrinterProvider):
-    return get_provider_client(_printer(provider))
+    return get_provider_client(_printer(provider), registry=REGISTRY)
 
 
 def test_every_provider_is_covered():
@@ -93,7 +95,9 @@ class TestProviderConformance:
 
     def test_missing_credentials_are_rejected(self, provider):
         with pytest.raises(ProviderError) as exc:
-            get_provider_client(Printer(name="empty", provider=provider))
+            get_provider_client(
+                Printer(name="empty", provider=provider), registry=REGISTRY
+            )
         assert exc.value.code == "provider_credentials_missing"
 
     def test_capability_metadata_is_honest(self, provider):

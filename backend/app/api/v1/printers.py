@@ -11,10 +11,12 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
 )
+from printstash_core.printers import ProviderRegistry
 from sqlmodel import Session, select
 from starlette.concurrency import run_in_threadpool
 
@@ -84,6 +86,12 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/printers", tags=["printers"])
 
 _DIAGNOSTIC_CHECK_TIMEOUT_SECONDS = 5.0
+
+
+def _provider_client(request: Request, printer: Printer):
+    """Build a provider using this application's explicitly composed registry."""
+    registry: ProviderRegistry = request.app.state.printer_provider_registry
+    return get_provider_client(printer, registry=registry)
 
 
 def _validate_provider_config(p: Printer) -> None:
@@ -415,6 +423,7 @@ def farm_dashboard(
 )
 async def printer_diagnostics(
     printer_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict:
@@ -429,7 +438,7 @@ async def printer_diagnostics(
     checks: list[dict[str, object]] = []
 
     try:
-        provider = get_provider_client(p)
+        provider = _provider_client(request, p)
         checks.append({"name": "configuration", "ok": True})
     except ProviderError as exc:
         checks.append(
@@ -473,6 +482,7 @@ async def printer_diagnostics(
 )
 async def printer_config(
     printer_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> MoonrakerConfigRead:
@@ -489,7 +499,7 @@ async def printer_config(
         )
 
     try:
-        provider = get_provider_client(p)
+        provider = _provider_client(request, p)
         server_info, printer_info, server_config, klipper_config = await asyncio.gather(
             provider.server_info(),
             provider.info(),
@@ -835,6 +845,7 @@ def delete_printer_permission(
 async def send_to_printer(
     printer_id: int,
     payload: SendToPrinter,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> PrintJobRead:
@@ -842,7 +853,7 @@ async def send_to_printer(
         session, current_user, printer_id, PrinterRole.PRINT
     )
     p = get_or_404(session, Printer, printer_id, "printer_not_found")
-    provider = get_provider_client(p)
+    provider = _provider_client(request, p)
     if not provider.capabilities.can_upload:
         raise HTTPException(
             status_code=409,
@@ -986,6 +997,7 @@ async def send_to_printer(
 async def start_printer_file(
     printer_id: int,
     payload: StartPrinterFile,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> PrintJobRead:
@@ -993,7 +1005,7 @@ async def start_printer_file(
         session, current_user, printer_id, PrinterRole.PRINT
     )
     p = get_or_404(session, Printer, printer_id, "printer_not_found")
-    provider = get_provider_client(p)
+    provider = _provider_client(request, p)
     if not provider.capabilities.can_start:
         raise HTTPException(
             status_code=409,
@@ -1068,9 +1080,11 @@ async def start_printer_file(
     return PrintJobRead(**job.model_dump())
 
 
-async def _printer_control(printer_id: int, session: Session, action: str) -> dict:
+async def _printer_control(
+    request: Request, printer_id: int, session: Session, action: str
+) -> dict:
     p = get_or_404(session, Printer, printer_id, "printer_not_found")
-    client = get_provider_client(p)
+    client = _provider_client(request, p)
     cap_map = {
         "start": client.capabilities.can_start,
         "pause": client.capabilities.can_pause,
@@ -1119,13 +1133,14 @@ async def _printer_control(printer_id: int, session: Session, action: str) -> di
 )
 async def pause_printer(
     printer_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict:
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.CONTROL
     )
-    return await _printer_control(printer_id, session, "pause")
+    return await _printer_control(request, printer_id, session, "pause")
 
 
 @router.post(
@@ -1134,13 +1149,14 @@ async def pause_printer(
 )
 async def resume_printer(
     printer_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict:
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.CONTROL
     )
-    return await _printer_control(printer_id, session, "resume")
+    return await _printer_control(request, printer_id, session, "resume")
 
 
 @router.post(
@@ -1149,20 +1165,21 @@ async def resume_printer(
 )
 async def cancel_printer(
     printer_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict:
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.CONTROL
     )
-    return await _printer_control(printer_id, session, "cancel")
+    return await _printer_control(request, printer_id, session, "cancel")
 
 
-def _require_gcode_provider(session: Session, printer_id: int):
+def _require_gcode_provider(request: Request, session: Session, printer_id: int):
     p = get_or_404(session, Printer, printer_id, "printer_not_found")
     if p.deleted_at is not None:
         raise HTTPException(status_code=404, detail="printer_not_found")
-    provider = get_provider_client(p)
+    provider = _provider_client(request, p)
     if not provider.capabilities.can_send_gcode:
         raise HTTPException(
             status_code=409, detail="operation_not_supported_for_provider"
@@ -1188,13 +1205,14 @@ async def _run_gcode(provider, script: str) -> dict:
 async def set_printer_temperature(
     printer_id: int,
     payload: SetTemperature,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict:
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.CONTROL
     )
-    provider = _require_gcode_provider(session, printer_id)
+    provider = _require_gcode_provider(request, session, printer_id)
     code = "M104" if payload.heater == "extruder" else "M140"
     return await _run_gcode(provider, f"{code} S{payload.target:g}")
 
@@ -1206,13 +1224,14 @@ async def set_printer_temperature(
 async def home_printer(
     printer_id: int,
     payload: HomeAxes,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict:
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.CONTROL
     )
-    provider = _require_gcode_provider(session, printer_id)
+    provider = _require_gcode_provider(request, session, printer_id)
     script = "G28" if not payload.axes else "G28 " + " ".join(payload.axes.upper())
     return await _run_gcode(provider, script)
 
@@ -1223,13 +1242,14 @@ async def home_printer(
 )
 async def emergency_stop_printer(
     printer_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict:
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.CONTROL
     )
-    provider = _require_gcode_provider(session, printer_id)
+    provider = _require_gcode_provider(request, session, printer_id)
     try:
         await provider.emergency_stop()
     except ProviderError as exc:
@@ -1290,6 +1310,7 @@ def list_files_on_printer(
 )
 async def sync_files_on_printer(
     printer_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> List[PrinterFileRead]:
@@ -1297,7 +1318,7 @@ async def sync_files_on_printer(
         session, current_user, printer_id, PrinterRole.ADMIN
     )
     p = get_or_404(session, Printer, printer_id, "printer_not_found")
-    provider = get_provider_client(p)
+    provider = _provider_client(request, p)
     if not provider.capabilities.can_list_files:
         raise HTTPException(
             status_code=409,
@@ -1326,6 +1347,7 @@ async def sync_files_on_printer(
 async def delete_file_on_printer(
     printer_id: int,
     printer_file_id: int,
+    request: Request,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> List[PrinterFileRead]:
@@ -1333,7 +1355,7 @@ async def delete_file_on_printer(
         session, current_user, printer_id, PrinterRole.ADMIN
     )
     p = get_or_404(session, Printer, printer_id, "printer_not_found")
-    provider = get_provider_client(p)
+    provider = _provider_client(request, p)
     if not provider.capabilities.can_list_files:
         raise HTTPException(
             status_code=409,

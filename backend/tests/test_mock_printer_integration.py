@@ -20,6 +20,7 @@ from app.db.session import get_session_factory
 from app.services import runtime_config
 from app.services.moonraker import MoonrakerClient, MoonrakerError
 from app.services.printer_hub import PrinterHub
+from app.services.printer_provider import build_provider_registry, get_provider_client
 from tests.e2e.fakes.mock_printer import create_app
 from tests.e2e.fakes.server import start_server
 
@@ -113,7 +114,10 @@ async def _run_hub(printer_id: int, body) -> None:
     ``body`` is an async callback that issues HTTP commands against the mock and
     waits on job state; the hub task is always torn down afterward.
     """
-    hub = PrinterHub()
+    registry = build_provider_registry()
+    hub = PrinterHub(
+        provider_builder=lambda printer: get_provider_client(printer, registry=registry)
+    )
     stop = asyncio.Event()
     task = asyncio.create_task(hub._run_printer(printer_id, stop))
     try:

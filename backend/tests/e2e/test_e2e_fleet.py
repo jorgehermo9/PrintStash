@@ -36,11 +36,18 @@ from app.db.models import (
 )
 from app.services.printer_hub import PrinterHub
 from app.services.printer_jobs import dispatch_next, reconcile_stranded_dispatches
+from app.services.printer_provider import build_provider_registry, get_provider_client
 
 from .fakes.mock_printer import create_app
 from .fakes.server import start_server
 
 pytestmark = pytest.mark.e2e
+
+REGISTRY = build_provider_registry()
+
+
+def _provider_builder(printer: Printer):
+    return get_provider_client(printer, registry=REGISTRY)
 
 
 class _Backend:
@@ -135,11 +142,11 @@ async def test_two_printers_dispatch_and_complete_via_real_api(
         ).json()
 
         with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
-            dispatched_1 = await dispatch_next()
-            dispatched_2 = await dispatch_next()
+            dispatched_1 = await dispatch_next(_provider_builder)
+            dispatched_2 = await dispatch_next(_provider_builder)
             assert {dispatched_1, dispatched_2} == {job1["id"], job2["id"]}
 
-        hub = PrinterHub()
+        hub = PrinterHub(provider_builder=_provider_builder)
         stop = asyncio.Event()
         tasks = [
             asyncio.create_task(hub._run_printer(printer_a.id, stop)),
@@ -315,7 +322,7 @@ async def test_drain_mode_blocks_routing_via_api(api, superuser_headers, e2e_db)
         ).json()
 
         with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
-            dispatched = await dispatch_next()
+            dispatched = await dispatch_next(_provider_builder)
             assert dispatched == queued["id"]
 
         row = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
@@ -368,7 +375,7 @@ async def test_maintenance_window_blocks_manual_routing_via_api(
         )
     ).json()
 
-    dispatched = await dispatch_next()
+    dispatched = await dispatch_next(_provider_builder)
     assert dispatched is None
 
     row = next(

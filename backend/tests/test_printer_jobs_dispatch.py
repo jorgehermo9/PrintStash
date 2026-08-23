@@ -37,9 +37,18 @@ from app.services.printer_jobs import (
     transfer_artifact,
 )
 from app.services.printer_provider import (
+    PrinterProviderClient,
     ProviderCapabilities,
     ProviderError,
 )
+
+
+def _provider_builder(provider: PrinterProviderClient):
+    return lambda _printer: provider
+
+
+def _unused_provider_builder(_printer: Printer) -> PrinterProviderClient:
+    raise AssertionError("provider construction should not be reached")
 
 
 def _gcode(session: Session, slug: str = "dispatch-cube") -> File:
@@ -184,7 +193,9 @@ def test_dispatch_claimed_raises_when_printer_missing(db_session: Session) -> No
     db_session.commit()
 
     with pytest.raises(RuntimeError, match="queue_dependency_missing"):
-        asyncio.run(printer_jobs._dispatch_claimed(job.id))  # noqa: SLF001
+        asyncio.run(
+            printer_jobs._dispatch_claimed(job.id, _unused_provider_builder)
+        )  # noqa: SLF001
 
 
 def test_dispatch_claimed_raises_when_job_has_no_printer(db_session: Session) -> None:
@@ -201,7 +212,9 @@ def test_dispatch_claimed_raises_when_job_has_no_printer(db_session: Session) ->
     db_session.refresh(job)
 
     with pytest.raises(RuntimeError, match="queue_job_not_found"):
-        asyncio.run(printer_jobs._dispatch_claimed(job.id))  # noqa: SLF001
+        asyncio.run(
+            printer_jobs._dispatch_claimed(job.id, _unused_provider_builder)
+        )  # noqa: SLF001
 
 
 def _seeded_upload_job(db_session: Session) -> tuple[Printer, PrintJob]:
@@ -255,7 +268,7 @@ def test_dispatch_rechecks_printer_grant_after_enqueue(db_session: Session) -> N
     db_session.delete(permission)
     db_session.commit()
 
-    assert asyncio.run(printer_jobs.dispatch_next()) is None
+    assert asyncio.run(printer_jobs.dispatch_next(_unused_provider_builder)) is None
     db_session.refresh(job)
     assert job.state == PrintJobState.QUEUED
     assert job.blocked_reason == "printer_access_revoked"
@@ -270,9 +283,10 @@ def test_dispatch_claimed_raises_when_provider_cannot_upload_or_start(
         supported=frozenset()
     )  # no START/UPLOAD
 
-    with patch("app.services.printer_jobs.get_provider_client", return_value=provider):
-        with pytest.raises(ProviderError, match="operation_not_supported_for_provider"):
-            asyncio.run(printer_jobs._dispatch_claimed(job.id))  # noqa: SLF001
+    with pytest.raises(ProviderError, match="operation_not_supported_for_provider"):
+        asyncio.run(
+            printer_jobs._dispatch_claimed(job.id, _provider_builder(provider))
+        )  # noqa: SLF001
 
 
 def test_dispatch_claimed_raises_printer_not_ready_when_requires_ready_before_send(
@@ -290,9 +304,10 @@ def test_dispatch_claimed_raises_printer_not_ready_when_requires_ready_before_se
         "result": {"status": {"print_stats": {"state": "printing"}}}
     }
 
-    with patch("app.services.printer_jobs.get_provider_client", return_value=provider):
-        with pytest.raises(ProviderError, match="printer_not_ready"):
-            asyncio.run(printer_jobs._dispatch_claimed(job.id))  # noqa: SLF001
+    with pytest.raises(ProviderError, match="printer_not_ready"):
+        asyncio.run(
+            printer_jobs._dispatch_claimed(job.id, _provider_builder(provider))
+        )  # noqa: SLF001
 
 
 def test_dispatch_claimed_proceeds_when_ready_before_send_reports_idle(
@@ -319,10 +334,11 @@ def test_dispatch_claimed_proceeds_when_ready_before_send_reports_idle(
             return target
 
     with (
-        patch("app.services.printer_jobs.get_provider_client", return_value=provider),
         patch("app.services.printer_jobs.get_backend", return_value=_Backend()),
     ):
-        asyncio.run(printer_jobs._dispatch_claimed(job.id))  # noqa: SLF001
+        asyncio.run(
+            printer_jobs._dispatch_claimed(job.id, _provider_builder(provider))
+        )  # noqa: SLF001
 
     provider.upload.assert_awaited_once()
     provider.start.assert_awaited_once()
@@ -338,7 +354,7 @@ def test_run_fleet_scheduler_dispatches_then_waits_on_task_queue(
 ) -> None:
     calls: list[int | None] = []
 
-    async def fake_dispatch_next() -> int | None:
+    async def fake_dispatch_next(_provider_builder) -> int | None:
         # First tick "dispatches" (truthy), every tick after reports nothing queued.
         result = 42 if not calls else None
         calls.append(result)
@@ -353,7 +369,11 @@ def test_run_fleet_scheduler_dispatches_then_waits_on_task_queue(
     printer_jobs.scheduler_status.last_dispatch_at = None
 
     async def _run() -> None:
-        task = asyncio.create_task(printer_jobs.run_fleet_scheduler(_NeverReadyQueue()))
+        task = asyncio.create_task(
+            printer_jobs.run_fleet_scheduler(
+                _NeverReadyQueue(), _unused_provider_builder
+            )
+        )
         # Let it dispatch once, then fall into the task_queue.dequeue() wait
         # (2s timeout) at least once before cancelling.
         await asyncio.sleep(0.05)
@@ -373,7 +393,7 @@ def test_run_fleet_scheduler_dispatches_then_waits_on_task_queue(
 def test_run_fleet_scheduler_survives_a_bad_tick(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def failing_dispatch_next() -> int | None:
+    async def failing_dispatch_next(_provider_builder) -> int | None:
         raise RuntimeError("simulated tick failure")
 
     class _NeverReadyQueue:
@@ -385,7 +405,11 @@ def test_run_fleet_scheduler_survives_a_bad_tick(
     printer_jobs.scheduler_status.last_error = None
 
     async def _run() -> None:
-        task = asyncio.create_task(printer_jobs.run_fleet_scheduler(_NeverReadyQueue()))
+        task = asyncio.create_task(
+            printer_jobs.run_fleet_scheduler(
+                _NeverReadyQueue(), _unused_provider_builder
+            )
+        )
         await asyncio.sleep(0.05)
         assert printer_jobs.scheduler_status.last_error == "RuntimeError"
         assert printer_jobs.scheduler_status.running is True  # loop kept going
