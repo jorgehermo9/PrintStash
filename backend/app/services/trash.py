@@ -44,6 +44,7 @@ from app.services.storage_deletion import (
 )
 from app.services.storage_ownership import (
     UnsafeStorageDeleteError,
+    require_or_adopt_legacy_artifact,
     require_owned_key,
 )
 
@@ -103,6 +104,26 @@ def _preflight_primary_keys(session: Session, keys: Iterable[str]) -> None:
         raise UnsafeStorageDeleteError("storage_delete_access_unverified") from exc
     for key in exact_keys:
         require_owned_key(session, backend, key)
+
+
+def _preflight_primary_files(session: Session, files: Iterable[File]) -> None:
+    """Verify current receipts or reconstruct proof for pre-0.12 Artifacts."""
+    backend = get_backend()
+    rows = [file_row for file_row in files if not file_row.is_external]
+    if not rows:
+        return
+    try:
+        backend.verify_destructive_access(list(dict.fromkeys(row.path for row in rows)))
+    except Exception as exc:
+        raise UnsafeStorageDeleteError("storage_delete_access_unverified") from exc
+    for file_row in rows:
+        require_or_adopt_legacy_artifact(
+            session,
+            backend,
+            file_row.path,
+            expected_size=file_row.size_bytes,
+            expected_sha256=file_row.sha256,
+        )
 
 
 def trash_expires_at(
@@ -170,7 +191,7 @@ def hard_delete_file(
     file_id = int(file_row.id)
     if not file_row.is_external:
         if not ownership_preflighted:
-            _preflight_primary_keys(session, [file_row.path])
+            _preflight_primary_files(session, [file_row])
         # Once a multi-key purge starts, a late storage failure must leak the
         # uncertain remainder rather than roll back DB rows after earlier exact
         # objects were already removed.
@@ -323,10 +344,7 @@ def hard_delete_model(
     # Verify every required primary before deleting the first byte. This avoids
     # a mixed legacy/missing model producing a partially applied hard delete.
     if not ownership_preflighted:
-        _preflight_primary_keys(
-            session,
-            [file_row.path for file_row in file_rows if not file_row.is_external],
-        )
+        _preflight_primary_files(session, file_rows)
     model.thumbnail_file_id = None
     model.thumbnail_path = None
     session.add(model)
@@ -375,10 +393,7 @@ def hard_delete_expired_models(session: Session, retention_days: int) -> list[in
         ).all()
         # Preflight the entire batch before deleting the first object. One
         # legacy or remounted item must preserve every model in this purge.
-        _preflight_primary_keys(
-            session,
-            [file_row.path for file_row in file_rows if not file_row.is_external],
-        )
+        _preflight_primary_files(session, file_rows)
     purged_ids = [model.id for model in models if model.id is not None]
     for model in models:
         hard_delete_model(session, model, ownership_preflighted=True)

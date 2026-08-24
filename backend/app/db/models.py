@@ -951,9 +951,10 @@ class SystemConfig(SQLModel, table=True):
 class OwnedStorageObject(SQLModel, table=True):
     """Object-level proof recorded only after a create-only storage write.
 
-    Legacy rows intentionally have no entry. Their bytes are therefore never
-    eligible for automated deletion: database presence, naming, and directory
-    placement are claims, not proof that this installation created an object.
+    Legacy rows start without an entry. Local primary Artifacts may be adopted
+    later only when their bytes match the historical size + SHA-256 and the
+    backend can bind that content to a stable filesystem identity. Database
+    presence, naming, and directory placement alone remain insufficient proof.
     """
 
     __tablename__ = "owned_storage_objects"

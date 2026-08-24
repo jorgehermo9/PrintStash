@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
+import stat as stat_module
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
@@ -183,6 +185,18 @@ class StorageBackend(ABC):
         """Return whether the exact object still matches positive proof."""
         del receipt
         return False
+
+    def adopt_existing(
+        self, key: str, *, expected_size: int, expected_sha256: str
+    ) -> CreationReceipt:
+        """Create proof for a legacy object whose immutable content is known.
+
+        Backends must fail closed unless they can bind the verified content to
+        an identity that later deletion can compare atomically. This is a
+        compatibility seam for pre-ledger Artifacts, not a generic claim API.
+        """
+        del key, expected_size, expected_sha256
+        raise NotImplementedError("existing_storage_adoption_not_supported")
 
     def verify_destructive_access(self, keys: list[str]) -> None:
         """Prove delete capability without touching any pre-existing object."""
@@ -561,6 +575,55 @@ class LocalStorageBackend(StorageBackend):
         ):
             return False
         return True
+
+    def adopt_existing(
+        self, key: str, *, expected_size: int, expected_sha256: str
+    ) -> CreationReceipt:
+        """Adopt one pre-ledger local Artifact after content + inode proof.
+
+        The open uses ``O_NOFOLLOW`` where available and hashes through the
+        descriptor. Matching ``fstat`` snapshots before/after ensure the bytes
+        did not change while they were verified. The resulting receipt then
+        uses the same device/inode/ctime guard as a newly-created object.
+        """
+        path = Path(key)
+        self._assert_no_managed_escape(path)
+        namespace = self._owned_namespace(path)
+        if namespace is None:
+            raise StorageCollisionError("storage_key_outside_managed_root")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError as exc:
+            raise StorageCollisionError("legacy_storage_object_unavailable") from exc
+        try:
+            before = os.fstat(fd)
+            if not stat_module.S_ISREG(before.st_mode) or before.st_size != expected_size:
+                raise StorageCollisionError("legacy_storage_content_mismatch")
+            digest = hashlib.sha256()
+            while chunk := os.read(fd, 1024 * 1024):
+                digest.update(chunk)
+            after = os.fstat(fd)
+        finally:
+            os.close(fd)
+        identity = (before.st_dev, before.st_ino, before.st_ctime_ns, before.st_size)
+        if identity != (after.st_dev, after.st_ino, after.st_ctime_ns, after.st_size):
+            raise StorageCollisionError("legacy_storage_object_changed")
+        if digest.hexdigest() != expected_sha256.lower():
+            raise StorageCollisionError("legacy_storage_content_mismatch")
+        receipt = CreationReceipt(
+            key=str(path),
+            size=after.st_size,
+            token=expected_sha256.lower(),
+            backend="local",
+            namespace=namespace,
+            device=after.st_dev,
+            inode=after.st_ino,
+            ctime_ns=after.st_ctime_ns,
+        )
+        if not self.creation_matches(receipt):
+            raise StorageCollisionError("legacy_storage_object_changed")
+        return receipt
 
     def verify_destructive_access(self, keys: list[str]) -> None:
         # Probe every distinct parent because nested ACLs/read-only submounts

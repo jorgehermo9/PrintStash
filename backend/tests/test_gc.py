@@ -7,6 +7,7 @@ that PrintStash may delete it.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import timedelta
 from pathlib import Path
 
@@ -340,6 +341,41 @@ def test_gc_skips_legacy_candidate_without_blocking_verifiable_candidates(
     assert Path(legacy_path).read_bytes() == b"legacy-user-bytes"
     assert db_session.get(File, first_id) is None
     assert db_session.get(File, legacy.id) is not None
+
+
+def test_gc_adopts_and_purges_pre_ledger_artifact_with_matching_content(
+    db_session: Session, storage
+) -> None:
+    model = Model(name="Legacy owned", slug="legacy-owned", hash="legacy-owned-hash")
+    db_session.add(model)
+    db_session.commit()
+    db_session.refresh(model)
+    content = b"artifact created before the ownership ledger"
+    legacy_path = storage.blob_key("legacy-owned", 1, "legacy.stl")
+    _write(legacy_path, content)
+    artifact = File(
+        model_id=model.id,
+        path=legacy_path,
+        original_filename="legacy.stl",
+        file_type=FileType.STL,
+        version=1,
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    model.deleted_at = utcnow() - timedelta(days=1)
+    db_session.add_all([model, artifact])
+    db_session.commit()
+    model_id = model.id
+    artifact_id = artifact.id
+
+    result = gc_soft_deleted(retention_days=0)
+
+    assert result["rows"] == 1
+    assert result["storage_completed"] == 1
+    assert not Path(legacy_path).exists()
+    db_session.expire_all()
+    assert db_session.get(Model, model_id) is None
+    assert db_session.get(File, artifact_id) is None
 
 
 def test_hard_delete_late_storage_failure_leaks_remainder_without_db_rollback(

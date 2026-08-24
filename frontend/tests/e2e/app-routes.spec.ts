@@ -237,6 +237,8 @@ test("mobile vault skips the desktop outliner request", async ({ page }) => {
 test("settings sections are deep-linkable and preserve navigation state", async ({ page }) => {
   await page.goto("/settings?section=trash");
   await expect(page.getByRole("heading", { name: "Trash retention" })).toBeVisible();
+  await expect(page.getByLabel("Trash size")).toHaveText("1.5 MB reclaimable");
+  await expect(page.getByText("2 files")).toBeVisible();
   await page.getByRole("button", { name: "About" }).click();
   await expect(page).toHaveURL(/\/settings\?section=about$/);
   await expect(page.getByRole("heading", { name: "Latest changes" })).toBeVisible();

@@ -415,6 +415,23 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     sendJson(res, []);
     return;
   }
+  if (url.pathname === "/api/v1/models/trash") {
+    sendJson(res, [
+      {
+        id: 91,
+        name: "Retired bracket",
+        slug: "retired-bracket",
+        collection: null,
+        tags: [],
+        thumbnail_url: null,
+        file_count: 2,
+        size_bytes: 1572864,
+        deleted_at: now,
+        expires_at: now,
+      },
+    ]);
+    return;
+  }
   if (url.pathname === "/api/v1/models/stats") {
     sendJson(res, {
       model_count: modelList.length,

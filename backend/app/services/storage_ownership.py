@@ -86,6 +86,37 @@ def require_owned_key(session: Session, backend: StorageBackend, key: str) -> No
     raise UnsafeStorageDeleteError("storage_object_no_longer_matches_receipt")
 
 
+def require_or_adopt_legacy_artifact(
+    session: Session,
+    backend: StorageBackend,
+    key: str,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    """Require proof, or safely reconstruct it for one pre-ledger Artifact.
+
+    Existing but mismatched receipts are never replaced. Adoption is attempted
+    only when the ledger has no claim at all, and the backend must independently
+    prove both the historical content hash and a stable deletable identity.
+    """
+    candidates = session.exec(
+        select(OwnedStorageObject).where(OwnedStorageObject.key == key)
+    ).all()
+    if candidates:
+        require_owned_key(session, backend, key)
+        return
+    try:
+        receipt = backend.adopt_existing(
+            key,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+        )
+    except Exception as exc:
+        raise UnsafeStorageDeleteError("storage_ownership_unverified") from exc
+    record_creation(session, receipt, object_kind="legacy_artifact")
+
+
 def replace_owned_bytes(
     session: Session,
     backend: StorageBackend,

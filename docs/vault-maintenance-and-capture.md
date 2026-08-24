@@ -1,4 +1,4 @@
-# Vault Maintenance And Quick Capture
+# Vault Maintenance And Browser Import
 
 Settings → Maintenance provides two read-only audit modes. Quick checks owned
 blob reachability/size, external links, thumbnails, Metadata, Revision
@@ -14,9 +14,16 @@ and uses normal ingestion, whose `persist_artifact` service remains sole owner o
 Model/Artifact/Metadata/thumbnail persistence. Failed captures remain retryable;
 dismissal removes managed staging but never an imported Model.
 
-Browser helper lives in `browser-extension/`. Load it unpacked, create a named
-API key in Settings, and configure Vault URL. It sends current page URL/title
-only to `/api/v1/inbox`; source resolution remains on server behind SSRF guards.
+The Chrome importer lives in `browser-extension/`. Load it unpacked, create a
+named API key in Settings, and configure the Vault URL. Printables and
+Thingiverse pages, Printables collections, and direct model/archive URLs send
+the current URL and title to `/api/v1/inbox`; source resolution remains on the
+server behind SSRF guards. MakerWorld packages are downloaded within the
+signed-in browser and uploaded without sharing site credentials or cookies.
+The extension verifies the PrintStash service and authenticated user before it
+saves credentials, rechecks the connection when opened, and removes the saved
+API key and host permission on disconnect. Every capture stays reviewable in
+Pending Imports before ingestion.
 
 The model browser supports URL-restorable filters for Artifact type, material,
 slicer, printer model, Revision status, printed state, print outcome, vault or
