@@ -490,11 +490,12 @@ jobs:
           retention-days: 7
 
   docker-build:
-    name: Docker build (${{ matrix.image }})
-    runs-on: ubuntu-latest
+    name: Docker build (${{ matrix.image }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
-    # Catch arm64 build breakage before it reaches a release tag. Builds both
-    # published platforms but never pushes — the release workflows publish.
+    # Build each platform on its native architecture. Besides avoiding slow
+    # QEMU emulation, this lets the full ARM image be loaded and STEP-smoked in
+    # the same job instead of building that image twice.
     strategy:
       fail-fast: false
       matrix:
@@ -503,26 +504,59 @@ jobs:
             context: ./backend
             dockerfile: ./backend/Dockerfile
             build-args: PRINTSTASH_VARIANT=full
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            load: false
+            step-smoke: false
+          - image: printstash-api
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            build-args: PRINTSTASH_VARIANT=full
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            load: true
+            step-smoke: true
           - image: printstash-api-lite
             context: ./backend
             dockerfile: ./backend/Dockerfile
             build-args: PRINTSTASH_VARIANT=lite
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            load: false
+            step-smoke: false
+          - image: printstash-api-lite
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            build-args: PRINTSTASH_VARIANT=lite
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            load: false
+            step-smoke: false
           - image: printstash-frontend
             context: ./frontend
             dockerfile: ./frontend/Dockerfile
             build-args: ""
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            load: false
+            step-smoke: false
+          - image: printstash-frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            build-args: ""
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            load: false
+            step-smoke: false
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          # Newer binfmt images crash with "illegal instruction" on arm64
-          # emulation of Node's JIT output (hung the 0.8.5 release job for
-          # 6h before GitHub's job cap force-cancelled it). Pin to the last
-          # known-good QEMU build.
-          image: tonistiigi/binfmt:qemu-v7.0.0-28
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -532,45 +566,21 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: false
+          load: ${{ matrix.load }}
+          tags: ${{ matrix.image }}:${{ matrix.arch }}-ci
           build-args: ${{ matrix.build-args }}
-          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           # ignore-error: a transient GitHub Actions Cache outage (e.g. a 503
           # while exporting) should not fail an otherwise-successful build.
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max,ignore-error=true
-
-  arm-step-runtime:
-    name: ARM64 STEP runtime smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          image: tonistiigi/binfmt:qemu-v7.0.0-28
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build loadable ARM64 full image
-        uses: docker/build-push-action@v7
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          platforms: linux/arm64
-          load: true
-          tags: printstash-arm-step-smoke:ci
-          build-args: PRINTSTASH_VARIANT=full
-          cache-from: type=gha,scope=printstash-api
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }},mode=max,ignore-error=true
 
       - name: Tessellate a valid STEP fixture in ARM64 userspace
+        if: matrix.step-smoke
         run: >-
-          docker run --rm --platform linux/arm64
+          docker run --rm
           -v "$PWD/backend/tests/fixtures:/fixtures:ro"
-          printstash-arm-step-smoke:ci
+          printstash-api:arm64-ci
           /app/.venv/bin/python -c
           "from pathlib import Path; from app.services.mesh_processing import _load_mesh; mesh = _load_mesh(Path('/fixtures/cascadio_material.stp')); assert mesh is not None and len(mesh.faces) > 0"
