@@ -10,6 +10,7 @@ still indexed; a 3MF still yields its embedded slicer preview.
 from __future__ import annotations
 
 import io
+import math
 import struct
 import zipfile
 from pathlib import Path
@@ -68,6 +69,53 @@ def _write_renderable_binary_stl(path: Path, n_triangles: int) -> None:
                     x,
                     y + 0.8,
                     z,
+                    0,
+                )
+            )
+
+
+def _write_annular_binary_stl(path: Path, segments: int = 96) -> None:
+    """Write a deterministic thin ring whose projected center must stay empty."""
+    record = struct.Struct("<12fH")
+    outer, inner = 10.0, 4.0
+    top, bottom = 0.5, -0.5
+
+    def point(radius: float, index: int, z: float) -> tuple[float, float, float]:
+        angle = 2.0 * math.pi * index / segments
+        return (radius * math.cos(angle), radius * math.sin(angle), z)
+
+    triangles: list[tuple[tuple[float, float, float], ...]] = []
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        ot0, ot1 = point(outer, index, top), point(outer, next_index, top)
+        it0, it1 = point(inner, index, top), point(inner, next_index, top)
+        ob0, ob1 = point(outer, index, bottom), point(outer, next_index, bottom)
+        ib0, ib1 = point(inner, index, bottom), point(inner, next_index, bottom)
+        triangles.extend(
+            [
+                (ot0, ot1, it1),
+                (ot0, it1, it0),
+                (ob0, ib1, ob1),
+                (ob0, ib0, ib1),
+                (ot0, ob1, ot1),
+                (ot0, ob0, ob1),
+                (it0, it1, ib1),
+                (it0, ib1, ib0),
+            ]
+        )
+
+    with path.open("wb") as fh:
+        fh.write(b"annular-regression".ljust(80, b"\x00"))
+        fh.write(struct.pack("<I", len(triangles)))
+        for first, second, third in triangles:
+            fh.write(
+                record.pack(
+                    0.0,
+                    0.0,
+                    1.0,
+                    *first,
+                    *second,
+                    *third,
                     0,
                 )
             )
@@ -149,6 +197,8 @@ def test_stl_fallback_uniformly_caps_sample_to_100k(
     assert result is not None
     assert result.triangle_count == 101
     assert result.sampled_triangles == 10
+    assert result.parsed_triangles == 10
+    assert result.scanned_bytes <= 84 + (10 * 50)
 
 
 def test_stl_fallback_dense_fixture_has_a_coherent_silhouette(
@@ -178,15 +228,17 @@ def test_stl_fallback_dense_fixture_has_a_coherent_silhouette(
     assert result.sampled_triangles == stl_fallback._MAX_SAMPLED_TRIANGLES
 
     pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
-    opaque = pixels[:, :, 3] > 200
-    ys, xs = np.where(opaque)
-    assert opaque.mean() > 0.10  # a solid silhouette, not a sparse point cloud
+    visible = pixels[:, :, 3] > 20
+    ys, xs = np.where(visible)
+    assert visible.mean() > 0.10  # visible silhouette, not a sparse point cloud
     assert np.ptp(xs) + 1 > pixels.shape[1] * 0.25
     assert np.ptp(ys) + 1 > pixels.shape[0] * 0.25
     assert xs.min() > 2 and xs.max() < pixels.shape[1] - 3
     assert ys.min() > 2 and ys.max() < pixels.shape[0] - 3
+    bbox_area = (np.ptp(xs) + 1) * (np.ptp(ys) + 1)
+    assert float(visible.sum() / bbox_area) > 0.45
 
-    shaded = pixels[:, :, :3][opaque]
+    shaded = pixels[:, :, :3][visible]
     assert float(shaded.std()) > 10.0  # lighting still provides useful contrast
 
 
@@ -194,21 +246,45 @@ def test_stl_fallback_work_budget_is_observable(tmp_path: Path, monkeypatch) -> 
     from app.services import mesh_render, stl_fallback
 
     monkeypatch.setattr(stl_fallback, "_MAX_SAMPLED_TRIANGLES", 32)
-    monkeypatch.setattr(
-        mesh_render,
-        "_rasterise_triangles",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("fallback must use bounded coarse coverage")
-        ),
-    )
-    path = tmp_path / "budget.stl"
-    _write_renderable_binary_stl(path, 101)
+    original_rasterise = mesh_render._rasterise_triangles
+    calls: list[int] = []
 
-    result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
+    def bounded_rasterise(*args, **kwargs):
+        calls.append(int(args[2].shape[0]))
+        return original_rasterise(*args, **kwargs)
+
+    monkeypatch.setattr(mesh_render, "_rasterise_triangles", bounded_rasterise)
+    path = tmp_path / "budget.stl"
+    _write_annular_binary_stl(path)
+
+    result = stl_fallback.render_stl_thumbnail(
+        path, width=64, height=48, max_triangles=1_000
+    )
 
     assert result is not None
-    assert result.triangle_count == 101
+    assert result.triangle_count == 768
     assert result.sampled_triangles == 32
+    assert result.parsed_triangles == 32
+    assert result.scanned_bytes <= 84 + (32 * 50)
+    assert calls and sum(calls) <= 32
+
+
+def test_stl_fallback_rasterises_real_area_and_preserves_hole(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from app.services import stl_fallback
+
+    path = tmp_path / "annular-hole.stl"
+    _write_annular_binary_stl(path)
+    result = stl_fallback.render_stl_thumbnail(path, width=160, height=120)
+
+    assert result is not None
+    pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
+    alpha = pixels[:, :, 3]
+    center = alpha[alpha.shape[0] // 2, alpha.shape[1] // 2]
+    assert center < 32
+    assert float((alpha > 200).mean()) > 0.15
+    assert float(pixels[:, :, :3][alpha > 200].std()) > 5.0
 
 
 def test_ascii_fallback_discards_hostile_line_and_recovers(
@@ -239,6 +315,39 @@ endfacet
 
     assert result is not None
     assert result.triangle_count == 1
+    assert result.parsed_triangles == 1
+    assert result.scanned_bytes <= stl_fallback._MAX_ASCII_BYTES
+
+
+def test_ascii_fallback_caps_total_facets_and_bytes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import stl_fallback
+
+    monkeypatch.setattr(stl_fallback, "_MAX_SAMPLED_TRIANGLES", 4)
+    path = tmp_path / "ascii-budget.stl"
+    facets = []
+    for index in range(10):
+        facets.append(
+            "facet normal 0 0 1\n"
+            "outer loop\n"
+            f"vertex {index} 0 0\n"
+            f"vertex {index + 1} 0 0\n"
+            f"vertex {index} 1 0\n"
+            "endloop\n"
+            "endfacet\n"
+        )
+    path.write_text("solid budget\n" + "".join(facets) + "endsolid budget\n")
+
+    result = stl_fallback.render_stl_thumbnail(
+        path, width=64, height=48, max_triangles=1_000
+    )
+
+    assert result is not None
+    assert result.triangle_count == 4
+    assert result.sampled_triangles == 4
+    assert result.parsed_triangles == 4
+    assert result.scanned_bytes <= stl_fallback._MAX_ASCII_BYTES
 
 
 def test_ascii_fallback_rejects_float32_overflow(tmp_path: Path) -> None:
@@ -307,7 +416,7 @@ def test_stl_fallback_skips_nonfinite_facets(tmp_path: Path) -> None:
     result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
 
     assert result is not None
-    assert result.triangle_count == 1
+    assert result.triangle_count == 2
     assert result.sampled_triangles == 1
 
 
