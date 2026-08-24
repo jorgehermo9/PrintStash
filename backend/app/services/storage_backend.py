@@ -735,6 +735,18 @@ class LocalStorageBackend(StorageBackend):
 # ---------------------------------------------------------------------------
 
 
+_S3_MISSING_OBJECT_CODES = {"404", "NoSuchKey", "NotFound"}
+
+
+def _raise_s3_missing_object(exc: Exception, key: str) -> None:
+    """Translate only object-missing responses; preserve all other failures."""
+
+    code = exc.response.get("Error", {}).get("Code")  # type: ignore[attr-defined]
+    if code in _S3_MISSING_OBJECT_CODES:
+        raise FileNotFoundError(key) from exc
+    raise exc
+
+
 class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-compatible
     # endpoint; verified against SeaweedFS in the storage-s3 CI job (see docs).
     backend_name = "s3"
@@ -1123,7 +1135,12 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         raise RuntimeError("unchecked_storage_move_disabled")
 
     def stat_size(self, key: str) -> int:
-        resp = self._client.head_object(Bucket=self._bucket, Key=key)
+        import botocore.exceptions
+
+        try:
+            resp = self._client.head_object(Bucket=self._bucket, Key=key)
+        except botocore.exceptions.ClientError as exc:
+            _raise_s3_missing_object(exc, key)
         return resp.get("ContentLength", 0)
 
     def read_bytes(self, key: str) -> bytes:
@@ -1131,7 +1148,12 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         return resp["Body"].read()
 
     def stream_chunks(self, key: str, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
-        resp = self._client.get_object(Bucket=self._bucket, Key=key)
+        import botocore.exceptions
+
+        try:
+            resp = self._client.get_object(Bucket=self._bucket, Key=key)
+        except botocore.exceptions.ClientError as exc:
+            _raise_s3_missing_object(exc, key)
         body = resp["Body"]
         try:
             while True:

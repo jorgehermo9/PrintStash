@@ -138,7 +138,7 @@ def test_storage_reads_through_direct_path_without_persisting_copy(
             return archive_path
 
     result = read_embedded_gcode(
-        Backend(),
+        Backend(),  # type: ignore[arg-type]
         "opaque-3mf-key",
         plate_index=1,  # type: ignore[arg-type]
     )
@@ -204,7 +204,7 @@ def test_remote_archive_size_is_checked_before_transfer() -> None:
 
     with pytest.raises(EmbeddedGcodeError) as failure:
         read_embedded_gcode(
-            RemoteBackend(),
+            RemoteBackend(),  # type: ignore[arg-type]
             "remote.3mf",
             max_archive_bytes=10,  # type: ignore[arg-type]
         )
@@ -232,7 +232,7 @@ def test_remote_archive_transfer_stops_at_cap() -> None:
 
     with pytest.raises(EmbeddedGcodeError) as failure:
         read_embedded_gcode(
-            RemoteBackend(),
+            RemoteBackend(),  # type: ignore[arg-type]
             "remote.3mf",
             max_archive_bytes=10,  # type: ignore[arg-type]
         )

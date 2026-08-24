@@ -239,6 +239,64 @@ def test_s3_exists_raises_on_auth_error(code: str) -> None:
         _s3_backend_raising(code).exists("some/key")
 
 
+@pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound"])
+def test_s3_stat_size_maps_missing_race_to_file_not_found(code: str) -> None:
+    backend = _s3_backend_raising(code)
+
+    with pytest.raises(FileNotFoundError):
+        backend.stat_size("some/key")
+
+
+def test_s3_stat_size_preserves_non_missing_client_error() -> None:
+    import botocore.exceptions
+
+    with pytest.raises(botocore.exceptions.ClientError):
+        _s3_backend_raising("AccessDenied").stat_size("some/key")
+
+
+def test_s3_get_object_missing_after_exists_maps_to_file_not_found() -> None:
+    import botocore.exceptions
+
+    class _Client:
+        def head_object(self, **_kwargs):
+            return {"ContentLength": 12}
+
+        def get_object(self, **_kwargs):
+            raise botocore.exceptions.ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "deleted"}},
+                "GetObject",
+            )
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "test-bucket"  # type: ignore[attr-defined]
+
+    # This models the endpoint's exists() check succeeding immediately before
+    # the object is deleted by another actor.
+    assert backend.exists("some/key") is True
+    assert backend.stat_size("some/key") == 12
+    with pytest.raises(FileNotFoundError):
+        list(backend.stream_chunks("some/key"))
+
+
+def test_s3_get_object_preserves_non_missing_client_error() -> None:
+    import botocore.exceptions
+
+    class _Client:
+        def get_object(self, **_kwargs):
+            raise botocore.exceptions.ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "forbidden"}},
+                "GetObject",
+            )
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "test-bucket"  # type: ignore[attr-defined]
+
+    with pytest.raises(botocore.exceptions.ClientError):
+        list(backend.stream_chunks("some/key"))
+
+
 def test_s3_object_info_exposes_remote_etag_and_size() -> None:
     class _Client:
         def head_object(self, **_kwargs):
