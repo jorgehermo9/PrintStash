@@ -4,14 +4,29 @@ Canonical validation detail: `docs/release-validation.md` (clean install,
 upgrade-from-volume, smoke checks) and `docs/manual-testing.md` (full browser
 sweep). This file is the ordered checklist that ties it together.
 
-## Prepare (on the version branch)
+## Readiness gate
+
+- [ ] Confirm the release scope. Every planned bug or feature is merged through
+      its own PR to `main`, together with the migrations, documentation, and
+      validation that change requires.
+- [ ] `main` is up to date and its required CI checks are green. Release from
+      this integrated state; do not collect work on a version-number branch.
+- [ ] Choose X.Y.Z from the merged contents. While 0.x, patches contain fixes
+      only; a release containing features increments the minor version.
+- [ ] If protected `main` requires a PR for release metadata, create
+      `chore/release-X.Y.Z` from the current `main`. This branch may contain only
+      the version, changelog, and release-documentation edits below.
+
+## Prepare the release commit
 
 - [ ] Bump the triple (`backend/pyproject.toml`, `backend/app/core/config.py`
       `app_version`, `frontend/package.json`) **and** add a matching
       `CHANGELOG[0]` entry to `frontend/src/lib/changelog.ts` (its own test,
       `changelog.test.ts`, checks this against `package.json` and fails CI on
       its own if skipped) — one commit: `chore(release): bump to X.Y.Z`.
-- [ ] Write the `CHANGELOG.md` entry (format in
+- [ ] Promote the accumulated `CHANGELOG.md` `## Unreleased` contents to
+      `## X.Y.Z`, restore an empty `## Unreleased`, and verify the entry matches
+      the condensed in-app changelog (format in
       [conventions.md](conventions.md)).
 - [ ] Backend: `cd backend && uv run pytest tests -v && uv run ruff check app/ tests/`
 - [ ] Frontend: `cd frontend && pnpm lint && pnpm exec tsc --noEmit && pnpm build`
@@ -32,9 +47,11 @@ sweep). This file is the ordered checklist that ties it together.
 
 ## Publish
 
-- [ ] PR → merge to `main`.
-- [ ] `git tag vX.Y.Z && git push origin vX.Y.Z` — CI publishes the GHCR image
-      (tag guard checks the version triple).
+- [ ] If a release-metadata PR was required, merge it to `main`; then update the
+      local `main` and verify its HEAD contains the version triple and changelog.
+- [ ] Tag that exact `main` commit:
+      `git tag vX.Y.Z && git push origin vX.Y.Z`. CI publishes the GHCR image
+      and the tag guard checks the version triple.
 - [ ] `gh release create vX.Y.Z` with the format below.
 - [ ] Announce in the public roadmap discussion. Changelog says what's
       protected; never quotes private `reports/` analysis.

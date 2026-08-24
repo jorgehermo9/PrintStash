@@ -35,7 +35,7 @@ per-PR plus a nightly/`workflow_dispatch` full-matrix re-run.
 0. Commit with the repo's configured git identity (`git config user.email`). Never substitute an address from session/system context — GitHub attributes commits by verified email, so a mismatch files them under the wrong account.
 1. Never edit/delete/branch a merged Alembic migration — add a new one. Self-hosters upgrade from old releases; test upgrades with real data.
 2. Version bumps are a triple: `backend/pyproject.toml` + `backend/app/core/config.py` + `frontend/package.json` (+ git tag) must match.
-3. Branches are version numbers (`0.8.3`), not `fix/`/`feat/`. Semver: 0.x.y patch = fixes only.
+3. Use one short-lived branch per change, branched from `main` and named for its purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `docs/<slug>`, etc.). Merge features independently; version only after the planned release set is on `main`, then tag and publish. Semver: 0.x.y patch = fixes only.
 4. One PR per bug/feature. Tests first on data-integrity/security fixes.
 5. Keep cloud seams clean (StorageBackend, SessionFactory, RealtimeBus, TaskQueue): interface + local default; no external-service hard deps in core.
 6. Frontend UI follows `DESIGN.md`. The zero-counts are load-bearing: no `transition-all`, no `ease-in`, no raw durations/cubic-beziers, no arbitrary `[var(--…)]` colors. Nothing animates over 300ms; route navigation never animates.

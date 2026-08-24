@@ -51,7 +51,9 @@ and changelog instead of reconstructing their contents.
 
 ## Workflow for any change
 
-1. Branch off `main` named as the target version (`0.9.1`), never `fix/`/`feat/`.
+1. Branch from an up-to-date `main` for one change. Name the branch for its
+   purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `docs/<slug>`, etc.);
+   version numbers belong to release tags, not feature branches.
 2. Implement the minimal change at the owning seam; data-integrity/security
    fixes get tests first.
 3. Validate: `cd backend && uv run pytest tests -v && uv run ruff check app/ tests/`;
@@ -68,6 +70,11 @@ and changelog instead of reconstructing their contents.
    exception: keep its audit fixes traceable and respect plans 17 and 18; do
    not split them onto another branch unless the user reverses that release
    direction.
+6. Merge each completed PR to `main` independently. After every planned change
+   for a release is merged and `main` is green, follow
+   [references/release.md](references/release.md): prepare the version metadata,
+   tag the exact release commit on `main`, and publish. Never collect feature
+   work on a version-number branch.
 
 ## Common mistakes to avoid
 

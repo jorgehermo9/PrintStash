@@ -47,6 +47,7 @@ frontend/coverage/
 .opencode/opencode.json.lock
 
 # Internal/private planning docs
+reports/
 docs/feature-inventory.md
 docs/internal/
 docs/*-internal.md
@@ -57,6 +58,8 @@ docs/*-internal.md
 
 # AI assistant tooling (kept local, not published) — except the shared
 # project skill in .claude/skills/printstash/
+.codex/
+.mcp.json
 .claude/*
 !.claude/skills/
 .claude/skills/*
@@ -70,6 +73,9 @@ frontend/playwright-report/
 frontend/tests/e2e-real/.data/
 .playwright-mcp/
 screenshots/gif-frames/
+
+# Local integration worktrees
+.cloud-integration-*/
 
 # Windows "downloaded from internet" metadata streams (WSL surfaces these)
 *:Zone.Identifier

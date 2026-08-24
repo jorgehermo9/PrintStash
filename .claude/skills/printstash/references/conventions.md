@@ -1,20 +1,30 @@
 # Git, PR, and changelog conventions
 
-All conventions below are existing practice, inferred from git history and
-`.github/` — none are proposals.
+These are the binding repository conventions. Current instructions take
+precedence over historical branch names in git history.
 
 ## Branches
 
-Branch = target version number, branched off `main`:
+Create one short-lived branch per bug, feature, or supporting change from an
+up-to-date `main`. The branch name describes the work:
 
 ```
-0.9.0        # feature release in flight
-0.8.4        # patch release
+feat/73-material-aware-dispatch
+fix/69-bambu-report-subscription
+docs/provider-validation
+chore/dependency-refresh
 ```
 
-Never `fix/…` or `feat/…` (one legacy `feat/nas-external-libraries` exists;
-it's the exception, not the pattern). Semver while 0.x: patch (0.x.Y) = fixes
-only; features bump the minor.
+Use the conventional type that matches the change (`feat`, `fix`, `perf`,
+`refactor`, `docs`, `test`, `chore`, or `ci`), followed by an issue number when
+one exists and a short kebab-case slug. Merge every branch through its own PR;
+do not aggregate unrelated work on a version-number branch.
+
+A release is assembled from completed PRs already merged to `main`. If branch
+protection requires a PR for the final version/changelog edits, use a
+short-lived `chore/release-X.Y.Z` branch containing release metadata only—no
+feature or fix implementation. Semver while 0.x: patch (0.x.Y) = fixes only;
+features bump the minor.
 
 ## Commits
 
@@ -66,9 +76,11 @@ address from session context; GitHub attributes by verified email.
 ```
 
 Only include sections that apply. Bullets are user-facing sentences (bold
-lead-in for headline items), not commit subjects. Write the entry on the
-version branch before tagging. Upgrade-behavior warnings go in a bold callout
-line at the top of the entry (also surfaced in the GitHub release body — see
+lead-in for headline items), not commit subjects. User-facing feature/fix PRs
+update the appropriate section under `## Unreleased`. The final release commit
+promotes that content to `## X.Y.Z` and restores an empty `## Unreleased`.
+Upgrade-behavior warnings go in a bold callout line at the top of the release
+entry (also surfaced in the GitHub release body — see
 [release.md](release.md)).
 
 ## Versioning
