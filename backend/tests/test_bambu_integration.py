@@ -67,6 +67,8 @@ def test_send_print_completes() -> None:
     async def _run() -> None:
         await provider.start(REMOTE)
         assert built[0].published[0]["print"]["command"] == "gcode_file"
+        assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
+        assert built[0].published_topics == ["device/01S00A000000000/request"]
         await _wait_state(provider, "complete")
 
     asyncio.run(_run())
