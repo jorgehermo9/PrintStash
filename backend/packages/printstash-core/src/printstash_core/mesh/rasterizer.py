@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 
 if TYPE_CHECKING:
@@ -63,6 +64,14 @@ _SUPERSAMPLE = 2
 # Cap candidate-pixel expansion per rasteriser chunk (~tens of MB of
 # temporaries at this size).
 _CHUNK_PIXEL_BUDGET = 2_000_000
+
+
+@dataclass
+class RasterBudget:
+    """Cumulative candidate-pixel budget shared by rasteriser calls."""
+
+    limit: int = _CHUNK_PIXEL_BUDGET
+    used: int = 0
 
 
 class LogSink(Protocol):
@@ -91,7 +100,7 @@ class Rasteriser(Protocol):
         base_color: FloatArray,
         width: int,
         height: int,
-    ) -> None: ...
+    ) -> int | None: ...
 
 
 def render_mesh_thumbnail(
@@ -535,7 +544,9 @@ def _rasterise_triangles(
     base_color: FloatArray,
     width: int,
     height: int,
-) -> None:
+    *,
+    budget: RasterBudget | None = None,
+) -> int:
     """Z-buffered Phong rasteriser, vectorised over triangles.
 
     ``vert_nrm`` is (F, 3, 3): a view-space normal for each of a triangle's three
@@ -551,7 +562,7 @@ def _rasterise_triangles(
     import numpy as np
 
     if tri.shape[0] == 0:
-        return
+        return 0
 
     xs = tri[:, :, 0]
     ys = tri[:, :, 1]
@@ -566,7 +577,7 @@ def _rasterise_triangles(
     )
     keep = (np.abs(denom) > 1e-9) & (x1 >= x0) & (y1 >= y0)
     if not keep.any():
-        return
+        return 0
 
     v0, v1, v2 = v0[keep], v1[keep], v2[keep]
     denom = denom[keep]
@@ -580,18 +591,41 @@ def _rasterise_triangles(
     flat_img = img.reshape(-1, 3)
     flat_z = zbuf.reshape(-1)
 
-    # Chunk triangles so the candidate-pixel expansion stays within budget.
+    # Chunk triangles so the candidate-pixel expansion stays within budget. A
+    # budget passed by a caller is cumulative across all rasteriser calls; this
+    # matters for fallback renderers, which call us once per input chunk.
     cum_areas = np.cumsum(areas)
     start = 0
     n_faces = len(areas)
-    consumed = 0
+    candidates = 0
     while start < n_faces:
+        consumed_before = int(cum_areas[start - 1]) if start else 0
+        available = _CHUNK_PIXEL_BUDGET
+        if budget is not None:
+            available = min(available, budget.limit - budget.used)
+        if available <= 0:
+            break
+        # A single giant projected triangle must not force one allocation larger
+        # than the remaining allowance. Skip it deterministically and continue
+        # with smaller facets, preserving bounded latency under adversarial input.
+        if int(areas[start]) > available:
+            start += 1
+            continue
         end = int(
-            np.searchsorted(cum_areas, consumed + _CHUNK_PIXEL_BUDGET, side="right")
+            np.searchsorted(
+                cum_areas,
+                consumed_before + available,
+                side="right",
+            )
         )
-        end = max(end, start + 1)
-        end = min(end, n_faces)
-        consumed = int(cum_areas[end - 1])
+        end = min(max(end, start + 1), n_faces)
+        candidate_count = int(cum_areas[end - 1] - consumed_before)
+        if candidate_count > available:  # defensive guard for integer edge cases
+            start += 1
+            continue
+        if budget is not None:
+            budget.used += candidate_count
+        candidates += candidate_count
 
         counts = areas[start:end]
         tri_idx = np.repeat(np.arange(start, end), counts)
@@ -652,3 +686,5 @@ def _rasterise_triangles(
             )
 
         start = end
+
+    return candidates

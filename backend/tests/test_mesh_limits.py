@@ -74,6 +74,32 @@ def _write_renderable_binary_stl(path: Path, n_triangles: int) -> None:
             )
 
 
+def _write_large_projected_binary_stl(path: Path, n_triangles: int) -> None:
+    """Write many facets whose projected boxes deliberately cover the frame."""
+    record = struct.Struct("<12fH")
+    with path.open("wb") as fh:
+        fh.write(b"large-projected".ljust(80, b"\x00"))
+        fh.write(struct.pack("<I", n_triangles))
+        for _ in range(n_triangles):
+            fh.write(
+                record.pack(
+                    0.0,
+                    0.0,
+                    1.0,
+                    -100.0,
+                    -100.0,
+                    0.0,
+                    100.0,
+                    -100.0,
+                    0.0,
+                    0.0,
+                    100.0,
+                    0.0,
+                    0,
+                )
+            )
+
+
 def _write_annular_binary_stl(path: Path, segments: int = 96) -> None:
     """Write a deterministic thin ring whose projected center must stay empty."""
     record = struct.Struct("<12fH")
@@ -180,6 +206,7 @@ def test_over_cap_valid_stl_uses_streaming_thumbnail_fallback(
 
     assert isinstance(thumb, mesh_processing.FallbackThumbnail)
     assert thumb.startswith(mesh_processing._PNG_MAGIC)
+    assert thumb.complete is True
     assert geometry["triangle_count"] == 1_001
     assert geometry["bbox_x_mm"] == 99.8
     assert geometry["bbox_y_mm"] == 10.8
@@ -269,6 +296,19 @@ def test_stl_fallback_work_budget_is_observable(tmp_path: Path, monkeypatch) -> 
     assert calls and sum(calls) <= 32
 
 
+def test_stl_fallback_global_candidate_budget_for_large_facets(tmp_path: Path) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "large-projected.stl"
+    _write_large_projected_binary_stl(path, 100_000)
+
+    result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
+
+    assert result is not None
+    assert result.sampled_triangles == 100_000
+    assert result.raster_candidates <= stl_fallback._MAX_COVERAGE_CANDIDATES
+
+
 def test_stl_fallback_rasterises_real_area_and_preserves_hole(tmp_path: Path) -> None:
     from PIL import Image
 
@@ -317,6 +357,7 @@ endfacet
     assert result.triangle_count == 1
     assert result.parsed_triangles == 1
     assert result.scanned_bytes <= stl_fallback._MAX_ASCII_BYTES
+    assert result.complete is False
 
 
 def test_ascii_fallback_caps_total_facets_and_bytes(
@@ -348,6 +389,39 @@ def test_ascii_fallback_caps_total_facets_and_bytes(
     assert result.sampled_triangles == 4
     assert result.parsed_triangles == 4
     assert result.scanned_bytes <= stl_fallback._MAX_ASCII_BYTES
+
+
+def test_ascii_fallback_marks_truncated_metadata_incomplete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import stl_fallback
+
+    monkeypatch.setattr(stl_fallback, "_MAX_ASCII_BYTES", 500)
+    path = tmp_path / "ascii-truncated.stl"
+    facet = (
+        "facet normal 0 0 1\n"
+        "outer loop\n"
+        "vertex 0 0 0\n"
+        "vertex 1 0 0\n"
+        "vertex 0 1 0\n"
+        "endloop\n"
+        "endfacet\n"
+    )
+    path.write_text("solid truncated\n" + (facet * 20) + "endsolid truncated\n")
+
+    result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
+
+    assert result is not None
+    assert result.complete is False
+    assert result.scanned_bytes <= 500
+
+    monkeypatch.setattr(mesh_processing, "_estimate_triangle_count", lambda _p: None)
+    monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: None)
+    geometry, thumbnail = mesh_processing.analyze_mesh(path)
+    assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
+    assert thumbnail.complete is False
+    assert geometry["triangle_count"] is None
+    assert geometry["bbox_x_mm"] is None
 
 
 def test_ascii_fallback_rejects_float32_overflow(tmp_path: Path) -> None:

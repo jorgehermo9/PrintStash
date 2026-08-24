@@ -251,3 +251,36 @@ def test_huge_mesh_never_allocates_full_face_arrays(monkeypatch) -> None:
     assert png is not None
     assert len(mesh.faces) > chunk  # the mesh really needed more than one chunk
     assert 0 < seen_max["n"] <= chunk
+
+
+def test_raster_budget_is_cumulative_across_calls() -> None:
+    img = np.zeros((16, 16, 3), dtype=np.uint8)
+    zbuf = np.full((16, 16), np.inf, dtype=np.float64)
+    triangle = np.array([[[0.0, 0.0, 0.0], [9.0, 0.0, 0.0], [0.0, 9.0, 0.0]]])
+    normals = np.zeros((1, 3, 3), dtype=np.float64)
+    budget = mesh_render.RasterBudget(limit=100)
+
+    mesh_render._rasterise_triangles(
+        img,
+        zbuf,
+        triangle,
+        normals,
+        lambda n: np.ones((n.shape[0], 3)),
+        np.ones(3),
+        16,
+        16,
+        budget=budget,
+    )
+    mesh_render._rasterise_triangles(
+        img,
+        zbuf,
+        triangle,
+        normals,
+        lambda n: np.ones((n.shape[0], 3)),
+        np.ones(3),
+        16,
+        16,
+        budget=budget,
+    )
+
+    assert budget.used == 100

@@ -13,6 +13,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 FLAT_MESH_THICKNESS_RATIO = _core.FLAT_MESH_THICKNESS_RATIO
+RasterBudget = _core.RasterBudget
 
 # Preserve the helper import surface used by the STL fallback and focused tests.
 _rasterise_triangles = _core._rasterise_triangles
@@ -57,6 +58,7 @@ def render_mesh_thumbnail(
 
 __all__ = [
     "FLAT_MESH_THICKNESS_RATIO",
+    "RasterBudget",
     "render_mesh_thumbnail",
     "render_thumbnail",
 ]

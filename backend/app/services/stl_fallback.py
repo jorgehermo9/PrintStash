@@ -21,6 +21,8 @@ class STLThumbnailResult:
     sampled_triangles: int
     scanned_bytes: int = 0
     parsed_triangles: int = 0
+    complete: bool = True
+    raster_candidates: int = 0
 
 
 @dataclass
@@ -34,6 +36,7 @@ class _SampledSTL:
     bounds_max: tuple[float, float, float] | None
     scanned_bytes: int
     parsed_triangles: int
+    complete: bool
 
 
 _BINARY_HEADER_BYTES = 84
@@ -48,6 +51,7 @@ _MAX_ASCII_BYTES = 16 * 1024 * 1024
 _MAX_ASCII_LINES = 1_000_000
 _FLOAT32_MAX = 3.4028234663852886e38
 _MAX_RENDER_DIMENSION = 2048
+_MAX_COVERAGE_CANDIDATES = 2_000_000
 
 
 def _binary_stl_info(path: Path) -> tuple[int, int] | None:
@@ -115,6 +119,7 @@ def _iter_ascii_triangles(
     scanned_bytes = 0
     lines = 0
     parsed = 0
+    draining = False
     try:
         with path.open("rb") as stream:
             while (
@@ -130,9 +135,14 @@ def _iter_ascii_triangles(
                 if not raw_line:
                     return
                 scanned_bytes += len(raw_line)
+                if draining:
+                    if raw_line.endswith((b"\n", b"\r")):
+                        draining = False
+                    continue
                 lines += 1
                 if len(raw_line) > _MAX_ASCII_LINE_BYTES:
                     vertices.clear()
+                    draining = not raw_line.endswith((b"\n", b"\r"))
                     continue
                 line = raw_line.decode("ascii", errors="ignore")
                 parts = line.lstrip().split()
@@ -227,6 +237,7 @@ def _read_binary_samples(
         bounds_max=(upper[0], upper[1], upper[2]),
         scanned_bytes=_BINARY_HEADER_BYTES + sample_count * _BINARY_TRIANGLE.size,
         parsed_triangles=parsed,
+        complete=parsed == sample_count and sample_count == triangle_count,
     )
 
 
@@ -240,6 +251,9 @@ def _read_ascii_samples(
     scanned_bytes = probe_bytes
     lines = 0
     parsed = 0
+    eof = False
+    valid_source = True
+    draining = False
     try:
         with path.open("rb") as stream:
             while (
@@ -253,11 +267,18 @@ def _read_ascii_samples(
                     break
                 raw_line = stream.readline(read_limit)
                 if not raw_line:
+                    eof = True
                     break
                 scanned_bytes += len(raw_line)
+                if draining:
+                    if raw_line.endswith((b"\n", b"\r")):
+                        draining = False
+                    continue
                 lines += 1
                 if len(raw_line) > _MAX_ASCII_LINE_BYTES:
                     vertices.clear()
+                    valid_source = False
+                    draining = not raw_line.endswith((b"\n", b"\r"))
                     continue
                 parts = raw_line.decode("ascii", errors="ignore").lstrip().split()
                 if len(parts) != 4 or parts[0].lower() != "vertex":
@@ -266,9 +287,11 @@ def _read_ascii_samples(
                     values = [float(value) for value in parts[1:]]
                 except ValueError:
                     vertices.clear()
+                    valid_source = False
                     continue
                 if not all(_valid_coordinate(value) for value in values):
                     vertices.clear()
+                    valid_source = False
                     continue
                 vertices.extend(values)
                 if len(vertices) == 9:
@@ -289,6 +312,7 @@ def _read_ascii_samples(
         bounds_max=(upper[0], upper[1], upper[2]),
         scanned_bytes=scanned_bytes,
         parsed_triangles=parsed,
+        complete=eof and valid_source,
     )
 
 
@@ -320,9 +344,13 @@ def render_stl_thumbnail(
     """
     try:
         import numpy as np
-        from PIL import Image
+        from PIL import Image, ImageFilter
 
-        from app.services.mesh_render import _rasterise_triangles, _select_view_rotation
+        from app.services.mesh_render import (
+            RasterBudget,
+            _rasterise_triangles,
+            _select_view_rotation,
+        )
     except ImportError:
         return None
 
@@ -384,6 +412,7 @@ def render_stl_thumbnail(
     coarse_zbuffer = np.full(
         (coverage_height, coverage_width), np.inf, dtype=np.float64
     )
+    raster_budget = RasterBudget(limit=_MAX_COVERAGE_CANDIDATES)
     base_color = np.asarray([176, 190, 214], dtype=np.float32)
     light = np.asarray([-0.45, 0.6, 1.0], dtype=np.float32)
     light /= np.linalg.norm(light)
@@ -426,6 +455,7 @@ def render_stl_thumbnail(
             base_color,
             coverage_width,
             coverage_height,
+            budget=raster_budget,
         )
 
     for start in range(0, triangles.shape[0], _COVERAGE_CHUNK_TRIANGLES):
@@ -446,6 +476,15 @@ def render_stl_thumbnail(
         ),
         dtype=np.uint8,
     )
+    if not sampled.complete or raster_budget.used >= raster_budget.limit:
+        # A truncated/sample-capped source can leave small gaps between otherwise
+        # adjacent coarse facets. A two-pixel conservative dilation
+        # reconnects that degraded silhouette without turning triangles into
+        # bounding boxes; complete sources keep exact triangle coverage.
+        alpha = np.asarray(
+            Image.fromarray(alpha, mode="L").filter(ImageFilter.MaxFilter(5)),
+            dtype=np.uint8,
+        )
     rgba = np.dstack([image, alpha])
     output = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(output, format="PNG", optimize=True)
@@ -457,4 +496,6 @@ def render_stl_thumbnail(
         sampled_triangles=sampled.sampled_triangles,
         scanned_bytes=sampled.scanned_bytes,
         parsed_triangles=sampled.parsed_triangles,
+        complete=sampled.complete,
+        raster_candidates=raster_budget.used,
     )
