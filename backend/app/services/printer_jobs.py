@@ -5,7 +5,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from sqlalchemy import case, update
 from sqlmodel import select
@@ -47,6 +47,65 @@ class FleetSchedulerStatus:
 
 scheduler_status = FleetSchedulerStatus()
 _CANDIDATE_BATCH_SIZE = 100
+
+
+def reproducibility_payload(job: Any, *, download_url: str | None = None) -> dict[str, Any]:
+    """Compose the typed Bambu reproducibility contract for read schemas.
+
+    The payload is deliberately evidence-based: MQTT fields are grouped as
+    identity/metadata, while ``exact`` is reported only when an archived
+    Artifact (and therefore a download seam) exists.
+    """
+
+    identity = {
+        "display_name": job.external_display_name,
+        "task_id": job.external_task_id,
+        "subtask_id": job.external_subtask_id,
+        "project_id": job.external_project_id,
+        "profile_id": job.external_profile_id,
+        "gcode_file": job.external_gcode_file,
+        "plate_index": job.external_plate_index,
+    }
+    metadata = {
+        "current_layer": job.external_current_layer,
+        "total_layers": job.external_total_layers,
+        "nozzle_diameter": job.external_nozzle_diameter,
+    }
+    has_identity = any(value is not None for value in identity.values())
+    exact = (
+        (
+            job.source != "external"
+            or job.artifact_evidence in {"gcode_archived", "project_archived"}
+        )
+        and download_url is not None
+    )
+    level = "exact" if exact else "metadata" if has_identity else "basic"
+    error_code = getattr(job, "artifact_capture_error_code", None)
+    error_message = getattr(job, "artifact_capture_error_message", None)
+    if error_code is None and job.artifact_capture_error:
+        error_code = job.artifact_capture_error
+    if error_message is None and error_code is not None:
+        error_message = job.artifact_capture_error or error_code
+    error = (
+        {"code": error_code, "message": error_message}
+        if error_code is not None
+        else None
+    )
+    return {
+        "reproducibility_level": level,
+        "identity": identity,
+        "metadata": metadata,
+        "reproducibility": {
+            "level": level,
+            "identity": identity,
+            "metadata": metadata,
+            "error": error,
+            "download_url": download_url if exact else None,
+        },
+        "download_url": download_url if exact else None,
+        "artifact_capture_error_code": error_code,
+        "artifact_capture_error_message": error_message,
+    }
 
 
 def scheduler_snapshot() -> dict[str, object]:

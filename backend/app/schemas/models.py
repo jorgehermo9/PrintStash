@@ -8,6 +8,11 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.db.models import CollectionRole, FileRevisionStatus, FileType, PrintJobState
+from app.schemas.printers import (
+    PrintJobIdentityRead,
+    PrintJobReportedMetadataRead,
+    PrintJobReproducibilityRead,
+)
 
 
 class MetadataRead(BaseModel):
@@ -111,6 +116,18 @@ class ModelPrintJobRead(BaseModel):
     source: str = "vault"
     external_display_name: Optional[str] = None
     artifact_evidence: str = "vault"
+    artifact_capture_error: Optional[str] = None
+    artifact_capture_error_code: Optional[str] = None
+    artifact_capture_error_message: Optional[str] = None
+    reproducibility_level: Literal["exact", "metadata", "basic"] = "basic"
+    identity: PrintJobIdentityRead = Field(default_factory=PrintJobIdentityRead)
+    metadata: PrintJobReportedMetadataRead = Field(
+        default_factory=PrintJobReportedMetadataRead
+    )
+    reproducibility: PrintJobReproducibilityRead = Field(
+        default_factory=PrintJobReproducibilityRead
+    )
+    download_url: Optional[str] = None
     gcode_revision_number: Optional[int] = None
     revision_label: Optional[str] = None
     state: PrintJobState

@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import ssl
+from ftplib import error_perm
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -91,6 +92,49 @@ class FakeFtpsClient:
 
     def close(self) -> None:
         self.calls.append(("close",))
+
+
+class FailingFtpsClient(FakeFtpsClient):
+    def __init__(self, failure: BaseException | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.failure = failure
+
+    def connect(self, host: str, port: int) -> None:
+        super().connect(host, port)
+        if self.failure is not None:
+            failure, self.failure = self.failure, None
+            raise failure
+
+
+def test_ftps_retries_one_transport_reset_but_not_authentication(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "cube.gcode"
+    source.write_bytes(b"G28\n")
+    first = FailingFtpsClient(ConnectionResetError("peer reset"))
+    second = FakeFtpsClient()
+    clients = iter((first, second))
+    client = make_client(ftps_client_factory=lambda: next(clients))
+
+    client._upload_via_ftps(source, "cube.gcode")
+    assert len([call for call in first.calls if call[0] == "connect"]) == 1
+    assert len([call for call in second.calls if call[0] == "connect"]) == 1
+
+    auth = FailingFtpsClient(error_perm("530 Login incorrect"))
+    auth_client = make_client(ftps_client_factory=lambda: auth)
+    with pytest.raises(ProviderError) as failure:
+        auth_client._upload_via_ftps(source, "cube.gcode")
+    assert failure.value.action_code == "bambu_ftps_authentication_failed"
+    assert len([call for call in auth.calls if call[0] == "connect"]) == 1
+
+
+def test_ftps_classification_exposes_actionable_codes() -> None:
+    assert BambuClient._classify_ftps_exception(
+        error_perm("550 file unavailable")
+    ).action_code == "bambu_ftps_not_found"
+    assert BambuClient._classify_ftps_exception(TimeoutError()).action_code == (
+        "bambu_ftps_timeout"
+    )
 
 
 def test_bambu_ca_bundle_is_the_characterized_three_certificate_chain() -> None:

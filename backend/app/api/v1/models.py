@@ -100,6 +100,7 @@ from app.services import (
 from app.services.ingestion import add_gcode_revision_to_model
 from app.services.jobs import registry
 from app.services.moonraker import MoonrakerError
+from app.services.printer_jobs import reproducibility_payload
 from app.services.storage_deletion import process_storage_delete_intents
 from app.services.storage_ownership import UnsafeStorageDeleteError
 from app.services.trash import (
@@ -882,6 +883,15 @@ def get_model_print_jobs(
             started_at=job.started_at,
             finished_at=job.finished_at,
             created_at=job.created_at,
+            **reproducibility_payload(
+                job,
+                download_url=(
+                    f"/api/v1/files/{job.file_id}/download"
+                    if job.source != "external"
+                    or job.artifact_evidence.endswith("_archived")
+                    else None
+                ),
+            ),
         )
         for job, printer, file, md in rows
     ]
@@ -988,6 +998,14 @@ def create_manual_print_job(
         started_at=job.started_at,
         finished_at=job.finished_at,
         created_at=job.created_at,
+        **reproducibility_payload(
+            job,
+            download_url=(
+                f"/api/v1/files/{job.file_id}/download"
+                if job.source != "external" or job.artifact_evidence.endswith("_archived")
+                else None
+            ),
+        ),
     )
 
 

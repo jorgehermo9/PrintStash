@@ -144,6 +144,30 @@ def _reported_float(value: Any) -> float | None:
         return None
 
 
+_BAMBU_ID_FIELDS = (
+    "external_task_id",
+    "external_subtask_id",
+    "external_project_id",
+)
+
+
+def _bambu_identity(values: Dict[str, Any] | PrintJob) -> set[str]:
+    """Return the non-empty task/subtask/project identity set."""
+
+    return {
+        text
+        for field in _BAMBU_ID_FIELDS
+        if (
+            text := _reported_text(
+                values.get(field)
+                if isinstance(values, dict)
+                else getattr(values, field, None)
+            )
+        )
+        not in (None, "0")
+    }
+
+
 class PrinterHub:
     def __init__(
         self,
@@ -723,23 +747,52 @@ class PrinterHub:
                 None,
             )
             cached = self._active_job_cache.get(printer_id)
-            if cached is not None and cached[0] == filename:
-                job = session.get(PrintJob, cached[1])
-                if job is not None and job.deleted_at is not None:
-                    job = None
+            incoming_identity = _bambu_identity(print_stats)
+            if cached is not None:
+                cached_job = session.get(PrintJob, cached[1])
+                # Keep identity continuity ahead of the printer's transient
+                # provider_job_id. Bambu commonly emits project-only and
+                # task-only reports for one run; the same filename is the
+                # bounded transition fallback while a terminal tick still
+                # closes the row normally.
+                if (
+                    cached_job is not None
+                    and cached_job.dedupe_absorbed_at is None
+                    and cached_job.finished_at is None
+                    and (
+                        incoming_identity.intersection(_bambu_identity(cached_job))
+                        or (
+                            cached_job.source == "external"
+                            and cached_job.remote_filename == filename
+                        )
+                    )
+                ):
+                    job = cached_job
 
             if job is None:
-                query = select(PrintJob).where(
-                    PrintJob.printer_id == printer_id,
-                    live(PrintJob),
-                )
-                if provider_job_id:
-                    query = query.where(PrintJob.provider_job_id == provider_job_id)
-                else:
-                    query = query.where(PrintJob.remote_filename == filename)
-                job = session.exec(
-                    query.order_by(PrintJob.created_at.desc())  # type: ignore[attr-defined]
-                ).first()
+                rows = session.exec(
+                    select(PrintJob)
+                    .where(PrintJob.printer_id == printer_id, live(PrintJob))
+                    .order_by(PrintJob.created_at.desc())  # type: ignore[attr-defined]
+                ).all()
+                # Identity matching is set-based rather than provider_job_id
+                # matching: any task/subtask/project overlap is one job.
+                for candidate in rows:
+                    if incoming_identity.intersection(_bambu_identity(candidate)):
+                        job = candidate
+                        break
+                # A project-only -> task-only transition has no overlapping
+                # value. Match the active external row by the same reported
+                # filename as a bounded continuity fallback.
+                if job is None:
+                    for candidate in rows:
+                        if (
+                            candidate.finished_at is None
+                            and candidate.source == "external"
+                            and candidate.remote_filename == filename
+                        ):
+                            job = candidate
+                            break
 
             # A finished job is history, not the live print — its state never
             # moves again. When the printer starts a *new* run of the same
@@ -862,6 +915,8 @@ class PrinterHub:
             ):
                 job.artifact_evidence = "capture_pending"
                 job.artifact_capture_error = None
+                job.artifact_capture_error_code = None
+                job.artifact_capture_error_message = None
                 changed = True
                 assert job.id is not None
                 capture = (job.id, capture_path)
@@ -971,7 +1026,10 @@ class PrinterHub:
         max_mb = settings.bambu_external_capture_max_mb
         if max_mb <= 0:
             await asyncio.to_thread(
-                self._mark_capture_failed, job_id, "external_artifact_capture_disabled"
+                self._mark_capture_failed,
+                job_id,
+                "external_artifact_capture_disabled",
+                "External artifact capture is disabled by configuration.",
             )
             return
         try:
@@ -987,14 +1045,17 @@ class PrinterHub:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - metadata-only is a valid outcome
-            detail = getattr(exc, "code", "artifact_capture_failed")
+            detail = getattr(exc, "action_code", None) or getattr(
+                exc, "code", "artifact_capture_failed"
+            )
+            message = str(exc) or detail
             logger.info(
                 "external artifact capture unavailable for printer=%s job=%s: %s",
                 printer_id,
                 job_id,
                 detail,
             )
-            await asyncio.to_thread(self._mark_capture_failed, job_id, detail)
+            await asyncio.to_thread(self._mark_capture_failed, job_id, detail, message)
 
     def _persist_external_artifact(
         self, job_id: int, staged: Path, filename: str
@@ -1040,11 +1101,15 @@ class PrinterHub:
                 else "gcode_archived"
             )
             job.artifact_capture_error = None
+            job.artifact_capture_error_code = None
+            job.artifact_capture_error_message = None
             job.updated_at = utcnow()
             session.add(job)
             session.commit()
 
-    def _mark_capture_failed(self, job_id: int, error: str) -> None:
+    def _mark_capture_failed(
+        self, job_id: int, error: str, message: str | None = None
+    ) -> None:
         with self._session_factory.session() as session:
             job = session.get(PrintJob, job_id)
             if job is None or job.artifact_evidence not in (
@@ -1054,6 +1119,8 @@ class PrinterHub:
                 return
             job.artifact_evidence = "capture_failed"
             job.artifact_capture_error = error[:1024]
+            job.artifact_capture_error_code = error[:128]
+            job.artifact_capture_error_message = (message or error)[:1024]
             job.updated_at = utcnow()
             session.add(job)
             session.commit()

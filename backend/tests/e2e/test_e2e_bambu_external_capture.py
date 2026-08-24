@@ -59,3 +59,15 @@ def test_external_bambu_job_archives_available_gcode_through_real_storage(
     assert artifact is not None
     assert artifact.original_filename == "benchy.gcode"
     assert artifact.sha256 != "0" * 64
+
+    # The API read contract distinguishes exact artifact evidence from the
+    # printer-reported identity/metadata that cannot reconstruct slicer input.
+    from app.services.printer_jobs import reproducibility_payload
+
+    contract = reproducibility_payload(
+        job, download_url=f"/api/v1/files/{job.file_id}/download"
+    )
+    assert contract["reproducibility_level"] == "exact"
+    assert contract["identity"]["task_id"] == "task-42"
+    assert contract["identity"]["project_id"] == "project-7"
+    assert contract["download_url"].endswith("/download")

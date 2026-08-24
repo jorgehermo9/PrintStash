@@ -9,7 +9,7 @@ import socket
 import ssl
 import threading
 from collections.abc import Awaitable, Callable, Mapping
-from ftplib import FTP_TLS
+from ftplib import FTP_TLS, error_perm, error_reply, error_temp
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -171,6 +171,13 @@ class BambuClient:
         "finish": "complete",
         "failed": "error",
     }
+    _FTPS_RETRYABLE = frozenset(
+        {
+            "bambu_ftps_transport_error",
+            "bambu_ftps_connection_reset",
+            "bambu_ftps_timeout",
+        }
+    )
 
     def __init__(
         self,
@@ -367,12 +374,66 @@ class BambuClient:
         context.verify_mode = ssl.CERT_NONE
         return _ImplicitFTP_TLS(context=context, timeout=30)
 
-    def _upload_via_ftps(self, local_path: Path, remote_filename: str) -> None:
-        """Store a plain-text G-code file in Bambu's cache over implicit FTPS."""
+    @staticmethod
+    def _ftps_error(detail: str, *, action_code: str) -> ProviderError:
+        # ``code`` remains the coarse compatibility category.  The actionable
+        # value is persisted and exposed by the application as ``action_code``.
+        return ProviderError(detail, code="provider_error", action_code=action_code)
 
-        remote_name = Path(remote_filename).name
-        if not remote_name or remote_name != remote_filename:
-            raise ProviderError("invalid_bambu_remote_filename", code="provider_error")
+    @classmethod
+    def _classify_ftps_exception(cls, exc: BaseException) -> ProviderError:
+        if isinstance(exc, ProviderError):
+            return exc
+        if isinstance(exc, ssl.SSLError):
+            code = "bambu_ftps_tls_error"
+        elif isinstance(exc, (socket.timeout, TimeoutError)):
+            code = "bambu_ftps_timeout"
+        elif isinstance(exc, ConnectionResetError):
+            code = "bambu_ftps_connection_reset"
+        elif isinstance(exc, (error_perm, error_reply, error_temp)):
+            response = str(exc).lower()
+            if response.startswith("530") or "auth" in response:
+                code = "bambu_ftps_authentication_failed"
+            elif response.startswith("550") or "not found" in response:
+                code = "bambu_ftps_not_found"
+            elif response.startswith("553") or "path" in response:
+                code = "bambu_ftps_path_invalid"
+            else:
+                code = "bambu_ftps_transport_error"
+        elif isinstance(exc, (ConnectionError, OSError)):
+            code = "bambu_ftps_transport_error"
+        else:
+            code = "bambu_ftps_transport_error"
+        return cls._ftps_error(code, action_code=code)
+
+    @classmethod
+    def _with_ftps_retry(cls, operation: Callable[[], None]) -> None:
+        """Replay exactly once when the transport outcome is safely retryable."""
+
+        for attempt in range(2):
+            try:
+                operation()
+                return
+            except Exception as exc:  # noqa: BLE001 - classify at the seam
+                classified = cls._classify_ftps_exception(exc)
+                if (
+                    attempt == 0
+                    and classified.action_code in cls._FTPS_RETRYABLE
+                ):
+                    continue
+                raise classified from exc
+
+    @staticmethod
+    def _close_ftps(ftp: FTP_TLS) -> None:
+        try:
+            ftp.quit()
+        except Exception:  # noqa: BLE001 - connection can fail before greeting
+            try:
+                ftp.close()
+            except Exception:  # noqa: BLE001 - best-effort socket cleanup
+                pass
+
+    def _upload_once(self, local_path: Path, remote_name: str) -> None:
         temp_name = f".{remote_name}.{self._next_sequence_id()}.uploading"
         ftp = self._ftps_client()
         try:
@@ -383,41 +444,28 @@ class BambuClient:
                 ftp.storbinary(f"STOR cache/{temp_name}", source)
             remote_size = ftp.size(f"cache/{temp_name}")
             if remote_size is not None and remote_size != local_path.stat().st_size:
-                raise ProviderError("bambu_upload_size_mismatch", code="provider_error")
+                raise self._ftps_error(
+                    "bambu_upload_size_mismatch",
+                    action_code="bambu_ftps_size_mismatch",
+                )
             ftp.rename(f"cache/{temp_name}", f"cache/{remote_name}")
         finally:
-            try:
-                ftp.quit()
-            except Exception:  # noqa: BLE001 - connection can fail before greeting
-                try:
-                    ftp.close()
-                except Exception:  # noqa: BLE001 - best-effort socket cleanup
-                    pass
+            self._close_ftps(ftp)
 
-    def _download_via_ftps(
-        self, remote_path: str, local_path: Path, *, max_bytes: int
+    def _upload_via_ftps(self, local_path: Path, remote_filename: str) -> None:
+        """Store a plain-text G-code file in Bambu's cache over implicit FTPS."""
+
+        remote_name = Path(remote_filename).name
+        if not remote_name or remote_name != remote_filename:
+            raise self._ftps_error(
+                "invalid_bambu_remote_filename",
+                action_code="bambu_ftps_path_invalid",
+            )
+        self._with_ftps_retry(lambda: self._upload_once(local_path, remote_name))
+
+    def _download_once(
+        self, remote_name: str, local_path: Path, *, max_bytes: int
     ) -> None:
-        """Recover a cached G-code/project archive without trusting MQTT paths."""
-
-        parsed = urlparse(remote_path)
-        if parsed.scheme not in ("", "ftp", "ftps"):
-            raise ProviderError("invalid_bambu_artifact_path", code="provider_error")
-        if parsed.hostname and parsed.hostname not in {self.host, self.serial}:
-            raise ProviderError("invalid_bambu_artifact_host", code="provider_error")
-        raw_path = unquote(parsed.path).replace("\\", "/")
-        parts = [part for part in raw_path.split("/") if part]
-        if not parts or any(part in (".", "..") for part in parts):
-            raise ProviderError("invalid_bambu_artifact_path", code="provider_error")
-        if len(parts) == 1:
-            parts.insert(0, "cache")
-        if parts[0] != "cache":
-            raise ProviderError("invalid_bambu_artifact_path", code="provider_error")
-        remote_name = "/".join(parts)
-        if not remote_name.lower().endswith(
-            (".gcode", ".g", ".gco", ".bgcode", ".3mf")
-        ):
-            raise ProviderError("unsupported_bambu_artifact", code="provider_error")
-
         ftp = self._ftps_client()
         written = 0
         try:
@@ -426,27 +474,67 @@ class BambuClient:
             ftp.prot_p()
             remote_size = ftp.size(remote_name)
             if remote_size is not None and remote_size > max_bytes:
-                raise ProviderError("bambu_artifact_too_large", code="provider_error")
+                raise self._ftps_error(
+                    "bambu_artifact_too_large", action_code="bambu_ftps_too_large"
+                )
             with local_path.open("wb") as destination:
 
                 def write_chunk(chunk: bytes) -> None:
                     nonlocal written
                     written += len(chunk)
                     if written > max_bytes:
-                        raise ProviderError(
-                            "bambu_artifact_too_large", code="provider_error"
+                        raise self._ftps_error(
+                            "bambu_artifact_too_large",
+                            action_code="bambu_ftps_too_large",
                         )
                     destination.write(chunk)
 
                 ftp.retrbinary(f"RETR {remote_name}", write_chunk)
+            if remote_size is not None and written != remote_size:
+                raise self._ftps_error(
+                    "bambu_download_size_mismatch",
+                    action_code="bambu_ftps_size_mismatch",
+                )
         finally:
-            try:
-                ftp.quit()
-            except Exception:  # noqa: BLE001 - best-effort transport cleanup
-                try:
-                    ftp.close()
-                except Exception:  # noqa: BLE001 - best-effort socket cleanup
-                    pass
+            self._close_ftps(ftp)
+
+    def _download_via_ftps(
+        self, remote_path: str, local_path: Path, *, max_bytes: int
+    ) -> None:
+        """Recover a cached G-code/project archive without trusting MQTT paths."""
+
+        parsed = urlparse(remote_path)
+        if parsed.scheme not in ("", "ftp", "ftps"):
+            raise self._ftps_error(
+                "invalid_bambu_artifact_path", action_code="bambu_ftps_path_invalid"
+            )
+        if parsed.hostname and parsed.hostname not in {self.host, self.serial}:
+            raise self._ftps_error(
+                "invalid_bambu_artifact_host", action_code="bambu_ftps_path_invalid"
+            )
+        raw_path = unquote(parsed.path).replace("\\", "/")
+        parts = [part for part in raw_path.split("/") if part]
+        if not parts or any(part in (".", "..") for part in parts):
+            raise self._ftps_error(
+                "invalid_bambu_artifact_path", action_code="bambu_ftps_path_invalid"
+            )
+        if len(parts) == 1:
+            parts.insert(0, "cache")
+        if parts[0] != "cache":
+            raise self._ftps_error(
+                "invalid_bambu_artifact_path", action_code="bambu_ftps_path_invalid"
+            )
+        remote_name = "/".join(parts)
+        if not remote_name.lower().endswith(
+            (".gcode", ".g", ".gco", ".bgcode", ".3mf")
+        ):
+            raise self._ftps_error(
+                "unsupported_bambu_artifact", action_code="bambu_ftps_path_invalid"
+            )
+
+        self._with_ftps_retry(
+            lambda: self._download_once(remote_name, local_path, max_bytes=max_bytes)
+        )
 
     def _check(self, method: str) -> None:
         capability = self._METHOD_CAPABILITY.get(method)
@@ -675,8 +763,10 @@ class BambuClient:
                 max_bytes=max_bytes,
             )
         except ProviderError:
+            destination.unlink(missing_ok=True)
             raise
         except Exception as exc:
+            destination.unlink(missing_ok=True)
             raise ProviderError(str(exc), code="provider_transport_error") from exc
 
     async def delete_file(self, remote_filename: str) -> dict[str, Any]:

@@ -5037,6 +5037,39 @@
             ],
             "title": "Actual Duration S"
           },
+          "artifact_capture_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error"
+          },
+          "artifact_capture_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Code"
+          },
+          "artifact_capture_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Message"
+          },
           "artifact_evidence": {
             "default": "vault",
             "title": "Artifact Evidence",
@@ -5046,6 +5079,17 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
           },
           "error": {
             "anyOf": [
@@ -5122,6 +5166,9 @@
             "title": "Id",
             "type": "integer"
           },
+          "identity": {
+            "$ref": "#/components/schemas/PrintJobIdentityRead"
+          },
           "material_type": {
             "anyOf": [
               {
@@ -5132,6 +5179,9 @@
               }
             ],
             "title": "Material Type"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PrintJobReportedMetadataRead"
           },
           "printer_id": {
             "anyOf": [
@@ -5150,6 +5200,19 @@
           },
           "remote_filename": {
             "title": "Remote Filename",
+            "type": "string"
+          },
+          "reproducibility": {
+            "$ref": "#/components/schemas/PrintJobReproducibilityRead"
+          },
+          "reproducibility_level": {
+            "default": "basic",
+            "enum": [
+              "exact",
+              "metadata",
+              "basic"
+            ],
+            "title": "Reproducibility Level",
             "type": "string"
           },
           "revision_label": {
@@ -5773,6 +5836,90 @@
         "title": "PrintBatchRead",
         "type": "object"
       },
+      "PrintJobIdentityRead": {
+        "description": "Identity reported by a printer; absent values stay absent.",
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "gcode_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gcode File"
+          },
+          "plate_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plate Index"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "subtask_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtask Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "title": "PrintJobIdentityRead",
+        "type": "object"
+      },
       "PrintJobRead": {
         "properties": {
           "artifact_capture_error": {
@@ -5785,6 +5932,28 @@
               }
             ],
             "title": "Artifact Capture Error"
+          },
+          "artifact_capture_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Code"
+          },
+          "artifact_capture_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Message"
           },
           "artifact_evidence": {
             "default": "vault",
@@ -5849,6 +6018,17 @@
               }
             ],
             "title": "Dispatch Claimed At"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
           },
           "error": {
             "anyOf": [
@@ -5991,6 +6171,9 @@
             "title": "Id",
             "type": "integer"
           },
+          "identity": {
+            "$ref": "#/components/schemas/PrintJobIdentityRead"
+          },
           "material_override_at": {
             "anyOf": [
               {
@@ -6013,6 +6196,9 @@
               }
             ],
             "title": "Material Override By"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PrintJobReportedMetadataRead"
           },
           "model_id": {
             "title": "Model Id",
@@ -6082,6 +6268,19 @@
           },
           "remote_filename": {
             "title": "Remote Filename",
+            "type": "string"
+          },
+          "reproducibility": {
+            "$ref": "#/components/schemas/PrintJobReproducibilityRead"
+          },
+          "reproducibility_level": {
+            "default": "basic",
+            "enum": [
+              "exact",
+              "metadata",
+              "basic"
+            ],
+            "title": "Reproducibility Level",
             "type": "string"
           },
           "requested_by": {
@@ -6174,6 +6373,108 @@
           "updated_at"
         ],
         "title": "PrintJobRead",
+        "type": "object"
+      },
+      "PrintJobReportedMetadataRead": {
+        "description": "Only Bambu MQTT metadata actually supplied by the printer.",
+        "properties": {
+          "current_layer": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Layer"
+          },
+          "nozzle_diameter": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nozzle Diameter"
+          },
+          "total_layers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Layers"
+          }
+        },
+        "title": "PrintJobReportedMetadataRead",
+        "type": "object"
+      },
+      "PrintJobReproducibilityErrorRead": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "PrintJobReproducibilityErrorRead",
+        "type": "object"
+      },
+      "PrintJobReproducibilityRead": {
+        "description": "Evidence level and download seam for reproducible print history.",
+        "properties": {
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrintJobReproducibilityErrorRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "identity": {
+            "$ref": "#/components/schemas/PrintJobIdentityRead"
+          },
+          "level": {
+            "default": "basic",
+            "enum": [
+              "exact",
+              "metadata",
+              "basic"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PrintJobReportedMetadataRead"
+          }
+        },
+        "title": "PrintJobReproducibilityRead",
         "type": "object"
       },
       "PrintJobState": {

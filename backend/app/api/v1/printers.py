@@ -71,7 +71,11 @@ from app.services.printer_hub import (
     get_hub,
     get_hub_from_ws,
 )
-from app.services.printer_jobs import PrinterJobError, transfer_artifact
+from app.services.printer_jobs import (
+    PrinterJobError,
+    reproducibility_payload,
+    transfer_artifact,
+)
 from app.services.printer_provider import (
     ProviderError,
     capabilities_for_provider,
@@ -124,6 +128,12 @@ def _provider_client(request: Request, printer: Printer):
     """Build a provider using this application's explicitly composed registry."""
     registry: ProviderRegistry = request.app.state.printer_provider_registry
     return get_provider_client(printer, registry=registry)
+
+
+def _provider_action_code(exc: ProviderError) -> str:
+    """Return the precise persisted reason when a provider supplies one."""
+
+    return str(getattr(exc, "action_code", None) or exc.code)
 
 
 def _validate_provider_config(p: Printer) -> None:
@@ -420,6 +430,7 @@ def farm_dashboard(
     active_jobs = session.exec(
         select(PrintJob).where(
             PrintJob.printer_id.in_(visible_ids),  # type: ignore[union-attr]
+            live(PrintJob),
             PrintJob.state.in_(
                 [
                     PrintJobState.QUEUED,
@@ -972,11 +983,11 @@ async def send_to_printer(
         )
     except ProviderError as exc:
         job.state = PrintJobState.FAILED
-        job.error = exc.code
+        job.error = _provider_action_code(exc)
         job.finished_at = utcnow()
         session.add(job)
         session.commit()
-        raise HTTPException(status_code=502, detail=exc.code) from exc
+        raise HTTPException(status_code=502, detail=_provider_action_code(exc)) from exc
     except PrinterJobError as exc:
         job.state = PrintJobState.FAILED
         job.error = exc.code
@@ -1005,7 +1016,19 @@ async def send_to_printer(
     session.add(job)
     session.commit()
     session.refresh(job)
-    out = PrintJobRead(**job.model_dump())
+    out = PrintJobRead(
+        **job.model_dump(
+            exclude={"artifact_capture_error_code", "artifact_capture_error_message"}
+        ),
+        **reproducibility_payload(
+            job,
+            download_url=(
+                f"/api/v1/files/{job.file_id}/download"
+                if job.source == "vault" or job.artifact_evidence.endswith("_archived")
+                else None
+            ),
+        ),
+    )
     upsert_printer_file(
         session,
         printer_id=printer_id,
@@ -1095,12 +1118,12 @@ async def start_printer_file(
         await provider.start(payload.remote_filename)
     except ProviderError as exc:
         job.state = PrintJobState.FAILED
-        job.error = exc.code
+        job.error = _provider_action_code(exc)
         job.finished_at = utcnow()
         job.updated_at = utcnow()
         session.add(job)
         session.commit()
-        raise HTTPException(status_code=502, detail=exc.code) from exc
+        raise HTTPException(status_code=502, detail=_provider_action_code(exc)) from exc
     except Exception as exc:
         logger.error("printer start failed printer=%s", printer_id)
         job.state = PrintJobState.FAILED
@@ -1111,7 +1134,19 @@ async def start_printer_file(
         session.commit()
         raise HTTPException(status_code=502, detail="provider_error") from exc
 
-    return PrintJobRead(**job.model_dump())
+    return PrintJobRead(
+        **job.model_dump(
+            exclude={"artifact_capture_error_code", "artifact_capture_error_message"}
+        ),
+        **reproducibility_payload(
+            job,
+            download_url=(
+                f"/api/v1/files/{job.file_id}/download"
+                if job.source == "vault" or job.artifact_evidence.endswith("_archived")
+                else None
+            ),
+        ),
+    )
 
 
 async def _printer_control(
@@ -1142,6 +1177,7 @@ async def _printer_control(
         active_jobs = session.exec(
             select(PrintJob).where(
                 PrintJob.printer_id == printer_id,
+                live(PrintJob),
                 PrintJob.state.in_(  # type: ignore[union-attr]
                     [
                         PrintJobState.STARTED,
@@ -1452,7 +1488,22 @@ def list_jobs(
     rows = session.exec(
         stmt.order_by(PrintJob.created_at.desc()).limit(limit)  # type: ignore[attr-defined]
     ).all()
-    return [PrintJobRead(**j.model_dump()) for j in rows]
+    return [
+        PrintJobRead(
+            **j.model_dump(
+                exclude={"artifact_capture_error_code", "artifact_capture_error_message"}
+            ),
+            **reproducibility_payload(
+                j,
+                download_url=(
+                    f"/api/v1/files/{j.file_id}/download"
+                    if j.source == "vault" or j.artifact_evidence.endswith("_archived")
+                    else None
+                ),
+            ),
+        )
+        for j in rows
+    ]
 
 
 @router.post("/{printer_id}/ws-ticket")

@@ -274,6 +274,8 @@ def test_external_capture_failure_paths_are_persistent(
     failed = db_session.get(PrintJob, job.id)
     assert failed is not None
     assert failed.artifact_capture_error == "external_artifact_capture_disabled"
+    assert failed.artifact_capture_error_code == "external_artifact_capture_disabled"
+    assert failed.artifact_capture_error_message
 
     failed.artifact_evidence = "capture_pending"
     db_session.add(failed)
@@ -298,6 +300,8 @@ def test_external_capture_failure_paths_are_persistent(
     failed = db_session.get(PrintJob, job.id)
     assert failed is not None
     assert failed.artifact_capture_error == "download_failed"
+    assert failed.artifact_capture_error_code == "download_failed"
+    assert failed.artifact_capture_error_message
 
     hub._mark_capture_failed(999_999, "ignored")
     failed.artifact_evidence = "metadata_only"
@@ -797,6 +801,43 @@ class TestPrinterHubSyncActiveJob:
             assert job.external_current_layer == 8
             assert job.external_total_layers == 120
             assert job.external_nozzle_diameter == pytest.approx(0.4)
+
+    def test_bambu_project_only_then_task_only_reuses_one_job(self, hub):
+        from sqlmodel import select
+
+        from app.db.session import get_session_factory
+
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "plate_1.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "plate_1.gcode",
+                "external_project_id": "project-transition",
+            },
+        )
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "plate_1.gcode",
+            0.2,
+            {
+                "state": "printing",
+                "filename": "plate_1.gcode",
+                "external_task_id": "task-transition",
+            },
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob).where(PrintJob.printer_id == 1)
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].external_project_id == "project-transition"
+            assert rows[0].external_task_id == "task-transition"
+            assert rows[0].provider_job_id == "task-transition"
 
     def test_external_bambu_gcode_is_archived_when_cache_is_available(self, hub):
         from sqlmodel import select
