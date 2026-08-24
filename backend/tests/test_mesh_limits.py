@@ -154,13 +154,13 @@ def test_stl_fallback_uniformly_caps_sample_to_100k(
 def test_stl_fallback_dense_fixture_has_a_coherent_silhouette(
     tmp_path: Path,
 ) -> None:
-    """The production stream must cover a dense mesh instead of drawing points.
+    """The production fallback must cover a dense mesh instead of drawing points.
 
     An icosphere with 327,680 deterministic facets is deliberately above the
-    historical 100k sampling ceiling.  Rendering its full stream in bounded
-    chunks should fill the projected silhouette, retain contrast, and leave a
-    safe margin around the object.  The assertions are image properties rather
-    than a pixel snapshot, so they tolerate renderer/library updates.
+    100k work budget.  Aggregating its bounded sample into a coarse coverage
+    grid should fill the projected silhouette, retain contrast, and leave a safe
+    margin around the object.  The assertions are image properties rather than
+    a pixel snapshot, so they tolerate renderer/library updates.
     """
     import trimesh
     from PIL import Image
@@ -175,7 +175,7 @@ def test_stl_fallback_dense_fixture_has_a_coherent_silhouette(
 
     assert result is not None
     assert result.triangle_count == len(mesh.faces)
-    assert result.sampled_triangles == result.triangle_count
+    assert result.sampled_triangles == stl_fallback._MAX_SAMPLED_TRIANGLES
 
     pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
     opaque = pixels[:, :, 3] > 200
@@ -188,6 +188,77 @@ def test_stl_fallback_dense_fixture_has_a_coherent_silhouette(
 
     shaded = pixels[:, :, :3][opaque]
     assert float(shaded.std()) > 10.0  # lighting still provides useful contrast
+
+
+def test_stl_fallback_work_budget_is_observable(tmp_path: Path, monkeypatch) -> None:
+    from app.services import mesh_render, stl_fallback
+
+    monkeypatch.setattr(stl_fallback, "_MAX_SAMPLED_TRIANGLES", 32)
+    monkeypatch.setattr(
+        mesh_render,
+        "_rasterise_triangles",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("fallback must use bounded coarse coverage")
+        ),
+    )
+    path = tmp_path / "budget.stl"
+    _write_renderable_binary_stl(path, 101)
+
+    result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
+
+    assert result is not None
+    assert result.triangle_count == 101
+    assert result.sampled_triangles == 32
+
+
+def test_ascii_fallback_discards_hostile_line_and_recovers(
+    tmp_path: Path,
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "hostile-line.stl"
+    valid = """facet normal 0 0 1
+outer loop
+vertex 0 0 0
+vertex 1 0 0
+vertex 0 1 0
+endloop
+endfacet
+"""
+    path.write_text(
+        "solid hostile\n"
+        + "comment "
+        + ("x" * (stl_fallback._MAX_ASCII_LINE_BYTES + 10_000))
+        + "\n"
+        + valid
+        + "endsolid hostile\n",
+        encoding="ascii",
+    )
+
+    result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
+
+    assert result is not None
+    assert result.triangle_count == 1
+
+
+def test_ascii_fallback_rejects_float32_overflow(tmp_path: Path) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "float-overflow.stl"
+    path.write_text(
+        "solid overflow\n"
+        "facet normal 0 0 1\n"
+        "outer loop\n"
+        "vertex 1e308 0 0\n"
+        "vertex 0 1e308 0\n"
+        "vertex 0 0 1e308\n"
+        "endloop\n"
+        "endfacet\n"
+        "endsolid overflow\n",
+        encoding="ascii",
+    )
+
+    assert stl_fallback.render_stl_thumbnail(path, width=64, height=48) is None
 
 
 def test_stl_fallback_skips_nonfinite_facets(tmp_path: Path) -> None:

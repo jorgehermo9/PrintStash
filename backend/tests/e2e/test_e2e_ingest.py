@@ -111,7 +111,8 @@ async def test_over_cap_mesh_upload_has_a_visible_thumbnail(
     import trimesh
 
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
-    mesh = trimesh.creation.icosphere(subdivisions=4, radius=10.0)
+    mesh = trimesh.creation.icosphere(subdivisions=7, radius=10.0)
+    assert len(mesh.faces) > 100_000
     stl = mesh.export(file_type="stl")
     headers = await _setup_and_login(api, tmp_path)
 
