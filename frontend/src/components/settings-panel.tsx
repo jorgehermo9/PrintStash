@@ -2536,7 +2536,10 @@ export function SettingsPanel() {
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground sm:px-5">
                       <span>{`${trashItems.length} deleted model${trashItems.length === 1 ? "" : "s"}`}</span>
                       <span className="font-mono tabular-nums" aria-label="Trash size">
-                        {formatBytes(trashItems.reduce((total, item) => total + item.size_bytes, 0))} reclaimable
+                        {formatBytes(
+                          trashItems.reduce((total, item) => total + item.size_bytes, 0),
+                        )}{" "}
+                        reclaimable
                       </span>
                     </div>
                   )}

@@ -28,7 +28,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Allow mismatch", "Permitir incompatibilidad"],
   ["Least busy", "Menos ocupada"],
   ["Delete queued job?", "¿Eliminar el trabajo en cola?"],
-  ["This permanently removes the pending job from the queue. It does not cancel an active printer.", "Esto elimina permanentemente el trabajo pendiente de la cola. No cancela una impresora activa."],
+  [
+    "This permanently removes the pending job from the queue. It does not cancel an active printer.",
+    "Esto elimina permanentemente el trabajo pendiente de la cola. No cancela una impresora activa.",
+  ],
   ["Delete job", "Eliminar trabajo"],
   ["Queue job updated", "Trabajo en cola actualizado"],
   ["reclaimable", "recuperables"],
