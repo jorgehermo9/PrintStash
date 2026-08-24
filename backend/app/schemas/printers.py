@@ -82,6 +82,7 @@ class PrintJobReproducibilityRead(BaseModel):
     )
     error: Optional[PrintJobReproducibilityErrorRead] = None
     download_url: Optional[str] = None
+    toolpath_preview_url: Optional[str] = None
 
 
 class PrinterAccess(BaseModel):
@@ -362,6 +363,7 @@ class PrintJobRead(BaseModel):
         default_factory=PrintJobReproducibilityRead
     )
     download_url: Optional[str] = None
+    toolpath_preview_url: Optional[str] = None
     error: Optional[str] = None
     routing_strategy: RoutingStrategy = RoutingStrategy.MANUAL
     queue_position: int = 0

@@ -128,6 +128,7 @@ class ModelPrintJobRead(BaseModel):
         default_factory=PrintJobReproducibilityRead
     )
     download_url: Optional[str] = None
+    toolpath_preview_url: Optional[str] = None
     gcode_revision_number: Optional[int] = None
     revision_label: Optional[str] = None
     state: PrintJobState

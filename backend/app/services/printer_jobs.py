@@ -16,6 +16,7 @@ from app.core.time import utcnow
 from app.db.models import (
     CollectionRole,
     File,
+    FileType,
     JobPriority,
     Model,
     Printer,
@@ -49,7 +50,12 @@ scheduler_status = FleetSchedulerStatus()
 _CANDIDATE_BATCH_SIZE = 100
 
 
-def reproducibility_payload(job: Any, *, download_url: str | None = None) -> dict[str, Any]:
+def reproducibility_payload(
+    job: Any,
+    *,
+    download_url: str | None = None,
+    file_type: FileType | str | None = None,
+) -> dict[str, Any]:
     """Compose the typed Bambu reproducibility contract for read schemas.
 
     The payload is deliberately evidence-based: MQTT fields are grouped as
@@ -91,6 +97,22 @@ def reproducibility_payload(job: Any, *, download_url: str | None = None) -> dic
         if error_code is not None
         else None
     )
+    effective_file_type = file_type or getattr(job, "file_type", None)
+    if isinstance(effective_file_type, FileType):
+        is_three_mf = effective_file_type == FileType.THREE_MF
+    else:
+        is_three_mf = str(effective_file_type).lower() in {"3mf", "filetype.three_mf"}
+    toolpath_preview_url = None
+    if (
+        job.artifact_evidence == "project_archived"
+        and is_three_mf
+        and getattr(job, "file_id", None) is not None
+    ):
+        plate_index = getattr(job, "external_plate_index", None)
+        query = f"?plate_index={plate_index}" if plate_index is not None else ""
+        toolpath_preview_url = (
+            f"/api/v1/files/{job.file_id}/embedded-gcode{query}"
+        )
     return {
         "reproducibility_level": level,
         "identity": identity,
@@ -101,8 +123,10 @@ def reproducibility_payload(job: Any, *, download_url: str | None = None) -> dic
             "metadata": metadata,
             "error": error,
             "download_url": download_url if exact else None,
+            "toolpath_preview_url": toolpath_preview_url,
         },
         "download_url": download_url if exact else None,
+        "toolpath_preview_url": toolpath_preview_url,
         "artifact_capture_error_code": error_code,
         "artifact_capture_error_message": error_message,
     }

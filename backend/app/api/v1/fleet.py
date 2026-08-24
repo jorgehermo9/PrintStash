@@ -39,13 +39,15 @@ from app.services.task_queue import TaskEnvelope, TaskQueue, get_task_queue
 router = APIRouter(prefix="/fleet", tags=["fleet"])
 
 
-def _print_job_read(job: PrintJob) -> PrintJobRead:
+def _print_job_read(session: Session, job: PrintJob) -> PrintJobRead:
+    artifact = session.get(File, job.file_id)
     return PrintJobRead(
         **job.model_dump(
             exclude={"artifact_capture_error_code", "artifact_capture_error_message"}
         ),
         **reproducibility_payload(
             job,
+            file_type=artifact.file_type if artifact is not None else None,
             download_url=(
                 f"/api/v1/files/{job.file_id}/download"
                 if job.source != "external"
@@ -79,7 +81,7 @@ def get_queue(
         history_offset=history_offset,
         visible_printer_ids=visible_ids,
     )
-    return [_print_job_read(job) for job in rows]
+    return [_print_job_read(session, job) for job in rows]
 
 
 @router.post(
@@ -122,7 +124,7 @@ async def create_queue_job(
     await task_queue.enqueue(
         TaskEnvelope(job_id=str(job.id), kind="fleet_dispatch", payload={})
     )
-    return _print_job_read(job)
+    return _print_job_read(session, job)
 
 
 @router.post("/compatibility", response_model=CompatibilityRead)
@@ -192,7 +194,7 @@ async def create_batch(
     )
     return PrintBatchRead(
         **batch.model_dump(),
-        jobs=[_print_job_read(job) for job in jobs],
+        jobs=[_print_job_read(session, job) for job in jobs],
     )
 
 
@@ -244,7 +246,7 @@ def patch_queue_job(
         job = fleet.update_queue_job(session, job_id, payload, current_user)
     except fleet.FleetError as exc:
         raise _queue_error(exc) from exc
-    return _print_job_read(job)
+    return _print_job_read(session, job)
 
 
 @router.delete("/queue/{job_id}", response_model=PrintJobRead)
@@ -258,7 +260,7 @@ def delete_queue_job(
         job = fleet.delete_queue_job(session, job_id, current_user)
     except fleet.FleetError as exc:
         raise _queue_error(exc) from exc
-    return _print_job_read(job)
+    return _print_job_read(session, job)
 
 
 @router.post("/queue/{job_id}/retry", response_model=PrintJobRead)
@@ -276,7 +278,7 @@ async def retry_queue_job(
     await task_queue.enqueue(
         TaskEnvelope(job_id=str(job.id), kind="fleet_dispatch", payload={})
     )
-    return _print_job_read(job)
+    return _print_job_read(session, job)
 
 
 @router.post("/queue/{job_id}/operator-decision", response_model=PrintJobRead)
@@ -296,7 +298,7 @@ async def decide_operator_release(
         await task_queue.enqueue(
             TaskEnvelope(job_id=str(job.id), kind="fleet_dispatch", payload={})
         )
-    return _print_job_read(job)
+    return _print_job_read(session, job)
 
 
 @router.patch(

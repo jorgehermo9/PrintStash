@@ -885,6 +885,7 @@ def get_model_print_jobs(
             created_at=job.created_at,
             **reproducibility_payload(
                 job,
+                file_type=file.file_type,
                 download_url=(
                     f"/api/v1/files/{job.file_id}/download"
                     if job.source != "external"
@@ -1000,6 +1001,7 @@ def create_manual_print_job(
         created_at=job.created_at,
         **reproducibility_payload(
             job,
+            file_type=file_row.file_type,
             download_url=(
                 f"/api/v1/files/{job.file_id}/download"
                 if job.source != "external" or job.artifact_evidence.endswith("_archived")

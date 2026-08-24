@@ -5267,6 +5267,17 @@
           },
           "state": {
             "$ref": "#/components/schemas/PrintJobState"
+          },
+          "toolpath_preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toolpath Preview Url"
           }
         },
         "required": [
@@ -6356,6 +6367,17 @@
             ],
             "title": "Target Group"
           },
+          "toolpath_preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toolpath Preview Url"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -6472,6 +6494,17 @@
           },
           "metadata": {
             "$ref": "#/components/schemas/PrintJobReportedMetadataRead"
+          },
+          "toolpath_preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toolpath Preview Url"
           }
         },
         "title": "PrintJobReproducibilityRead",
@@ -14201,6 +14234,69 @@
           }
         ],
         "summary": "Get a pre-signed direct download URL (S3 only)",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/{file_id}/embedded-gcode": {
+      "get": {
+        "description": "Reads Metadata/plate_<N>.gcode on demand from an authorized 3MF. The selected member is bounded and is never extracted or persisted.",
+        "operationId": "embedded_gcode_api_v1_files__file_id__embedded_gcode_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plate_index",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Plate Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Serve a Bambu 3MF's embedded G-code preview",
         "tags": [
           "files"
         ]

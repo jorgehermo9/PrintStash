@@ -1022,6 +1022,7 @@ async def send_to_printer(
         ),
         **reproducibility_payload(
             job,
+            file_type=f.file_type,
             download_url=(
                 f"/api/v1/files/{job.file_id}/download"
                 if job.source == "vault" or job.artifact_evidence.endswith("_archived")
@@ -1140,6 +1141,7 @@ async def start_printer_file(
         ),
         **reproducibility_payload(
             job,
+            file_type=file_row.file_type if file_row is not None else None,
             download_url=(
                 f"/api/v1/files/{job.file_id}/download"
                 if job.source == "vault" or job.artifact_evidence.endswith("_archived")
@@ -1488,6 +1490,12 @@ def list_jobs(
     rows = session.exec(
         stmt.order_by(PrintJob.created_at.desc()).limit(limit)  # type: ignore[attr-defined]
     ).all()
+    file_types = {
+        file.id: file.file_type
+        for file in session.exec(
+            select(File).where(File.id.in_({job.file_id for job in rows}))  # type: ignore[attr-defined]
+        ).all()
+    }
     return [
         PrintJobRead(
             **j.model_dump(
@@ -1495,6 +1503,7 @@ def list_jobs(
             ),
             **reproducibility_payload(
                 j,
+                file_type=file_types.get(j.file_id),
                 download_url=(
                     f"/api/v1/files/{j.file_id}/download"
                     if j.source == "vault" or j.artifact_evidence.endswith("_archived")
