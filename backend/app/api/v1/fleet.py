@@ -237,7 +237,7 @@ def delete_queue_job(
 ) -> PrintJobRead:
     _require_queue_job_role(session, current_user, job_id, PrinterRole.PRINT)
     try:
-        job = fleet.cancel_queue_job(session, job_id, current_user)
+        job = fleet.delete_queue_job(session, job_id, current_user)
     except fleet.FleetError as exc:
         raise _queue_error(exc) from exc
     return PrintJobRead(**job.model_dump())

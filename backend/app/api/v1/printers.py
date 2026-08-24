@@ -429,6 +429,7 @@ def farm_dashboard(
                     PrintJobState.UPLOADING,
                 ]
             ),
+            live(PrintJob),
         )
     ).all()
 
@@ -1148,6 +1149,7 @@ async def _printer_control(
                         PrintJobState.PAUSED,
                     ]
                 ),
+                live(PrintJob),
             )
         ).all()
         for job in active_jobs:
@@ -1443,7 +1445,10 @@ def list_jobs(
     printer_rbac.require_printer_role(
         session, current_user, printer_id, PrinterRole.VIEW
     )
-    stmt = select(PrintJob).where(PrintJob.printer_id == printer_id)
+    stmt = select(PrintJob).where(
+        PrintJob.printer_id == printer_id,
+        live(PrintJob),
+    )
     rows = session.exec(
         stmt.order_by(PrintJob.created_at.desc()).limit(limit)  # type: ignore[attr-defined]
     ).all()

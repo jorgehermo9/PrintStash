@@ -213,7 +213,7 @@ def test_active_maintenance_blocks_routing_and_log_is_recorded(
     )
 
 
-def test_queued_jobs_can_be_reordered_and_cancelled(
+def test_queued_jobs_can_be_reordered_and_deleted(
     client: TestClient,
     auth_headers: dict[str, str],
     db_session: Session,
@@ -244,11 +244,29 @@ def test_queued_jobs_can_be_reordered_and_cancelled(
     queue = client.get("/api/v1/fleet/queue", headers=auth_headers).json()
     assert [row["id"] for row in queue[:2]] == [second["id"], first["id"]]
 
-    cancelled = client.delete(
+    changed_lane = client.patch(
+        f"/api/v1/fleet/queue/{first['id']}",
+        headers=auth_headers,
+        json={"priority": "rush"},
+    )
+    assert changed_lane.status_code == 200
+    assert changed_lane.json()["queue_position"] == 1
+    returned_to_lane = client.patch(
+        f"/api/v1/fleet/queue/{first['id']}",
+        headers=auth_headers,
+        json={"priority": "normal"},
+    )
+    assert returned_to_lane.status_code == 200
+    assert returned_to_lane.json()["queue_position"] == 2
+
+    deleted = client.delete(
         f"/api/v1/fleet/queue/{first['id']}", headers=auth_headers
     )
-    assert cancelled.status_code == 200
-    assert cancelled.json()["state"] == "cancelled"
+    assert deleted.status_code == 200
+    assert deleted.json()["state"] == "cancelled"
+    queue = client.get("/api/v1/fleet/queue", headers=auth_headers).json()
+    assert first["id"] not in {row["id"] for row in queue}
+    assert queue[0]["queue_position"] == 1
 
 
 def test_scheduler_dispatches_queued_job_once(
@@ -1575,6 +1593,7 @@ def test_require_queue_job_role_returns_unassigned_job_for_superuser(
 
     assert resp.status_code == 200
     assert resp.json()["state"] == "cancelled"
+    assert client.get("/api/v1/fleet/queue", headers=auth_headers).json() == []
 
 
 def test_require_queue_job_role_404_for_non_superuser_on_unassigned_job(

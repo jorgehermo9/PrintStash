@@ -971,6 +971,44 @@ class TestPrinterHubSyncActiveJob:
             ).first()
             assert job is None
 
+    @pytest.mark.parametrize(
+        ("terminal_state", "expected_state"),
+        [
+            ("complete", PrintJobState.COMPLETED),
+            ("cancelled", PrintJobState.CANCELLED),
+            ("error", PrintJobState.FAILED),
+        ],
+    )
+    def test_first_terminal_snapshot_never_leaves_a_phantom_active_job(
+        self, hub, terminal_state, expected_state
+    ):
+        """The initial row must become terminal in the same transaction."""
+        from sqlmodel import select
+
+        from app.db.models import PrintJob
+        from app.db.session import get_session_factory
+        from app.services.fleet import fleet_summary
+
+        asyncio.run(
+            hub._sync_active_job(
+                1,
+                terminal_state,
+                "stale-terminal.gcode",
+                0.0,
+                {"state": terminal_state},
+            )
+        )
+
+        with get_session_factory().session() as session:
+            job = session.exec(
+                select(PrintJob).where(
+                    PrintJob.remote_filename == "stale-terminal.gcode"
+                )
+            ).one()
+            assert job.state == expected_state
+            assert job.finished_at is not None
+            assert fleet_summary(session)["active_jobs"] == 0
+
     def test_sync_sets_error_on_failure(self, hub, db_session):
         pid, job = self._setup_job(db_session)
 

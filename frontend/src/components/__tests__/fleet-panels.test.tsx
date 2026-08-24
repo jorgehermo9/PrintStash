@@ -26,13 +26,13 @@ import type {
 // `QueryClient` cache `renderQueuePanel` renders them under.
 // Toasts are left as the real thing — sonner is happy without a mounted
 // `<Toaster />` and nothing here asserts on them.
-const cancelJob = vi.fn<FleetQueueDeps["cancelJob"]>();
+const deleteJob = vi.fn<FleetQueueDeps["deleteJob"]>();
 const updateJob = vi.fn<FleetQueueDeps["updateJob"]>();
 const retryJob = vi.fn<FleetQueueDeps["retryJob"]>();
 const decideOperatorGate = vi.fn<FleetQueueDeps["decideOperatorGate"]>();
 
 const queueDeps: FleetQueueDeps = {
-  cancelJob,
+  deleteJob,
   updateJob,
   retryJob,
   decideOperatorGate,
@@ -268,18 +268,53 @@ describe("FleetQueuePanel", () => {
     await waitFor(() => expect(updateJob).toHaveBeenCalledWith(2, { queue_position: 1 }));
   });
 
-  it("cancelling a queued job confirms then calls cancelFleetJob", async () => {
-    cancelJob.mockResolvedValue(undefined);
+  it("deleting a queued job confirms then calls deleteFleetJob", async () => {
+    deleteJob.mockResolvedValue(undefined);
     renderQueuePanel({
       jobs: [
         makeJob({ id: 5, state: "queued", queue_position: 1, remote_filename: "cancel-me.gcode" }),
       ],
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Cancel cancel-me.gcode" }));
-    await userEvent.click(screen.getByRole("button", { name: "Cancel job" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete cancel-me.gcode" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete job" }));
 
-    await waitFor(() => expect(cancelJob).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(deleteJob).toHaveBeenCalledWith(5));
+  });
+
+  it("edits routing, priority, and position for a queued job", async () => {
+    updateJob.mockResolvedValue(makeJob());
+    renderQueuePanel({
+      jobs: [
+        makeJob({
+          id: 7,
+          remote_filename: "edit-me.gcode",
+          updated_at: "2026-07-15T00:00:00Z",
+        }),
+      ],
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit edit-me.gcode" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit queue job" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("Routing"), "manual");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Printer"), "1");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Priority"), "rush");
+    await userEvent.clear(within(dialog).getByLabelText("Queue position"));
+    await userEvent.type(within(dialog).getByLabelText("Queue position"), "3");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(updateJob).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({
+          strategy: "manual",
+          printer_id: 1,
+          priority: "rush",
+          queue_position: 3,
+          expected_updated_at: "2026-07-15T00:00:00Z",
+        }),
+      ),
+    );
   });
 
   it("retrying a failed retryable job calls retryFleetJob", async () => {

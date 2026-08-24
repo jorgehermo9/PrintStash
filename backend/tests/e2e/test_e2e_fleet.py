@@ -95,6 +95,69 @@ async def _wait_job_state(
 
 
 @pytest.mark.asyncio
+async def test_queue_jobs_can_be_edited_reordered_and_deleted_via_real_api(
+    api, superuser_headers, e2e_db
+):
+    printer = Printer(
+        name="Queue editor",
+        moonraker_url="http://queue-editor.invalid",
+        status=PrinterStatus.READY,
+    )
+    e2e_db.add(printer)
+    e2e_db.commit()
+    e2e_db.refresh(printer)
+    artifact = _gcode(e2e_db, "queue-edit")
+
+    first = (
+        await api.post(
+            "/api/v1/fleet/queue",
+            headers=superuser_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        )
+    ).json()
+    second = (
+        await api.post(
+            "/api/v1/fleet/queue",
+            headers=superuser_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        )
+    ).json()
+
+    edited = await api.patch(
+        f"/api/v1/fleet/queue/{second['id']}",
+        headers=superuser_headers,
+        json={
+            "queue_position": 1,
+            "priority": "rush",
+            "expected_updated_at": second["updated_at"],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["priority"] == "rush"
+
+    deleted = await api.delete(
+        f"/api/v1/fleet/queue/{first['id']}", headers=superuser_headers
+    )
+    assert deleted.status_code == 200, deleted.text
+    rows = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
+    assert [row["id"] for row in rows] == [second["id"]]
+
+    await api.delete(f"/api/v1/fleet/queue/{second['id']}", headers=superuser_headers)
+    summary = (await api.get("/api/v1/fleet/summary", headers=superuser_headers)).json()
+    assert summary["queued_jobs"] == 0
+    assert summary["active_jobs"] == 0
+    assert (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json() == []
+
+
+@pytest.mark.asyncio
 async def test_two_printers_dispatch_and_complete_via_real_api(
     api, superuser_headers, e2e_db
 ):

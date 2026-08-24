@@ -53,7 +53,7 @@ export function updateFleetJob(id: number, payload: QueueJobUpdate): Promise<Pri
   return sendJson<PrintJobRead>(`/api/v1/fleet/queue/${id}`, "PATCH", payload);
 }
 
-export function cancelFleetJob(id: number): Promise<void> {
+export function deleteFleetJob(id: number): Promise<void> {
   return sendAction(`/api/v1/fleet/queue/${id}`, "DELETE");
 }
 

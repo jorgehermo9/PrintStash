@@ -24,6 +24,7 @@ from app.db.models import (
     PrintJobState,
     User,
 )
+from app.db.scopes import live
 from app.db.session import get_session_factory
 from app.services import fleet, printer_rbac, rbac
 from app.services.printer_files import upsert_printer_file
@@ -122,6 +123,7 @@ def reconcile_stranded_dispatches() -> int:
                 select(PrintJob).where(
                     PrintJob.state == PrintJobState.UPLOADING,
                     PrintJob.dispatch_claimed_at.is_not(None),  # type: ignore[union-attr]
+                    live(PrintJob),
                 )
             ).all()
         )
@@ -153,6 +155,7 @@ def _claim_next_sync() -> int | None:
                 .where(
                     PrintJob.state == PrintJobState.QUEUED,
                     PrintJob.dispatch_claimed_at.is_(None),  # type: ignore[union-attr]
+                    live(PrintJob),
                 )
                 .order_by(
                     PrintJob.blocked_reason.is_not(None),  # type: ignore[union-attr]
@@ -303,6 +306,7 @@ def _claim_next_sync() -> int | None:
                 PrintJob.id == candidate.id,
                 PrintJob.state == PrintJobState.QUEUED,
                 PrintJob.dispatch_claimed_at.is_(None),  # type: ignore[union-attr]
+                live(PrintJob),
             )
             .values(
                 state=PrintJobState.UPLOADING,
@@ -348,7 +352,7 @@ class DispatchContext:
 def _load_dispatch_context(job_id: int) -> DispatchContext:
     with get_session_factory().scoped_session() as session:
         job = session.get(PrintJob, job_id)
-        if job is None or job.printer_id is None:
+        if job is None or job.deleted_at is not None or job.printer_id is None:
             raise RuntimeError("queue_job_not_found")
         printer = session.get(Printer, job.printer_id)
         artifact = session.get(File, job.file_id)

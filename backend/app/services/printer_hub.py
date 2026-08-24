@@ -725,9 +725,14 @@ class PrinterHub:
             cached = self._active_job_cache.get(printer_id)
             if cached is not None and cached[0] == filename:
                 job = session.get(PrintJob, cached[1])
+                if job is not None and job.deleted_at is not None:
+                    job = None
 
             if job is None:
-                query = select(PrintJob).where(PrintJob.printer_id == printer_id)
+                query = select(PrintJob).where(
+                    PrintJob.printer_id == printer_id,
+                    live(PrintJob),
+                )
                 if provider_job_id:
                     query = query.where(PrintJob.provider_job_id == provider_job_id)
                 else:
@@ -751,7 +756,10 @@ class PrinterHub:
                 self._active_job_cache.pop(printer_id, None)
 
             if job is None:
-                # No vault-created job — check if printer is actively printing.
+                # Keep creation and the first observed provider state in one
+                # transaction. Previously a terminal cancellation committed a
+                # default QUEUED row first, so concurrent dashboards briefly
+                # counted a phantom active job before the terminal writeback.
                 if ms_state in (
                     "printing",
                     "paused",
@@ -770,8 +778,7 @@ class PrinterHub:
                         artifact_evidence="metadata_only",
                     )
                     session.add(job)
-                    session.commit()
-                    session.refresh(job)
+                    session.flush()
                     logger.info(
                         "captured external print job %s on printer %s (state=%s)",
                         filename,

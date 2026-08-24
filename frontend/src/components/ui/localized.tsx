@@ -20,6 +20,19 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   ["Print anyway", "Imprimir de todos modos"],
   ["Copies", "Copias"],
   ["Priority", "Prioridad"],
+  ["Edit queue job", "Editar trabajo en cola"],
+  ["Queue position", "Posición en la cola"],
+  ["Target group", "Grupo de destino"],
+  ["Compatibility", "Compatibilidad"],
+  ["Require compatible material", "Requerir material compatible"],
+  ["Allow mismatch", "Permitir incompatibilidad"],
+  ["Least busy", "Menos ocupada"],
+  ["Delete queued job?", "¿Eliminar el trabajo en cola?"],
+  ["This permanently removes the pending job from the queue. It does not cancel an active printer.", "Esto elimina permanentemente el trabajo pendiente de la cola. No cancela una impresora activa."],
+  ["Delete job", "Eliminar trabajo"],
+  ["Queue job updated", "Trabajo en cola actualizado"],
+  ["reclaimable", "recuperables"],
+  ["Trash size", "Tamaño de la papelera"],
   ["Low", "Baja"],
   ["Normal", "Normal"],
   ["Rush", "Urgente"],
@@ -1585,6 +1598,11 @@ export function translateUiText(locale: Locale, value: string): string {
 
   const files = message.match(/^(\d+) files?$/i)?.[1];
   if (files) return `${leading}${files} archivos${trailing}`;
+
+  const deletedModels = message.match(/^(\d+) deleted models?$/i)?.[1];
+  if (deletedModels) {
+    return `${leading}${deletedModels} ${deletedModels === "1" ? "modelo eliminado" : "modelos eliminados"}${trailing}`;
+  }
 
   const source = message.match(/^(\d+) source$/i)?.[1];
   if (source) return `${leading}${source} originales${trailing}`;

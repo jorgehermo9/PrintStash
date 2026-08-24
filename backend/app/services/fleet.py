@@ -104,6 +104,7 @@ def build_routing_snapshot(
             .where(
                 PrintJob.printer_id.in_(printer_ids),  # type: ignore[union-attr]
                 PrintJob.state.in_(_ACTIVE_STATES),
+                live(PrintJob),
             )
             .group_by(PrintJob.printer_id)
         ).all()
@@ -363,7 +364,7 @@ def _active_counts(session: Session) -> dict[int, int]:
         int(printer_id): int(count)
         for printer_id, count in session.exec(
             select(PrintJob.printer_id, func.count(PrintJob.id))
-            .where(PrintJob.state.in_(_ACTIVE_STATES))
+            .where(PrintJob.state.in_(_ACTIVE_STATES), live(PrintJob))
             .group_by(PrintJob.printer_id)
         ).all()
         if printer_id is not None
@@ -466,7 +467,10 @@ def enqueue_job(
     if blocked_reason == "material_mismatch_confirmation_required":
         raise FleetError(blocked_reason)
     queued = session.exec(
-        select(PrintJob).where(PrintJob.state == PrintJobState.QUEUED)
+        select(PrintJob).where(
+            PrintJob.state == PrintJobState.QUEUED,
+            live(PrintJob),
+        )
     ).all()
     job = PrintJob(
         printer_id=printer.id if printer else None,
@@ -540,7 +544,10 @@ def create_batch(
     session.flush()
     snapshot = build_routing_snapshot(session, {int(artifact.id)})
     queued = session.exec(
-        select(PrintJob).where(PrintJob.state == PrintJobState.QUEUED)
+        select(PrintJob).where(
+            PrintJob.state == PrintJobState.QUEUED,
+            live(PrintJob),
+        )
     ).all()
     position = max((row.queue_position for row in queued), default=0)
     jobs: list[PrintJob] = []
@@ -669,7 +676,7 @@ def list_queue_page(
     active = list(
         session.exec(
             select(PrintJob)
-            .where(PrintJob.state.in_(_ACTIVE_STATES), visibility)
+            .where(PrintJob.state.in_(_ACTIVE_STATES), live(PrintJob), visibility)
             .order_by(
                 case(
                     (PrintJob.priority == JobPriority.RUSH, 0),
@@ -687,6 +694,7 @@ def list_queue_page(
             select(PrintJob)
             .where(
                 PrintJob.state.notin_(_ACTIVE_STATES),  # type: ignore[union-attr]
+                live(PrintJob),
                 visibility,
             )
             .order_by(
@@ -747,8 +755,10 @@ def update_queue_job(
         job.priority = payload.priority
         lane = session.exec(
             select(PrintJob).where(
+                PrintJob.id != job.id,
                 PrintJob.state == PrintJobState.QUEUED,
                 PrintJob.priority == payload.priority,
+                live(PrintJob),
             )
         ).all()
         job.queue_position = max((row.queue_position for row in lane), default=0) + 1
@@ -766,6 +776,7 @@ def update_queue_job(
                 .where(
                     PrintJob.state == PrintJobState.QUEUED,
                     PrintJob.priority == job.priority,
+                    live(PrintJob),
                 )
                 .order_by(PrintJob.queue_position, PrintJob.created_at, PrintJob.id)
             ).all()
@@ -785,14 +796,33 @@ def update_queue_job(
     return job
 
 
-def cancel_queue_job(session: Session, job_id: int, current_user: User) -> PrintJob:
+def delete_queue_job(session: Session, job_id: int, current_user: User) -> PrintJob:
+    """Remove a not-yet-dispatched job without fabricating cancelled history."""
     job = _queued_job(session, job_id)
+    priority = job.priority
+    now = utcnow()
     job.state = PrintJobState.CANCELLED
-    job.finished_at = utcnow()
+    job.finished_at = now
     job.blocked_reason = None
+    job.deleted_at = now
+    job.deleted_by = current_user.id
     job.updated_by = current_user.id
-    job.updated_at = utcnow()
+    job.updated_at = now
     session.add(job)
+    remaining = session.exec(
+        select(PrintJob)
+        .where(
+            PrintJob.state == PrintJobState.QUEUED,
+            PrintJob.priority == priority,
+            live(PrintJob),
+        )
+        .order_by(PrintJob.queue_position, PrintJob.created_at, PrintJob.id)
+    ).all()
+    for position, row in enumerate(remaining, start=1):
+        if row.queue_position != position:
+            row.queue_position = position
+            row.updated_at = now
+            session.add(row)
     session.commit()
     session.refresh(job)
     return job
