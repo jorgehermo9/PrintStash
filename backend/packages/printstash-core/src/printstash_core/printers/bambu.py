@@ -403,7 +403,11 @@ class BambuClient:
             elif response.startswith("553") or "path" in response:
                 code = "bambu_ftps_path_invalid"
             else:
-                code = "bambu_ftps_transport_error"
+                # Unknown FTP replies are server decisions, not evidence of
+                # a transient transport failure. Persist a stable code and
+                # leave the one-shot retry reserved for explicit transport
+                # outcomes only.
+                code = "bambu_ftps_server_rejected"
         elif isinstance(exc, (ConnectionError, OSError)):
             code = "bambu_ftps_transport_error"
         else:

@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import ssl
-from ftplib import error_perm
+from ftplib import error_perm, error_reply
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -141,6 +141,12 @@ def test_ftps_classification_exposes_actionable_codes() -> None:
     assert BambuClient._classify_ftps_exception(TimeoutError()).action_code == (
         "bambu_ftps_timeout"
     )
+    assert BambuClient._classify_ftps_exception(
+        error_reply("501 command syntax error")
+    ).action_code == "bambu_ftps_server_rejected"
+    assert BambuClient._classify_ftps_exception(
+        error_reply("452 insufficient storage")
+    ).action_code == "bambu_ftps_server_rejected"
 
 
 def test_provider_error_defaults_action_code_to_safe_coarse_code() -> None:
@@ -200,6 +206,19 @@ def test_ftps_non_retryable_codes_and_path_guards(tmp_path: Path) -> None:
     with pytest.raises(ProviderError) as invalid_path:
         invalid._download_via_ftps("cache/../benchy.3mf", tmp_path / "invalid", max_bytes=4)
     assert invalid_path.value.action_code == "bambu_ftps_path_invalid"
+
+    unknown_calls = 0
+
+    def unknown_reply_factory() -> FailingFtpsClient:
+        nonlocal unknown_calls
+        unknown_calls += 1
+        return FailingFtpsClient(error_reply("501 command syntax error"))
+
+    unknown = make_client(ftps_client_factory=unknown_reply_factory)
+    with pytest.raises(ProviderError) as unknown_error:
+        unknown._upload_via_ftps(source, "cube.gcode")
+    assert unknown_error.value.action_code == "bambu_ftps_server_rejected"
+    assert unknown_calls == 1
 
 
 def test_bambu_ca_bundle_is_the_characterized_three_certificate_chain() -> None:

@@ -210,6 +210,35 @@ def test_bambu_identity_grouping_rejects_fast_reprints_and_transitive_chains() -
     groups = migration._groups(chain)
     assert [[entry["id"] for entry in group] for group in groups] == [[1, 2]]
 
+    # A reused project id in a later, completed lifecycle is a reprint, not a
+    # duplicate callback. Shared identity must be paired with time evidence.
+    separated_reprints = [
+        row(
+            10,
+            project="project-reused",
+            started="2026-08-24 01:00:00",
+            finished="2026-08-24 01:05:00",
+        ),
+        row(
+            11,
+            project="project-reused",
+            started="2026-08-24 02:00:00",
+            finished="2026-08-24 02:05:00",
+            created="2026-08-24 02:00:00",
+        ),
+    ]
+    assert migration._groups(separated_reprints) == []
+
+    # The same token on separate printers is not evidence of one print.
+    multi_printer = [
+        row(20, project="shared-project", started="2026-08-24 03:00:00"),
+        {
+            **row(21, project="shared-project", started="2026-08-24 03:00:00"),
+            "printer_id": 2,
+        },
+    ]
+    assert migration._groups(multi_printer) == []
+
 # --------------------------------------------------------------------------- #
 # Strict coverage for the migration runner (app/db/migrate.py) and create_all
 # gating — the entrypoint hardening for issue #29. Runs the real migration chain

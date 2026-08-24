@@ -79,19 +79,29 @@ def _identity_fields(row: sa.RowMapping) -> dict[str, str]:
     }
 
 
-def _strict_transition(left: sa.RowMapping, right: sa.RowMapping) -> bool:
-    """Prove a project/task hand-off is one active lifecycle, not a reprint."""
+def _identity_tokens(row: sa.RowMapping) -> set[tuple[object, str, str]]:
+    """Return printer-scoped, typed identity tokens.
 
-    left_fields = _identity_fields(left)
-    right_fields = _identity_fields(right)
-    if len(left_fields) != 1 or len(right_fields) != 1:
-        return False
-    field_pair = frozenset((next(iter(left_fields)), next(iter(right_fields))))
-    if field_pair not in _TRANSITION_FIELDS:
-        return False
-    if left["remote_filename"] != right["remote_filename"]:
-        return False
-    # A missing started_at cannot prove that two rows describe one lifecycle.
+    The value alone is not an identity: Bambu identifiers are only meaningful
+    on their printer, and a task id must never match a project id merely
+    because their serialized values happen to be equal.
+    """
+
+    printer_id = row["printer_id"]
+    return {
+        (printer_id, column, value)
+        for column, value in _identity_fields(row).items()
+    }
+
+
+def _lifecycle_overlaps(left: sa.RowMapping, right: sa.RowMapping) -> bool:
+    """Prove two rows belong to an overlapping print lifecycle.
+
+    ``created_at`` is deliberately not a lifecycle signal: import timing can
+    differ from the printer's start/finish timestamps. An absent start cannot
+    prove continuity, while an absent finish is an open active interval.
+    """
+
     left_started = _timestamp(left["started_at"])
     right_started = _timestamp(right["started_at"])
     if left_started == _MISSING_TIMESTAMP or right_started == _MISSING_TIMESTAMP:
@@ -105,27 +115,49 @@ def _strict_transition(left: sa.RowMapping, right: sa.RowMapping) -> bool:
     return max(left_started, right_started) <= min(left_finished, right_finished)
 
 
+def _strict_transition(left: sa.RowMapping, right: sa.RowMapping) -> bool:
+    """Prove a project/task hand-off is one active lifecycle, not a reprint."""
+
+    left_fields = _identity_fields(left)
+    right_fields = _identity_fields(right)
+    if len(left_fields) != 1 or len(right_fields) != 1:
+        return False
+    field_pair = frozenset((next(iter(left_fields)), next(iter(right_fields))))
+    if field_pair not in _TRANSITION_FIELDS:
+        return False
+    if left["remote_filename"] != right["remote_filename"]:
+        return False
+    return _lifecycle_overlaps(left, right)
+
+
 def _same_identity_or_transition(left: sa.RowMapping, right: sa.RowMapping) -> bool:
     if left["printer_id"] != right["printer_id"]:
         return False
-    left_ids = _identity(left)
-    right_ids = _identity(right)
-    if left_ids.intersection(right_ids):
-        return True
+    left_tokens = _identity_tokens(left)
+    right_tokens = _identity_tokens(right)
+    if left_tokens.intersection(right_tokens):
+        # Shared identity alone is not enough: the same project/task can be
+        # reused for later reprints. Keep the filename and lifecycle evidence
+        # in the proof, and refuse ambiguous rows rather than guessing.
+        return (
+            left["remote_filename"] == right["remote_filename"]
+            and _lifecycle_overlaps(left, right)
+        )
     # A project-only -> task-only hand-off is safe only when its lifecycle
     # intervals overlap and each row has exactly one non-conflicting identity.
     # Filename/time alone is deliberately insufficient: fast reprints and
     # transitive identity chains must remain separate history rows.
-    return bool(left_ids and right_ids) and _strict_transition(left, right)
+    return bool(left_tokens and right_tokens) and _strict_transition(left, right)
 
 
 def _groups(rows: list[sa.RowMapping]) -> list[list[sa.RowMapping]]:
-    # Select disjoint groups by one shared identity token. A union-find would
-    # incorrectly collapse A(project), B(project+task), C(task) transitively.
-    candidates: list[tuple[int, str, list[int]]] = []
-    token_rows: dict[str, list[int]] = {}
+    # Select disjoint groups by one shared, printer-scoped identity token. A
+    # union-find would incorrectly collapse A(project), B(project+task),
+    # C(task) transitively, and a raw value key would cross printers/types.
+    candidates: list[tuple[int, tuple[object, str, str], list[int]]] = []
+    token_rows: dict[tuple[object, str, str], list[int]] = {}
     for index, row in enumerate(rows):
-        for token in _identity(row):
+        for token in _identity_tokens(row):
             token_rows.setdefault(token, []).append(index)
     for token, indexes in token_rows.items():
         if len(indexes) > 1:
@@ -134,9 +166,23 @@ def _groups(rows: list[sa.RowMapping]) -> list[list[sa.RowMapping]]:
     groups: list[list[sa.RowMapping]] = []
     for _first, _token, indexes in sorted(candidates):
         available = [index for index in indexes if index not in used]
-        if len(available) > 1:
-            used.update(available)
-            groups.append([rows[index] for index in available])
+        # Only consume a clique of lifecycle-compatible rows. This prevents a
+        # chain of pairwise overlaps from turning into one transitive row.
+        while len(available) > 1:
+            anchor, *rest = available
+            group = [anchor]
+            for candidate in rest:
+                if all(
+                    _same_identity_or_transition(rows[member], rows[candidate])
+                    for member in group
+                ):
+                    group.append(candidate)
+            if len(group) == 1:
+                available = rest
+                continue
+            used.update(group)
+            groups.append([rows[index] for index in group])
+            available = [index for index in rest if index not in group]
 
     # Resolve only demonstrable project/task hand-offs among rows not already
     # grouped by an explicit shared identity, and consume each row once.
