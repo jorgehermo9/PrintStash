@@ -29,6 +29,12 @@ vi.mock("@/lib/navigation", () => ({
   ),
 }));
 
+vi.mock("@/components/gcode-viewer", () => ({
+  GcodeViewer: ({ url }: { url: string }) => (
+    <div data-testid="toolpath-viewer">Authenticated toolpath: {url}</div>
+  ),
+}));
+
 function makeJob(
   overrides: Partial<PrintJobReproducibilityInput> = {},
 ): PrintJobReproducibilityInput {
@@ -187,6 +193,69 @@ describe("PrintJobReproducibility", () => {
     expect(screen.queryByText("Archived artifact", { exact: true })).not.toBeInTheDocument();
   });
 
+  it("shows only a project preview URL and opens an accessible toolpath viewer", async () => {
+    const user = userEvent.setup();
+    const identity = {
+      display_name: "Bambu project label",
+      task_id: "task-42",
+      subtask_id: "subtask-9",
+      project_id: "project-7",
+      profile_id: "profile-4",
+      gcode_file: null,
+      plate_index: 2,
+    };
+    const metadata = { current_layer: 80, total_layers: 80, nozzle_diameter: 0.4 };
+    const noPreviewJob = makeJob({
+      artifact_evidence: "gcode_archived",
+      toolpath_preview_url: "/api/v1/files/7/ignored-preview",
+      reproducibility: {
+        level: "exact",
+        identity,
+        metadata,
+        error: null,
+        download_url: "/api/v1/files/7/download",
+        toolpath_preview_url: "/api/v1/files/7/ignored-nested-preview",
+      },
+    });
+
+    const { rerender } = render(<PrintJobReproducibility job={noPreviewJob} />);
+    expect(screen.queryByRole("button", { name: "Preview toolpath" })).not.toBeInTheDocument();
+
+    expect(
+      resolvePrintJobReproducibility({
+        ...noPreviewJob,
+        artifact_evidence: "project_archived",
+        reproducibility: {
+          ...noPreviewJob.reproducibility!,
+          toolpath_preview_url: undefined,
+        },
+      }).toolpathPreviewUrl,
+    ).toBe("/api/v1/files/7/ignored-preview");
+
+    const previewJob = {
+      ...noPreviewJob,
+      artifact_evidence: "project_archived",
+      toolpath_preview_url: "/api/v1/files/7/top-level-preview",
+      reproducibility: {
+        ...noPreviewJob.reproducibility!,
+        toolpath_preview_url: "/api/v1/files/7/nested-preview",
+      },
+    };
+    rerender(<PrintJobReproducibility job={previewJob} />);
+    const trigger = screen.getByRole("button", { name: "Preview toolpath" });
+    await user.click(trigger);
+
+    const dialog = await screen.findByRole("dialog", { name: "Toolpath preview" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(await screen.findByTestId("toolpath-viewer")).toHaveTextContent(
+      "/api/v1/files/7/nested-preview",
+    );
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
   it("maps legacy error codes to a human message without duplicating the code", () => {
     const resolved = resolvePrintJobReproducibility(
       makeJob({
@@ -267,5 +336,42 @@ describe("PrintJobReproducibility", () => {
     });
     expect(screen.queryByText("subtask-name", { exact: true })).not.toBeInTheDocument();
     container.remove();
+  });
+
+  it("uses the i18n context inside the portaled toolpath preview", async () => {
+    localStorage.setItem("printstash.locale", "es");
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <PrintJobReproducibility
+          job={makeJob({
+            artifact_evidence: "project_archived",
+            reproducibility: {
+              level: "exact",
+              identity: {
+                display_name: "Bambu project label",
+                task_id: null,
+                subtask_id: null,
+                project_id: null,
+                profile_id: null,
+                gcode_file: null,
+                plate_index: null,
+              },
+              metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
+              error: null,
+              download_url: null,
+              toolpath_preview_url: "/api/v1/files/7/toolpath-preview",
+            },
+          })}
+        />
+      </I18nProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Previsualizar trayectoria" });
+    await user.click(trigger);
+    expect(
+      await screen.findByRole("dialog", { name: "Vista previa de la trayectoria" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cerrar" })).toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ export {
   downloadAuthenticatedFile,
   getAssetUrl,
   getAuthenticatedBlob,
+  getAuthenticatedText,
   getUrl,
   getWsUrl,
   invalidateApiCache,

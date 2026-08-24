@@ -47,6 +47,16 @@ export async function getAuthenticatedBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
+/** Read a protected text resource while preserving the shared 401 handling. */
+export async function getAuthenticatedText(path: string): Promise<string> {
+  const res = await fetch(getUrl(path), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  if (!res.ok) throw await parseError(res);
+  return res.text();
+}
+
 const SAFE_DOWNLOAD_FALLBACK = "download";
 
 /** Remove path/control characters before assigning a server-provided filename. */

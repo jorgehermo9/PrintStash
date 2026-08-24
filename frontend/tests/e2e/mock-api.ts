@@ -519,7 +519,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
         remote_filename: "subtask-9",
         source: "external",
         external_display_name: "Bambu project label",
-        artifact_evidence: "gcode_archived",
+        artifact_evidence: "project_archived",
         reproducibility_level: "exact",
         identity: {
           display_name: "Bambu project label",
@@ -545,8 +545,10 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
           metadata: { current_layer: 80, total_layers: 80, nozzle_diameter: 0.4 },
           error: null,
           download_url: "/api/v1/files/2/download",
+          toolpath_preview_url: "/api/v1/files/2/toolpath-preview",
         },
         download_url: "/api/v1/files/2/download",
+        toolpath_preview_url: "/api/v1/files/2/toolpath-preview",
         gcode_revision_number: 1,
         revision_label: null,
         state: "completed",
@@ -848,6 +850,11 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
         updated_at: now,
       },
     ]);
+    return;
+  }
+  if (url.pathname.startsWith("/api/v1/files/") && url.pathname.endsWith("/toolpath-preview")) {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("G90\nM82\nG1 Z0.2\nG1 X10 Y0 E0.1\nG1 X20 Y0 E0.2\n");
     return;
   }
   if (url.pathname.startsWith("/api/v1/files/") && url.pathname.endsWith("/download")) {

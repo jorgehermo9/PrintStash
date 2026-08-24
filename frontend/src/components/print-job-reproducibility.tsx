@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { Download, ExternalLink, FileWarning } from "lucide-react";
+import { lazy, Suspense, useState } from "react";
+import { Download, Eye, ExternalLink, FileWarning, Loader2 } from "lucide-react";
 
 import { downloadAuthenticatedFile } from "@/lib/api/request";
+import { useOptionalI18n } from "@/lib/i18n";
 import { Link } from "@/lib/navigation";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
 import {
   isArchivedPrintArtifact,
   printJobArtifactLabel,
@@ -15,6 +17,10 @@ import {
   type PrintJobReproducibilityInput,
 } from "@/lib/print-job-reproducibility";
 import type { ReproducibilityLevel } from "@/types";
+
+const LazyGcodeViewer = lazy(() =>
+  import("@/components/gcode-viewer").then(({ GcodeViewer }) => ({ default: GcodeViewer })),
+);
 
 function levelCopy(level: ReproducibilityLevel): {
   label: string;
@@ -66,9 +72,14 @@ export function PrintJobReproducibility({
   previewHref?: string | null;
   previewLabel?: string;
 }) {
+  const i18n = useOptionalI18n();
   const [downloading, setDownloading] = useState(false);
+  const [toolpathPreviewOpen, setToolpathPreviewOpen] = useState(false);
   const resolved = resolvePrintJobReproducibility(job);
   const copy = levelCopy(resolved.level);
+  const previewToolpathLabel = i18n?.t("repro.previewToolpath") ?? "Preview toolpath";
+  const toolpathPreviewTitle = i18n?.t("repro.toolpathPreview") ?? "Toolpath preview";
+  const loadingToolpathLabel = i18n?.t("viewer.loadingToolpath") ?? "Loading toolpath…";
   const artifactName = printJobArtifactLabel(job);
   const canDownload = Boolean(
     resolved.level === "exact" &&
@@ -166,7 +177,7 @@ export function PrintJobReproducibility({
         </div>
       )}
 
-      {(canDownload || canPreview) && (
+      {(canDownload || canPreview || resolved.toolpathPreviewUrl) && (
         <div className="flex flex-wrap gap-2 border-t border-border pt-2">
           {canDownload && (
             <Button
@@ -191,7 +202,41 @@ export function PrintJobReproducibility({
               {previewLabel}
             </Link>
           )}
+          {resolved.toolpathPreviewUrl && (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={() => setToolpathPreviewOpen(true)}
+              aria-label={previewToolpathLabel}
+            >
+              <Eye className="h-3.5 w-3.5" aria-hidden />
+              {previewToolpathLabel}
+            </Button>
+          )}
         </div>
+      )}
+
+      {resolved.toolpathPreviewUrl && (
+        <Modal
+          open={toolpathPreviewOpen}
+          onClose={() => setToolpathPreviewOpen(false)}
+          title={toolpathPreviewTitle}
+          className="flex max-h-[min(48rem,calc(100vh-2rem))] max-w-5xl flex-col overflow-hidden"
+        >
+          <div className="relative h-[min(70vh,42rem)] min-h-[20rem] w-full overflow-hidden rounded border border-border bg-surface-container-lowest">
+            <Suspense
+              fallback={
+                <div className="absolute inset-0 flex items-center justify-center gap-2 text-muted-foreground">
+                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+                  <span className="font-mono text-2xs">{loadingToolpathLabel}</span>
+                </div>
+              }
+            >
+              <LazyGcodeViewer url={resolved.toolpathPreviewUrl} />
+            </Suspense>
+          </div>
+        </Modal>
       )}
     </div>
   );

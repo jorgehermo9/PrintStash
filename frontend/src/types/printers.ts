@@ -258,6 +258,7 @@ export interface PrintJobRead {
   artifact_capture_error_code?: string | null;
   artifact_capture_error_message?: string | null;
   reproducibility_level?: ReproducibilityLevel;
+  toolpath_preview_url?: string | null;
   identity?: PrintJobIdentityRead;
   metadata?: PrintJobReportedMetadataRead;
   reproducibility?: PrintJobReproducibilityRead;
@@ -316,6 +317,7 @@ export interface PrintJobReproducibilityRead {
   metadata: PrintJobReportedMetadataRead;
   error?: PrintJobReproducibilityErrorRead | null;
   download_url?: string | null;
+  toolpath_preview_url?: string | null;
 }
 
 export interface SendToPrinter {

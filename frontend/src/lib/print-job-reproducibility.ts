@@ -15,6 +15,7 @@ export interface PrintJobReproducibilityInput {
   artifact_capture_error_code?: string | null;
   artifact_capture_error_message?: string | null;
   reproducibility_level?: ReproducibilityLevel;
+  toolpath_preview_url?: string | null;
   identity?: PrintJobIdentityRead;
   metadata?: PrintJobReportedMetadataRead;
   reproducibility?: PrintJobReproducibilityRead;
@@ -37,6 +38,7 @@ export interface ResolvedPrintJobReproducibility {
   metadata: PrintJobReportedMetadataRead;
   error: PrintJobReproducibilityErrorRead | null;
   downloadUrl: string | null;
+  toolpathPreviewUrl: string | null;
 }
 
 const CAPTURE_ERROR_MESSAGES: Record<string, string> = {
@@ -165,6 +167,9 @@ export function resolvePrintJobReproducibility(
         ? "metadata"
         : "basic");
   const error = contract ? normalizeContractError(contract.error) : legacyError(job);
+  const toolpathPreviewUrl = contract?.toolpath_preview_url !== undefined
+    ? contract.toolpath_preview_url
+    : job.toolpath_preview_url;
 
   return {
     level,
@@ -177,6 +182,10 @@ export function resolvePrintJobReproducibility(
     downloadUrl:
       level === "exact" && isArchivedPrintArtifact(job.artifact_evidence)
         ? (contract?.download_url ?? job.download_url ?? null)
+        : null,
+    toolpathPreviewUrl:
+      job.artifact_evidence === "project_archived"
+        ? (toolpathPreviewUrl ?? null)
         : null,
   };
 }

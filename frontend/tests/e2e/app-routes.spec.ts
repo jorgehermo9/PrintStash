@@ -107,6 +107,7 @@ test("print history explains exact, partial, and basic evidence with safe downlo
   await expect(evidence.getByRole("button", { name: /download archived artifact/i })).toHaveCount(
     1,
   );
+  await expect(evidence.nth(0).getByRole("button", { name: /preview toolpath/i })).toHaveCount(1);
   await expect(evidence.getByRole("link", { name: "Open model detail" })).toHaveCount(1);
 
   const [download] = await Promise.all([
@@ -114,6 +115,19 @@ test("print history explains exact, partial, and basic evidence with safe downlo
     evidence.getByRole("button", { name: /download archived artifact/i }).click(),
   ]);
   expect(download.suggestedFilename()).toBe("benchy.gcode");
+
+  const [toolpathRequest] = await Promise.all([
+    page.waitForRequest((request) =>
+      request.url().endsWith("/api/v1/files/2/toolpath-preview"),
+    ),
+    evidence.nth(0).getByRole("button", { name: /preview toolpath/i }).click(),
+  ]);
+  expect(toolpathRequest.method()).toBe("GET");
+  const toolpathDialog = page.getByRole("dialog", { name: "Toolpath preview" });
+  await expect(toolpathDialog).toBeVisible();
+  await expect(toolpathDialog.getByText(/Layer 1 \/ 1/)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(toolpathDialog).toHaveCount(0);
 });
 
 test("model detail uses focused send dialog and compact actions", async ({ page }) => {
