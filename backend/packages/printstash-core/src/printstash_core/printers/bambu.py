@@ -394,6 +394,10 @@ class BambuClient:
             response = str(exc).lower()
             if response.startswith("530") or "auth" in response:
                 code = "bambu_ftps_authentication_failed"
+            elif response.startswith("552"):
+                code = "bambu_ftps_too_large"
+            elif response.startswith("450"):
+                code = "bambu_ftps_not_found"
             elif response.startswith("550") or "not found" in response:
                 code = "bambu_ftps_not_found"
             elif response.startswith("553") or "path" in response:

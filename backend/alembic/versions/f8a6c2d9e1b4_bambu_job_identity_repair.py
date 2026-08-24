@@ -43,6 +43,12 @@ _EVIDENCE_RANK = {
     "gcode_archived": 3,
     "project_archived": 4,
 }
+_TRANSITION_FIELDS = {
+    frozenset(("external_project_id", "external_task_id")),
+    frozenset(("external_project_id", "external_subtask_id")),
+}
+_MISSING_TIMESTAMP = datetime.min.replace(tzinfo=timezone.utc)
+_OPEN_TIMESTAMP = datetime.max.replace(tzinfo=timezone.utc)
 
 
 def _timestamp(value: object) -> datetime:
@@ -54,7 +60,7 @@ def _timestamp(value: object) -> datetime:
             return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
         except ValueError:
             pass
-    return datetime.min.replace(tzinfo=timezone.utc)
+    return _MISSING_TIMESTAMP
 
 
 def _identity(row: sa.RowMapping) -> set[str]:
@@ -65,6 +71,40 @@ def _identity(row: sa.RowMapping) -> set[str]:
     }
 
 
+def _identity_fields(row: sa.RowMapping) -> dict[str, str]:
+    return {
+        column: str(row[column]).strip()
+        for column in _IDENTITY_COLUMNS
+        if row[column] not in (None, "")
+    }
+
+
+def _strict_transition(left: sa.RowMapping, right: sa.RowMapping) -> bool:
+    """Prove a project/task hand-off is one active lifecycle, not a reprint."""
+
+    left_fields = _identity_fields(left)
+    right_fields = _identity_fields(right)
+    if len(left_fields) != 1 or len(right_fields) != 1:
+        return False
+    field_pair = frozenset((next(iter(left_fields)), next(iter(right_fields))))
+    if field_pair not in _TRANSITION_FIELDS:
+        return False
+    if left["remote_filename"] != right["remote_filename"]:
+        return False
+    # A missing started_at cannot prove that two rows describe one lifecycle.
+    left_started = _timestamp(left["started_at"])
+    right_started = _timestamp(right["started_at"])
+    if left_started == _MISSING_TIMESTAMP or right_started == _MISSING_TIMESTAMP:
+        return False
+    left_finished = _timestamp(left["finished_at"])
+    right_finished = _timestamp(right["finished_at"])
+    if left["finished_at"] in (None, ""):
+        left_finished = _OPEN_TIMESTAMP
+    if right["finished_at"] in (None, ""):
+        right_finished = _OPEN_TIMESTAMP
+    return max(left_started, right_started) <= min(left_finished, right_finished)
+
+
 def _same_identity_or_transition(left: sa.RowMapping, right: sa.RowMapping) -> bool:
     if left["printer_id"] != right["printer_id"]:
         return False
@@ -72,50 +112,46 @@ def _same_identity_or_transition(left: sa.RowMapping, right: sa.RowMapping) -> b
     right_ids = _identity(right)
     if left_ids.intersection(right_ids):
         return True
-    # A Bambu firmware sequence can emit only project_id and then only
-    # task_id. The filename is the remaining stable evidence; bound this
-    # fallback to a short active-report window so repeated prints of the same
-    # file remain separate history rows.
-    if (
-        left["remote_filename"]
-        and left["remote_filename"] == right["remote_filename"]
-        and left_ids
-        and right_ids
-    ):
-        delta = abs(
-            (
-                _timestamp(left["created_at"])
-                - _timestamp(right["created_at"])
-            ).total_seconds()
-        )
-        return delta <= 300
-    return bool(left.get("provider_job_id")) and left.get("provider_job_id") == right.get(
-        "provider_job_id"
-    )
+    # A project-only -> task-only hand-off is safe only when its lifecycle
+    # intervals overlap and each row has exactly one non-conflicting identity.
+    # Filename/time alone is deliberately insufficient: fast reprints and
+    # transitive identity chains must remain separate history rows.
+    return bool(left_ids and right_ids) and _strict_transition(left, right)
 
 
 def _groups(rows: list[sa.RowMapping]) -> list[list[sa.RowMapping]]:
-    parent = list(range(len(rows)))
-
-    def find(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    def union(left: int, right: int) -> None:
-        left_root, right_root = find(left), find(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
+    # Select disjoint groups by one shared identity token. A union-find would
+    # incorrectly collapse A(project), B(project+task), C(task) transitively.
+    candidates: list[tuple[int, str, list[int]]] = []
+    token_rows: dict[str, list[int]] = {}
     for index, row in enumerate(rows):
-        for other_index in range(index):
-            if _same_identity_or_transition(row, rows[other_index]):
-                union(index, other_index)
-    grouped: dict[int, list[sa.RowMapping]] = {}
-    for index, row in enumerate(rows):
-        grouped.setdefault(find(index), []).append(row)
-    return [group for group in grouped.values() if len(group) > 1]
+        for token in _identity(row):
+            token_rows.setdefault(token, []).append(index)
+    for token, indexes in token_rows.items():
+        if len(indexes) > 1:
+            candidates.append((min(indexes), token, indexes))
+    used: set[int] = set()
+    groups: list[list[sa.RowMapping]] = []
+    for _first, _token, indexes in sorted(candidates):
+        available = [index for index in indexes if index not in used]
+        if len(available) > 1:
+            used.update(available)
+            groups.append([rows[index] for index in available])
+
+    # Resolve only demonstrable project/task hand-offs among rows not already
+    # grouped by an explicit shared identity, and consume each row once.
+    remaining = [index for index in range(len(rows)) if index not in used]
+    for position, left_index in enumerate(remaining):
+        if left_index in used:
+            continue
+        for right_index in remaining[position + 1 :]:
+            if right_index not in used and _same_identity_or_transition(
+                rows[left_index], rows[right_index]
+            ):
+                used.update((left_index, right_index))
+                groups.append([rows[left_index], rows[right_index]])
+                break
+    return groups
 
 
 def upgrade() -> None:
@@ -214,6 +250,22 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    connection = op.get_bind()
+    # Dropping these columns would erase absorbed-row lineage and actionable
+    # capture diagnostics. Refuse before any schema mutation when data exists;
+    # a clean, never-used migration can still be downgraded safely.
+    existing = connection.execute(
+        sa.text(
+            "SELECT 1 FROM print_jobs WHERE dedupe_absorbed_at IS NOT NULL "
+            "OR dedupe_survivor_id IS NOT NULL "
+            "OR artifact_capture_error_code IS NOT NULL "
+            "OR artifact_capture_error_message IS NOT NULL LIMIT 1"
+        )
+    ).first()
+    if existing is not None:
+        raise RuntimeError(
+            "cannot downgrade Bambu identity repair after lineage or capture data exists"
+        )
     with op.batch_alter_table("print_jobs") as batch:
         batch.drop_index("ix_print_jobs_dedupe_survivor_id")
         batch.drop_index("ix_print_jobs_dedupe_absorbed_at")

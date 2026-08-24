@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -838,6 +839,56 @@ class TestPrinterHubSyncActiveJob:
             assert rows[0].external_project_id == "project-transition"
             assert rows[0].external_task_id == "task-transition"
             assert rows[0].provider_job_id == "task-transition"
+
+    def test_concurrent_bambu_initial_callbacks_create_one_job(
+        self, hub, threaded_hub_db
+    ):
+        from app.db.session import get_session_factory, override_session_factory
+
+        factory = get_session_factory()
+        with get_session_factory().session() as session:
+            session.add(
+                Printer(
+                    name="Concurrent Bambu",
+                    provider=PrinterProvider.BAMBU_LAN,
+                    bambu_host="192.0.2.10",
+                    bambu_serial="TEST-SERIAL",
+                    bambu_access_code="test-code",
+                )
+            )
+            session.commit()
+
+        reports = [
+            {
+                "state": "printing",
+                "filename": "concurrent.gcode",
+                "external_project_id": "project-concurrent",
+            },
+            {
+                "state": "printing",
+                "filename": "concurrent.gcode",
+                "external_task_id": "task-concurrent",
+            },
+        ]
+        def reconcile(report):
+            # ContextVars do not cross raw ThreadPoolExecutor workers; mirror
+            # the app's asyncio.to_thread propagation explicitly in this unit.
+            override_session_factory(factory)
+            return hub._sync_active_job_db(
+                1, "printing", "concurrent.gcode", 0.1, report
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(reconcile, reports))
+        assert results == [None, None]
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob).where(PrintJob.printer_id == 1)
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].external_project_id == "project-concurrent"
+            assert rows[0].external_task_id == "task-concurrent"
 
     def test_external_bambu_gcode_is_archived_when_cache_is_available(self, hub):
         from sqlmodel import select

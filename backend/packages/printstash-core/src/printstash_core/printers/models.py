@@ -59,7 +59,10 @@ class ProviderError(RuntimeError):
         super().__init__(detail)
         self.detail = detail
         self.code = code
-        self.action_code = action_code or detail
+        # Never promote an arbitrary remote/detail string into an actionable
+        # machine code. Provider implementations opt into a more precise code
+        # explicitly (the Bambu FTPS classifier does so).
+        self.action_code = action_code or code
 
 
 _UNSUPPORTED_ACTION_ORDER: tuple[Capability, ...] = (

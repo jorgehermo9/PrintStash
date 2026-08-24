@@ -462,6 +462,22 @@ def test_fleet_summary_counts_queue_drain_and_maintenance(
         headers=auth_headers,
         json={"file_id": artifact.id, "strategy": "manual", "printer_id": printer.id},
     )
+    absorbed = PrintJob(
+        printer_id=printer.id,
+        file_id=artifact.id,
+        model_id=artifact.model_id,
+        remote_filename="absorbed.gcode",
+        state=PrintJobState.PRINTING,
+        source="external",
+        dedupe_absorbed_at=utcnow(),
+        dedupe_survivor_id=1,
+    )
+    db_session.add(absorbed)
+    db_session.commit()
+    from app.services.fleet import _active_counts, build_routing_snapshot
+
+    assert build_routing_snapshot(db_session).active_counts == {printer.id: 1}
+    assert _active_counts(db_session) == {printer.id: 1}
 
     summary = client.get("/api/v1/fleet/summary", headers=auth_headers)
 
@@ -502,6 +518,36 @@ def test_fleet_summary_counts_queue_drain_and_maintenance(
             "pending_operator_release": False,
         }
     ]
+
+
+def test_absorbed_jobs_are_excluded_from_routing_counts(db_session: Session) -> None:
+    printer = Printer(
+        name="Count scope",
+        moonraker_url="http://count-scope",
+        status=PrinterStatus.READY,
+    )
+    db_session.add(printer)
+    db_session.commit()
+    db_session.refresh(printer)
+    artifact = _gcode(db_session)
+    db_session.add(
+        PrintJob(
+            printer_id=printer.id,
+            file_id=artifact.id,
+            model_id=artifact.model_id,
+            remote_filename="absorbed.gcode",
+            state=PrintJobState.PRINTING,
+            source="external",
+            dedupe_absorbed_at=utcnow(),
+            dedupe_survivor_id=1,
+        )
+    )
+    db_session.commit()
+
+    from app.services.fleet import _active_counts, build_routing_snapshot
+
+    assert build_routing_snapshot(db_session).active_counts == {}
+    assert _active_counts(db_session) == {}
 
 
 def test_failed_dispatch_can_be_retried(

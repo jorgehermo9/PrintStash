@@ -116,6 +116,7 @@ def build_routing_snapshot(
             select(PrintJob.printer_id).where(
                 PrintJob.printer_id.in_(printer_ids),  # type: ignore[union-attr]
                 PrintJob.operator_gate_state == OperatorGateState.PENDING,
+                live(PrintJob),
             )
         ).all()
         if printer_id is not None

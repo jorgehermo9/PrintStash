@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pytest
@@ -116,10 +117,10 @@ def test_bambu_identity_migration_absorbs_duplicate_pair_without_delete(
                         "INSERT INTO print_jobs "
                         "(id, printer_id, file_id, model_id, remote_filename, state, "
                         "progress, source, external_project_id, external_task_id, "
-                        "artifact_evidence, created_at, updated_at) "
+                        "artifact_evidence, started_at, created_at, updated_at) "
                         "VALUES (:id, 1, 1, 1, 'plate.gcode', 'PRINTING', 0.5, "
                         "'external', :project_id, :task_id, :evidence, "
-                        ":created_at, :created_at)"
+                        "'2026-08-24 00:00:00', :created_at, :created_at)"
                     ),
                     {
                         "id": job_id,
@@ -144,8 +145,70 @@ def test_bambu_identity_migration_absorbs_duplicate_pair_without_delete(
         assert rows[0]["artifact_evidence"] == "gcode_archived"
         assert rows[1]["dedupe_absorbed_at"] is not None
         assert rows[1]["dedupe_survivor_id"] == 1
+        with pytest.raises(RuntimeError, match="cannot downgrade Bambu identity repair"):
+            command.downgrade(cfg, "e7b4c1d9a6f2")
+        assert {
+            column["name"] for column in inspect(engine).get_columns("print_jobs")
+        } >= {"dedupe_absorbed_at", "dedupe_survivor_id"}
     finally:
         engine.dispose()
+
+
+def test_bambu_identity_grouping_rejects_fast_reprints_and_transitive_chains() -> None:
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "f8a6c2d9e1b4_bambu_job_identity_repair.py"
+    )
+    spec = spec_from_file_location("bambu_identity_repair", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    def row(
+        job_id: int,
+        *,
+        project: str | None = None,
+        task: str | None = None,
+        started: str = "2026-08-24 00:00:00",
+        finished: str | None = None,
+        created: str = "2026-08-24 00:00:00",
+    ) -> dict[str, object]:
+        return {
+            "id": job_id,
+            "printer_id": 1,
+            "remote_filename": "plate.gcode",
+            "external_project_id": project,
+            "external_task_id": task,
+            "external_subtask_id": None,
+            "provider_job_id": None,
+            "started_at": started,
+            "finished_at": finished,
+            "created_at": created,
+        }
+
+    # A completed print followed by a fast reprint has disjoint lifecycles,
+    # despite sharing a filename and being only seconds apart.
+    fast_reprints = [
+        row(1, project="project-old", finished="2026-08-24 00:00:08"),
+        row(
+            2,
+            task="task-new",
+            started="2026-08-24 00:00:10",
+            created="2026-08-24 00:00:10",
+        ),
+    ]
+    assert migration._groups(fast_reprints) == []
+
+    # A(project), B(project+task), C(task) must not collapse transitively.
+    chain = [
+        row(1, project="project-chain"),
+        row(2, project="project-chain", task="task-chain"),
+        row(3, task="task-chain"),
+    ]
+    groups = migration._groups(chain)
+    assert [[entry["id"] for entry in group] for group in groups] == [[1, 2]]
 
 # --------------------------------------------------------------------------- #
 # Strict coverage for the migration runner (app/db/migrate.py) and create_all

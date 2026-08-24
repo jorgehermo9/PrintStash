@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -197,6 +198,10 @@ class PrinterHub:
         self._active_job_cache: Dict[int, tuple[str, int]] = {}
         # printer_id -> (consecutive failures, retry-after monotonic timestamp)
         self._job_sync_breakers: Dict[int, tuple[int, float]] = {}
+        # Status callbacks may arrive concurrently from MQTT/HTTP worker
+        # threads. Serialize the DB reconciliation seam per printer so two
+        # initial callbacks cannot both create external placeholder rows.
+        self._job_sync_db_locks: Dict[int, threading.Lock] = {}
         # printer_id -> (filename, state, progress, monotonic time) for DB write coalescing
         self._last_job_sync_write: Dict[int, tuple[str, str, float, float]] = {}
         self._capture_tasks: Dict[tuple[int, int], asyncio.Task] = {}
@@ -725,6 +730,20 @@ class PrinterHub:
             end_mutating_operation()
 
     def _sync_active_job_db(
+        self,
+        printer_id: int,
+        ms_state: str,
+        filename: str,
+        progress: float,
+        print_stats: Dict[str, Any],
+    ) -> tuple[int, str] | None:
+        lock = self._job_sync_db_locks.setdefault(printer_id, threading.Lock())
+        with lock:
+            return self._sync_active_job_db_locked(
+                printer_id, ms_state, filename, progress, print_stats
+            )
+
+    def _sync_active_job_db_locked(
         self,
         printer_id: int,
         ms_state: str,
