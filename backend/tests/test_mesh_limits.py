@@ -9,6 +9,7 @@ still indexed; a 3MF still yields its embedded slicer preview.
 
 from __future__ import annotations
 
+import io
 import struct
 import zipfile
 from pathlib import Path
@@ -148,6 +149,95 @@ def test_stl_fallback_uniformly_caps_sample_to_100k(
     assert result is not None
     assert result.triangle_count == 101
     assert result.sampled_triangles == 10
+
+
+def test_stl_fallback_dense_fixture_has_a_coherent_silhouette(
+    tmp_path: Path,
+) -> None:
+    """The production stream must cover a dense mesh instead of drawing points.
+
+    An icosphere with 327,680 deterministic facets is deliberately above the
+    historical 100k sampling ceiling.  Rendering its full stream in bounded
+    chunks should fill the projected silhouette, retain contrast, and leave a
+    safe margin around the object.  The assertions are image properties rather
+    than a pixel snapshot, so they tolerate renderer/library updates.
+    """
+    import trimesh
+    from PIL import Image
+
+    from app.services import stl_fallback
+
+    path = tmp_path / "issue-67-dense-figure.stl"
+    mesh = trimesh.creation.icosphere(subdivisions=7, radius=10.0)
+    path.write_bytes(mesh.export(file_type="stl"))
+
+    result = stl_fallback.render_stl_thumbnail(path, width=96, height=72)
+
+    assert result is not None
+    assert result.triangle_count == len(mesh.faces)
+    assert result.sampled_triangles == result.triangle_count
+
+    pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
+    opaque = pixels[:, :, 3] > 200
+    ys, xs = np.where(opaque)
+    assert opaque.mean() > 0.10  # a solid silhouette, not a sparse point cloud
+    assert np.ptp(xs) + 1 > pixels.shape[1] * 0.25
+    assert np.ptp(ys) + 1 > pixels.shape[0] * 0.25
+    assert xs.min() > 2 and xs.max() < pixels.shape[1] - 3
+    assert ys.min() > 2 and ys.max() < pixels.shape[0] - 3
+
+    shaded = pixels[:, :, :3][opaque]
+    assert float(shaded.std()) > 10.0  # lighting still provides useful contrast
+
+
+def test_stl_fallback_skips_nonfinite_facets(tmp_path: Path) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "malformed-coordinates.stl"
+    record = struct.Struct("<12fH")
+    with path.open("wb") as fh:
+        fh.write(b"malformed".ljust(80, b"\x00"))
+        fh.write(struct.pack("<I", 2))
+        fh.write(
+            record.pack(
+                0.0,
+                0.0,
+                1.0,
+                float("nan"),
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0,
+            )
+        )
+        fh.write(
+            record.pack(
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0,
+            )
+        )
+
+    result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
+
+    assert result is not None
+    assert result.triangle_count == 1
+    assert result.sampled_triangles == 1
 
 
 def test_over_cap_3mf_still_gets_embedded_preview(tmp_path: Path, monkeypatch) -> None:

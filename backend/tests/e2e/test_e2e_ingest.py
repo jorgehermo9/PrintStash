@@ -9,15 +9,21 @@ than create a second model.
 from __future__ import annotations
 
 import asyncio
+import io
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
 
+from app.core.config import _overlay
 from app.services.setup_token import current_setup_token
 
 pytestmark = pytest.mark.e2e
 
-FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "real_orca_ender3_benchy.gcode"
+FIXTURE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "real_orca_ender3_benchy.gcode"
+)
 
 
 async def _setup_and_login(api, tmp_path) -> dict[str, str]:
@@ -66,7 +72,9 @@ async def _await_job(api, headers, job_id: str) -> dict:
 async def test_gcode_upload_parses_metadata_and_dedups(api, tmp_path, e2e_db):
     headers = await _setup_and_login(api, tmp_path)
 
-    job = await _await_job(api, headers, (await _upload(api, headers, model_name="Benchy"))["job_id"])
+    job = await _await_job(
+        api, headers, (await _upload(api, headers, model_name="Benchy"))["job_id"]
+    )
     assert job["state"] == "completed", job
 
     # The model now exists and is listable.
@@ -86,8 +94,45 @@ async def test_gcode_upload_parses_metadata_and_dedups(api, tmp_path, e2e_db):
     assert (meta.slicer_name or "").lower().startswith("orca") or meta.layer_height_mm
 
     # Re-uploading identical bytes dedups by content hash (no second model).
-    dup = await _await_job(api, headers, (await _upload(api, headers, model_name="Benchy Copy"))["job_id"])
+    dup = await _await_job(
+        api, headers, (await _upload(api, headers, model_name="Benchy Copy"))["job_id"]
+    )
     assert dup["state"] in ("duplicate", "completed"), dup
     listing2 = (await api.get("/api/v1/models", headers=headers)).json()
     benchies = [m for m in listing2 if m["name"] in ("Benchy", "Benchy Copy")]
     assert len(benchies) == 1, f"dedup failed, got {benchies}"
+
+
+@pytest.mark.asyncio
+async def test_over_cap_mesh_upload_has_a_visible_thumbnail(
+    api, tmp_path, e2e_db, monkeypatch
+):
+    """The headline #67 flow persists a useful fallback through the real API."""
+    import trimesh
+
+    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+    mesh = trimesh.creation.icosphere(subdivisions=4, radius=10.0)
+    stl = mesh.export(file_type="stl")
+    headers = await _setup_and_login(api, tmp_path)
+
+    uploaded = await api.post(
+        "/api/v1/ingest/model",
+        files={"file": ("issue-67-dense.stl", stl, "application/sla")},
+        data={"model_name": "Issue 67 Dense"},
+        headers=headers,
+    )
+    assert uploaded.status_code == 202, uploaded.text
+    job = await _await_job(api, headers, uploaded.json()["job_id"])
+
+    assert job["state"] == "completed", job
+    assert job["thumbnail_status"] == "fallback_generated", job
+    file_id = job["file_id"]
+    thumbnail = await api.get(f"/api/v1/files/{file_id}/thumbnail", headers=headers)
+    assert thumbnail.status_code == 200, thumbnail.text
+    assert thumbnail.headers["content-type"] == "image/webp"
+
+    with Image.open(io.BytesIO(thumbnail.content)) as image:
+        pixels = np.asarray(image.convert("RGBA"))
+    opaque = pixels[:, :, 3] > 200
+    assert opaque.mean() > 0.08
+    assert float(pixels[:, :, :3][opaque].std()) > 8.0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 import struct
 from dataclasses import dataclass
 from itertools import product
@@ -20,6 +21,10 @@ class STLThumbnailResult:
 
 
 _BINARY_TRIANGLE = struct.Struct("<12fH")
+# Kept as a named compatibility constant for callers that want an explicit
+# sampling budget.  The production fallback deliberately does not use this
+# limit: dropping most facets is what turns dense, otherwise valid STL files
+# into a sparse cloud of points (#67).
 _MAX_SAMPLED_TRIANGLES = 100_000
 _RASTER_CHUNK_TRIANGLES = 2_048
 
@@ -48,7 +53,12 @@ def _iter_binary_triangles(path: Path) -> Iterator[tuple[float, ...]]:
             if len(record) != _BINARY_TRIANGLE.size:
                 return
             values = _BINARY_TRIANGLE.unpack(record)
-            yield tuple(float(value) for value in values[3:12])
+            triangle = tuple(float(value) for value in values[3:12])
+            # NaN/Inf coordinates can poison the bounds, camera matrix and
+            # rasteriser.  Ignore those facets rather than allowing a malformed
+            # file to turn into an unbounded/invalid NumPy operation.
+            if all(math.isfinite(value) for value in triangle):
+                yield triangle
 
 
 def _iter_ascii_triangles(path: Path) -> Iterator[tuple[float, ...]]:
@@ -64,7 +74,9 @@ def _iter_ascii_triangles(path: Path) -> Iterator[tuple[float, ...]]:
                 vertices.clear()
                 continue
             if len(vertices) == 9:
-                yield tuple(vertices)
+                triangle = tuple(vertices)
+                if all(math.isfinite(value) for value in triangle):
+                    yield triangle
                 vertices.clear()
 
 
@@ -101,9 +113,19 @@ def render_stl_thumbnail(
     *,
     width: int = 640,
     height: int = 480,
-    max_triangles: int = _MAX_SAMPLED_TRIANGLES,
+    max_triangles: int | None = None,
 ) -> STLThumbnailResult | None:
-    """Stream twice, uniformly sample, and rasterise into one bounded z-buffer."""
+    """Stream twice and rasterise into one bounded z-buffer.
+
+    Every facet is rendered by default.  The previous default uniformly sampled
+    at most 100,000 facets, which is memory-safe but visually unusable for dense
+    meshes: most screen pixels were never covered (#67).  Rasterisation still
+    receives only ``_RASTER_CHUNK_TRIANGLES`` facets at a time, so this change
+    does not materialise the mesh or make peak memory proportional to file size.
+
+    ``max_triangles`` remains available as an explicit bounded sampling mode for
+    callers that prefer a CPU ceiling over a complete silhouette.
+    """
     try:
         import numpy as np
         from PIL import Image
@@ -116,9 +138,14 @@ def render_stl_thumbnail(
     if scanned is None:
         return None
     triangle_count, bounds_min, bounds_max = scanned
-    sample_count = min(triangle_count, max(max_triangles, 1))
-    # Midpoints of equal-width bins provide deterministic uniform coverage of
-    # the whole file without reservoir memory or random state.
+    if max_triangles is None:
+        sample_count = triangle_count
+    else:
+        sample_count = min(triangle_count, max(max_triangles, 1))
+    # Midpoints of equal-width bins provide deterministic uniform coverage when
+    # an explicit sampling budget is requested, without reservoir memory or
+    # random state.  With the production default, the target sequence is simply
+    # every facet, preserving a coherent surface.
     targets = (
         ((sample_index * triangle_count + triangle_count // 2) // sample_count)
         for sample_index in range(sample_count)
