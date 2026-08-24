@@ -88,6 +88,8 @@ def test_status_subscription_uses_one_mqtt_session_and_one_bootstrap_pushall() -
 
     asyncio.run(_run())
     assert len(built) == 1
+    assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
+    assert built[0].published_topics == ["device/01S00A000000000/request"]
     assert built[0].published == [
         {
             "pushing": {

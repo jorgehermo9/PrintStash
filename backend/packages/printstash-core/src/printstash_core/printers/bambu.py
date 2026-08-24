@@ -756,7 +756,6 @@ class BambuClient:
             try:
                 self._validate_mqtt_peer(client)
                 client.subscribe(self._report_topic, qos=1)
-                client.subscribe(self._request_topic, qos=1)
                 payload = {
                     "pushing": {
                         "sequence_id": self._next_sequence_id(),

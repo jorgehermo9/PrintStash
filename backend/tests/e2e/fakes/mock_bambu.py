@@ -72,6 +72,7 @@ class FakeMqttClient:
         self.expected_access_code = expected_access_code
         self.reject_commands = reject_commands
         self.published: list[dict[str, Any]] = []
+        self.published_topics: list[str] = []
         self.username: Optional[str] = None
         self.password: Optional[str] = None
         self.tls_configured = False
@@ -116,6 +117,7 @@ class FakeMqttClient:
         self, topic: str, payload: str, qos: int = 1, retain: bool = False
     ) -> _FakePublishInfo:
         body = json.loads(payload)
+        self.published_topics.append(topic)
         self.published.append(body)
         report: dict[str, Any]
         if "pushing" in body:
