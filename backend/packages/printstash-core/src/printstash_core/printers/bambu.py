@@ -778,12 +778,13 @@ class BambuClient:
                 return
             if not isinstance(body.get("print"), dict):
                 return
-            topic = str(getattr(message, "topic", ""))
-            normalized = (
-                self._normalize_project_request(body)
-                if topic == self._request_topic
-                else self._normalize_status(body)
-            )
+            # Bambu can put project_file capture hints on the report topic,
+            # which is the only topic this persistent session subscribes to.
+            # Prefer that shape regardless of topic, then fall back to the
+            # ordinary status normalizer for all other printer reports.
+            normalized = self._normalize_project_request(body)
+            if not normalized:
+                normalized = self._normalize_status(body)
             if not normalized:
                 return
             future = asyncio.run_coroutine_threadsafe(dispatch(normalized), loop)
