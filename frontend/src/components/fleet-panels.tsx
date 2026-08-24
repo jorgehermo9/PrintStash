@@ -66,6 +66,18 @@ function editDraft(job: PrintJobRead): QueueEditDraft {
   };
 }
 
+function parseRoutingStrategy(value: string): RoutingStrategy | null {
+  return value === "manual" || value === "default" || value === "least_busy" ? value : null;
+}
+
+function parseJobPriority(value: string): JobPriority | null {
+  return value === "low" || value === "normal" || value === "rush" ? value : null;
+}
+
+function parseCompatibilityPolicy(value: string): CompatibilityPolicy | null {
+  return value === "safe" || value === "allow_mismatch" ? value : null;
+}
+
 /**
  * The fleet mutations `FleetQueuePanel` reaches for outside itself. Application
  * code renders the panel without a `deps` prop and gets
@@ -215,18 +227,17 @@ export function FleetQueuePanel({
         >
           {editTarget && draft && (
             <div className="space-y-4">
-              <p className="truncate text-sm text-muted-foreground">
-                {editTarget.remote_filename}
-              </p>
+              <p className="truncate text-sm text-muted-foreground">{editTarget.remote_filename}</p>
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="block space-y-1.5 text-sm font-medium text-foreground">
                   Routing
                   <select
                     className={inputClasses}
                     value={draft.strategy}
-                    onChange={(event) =>
-                      setDraft({ ...draft, strategy: event.target.value as RoutingStrategy })
-                    }
+                    onChange={(event) => {
+                      const strategy = parseRoutingStrategy(event.target.value);
+                      if (strategy) setDraft({ ...draft, strategy });
+                    }}
                   >
                     <option value="manual">Choose printer</option>
                     <option value="default">Default printer</option>
@@ -254,9 +265,10 @@ export function FleetQueuePanel({
                   <select
                     className={inputClasses}
                     value={draft.priority}
-                    onChange={(event) =>
-                      setDraft({ ...draft, priority: event.target.value as JobPriority })
-                    }
+                    onChange={(event) => {
+                      const priority = parseJobPriority(event.target.value);
+                      if (priority) setDraft({ ...draft, priority });
+                    }}
                   >
                     <option value="low">Low</option>
                     <option value="normal">Normal</option>
@@ -286,12 +298,10 @@ export function FleetQueuePanel({
                   <select
                     className={inputClasses}
                     value={draft.compatibilityPolicy}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        compatibilityPolicy: event.target.value as CompatibilityPolicy,
-                      })
-                    }
+                    onChange={(event) => {
+                      const compatibilityPolicy = parseCompatibilityPolicy(event.target.value);
+                      if (compatibilityPolicy) setDraft({ ...draft, compatibilityPolicy });
+                    }}
                   >
                     <option value="safe">Require compatible material</option>
                     <option value="allow_mismatch">Allow mismatch</option>
