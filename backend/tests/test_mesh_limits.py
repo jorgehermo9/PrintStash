@@ -327,6 +327,24 @@ def test_stl_fallback_rasterises_real_area_and_preserves_hole(tmp_path: Path) ->
     assert float(pixels[:, :, :3][alpha > 200].std()) > 5.0
 
 
+def test_incomplete_annular_sample_still_preserves_hole(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from PIL import Image
+
+    from app.services import stl_fallback
+
+    monkeypatch.setattr(stl_fallback, "_MAX_SAMPLED_TRIANGLES", 32)
+    path = tmp_path / "incomplete-annular-hole.stl"
+    _write_annular_binary_stl(path)
+    result = stl_fallback.render_stl_thumbnail(path, width=160, height=120)
+
+    assert result is not None
+    assert result.complete is False
+    pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
+    assert pixels[pixels.shape[0] // 2, pixels.shape[1] // 2, 3] < 32
+
+
 def test_ascii_fallback_discards_hostile_line_and_recovers(
     tmp_path: Path,
 ) -> None:
@@ -389,6 +407,42 @@ def test_ascii_fallback_caps_total_facets_and_bytes(
     assert result.sampled_triangles == 4
     assert result.parsed_triangles == 4
     assert result.scanned_bytes <= stl_fallback._MAX_ASCII_BYTES
+
+
+@pytest.mark.parametrize(
+    "pending_vertices",
+    ["vertex 2 2 2\n", "vertex 2 2 2\nvertex 3 3 3\n"],
+)
+def test_ascii_pending_vertices_at_eof_are_incomplete(
+    tmp_path: Path, monkeypatch, pending_vertices: str
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "ascii-pending-eof.stl"
+    path.write_text(
+        "solid pending\n"
+        "facet normal 0 0 1\n"
+        "outer loop\n"
+        "vertex 0 0 0\n"
+        "vertex 1 0 0\n"
+        "vertex 0 1 0\n"
+        "endloop\n"
+        "endfacet\n" + pending_vertices
+    )
+
+    result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
+
+    assert result is not None
+    assert result.parsed_triangles == 1
+    assert result.complete is False
+
+    monkeypatch.setattr(mesh_processing, "_estimate_triangle_count", lambda _p: None)
+    monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: None)
+    geometry, thumbnail = mesh_processing.analyze_mesh(path)
+    assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
+    assert thumbnail.complete is False
+    assert geometry["triangle_count"] is None
+    assert geometry["bbox_x_mm"] is None
 
 
 def test_ascii_fallback_marks_truncated_metadata_incomplete(

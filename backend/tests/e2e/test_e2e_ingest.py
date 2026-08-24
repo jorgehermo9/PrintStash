@@ -134,6 +134,6 @@ async def test_over_cap_mesh_upload_has_a_visible_thumbnail(
 
     with Image.open(io.BytesIO(thumbnail.content)) as image:
         pixels = np.asarray(image.convert("RGBA"))
-    opaque = pixels[:, :, 3] > 200
-    assert opaque.mean() > 0.08
-    assert float(pixels[:, :, :3][opaque].std()) > 8.0
+    visible = pixels[:, :, 3] > 20
+    assert visible.mean() > 0.08
+    assert float(pixels[:, :, :3][visible].std()) > 8.0

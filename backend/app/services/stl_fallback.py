@@ -312,7 +312,7 @@ def _read_ascii_samples(
         bounds_max=(upper[0], upper[1], upper[2]),
         scanned_bytes=scanned_bytes,
         parsed_triangles=parsed,
-        complete=eof and valid_source,
+        complete=eof and valid_source and not vertices and not draining,
     )
 
 
@@ -344,7 +344,7 @@ def render_stl_thumbnail(
     """
     try:
         import numpy as np
-        from PIL import Image, ImageFilter
+        from PIL import Image
 
         from app.services.mesh_render import (
             RasterBudget,
@@ -404,8 +404,9 @@ def render_stl_thumbnail(
     except (FloatingPointError, ValueError, RuntimeError):
         return None
 
-    # Half-resolution coverage keeps narrow silhouettes continuous while still
-    # bounding candidate-pixel work to a quarter of a full-resolution render.
+    # Half-resolution coverage keeps the silhouette detailed while actual
+    # triangle tests preserve holes. Small meshes retain the same resolution so
+    # tiny facets are not rounded away entirely.
     coverage_width = max(1, min(width, max(64, width // 2)))
     coverage_height = max(1, min(height, max(48, height // 2)))
     coarse_image = np.zeros((coverage_height, coverage_width, 3), dtype=np.uint8)
@@ -476,15 +477,6 @@ def render_stl_thumbnail(
         ),
         dtype=np.uint8,
     )
-    if not sampled.complete or raster_budget.used >= raster_budget.limit:
-        # A truncated/sample-capped source can leave small gaps between otherwise
-        # adjacent coarse facets. A two-pixel conservative dilation
-        # reconnects that degraded silhouette without turning triangles into
-        # bounding boxes; complete sources keep exact triangle coverage.
-        alpha = np.asarray(
-            Image.fromarray(alpha, mode="L").filter(ImageFilter.MaxFilter(5)),
-            dtype=np.uint8,
-        )
     rgba = np.dstack([image, alpha])
     output = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(output, format="PNG", optimize=True)
