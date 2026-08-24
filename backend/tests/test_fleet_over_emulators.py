@@ -99,6 +99,20 @@ async def _wait_job_state(
     raise AssertionError(f"job {job_id} never reached {states}")
 
 
+async def _stop_hub_tasks(tasks: list[asyncio.Task[None]], stop: asyncio.Event) -> None:
+    """Drain in-flight DB syncs before cancelling emulator workers.
+
+    Cancelling a task that is awaiting ``asyncio.to_thread`` does not cancel
+    the worker thread. Under coverage that stale write can finish after the
+    test has observed the terminal state and make the final assertion flaky.
+    """
+    stop.set()
+    _done, pending = await asyncio.wait(tasks, timeout=2.0)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def test_dispatch_to_two_emulated_printers_both_complete(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
@@ -177,14 +191,7 @@ def test_dispatch_to_two_emulated_printers_both_complete(
                         _wait_job_state(job2["id"], PrintJobState.COMPLETED),
                     )
                 finally:
-                    stop.set()
-                    for task in tasks:
-                        task.cancel()
-                    for task in tasks:
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
+                    await _stop_hub_tasks(tasks, stop)
 
                 return first, second
 

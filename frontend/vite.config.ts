@@ -1,6 +1,5 @@
 import { defineConfig } from "vitest/config";
-import babel from "@rolldown/plugin-babel";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const API_TARGET = process.env.VITE_API_URL || "http://localhost:8000";
@@ -10,10 +9,10 @@ const API_TARGET = process.env.VITE_API_URL || "http://localhost:8000";
 export default defineConfig(({ mode }) => ({
   plugins: [
     tailwindcss(),
-    react(),
-    // Keep the normal Oxc transform path fast. The compiler is an explicit
-    // profiling build until it demonstrates a real interaction-time win.
-    ...(mode === "react-compiler" ? [babel({ presets: [reactCompilerPreset()] })] : []),
+    // Keep the default Oxc transform path fast. Native React Compiler remains
+    // an explicit profiling build until it demonstrates an interaction-time
+    // win and its unsupported diagnostics have been triaged.
+    react({ compiler: mode === "react-compiler" }),
   ],
   resolve: {
     tsconfigPaths: true,

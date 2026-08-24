@@ -8,6 +8,15 @@ import app.core.ratelimit as ratelimit
 from app.core.ratelimit import RateLimiter
 
 
+@pytest.mark.parametrize(
+    ("limit", "window_s", "max_keys"),
+    [(0, 60.0, 100), (1, 0.0, 100), (1, 60.0, 0)],
+)
+def test_rejects_non_positive_configuration(limit, window_s, max_keys):
+    with pytest.raises(ValueError, match="must be positive"):
+        RateLimiter(limit=limit, window_s=window_s, max_keys=max_keys)
+
+
 def test_allows_up_to_limit():
     limiter = RateLimiter(limit=3, window_s=60.0)
     assert limiter.check("1.2.3.4") is True

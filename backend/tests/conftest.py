@@ -22,21 +22,38 @@ from sqlmodel import Session, SQLModel, create_engine, select
 # absolute container paths (/data/...), which a non-root process can't create,
 # breaking real-storage and real-lifespan tests. `_data/` and `*.sqlite` are
 # gitignored, so this needs no cleanup.
+_xdist_worker = os.environ.get("PYTEST_XDIST_WORKER")
+_xdist_run_uid = os.environ.get("PYTEST_XDIST_TESTRUNUID")
 _TEST_STORAGE_ROOT = Path(__file__).parent / "_data"
+if _xdist_worker:
+    # xdist workers run independent app/DB state, so their filesystem state
+    # must be independent too. Include the run UID as well as the worker name:
+    # two concurrent pytest sessions both have a gw0, gw1, etc.
+    _xdist_namespace = f"{_xdist_run_uid or 'xdist'}-{_xdist_worker}"
+    _TEST_STORAGE_ROOT /= _xdist_namespace
 for _var, _path in (
     ("VAULT_DATA_DIR", _TEST_STORAGE_ROOT / "files"),
     ("VAULT_THUMB_DIR", _TEST_STORAGE_ROOT / "thumbs"),
     ("VAULT_STAGING_DIR", _TEST_STORAGE_ROOT / "staging"),
     ("VAULT_BACKUP_DIR", _TEST_STORAGE_ROOT / "backups"),
 ):
-    os.environ.setdefault(_var, str(_path))
+    if _xdist_worker:
+        # The xdist controller imports this conftest first, so workers inherit
+        # its serial path. Worker processes must replace that test-owned value.
+        os.environ[_var] = str(_path)
+    else:
+        os.environ.setdefault(_var, str(_path))
     _path.mkdir(parents=True, exist_ok=True)
 _db_dir = _TEST_STORAGE_ROOT / "db"
 _db_dir.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("VAULT_DB_URL", f"sqlite:///{_db_dir / 'printstash.sqlite'}")
-os.environ.setdefault(
-    "VAULT_SECRETS_KEY_FILE", str(_db_dir / ".printstash-secrets-key")
-)
+_test_db_url = f"sqlite:///{_db_dir / 'printstash.sqlite'}"
+_test_secrets_key_file = str(_db_dir / ".printstash-secrets-key")
+if _xdist_worker:
+    os.environ["VAULT_DB_URL"] = _test_db_url
+    os.environ["VAULT_SECRETS_KEY_FILE"] = _test_secrets_key_file
+else:
+    os.environ.setdefault("VAULT_DB_URL", _test_db_url)
+    os.environ.setdefault("VAULT_SECRETS_KEY_FILE", _test_secrets_key_file)
 
 from app.core.config import _overlay, settings  # noqa: E402
 from app.db.session import (  # noqa: E402
@@ -46,6 +63,33 @@ from app.db.session import (  # noqa: E402
     override_session_factory,
 )
 from app.services.printer_hub import PrinterHub  # noqa: E402
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Classify boundary tests so local development can select a useful tier.
+
+    E2E modules already declare their marker explicitly.  Integration modules
+    follow stable path/name conventions because they exercise a real server,
+    external storage/database, or full-size fixture rather than an in-process
+    contract fake.  The default pytest invocation still collects every test.
+    """
+    for item in items:
+        path = Path(str(item.path))
+        name = path.name
+        if "e2e" in path.parts:
+            item.add_marker(pytest.mark.e2e)
+        elif (
+            "postgres" in path.parts
+            or "migration" in name
+            or name.startswith("test_real_")
+            or name.endswith("_integration.py")
+            or name.endswith("_real.py")
+            or name.endswith("_realfiles.py")
+            or name == "test_db_session.py"
+            or name == "test_storage_s3.py"
+        ):
+            item.add_marker(pytest.mark.integration)
+
 
 # The dev shell exports a short VAULT_JWT_SECRET (e.g. "dev-jwt-secret", 14 bytes),
 # which PyJWT flags with InsecureKeyLengthWarning on every token encode/decode —
@@ -87,8 +131,11 @@ _test_factory = SQLiteSessionFactory(_test_engine)
 # ``_use_threaded_db`` autouse fixture) instead of it being the suite-wide
 # default, since NullPool's real per-checkout connections add contention
 # under the full suite's much higher, non-threaded concurrency.
+_threaded_db_name = (
+    f"printstash_threaded_test_{_xdist_run_uid or 'serial'}_{_xdist_worker or 'main'}"
+)
 THREADED_DB_URL = (
-    "sqlite:///file:printstash_threaded_test?mode=memory&cache=shared&uri=true"
+    f"sqlite:///file:{_threaded_db_name}?mode=memory&cache=shared&uri=true"
 )
 _threaded_engine = create_engine(
     THREADED_DB_URL,
@@ -329,7 +376,9 @@ def app() -> FastAPI:
     hub = PrinterHub(
         InProcessBus(),
         session_factory=get_session_factory(),
-        provider_builder=lambda printer: get_provider_client(printer, registry=registry)
+        provider_builder=lambda printer: get_provider_client(
+            printer, registry=registry
+        ),
     )
     _app.state.printer_hub = hub
     _app.state.task_queue = LocalTaskQueue()

@@ -16,14 +16,14 @@ work; that detail lives there, not here, so this file stays small.
 - Public roadmap: `docs/roadmap.md`. Local-only planning (gitignored): `reports/` — start with `reports/14-implementation-plan-to-1.0.0.md` (OSS plan) and `reports/15-cloud-implementation-plan.md` (cloud). Never commit or quote `reports/` content publicly.
 
 ## Commands
-- Backend: `cd backend && uv run pytest tests -v` · lint `uv run ruff check app/ tests/` · run `uv run uvicorn app.main:app --reload` · migrate `uv run alembic upgrade head`
+- Backend: fast loop `cd backend && ./scripts/test.sh fast -q` · full gate `./scripts/test.sh full -q` · lint `uv run ruff check app/ tests/` · run `uv run uvicorn app.main:app --reload` · migrate `uv run alembic upgrade head`
 - Frontend: `cd frontend && pnpm dev|test|lint|format|typecheck` — oxlint + oxfmt + TypeScript 7 (no ESLint, no prettier)
 - Full stack: `docker compose -f docker-compose.light.yml up` (prebuilt image — src edits need vite dev server).
 
 ## Testing
 Four layers: unit/integration (`backend/tests/test_*.py`), backend e2e
 (`backend/tests/e2e/`, real app + contract fakes under `e2e/fakes/`, part of
-`pytest tests`), mock-API Playwright (`frontend/tests/e2e/`, `pnpm test:e2e`),
+`./scripts/test.sh full`), mock-API Playwright (`frontend/tests/e2e/`, `pnpm test:e2e`),
 real-backend Playwright (`frontend/tests/e2e-real/`, `pnpm test:e2e:real`).
 Printer emulators run standalone for manual testing, e.g.
 `cd backend && uv run python -m tests.e2e.fakes.mock_printer --port 7125 --print-seconds 5`

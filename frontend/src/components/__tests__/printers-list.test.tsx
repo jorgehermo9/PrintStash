@@ -276,7 +276,8 @@ describe("printer card", () => {
     });
 
     expect(screen.getByLabelText("Fleet summary")).toHaveTextContent("1");
-    await userEvent.click(screen.getByRole("button", { name: /Workshop1/ }));
+    // DOM implementations differ on whether adjacent text nodes insert a space.
+    await userEvent.click(screen.getByRole("button", { name: /Workshop\s*1/ }));
     expect(screen.getByRole("link", { name: "Workshop Voron" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Garage Prusa" })).not.toBeInTheDocument();
   });

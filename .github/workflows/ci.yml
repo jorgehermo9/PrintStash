@@ -122,7 +122,7 @@ jobs:
         run: uv run ty check app/ --exit-zero --quiet
 
       - name: Test backend
-        run: uv run pytest tests -v --cov=app --cov-report=term-missing --cov-fail-under=95
+        run: ./scripts/test.sh full -v --cov=app --cov-report=term-missing --cov-fail-under=95
 
   backend-python313:
     name: Backend compatibility (Python 3.13, advisory)
@@ -150,7 +150,7 @@ jobs:
         run: uv sync --extra dev --extra full --frozen
 
       - name: Run backend compatibility suite
-        run: uv run pytest tests -q
+        run: ./scripts/test.sh full -q
 
   sqlite-async:
     name: SQLite async extra
@@ -361,8 +361,31 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check whether legacy migration files changed
+        id: legacy_migration
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            .github/workflows/ci.yml \
+            docker-compose.yml \
+            docker-compose.migrate-minio.yml \
+            scripts/migrate_minio_to_seaweedfs.sh \
+            scripts/rclone_minio_to_seaweedfs.sh \
+            scripts/test_minio_migration.sh; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Verify idempotent migration and downloaded content
+        if: steps.legacy_migration.outputs.run == 'true'
         run: ./scripts/test_minio_migration.sh
 
   frontend:

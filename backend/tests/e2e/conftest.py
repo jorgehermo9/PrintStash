@@ -117,7 +117,7 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> Iterator[Fakes]:
 
 
 @pytest_asyncio.fixture
-async def api() -> "httpx.AsyncClient":
+async def api(e2e_db: Session) -> "httpx.AsyncClient":
     """An async client bound to the real app via ASGI (no network for ingress).
 
     The process-wide outbound httpx client is reset around each test: it caches a
@@ -126,7 +126,28 @@ async def api() -> "httpx.AsyncClient":
     "Event loop is closed".
     """
     from app.core.http_client import close_http_client
+    from app.db.session import get_session_factory
     from app.main import app
+    from app.services.printer_hub import PrinterHub
+    from app.services.printer_provider import (
+        build_provider_registry,
+        get_provider_client,
+    )
+    from app.services.realtime import InProcessBus
+    from app.services.task_queue import LocalTaskQueue
+
+    # E2E must initialize its own process-local runtime state instead of
+    # depending on an earlier unit test's app fixture having populated it.
+    registry = build_provider_registry()
+    app.state.printer_provider_registry = registry
+    app.state.printer_hub = PrinterHub(
+        InProcessBus(),
+        session_factory=get_session_factory(),
+        provider_builder=lambda printer: get_provider_client(
+            printer, registry=registry
+        ),
+    )
+    app.state.task_queue = LocalTaskQueue()
 
     await close_http_client()
     transport = httpx.ASGITransport(app=app)

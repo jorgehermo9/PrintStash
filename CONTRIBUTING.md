@@ -55,6 +55,51 @@ pnpm format:check  # oxfmt
 pnpm typecheck     # TypeScript 7 native compiler
 ```
 
+## Performance experiments
+
+The default development, build, and test commands remain the authoritative
+paths. These opt-in lanes make timing experiments reproducible without making
+experimental tools release requirements:
+
+```bash
+cd frontend
+pnpm dev:bundle                 # Vite's experimental bundled development server
+pnpm build:react-compiler       # native Oxc React Compiler production build
+pnpm test:fast                  # audited pure tests: threads + shared module graph
+pnpm test:changed               # root tests related to the current Git diff
+pnpm test:happy-dom             # compatibility/timing trial; jsdom stays authoritative
+pnpm test:jsdom                 # explicit authoritative root-suite comparison
+pnpm test:e2e:bundle            # full mock-API E2E against bundled development
+pnpm test:perf                  # 3 baseline production-build browser samples
+pnpm test:perf:react-compiler   # same browser samples with native React Compiler
+```
+
+Compare the `PRINTSTASH_PERF` JSON emitted by the two browser timing commands.
+Do not enable React Compiler by default based on build time alone: first triage
+its unsupported diagnostics and require a repeatable interaction-time win.
+
+The backend suite is split into explicit development lanes. All parallel lanes
+use isolated worker databases/storage and xdist work stealing:
+
+```bash
+cd backend
+./scripts/test.sh fast -q         # usual loop; no service/schema boundaries, real files, or E2E
+./scripts/test.sh affected -q     # dependency-based selection; first run seeds its cache
+./scripts/test.sh integration -q  # real servers, stores, databases, and large fixtures
+./scripts/test.sh e2e -q          # real app against contract-enforcing fakes
+./scripts/test.sh full -q         # complete pre-merge gate
+./scripts/test.sh serial -q       # diagnostic reference only
+```
+
+`affected` stores only local dependency metadata in the ignored `.testmondata`
+file. Treat it as a tight edit/test loop, not a substitute for `full`. Generic
+S3 tests use SeaweedFS; MinIO is intentionally limited to the legacy
+MinIO-to-SeaweedFS migration check, which pull requests run only when that
+migration surface changes.
+
+The manual **Tooling experiments** GitHub workflow runs the same lanes on a
+hosted runner without adding experimental work to normal pull-request CI.
+
 ## Project Boundaries
 
 - Self-hosted first. Cloud-style features should stay optional.
