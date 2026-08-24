@@ -172,6 +172,15 @@ class BambuClient:
         "finish": "complete",
         "failed": "error",
     }
+    _FTPS_RETRYABLE = frozenset(
+        {
+            "bambu_ftps_transport_error",
+            "bambu_ftps_connection_reset",
+            "bambu_ftps_timeout",
+            "bambu_ftps_eof",
+        }
+    )
+
     def __init__(
         self,
         config: BambuConfig,
@@ -393,6 +402,9 @@ class BambuClient:
         elif isinstance(exc, ConnectionResetError):
             code = "bambu_ftps_connection_reset"
             retryable = True
+        elif isinstance(exc, EOFError):
+            code = "bambu_ftps_eof"
+            retryable = True
         elif isinstance(exc, (error_perm, error_reply, error_temp)):
             response = str(exc).lower()
             if response.startswith("530") or "auth" in response:
@@ -451,7 +463,11 @@ class BambuClient:
                 return
             except Exception as exc:  # noqa: BLE001 - classify at the seam
                 classified = cls._classify_ftps_exception(exc)
-                if attempt == 0 and classified.retryable:
+                if (
+                    attempt == 0
+                    and classified.retryable
+                    and classified.action_code in cls._FTPS_RETRYABLE
+                ):
                     continue
                 raise classified from exc
 

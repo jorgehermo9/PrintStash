@@ -129,6 +129,22 @@ def test_ftps_retries_one_transport_reset_but_not_authentication(
     assert BambuClient._classify_ftps_exception(ConnectionResetError()).retryable is True
 
 
+def test_ftps_retries_eof_once(tmp_path: Path) -> None:
+    source = tmp_path / "cube.gcode"
+    source.write_bytes(b"G28\n")
+    first = FailingFtpsClient(EOFError("unexpected EOF"))
+    second = FakeFtpsClient()
+    clients = iter((first, second))
+    client = make_client(ftps_client_factory=lambda: next(clients))
+
+    client._upload_via_ftps(source, "cube.gcode")
+    assert len([call for call in first.calls if call[0] == "connect"]) == 1
+    assert len([call for call in second.calls if call[0] == "connect"]) == 1
+    eof = BambuClient._classify_ftps_exception(EOFError())
+    assert eof.action_code == "bambu_ftps_eof"
+    assert eof.retryable is True
+
+
 def test_ftps_classification_exposes_actionable_codes() -> None:
     assert BambuClient._classify_ftps_exception(
         error_perm("550 file unavailable")
@@ -194,8 +210,25 @@ def test_ftps_retry_requires_explicit_transport_or_provider_opt_in() -> None:
         if provider_attempts == 1:
             raise ProviderError("temporary provider outcome", retryable=True)
 
-    BambuClient._with_ftps_retry(explicitly_retryable_provider_failure)
-    assert provider_attempts == 2
+    with pytest.raises(ProviderError) as generic_error:
+        BambuClient._with_ftps_retry(explicitly_retryable_provider_failure)
+    assert generic_error.value.action_code == "provider_error"
+    assert provider_attempts == 1
+
+    explicit_ftps_attempts = 0
+
+    def explicitly_retryable_ftps_failure() -> None:
+        nonlocal explicit_ftps_attempts
+        explicit_ftps_attempts += 1
+        if explicit_ftps_attempts == 1:
+            raise ProviderError(
+                "temporary FTPS transport outcome",
+                action_code="bambu_ftps_transport_error",
+                retryable=True,
+            )
+
+    BambuClient._with_ftps_retry(explicitly_retryable_ftps_failure)
+    assert explicit_ftps_attempts == 2
 
 
 def test_missing_local_upload_is_not_retried(tmp_path: Path) -> None:
