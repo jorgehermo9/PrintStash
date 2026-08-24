@@ -126,6 +126,7 @@ def test_ftps_retries_one_transport_reset_but_not_authentication(
         auth_client._upload_via_ftps(source, "cube.gcode")
     assert failure.value.action_code == "bambu_ftps_authentication_failed"
     assert len([call for call in auth.calls if call[0] == "connect"]) == 1
+    assert BambuClient._classify_ftps_exception(ConnectionResetError()).retryable is True
 
 
 def test_ftps_classification_exposes_actionable_codes() -> None:
@@ -153,6 +154,63 @@ def test_provider_error_defaults_action_code_to_safe_coarse_code() -> None:
     error = ProviderError("remote server detail", code="provider_timeout")
     assert error.detail == "remote server detail"
     assert error.action_code == "provider_timeout"
+    assert error.retryable is False
+
+
+def test_ftps_retry_requires_explicit_transport_or_provider_opt_in() -> None:
+    for local_exception in (
+        FileNotFoundError("local source is missing"),
+        PermissionError("local destination is not writable"),
+    ):
+        local_attempts = 0
+
+        def local_failure(exc: BaseException = local_exception) -> None:
+            nonlocal local_attempts
+            local_attempts += 1
+            raise exc
+
+        with pytest.raises(ProviderError) as local_error:
+            BambuClient._with_ftps_retry(local_failure)
+        assert local_error.value.action_code == "bambu_ftps_local_error"
+        assert local_attempts == 1
+
+    unknown_attempts = 0
+
+    def unknown_failure() -> None:
+        nonlocal unknown_attempts
+        unknown_attempts += 1
+        raise RuntimeError("unexpected local callback failure")
+
+    with pytest.raises(ProviderError) as unknown_error:
+        BambuClient._with_ftps_retry(unknown_failure)
+    assert unknown_error.value.action_code == "bambu_ftps_unknown_error"
+    assert unknown_attempts == 1
+
+    provider_attempts = 0
+
+    def explicitly_retryable_provider_failure() -> None:
+        nonlocal provider_attempts
+        provider_attempts += 1
+        if provider_attempts == 1:
+            raise ProviderError("temporary provider outcome", retryable=True)
+
+    BambuClient._with_ftps_retry(explicitly_retryable_provider_failure)
+    assert provider_attempts == 2
+
+
+def test_missing_local_upload_is_not_retried(tmp_path: Path) -> None:
+    factory_attempts = 0
+
+    def client_factory() -> FakeFtpsClient:
+        nonlocal factory_attempts
+        factory_attempts += 1
+        return FakeFtpsClient()
+
+    client = make_client(ftps_client_factory=client_factory)
+    with pytest.raises(ProviderError) as missing:
+        client._upload_via_ftps(tmp_path / "missing.gcode", "cube.gcode")
+    assert missing.value.action_code == "bambu_ftps_local_error"
+    assert factory_attempts == 1
 
 
 def test_ftps_non_retryable_codes_and_path_guards(tmp_path: Path) -> None:

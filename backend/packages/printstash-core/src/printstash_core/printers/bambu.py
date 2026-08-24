@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import socket
@@ -171,14 +172,6 @@ class BambuClient:
         "finish": "complete",
         "failed": "error",
     }
-    _FTPS_RETRYABLE = frozenset(
-        {
-            "bambu_ftps_transport_error",
-            "bambu_ftps_connection_reset",
-            "bambu_ftps_timeout",
-        }
-    )
-
     def __init__(
         self,
         config: BambuConfig,
@@ -375,21 +368,31 @@ class BambuClient:
         return _ImplicitFTP_TLS(context=context, timeout=30)
 
     @staticmethod
-    def _ftps_error(detail: str, *, action_code: str) -> ProviderError:
+    def _ftps_error(
+        detail: str, *, action_code: str, retryable: bool = False
+    ) -> ProviderError:
         # ``code`` remains the coarse compatibility category.  The actionable
         # value is persisted and exposed by the application as ``action_code``.
-        return ProviderError(detail, code="provider_error", action_code=action_code)
+        return ProviderError(
+            detail,
+            code="provider_error",
+            action_code=action_code,
+            retryable=retryable,
+        )
 
     @classmethod
     def _classify_ftps_exception(cls, exc: BaseException) -> ProviderError:
         if isinstance(exc, ProviderError):
             return exc
+        retryable = False
         if isinstance(exc, ssl.SSLError):
             code = "bambu_ftps_tls_error"
         elif isinstance(exc, (socket.timeout, TimeoutError)):
             code = "bambu_ftps_timeout"
+            retryable = True
         elif isinstance(exc, ConnectionResetError):
             code = "bambu_ftps_connection_reset"
+            retryable = True
         elif isinstance(exc, (error_perm, error_reply, error_temp)):
             response = str(exc).lower()
             if response.startswith("530") or "auth" in response:
@@ -408,11 +411,35 @@ class BambuClient:
                 # leave the one-shot retry reserved for explicit transport
                 # outcomes only.
                 code = "bambu_ftps_server_rejected"
-        elif isinstance(exc, (ConnectionError, OSError)):
+        elif isinstance(exc, (ConnectionError, socket.gaierror)) or (
+            isinstance(exc, OSError)
+            and getattr(exc, "errno", None)
+            in {
+                getattr(errno, name)
+                for name in (
+                    "ECONNABORTED",
+                    "ECONNREFUSED",
+                    "ECONNRESET",
+                    "EHOSTDOWN",
+                    "EHOSTUNREACH",
+                    "ENETDOWN",
+                    "ENETRESET",
+                    "ENETUNREACH",
+                    "EPIPE",
+                    "ETIMEDOUT",
+                )
+                if hasattr(errno, name)
+            }
+        ):
             code = "bambu_ftps_transport_error"
+            retryable = True
+        elif isinstance(exc, OSError):
+            # File/path/permission failures happen on the local side of the
+            # transfer and are never made transient by replaying the upload.
+            code = "bambu_ftps_local_error"
         else:
-            code = "bambu_ftps_transport_error"
-        return cls._ftps_error(code, action_code=code)
+            code = "bambu_ftps_unknown_error"
+        return cls._ftps_error(code, action_code=code, retryable=retryable)
 
     @classmethod
     def _with_ftps_retry(cls, operation: Callable[[], None]) -> None:
@@ -424,10 +451,7 @@ class BambuClient:
                 return
             except Exception as exc:  # noqa: BLE001 - classify at the seam
                 classified = cls._classify_ftps_exception(exc)
-                if (
-                    attempt == 0
-                    and classified.action_code in cls._FTPS_RETRYABLE
-                ):
+                if attempt == 0 and classified.retryable:
                     continue
                 raise classified from exc
 
