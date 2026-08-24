@@ -40,7 +40,9 @@ import { TabBar } from "@/components/ui/tabs";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { FleetMaintenancePanel } from "@/components/fleet-panels";
 import { PrinterMaterials } from "@/components/printer-materials";
+import { PrintJobReproducibility } from "@/components/print-job-reproducibility";
 import { cn } from "@/lib/utils";
+import { printJobArtifactLabel } from "@/lib/print-job-reproducibility";
 import { Localized } from "@/components/ui/localized";
 import { PRINTER_MODEL_OPTIONS, providerAddress, providerLabel } from "@/lib/printer-providers";
 import {
@@ -981,22 +983,22 @@ export function PrinterDetailPage({
                           <td className="py-3 px-4 font-mono text-xs text-muted-foreground whitespace-nowrap">
                             {new Date(j.created_at).toLocaleString()}
                           </td>
-                          <td className="py-3 px-4 max-w-[260px] truncate">
+                          <td className="py-3 px-4 max-w-[260px]">
                             {j.artifact_evidence === "vault" ||
                             j.artifact_evidence.endsWith("_archived") ? (
                               <Link
                                 href={`/models/${j.model_id}`}
                                 className="font-mono text-xs text-foreground hover:text-primary hover:underline"
-                                title={j.external_display_name ?? j.remote_filename}
+                                title={printJobArtifactLabel(j)}
                               >
-                                {j.external_display_name ?? j.remote_filename}
+                                {printJobArtifactLabel(j)}
                               </Link>
                             ) : (
                               <span
                                 className="font-mono text-xs text-foreground"
-                                title={j.external_gcode_file ?? j.remote_filename}
+                                title={printJobArtifactLabel(j)}
                               >
-                                {j.external_display_name ?? j.remote_filename}
+                                {printJobArtifactLabel(j)}
                               </span>
                             )}
                             {j.source === "external" && (
@@ -1004,6 +1006,15 @@ export function PrinterDetailPage({
                                 {j.artifact_evidence.replaceAll("_", " ")}
                               </span>
                             )}
+                            <PrintJobReproducibility
+                              job={j}
+                              previewHref={
+                                j.artifact_evidence === "vault" ||
+                                j.artifact_evidence.endsWith("_archived")
+                                  ? `/models/${j.model_id}`
+                                  : null
+                              }
+                            />
                           </td>
                           <td className="py-3 px-4">
                             <span className="rounded bg-muted px-2 py-0.5 font-mono text-3xs uppercase tracking-wider text-foreground">

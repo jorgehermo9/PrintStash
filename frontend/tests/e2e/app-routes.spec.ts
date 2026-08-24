@@ -83,6 +83,39 @@ test("model detail route renders data and hydrates printer integrations", async 
   expect(problems).toEqual([]);
 });
 
+test("print history explains exact, partial, and basic evidence with safe download", async ({
+  page,
+}) => {
+  await page.goto("/models/1");
+  await page.getByRole("tab", { name: /History/ }).click();
+
+  const evidence = page.getByTestId("print-job-reproducibility");
+  await expect(evidence).toHaveCount(3);
+  await expect(
+    evidence.getByTestId("reproducibility-level").filter({ hasText: "Exactly reproducible" }),
+  ).toHaveCount(1);
+  await expect(
+    evidence.getByTestId("reproducibility-level").filter({ hasText: "Partially reproducible" }),
+  ).toHaveCount(1);
+  await expect(
+    evidence.getByTestId("reproducibility-level").filter({ hasText: "External/basic evidence" }),
+  ).toHaveCount(1);
+  await expect(page.getByText(/Error code: bambu_ftps_unavailable/)).toBeVisible();
+  await expect(page.getByText("The printer cache is unavailable.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bambu project label", { exact: true })).toBeVisible();
+  await expect(evidence.nth(0).getByText("Archived artifact", { exact: true })).toHaveCount(1);
+  await expect(evidence.getByRole("button", { name: /download archived artifact/i })).toHaveCount(
+    1,
+  );
+  await expect(evidence.getByRole("link", { name: "Open model detail" })).toHaveCount(1);
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    evidence.getByRole("button", { name: /download archived artifact/i }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe("benchy.gcode");
+});
+
 test("model detail uses focused send dialog and compact actions", async ({ page }) => {
   await page.goto("/models/1");
 

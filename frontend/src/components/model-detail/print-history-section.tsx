@@ -8,6 +8,8 @@ import { usePrinters, useSpoolmanStatus, useSpools } from "@/lib/queries";
 import { formatCost, formatDuration, formatGrams, timeAgo } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { FileRead, ModelPrintJobRead } from "@/types";
+import { PrintJobReproducibility } from "@/components/print-job-reproducibility";
+import { printJobArtifactLabel } from "@/lib/print-job-reproducibility";
 
 import { PRINT_JOB_PRESENTATION, printJobToneClass } from "./presentation";
 import { Localized } from "@/components/ui/localized";
@@ -437,7 +439,7 @@ export function PrintHistorySection({
                       />
                       <span className="font-mono text-[13px] text-on-surface truncate">
                         {job.source === "external"
-                          ? (job.external_display_name ?? job.remote_filename)
+                          ? printJobArtifactLabel(job)
                           : `Rev ${job.gcode_revision_number ?? "—"}`}{" "}
                         · {job.printer_name}
                       </span>
@@ -457,6 +459,7 @@ export function PrintHistorySection({
                       {job.artifact_evidence.replaceAll("_", " ")}
                     </p>
                   )}
+                  <PrintJobReproducibility job={job} previewHref={`/models/${modelId}`} />
                   {(job.actual_duration_s != null || job.filament_used_g != null) && (
                     <p className="font-mono text-2xs text-on-surface-variant">
                       <span className="text-emerald-600">measured</span>

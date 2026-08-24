@@ -41,6 +41,7 @@ export type PrintJobState =
   | "completed"
   | "cancelled"
   | "failed";
+export type ReproducibilityLevel = "exact" | "metadata" | "basic";
 export type RoutingStrategy = "manual" | "default" | "least_busy";
 export type JobPriority = "low" | "normal" | "rush";
 export type CompatibilityPolicy = "safe" | "allow_mismatch";
@@ -254,6 +255,13 @@ export interface PrintJobRead {
     | "project_archived"
     | "capture_failed";
   artifact_capture_error: string | null;
+  artifact_capture_error_code?: string | null;
+  artifact_capture_error_message?: string | null;
+  reproducibility_level?: ReproducibilityLevel;
+  identity?: PrintJobIdentityRead;
+  metadata?: PrintJobReportedMetadataRead;
+  reproducibility?: PrintJobReproducibilityRead;
+  download_url?: string | null;
   error: string | null;
   routing_strategy: RoutingStrategy;
   queue_position: number;
@@ -279,6 +287,35 @@ export interface PrintJobRead {
   finished_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface PrintJobIdentityRead {
+  display_name: string | null;
+  task_id: string | null;
+  subtask_id: string | null;
+  project_id: string | null;
+  profile_id: string | null;
+  gcode_file: string | null;
+  plate_index: number | null;
+}
+
+export interface PrintJobReportedMetadataRead {
+  current_layer: number | null;
+  total_layers: number | null;
+  nozzle_diameter: number | null;
+}
+
+export interface PrintJobReproducibilityErrorRead {
+  code: string;
+  message: string;
+}
+
+export interface PrintJobReproducibilityRead {
+  level: ReproducibilityLevel;
+  identity: PrintJobIdentityRead;
+  metadata: PrintJobReportedMetadataRead;
+  error?: PrintJobReproducibilityErrorRead | null;
+  download_url?: string | null;
 }
 
 export interface SendToPrinter {

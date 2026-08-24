@@ -1,0 +1,271 @@
+import "@testing-library/jest-dom/vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { PrintJobReproducibility } from "@/components/print-job-reproducibility";
+import { DomLocalization, Localized } from "@/components/ui/localized";
+import { I18nProvider } from "@/lib/i18n";
+import {
+  resolvePrintJobReproducibility,
+  type PrintJobReproducibilityInput,
+} from "@/lib/print-job-reproducibility";
+
+const { downloadAuthenticatedFile } = vi.hoisted(() => ({
+  downloadAuthenticatedFile: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/lib/api/request", () => ({
+  downloadAuthenticatedFile,
+}));
+
+vi.mock("@/lib/toast", () => ({
+  toast: { error: vi.fn() },
+}));
+
+vi.mock("@/lib/navigation", () => ({
+  Link: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a {...props}>{children}</a>
+  ),
+}));
+
+function makeJob(
+  overrides: Partial<PrintJobReproducibilityInput> = {},
+): PrintJobReproducibilityInput {
+  return {
+    source: "external",
+    file_id: 7,
+    remote_filename: "cache/benchy.gcode",
+    artifact_evidence: "metadata_only",
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  localStorage.removeItem("printstash.locale");
+});
+
+describe("PrintJobReproducibility", () => {
+  it("prefers the nested contract and keeps the reported display name separate from the file", () => {
+    const job = makeJob({
+      external_display_name: "Bambu project label",
+      reproducibility: {
+        level: "metadata",
+        identity: {
+          display_name: "Bambu project label",
+          task_id: "task-42",
+          subtask_id: "subtask-9",
+          project_id: "project-7",
+          profile_id: "profile-4",
+          gcode_file: "cache/real-plate.gcode",
+          plate_index: 2,
+        },
+        metadata: { current_layer: 14, total_layers: 80, nozzle_diameter: 0.4 },
+        error: { code: "bambu_ftps_unavailable", message: "The printer cache is unavailable." },
+        download_url: "/api/v1/files/7/download",
+      },
+      // These legacy fields deliberately disagree with the nested object.
+      external_gcode_file: "cache/stale.gcode",
+      download_url: "/api/v1/files/old/download",
+    });
+
+    const resolved = resolvePrintJobReproducibility(job);
+    expect(resolved.level).toBe("metadata");
+    expect(resolved.identity.gcode_file).toBe("cache/real-plate.gcode");
+    expect(resolved.downloadUrl).toBeNull();
+
+    render(<PrintJobReproducibility job={job} />);
+    expect(screen.getByTestId("reproducibility-level")).toHaveTextContent("Partially reproducible");
+    expect(screen.getByText("real-plate.gcode")).toBeInTheDocument();
+    expect(screen.getByText("Bambu project label")).toBeInTheDocument();
+    expect(screen.getByText("task-42")).toBeInTheDocument();
+    expect(screen.getByText("bambu_ftps_unavailable")).toBeInTheDocument();
+    expect(screen.getByText("The printer cache is unavailable.")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /download archived artifact/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("stale.gcode")).not.toBeInTheDocument();
+  });
+
+  it("shows all evidence levels and only downloads an exact archived artifact", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <PrintJobReproducibility
+        job={makeJob({
+          artifact_evidence: "gcode_archived",
+          reproducibility: {
+            level: "exact",
+            identity: {
+              display_name: "Bambu project label",
+              task_id: null,
+              subtask_id: null,
+              project_id: null,
+              profile_id: null,
+              gcode_file: "cache/plate.gcode",
+              plate_index: null,
+            },
+            metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
+            error: null,
+            download_url: "/api/v1/files/7/download",
+          },
+        })}
+        previewHref="/models/7"
+      />,
+    );
+
+    expect(screen.getByTestId("reproducibility-level")).toHaveTextContent("Exactly reproducible");
+    expect(screen.getByText("plate.gcode", { exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open model detail" })).toHaveAttribute(
+      "href",
+      "/models/7",
+    );
+    await user.click(screen.getByRole("button", { name: /download archived artifact/i }));
+    expect(downloadAuthenticatedFile).toHaveBeenCalledWith("/api/v1/files/7/download");
+
+    rerender(<PrintJobReproducibility job={makeJob({ artifact_evidence: "capture_failed" })} />);
+    expect(screen.getByTestId("reproducibility-level")).toHaveTextContent(
+      "External/basic evidence",
+    );
+    expect(
+      screen.queryByRole("button", { name: /download archived artifact/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses an authoritative reported path and blocks URLs from failed captures", async () => {
+    const user = userEvent.setup();
+    const exactArchivedJob = makeJob({
+      remote_filename: "subtask-name",
+      artifact_evidence: "gcode_archived",
+      reproducibility: {
+        level: "exact",
+        identity: {
+          display_name: "Bambu project label",
+          task_id: "task-42",
+          subtask_id: "subtask-9",
+          project_id: "project-7",
+          profile_id: "profile-4",
+          gcode_file: null,
+          plate_index: 2,
+        },
+        metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
+        error: null,
+        download_url: "/api/v1/files/7/download",
+      },
+    });
+
+    const { rerender } = render(<PrintJobReproducibility job={exactArchivedJob} />);
+    expect(screen.getByText("Archived artifact", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("subtask-name", { exact: true })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /download archived artifact/i }));
+    expect(downloadAuthenticatedFile).toHaveBeenCalledWith("/api/v1/files/7/download");
+
+    rerender(
+      <PrintJobReproducibility
+        job={{
+          ...exactArchivedJob,
+          artifact_evidence: "capture_failed",
+        }}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /download archived artifact/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("External print evidence", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Archived artifact", { exact: true })).not.toBeInTheDocument();
+
+    rerender(
+      <PrintJobReproducibility
+        job={makeJob({
+          remote_filename: "subtask-name",
+          artifact_evidence: "metadata_only",
+        })}
+      />,
+    );
+    expect(screen.getByText("External print evidence", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Archived artifact", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("maps legacy error codes to a human message without duplicating the code", () => {
+    const resolved = resolvePrintJobReproducibility(
+      makeJob({
+        artifact_capture_error: "external_artifact_capture_disabled",
+      }),
+    );
+
+    expect(resolved.error).toEqual({
+      code: "external_artifact_capture_disabled",
+      message: "External artifact capture is disabled by configuration.",
+    });
+    expect(resolved.error?.message).not.toBe(resolved.error?.code);
+  });
+
+  it("normalizes a nested backend error when its message repeats a known code", () => {
+    const resolved = resolvePrintJobReproducibility(
+      makeJob({
+        artifact_evidence: "capture_failed",
+        reproducibility: {
+          level: "metadata",
+          identity: {
+            display_name: "Bambu project label",
+            task_id: "task-42",
+            subtask_id: null,
+            project_id: null,
+            profile_id: null,
+            gcode_file: null,
+            plate_index: null,
+          },
+          metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
+          error: {
+            code: "external_artifact_capture_disabled",
+            message: "external_artifact_capture_disabled",
+          },
+          download_url: "/api/v1/files/7/download",
+        },
+      }),
+    );
+
+    expect(resolved.error).toEqual({
+      code: "external_artifact_capture_disabled",
+      message: "External artifact capture is disabled by configuration.",
+    });
+  });
+
+  it("renders the neutral label and known capture errors in Spanish", async () => {
+    localStorage.setItem("printstash.locale", "es");
+    const container = document.createElement("div");
+    container.id = "root";
+    document.body.append(container);
+
+    render(
+      <I18nProvider>
+        <Localized>
+          <PrintJobReproducibility
+            job={makeJob({
+              remote_filename: "subtask-name",
+              artifact_evidence: "capture_failed",
+              artifact_capture_error: "external_artifact_capture_disabled",
+            })}
+          />
+        </Localized>
+        <DomLocalization />
+      </I18nProvider>,
+      { container },
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Evidencia de impresión externa", { exact: true }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "La captura de artefactos externos está desactivada por la configuración.",
+          { exact: true },
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText("subtask-name", { exact: true })).not.toBeInTheDocument();
+    container.remove();
+  });
+});

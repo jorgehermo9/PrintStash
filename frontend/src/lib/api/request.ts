@@ -47,6 +47,62 @@ export async function getAuthenticatedBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
+const SAFE_DOWNLOAD_FALLBACK = "download";
+
+/** Remove path/control characters before assigning a server-provided filename. */
+export function sanitizeDownloadFilename(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const withoutControls = Array.from(value)
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      return code > 0x1f && code !== 0x7f;
+    })
+    .join("");
+  const leaf = withoutControls
+    .replaceAll("\\", "/")
+    .split("/")
+    .pop()
+    ?.trim();
+  if (!leaf || leaf === "." || leaf === "..") return null;
+  return leaf.replace(/[<>:"|?*]/g, "_");
+}
+
+function decodeExtendedFilename(value: string): string | null {
+  const match = value.match(/^([^']*)'[^']*'(.*)$/);
+  if (!match || match[1].toLowerCase() !== "utf-8") return null;
+  const encoded = match[2];
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse RFC 6266/RFC 5987 Content-Disposition filename parameters safely. */
+export function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) return null;
+
+  const extended = header.match(
+    /(?:^|;)\s*filename\*\s*=\s*(?:"((?:\\.|[^"])*)"|([^;]*))/i,
+  );
+  const extendedValue = extended?.[1] ?? extended?.[2]?.trim();
+  if (extendedValue) {
+    const unescaped = extendedValue.replace(/\\([\\"])/g, "$1");
+    const decoded = decodeExtendedFilename(unescaped);
+    if (decoded) {
+      const filename = sanitizeDownloadFilename(decoded);
+      if (filename) return filename;
+    }
+  }
+
+  const plain = header.match(
+    /(?:^|;)\s*filename\s*=\s*(?:"((?:\\.|[^"])*)"|([^;]*))/i,
+  );
+  const plainValue = plain?.[1] ?? plain?.[2]?.trim();
+  if (!plainValue) return null;
+  return sanitizeDownloadFilename(plainValue.replace(/\\([\\"])/g, "$1"));
+}
+
 /**
  * Download a protected file. Plain <a href> links can't carry the bearer
  * token, so reads gated behind auth (post-RBAC) 401. Fetch the blob with the
@@ -59,10 +115,14 @@ export async function downloadAuthenticatedFile(path: string, filename?: string)
   });
   if (!res.ok) throw await parseError(res);
   const blob = await res.blob();
+  const resolvedFilename =
+    sanitizeDownloadFilename(filename) ??
+    parseContentDispositionFilename(res.headers.get("content-disposition")) ??
+    SAFE_DOWNLOAD_FALLBACK;
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = objectUrl;
-  if (filename) a.download = filename;
+  a.download = resolvedFilename;
   document.body.appendChild(a);
   a.click();
   a.remove();
