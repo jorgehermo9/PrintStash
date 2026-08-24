@@ -16,6 +16,7 @@ from app.services.storage_backend import get_backend
 
 pytestmark = pytest.mark.asyncio
 
+
 @pytest_asyncio.fixture
 async def api_client() -> AsyncIterator[httpx.AsyncClient]:
     from app.main import app
@@ -215,9 +216,7 @@ async def test_embedded_gcode_api_maps_malformed_and_bomb(
     assert response.status_code == 404
     assert response.json()["detail"] == "embedded_gcode_malformed"
 
-    monkeypatch.setattr(
-        get_backend(), "exists", lambda _key: True
-    )
+    monkeypatch.setattr(get_backend(), "exists", lambda _key: True)
     monkeypatch.setattr(settings._frozen, "three_mf_preview_max_uncompressed_mb", 1)
     bomb = _file(
         db_session,

@@ -110,8 +110,12 @@ class Settings(BaseSettings):
     bambu_external_capture_max_mb: int = Field(default=256, ge=0)
     # On-demand 3MF embedded toolpath preview limits. The service reads at
     # most cap+1 bytes and rejects high-compression-ratio members before read.
-    three_mf_preview_max_uncompressed_mb: int = Field(default=64, gt=0)
+    three_mf_preview_max_uncompressed_mb: int = Field(default=32, gt=0)
+    three_mf_preview_max_archive_mb: int = Field(default=128, gt=0)
+    three_mf_preview_max_entries: int = Field(default=10_000, gt=0)
+    three_mf_preview_max_central_directory_mb: int = Field(default=8, gt=0)
     three_mf_preview_max_ratio: float = Field(default=100.0, gt=0)
+    three_mf_preview_max_concurrent: int = Field(default=2, gt=0)
     log_level: str = "INFO"
 
     # Static ceiling on mesh density for geometry extraction + thumbnail

@@ -1133,11 +1133,14 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
     def stream_chunks(self, key: str, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
         resp = self._client.get_object(Bucket=self._bucket, Key=key)
         body = resp["Body"]
-        while True:
-            chunk = body.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
+        try:
+            while True:
+                chunk = body.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
 
     def download_to_path(self, key: str, dest: Path) -> Path:
         response = self._client.get_object(Bucket=self._bucket, Key=key)

@@ -14274,11 +14274,22 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Embedded G-code text"
+          },
+          "404": {
+            "description": "Artifact is inaccessible or preview is unavailable"
+          },
+          "410": {
+            "description": "Artifact blob is missing from storage"
+          },
+          "413": {
+            "description": "Archive or embedded toolpath exceeds configured limits"
           },
           "422": {
             "content": {
@@ -14289,6 +14300,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Preview concurrency capacity is exhausted"
           }
         },
         "security": [

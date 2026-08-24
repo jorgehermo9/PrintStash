@@ -109,10 +109,15 @@ def reproducibility_payload(
         and getattr(job, "file_id", None) is not None
     ):
         plate_index = getattr(job, "external_plate_index", None)
-        query = f"?plate_index={plate_index}" if plate_index is not None else ""
-        toolpath_preview_url = (
-            f"/api/v1/files/{job.file_id}/embedded-gcode{query}"
+        # A malformed provider value must never become an advertised URL query;
+        # the preview endpoint treats the absent index as its unique-candidate
+        # fallback instead.
+        query = (
+            f"?plate_index={plate_index}"
+            if plate_index is not None and plate_index >= 0
+            else ""
         )
+        toolpath_preview_url = f"/api/v1/files/{job.file_id}/embedded-gcode{query}"
     return {
         "reproducibility_level": level,
         "identity": identity,
