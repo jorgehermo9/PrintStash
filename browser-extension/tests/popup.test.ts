@@ -64,7 +64,7 @@ describe("popup browser adapters", () => {
 
   it("shows the loaded capture protocol marker", () => {
     expect(element("#runtime-marker").textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Capture protocol v2 · metadata transport 2",
+      "Capture protocol v2 · browser boundary 3",
     );
     expect(element("#runtime-marker").hidden).toBe(false);
   });
@@ -150,7 +150,96 @@ describe("popup browser adapters", () => {
     ).toBe(false);
   });
 
-  it("fetches MakerWorld metadata from the extension context without auth headers or a MAIN metadata seam", async () => {
+  it("checks Printables API permission before page extraction or metadata fetch", async () => {
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    const events: string[] = [];
+    fakeBrowser.permissions.contains = vi.fn(async ({ origins }: { origins: string[] }) => {
+      events.push(`contains:${origins[0]}`);
+      return origins[0] !== "https://api.printables.com/*";
+    });
+    fakeBrowser.permissions.request = vi.fn(async ({ origins }: { origins: string[] }) => {
+      events.push(`request:${origins[0]}`);
+      return true;
+    });
+    const fetchImpl = vi.fn(async (url: string) => {
+      events.push(`fetch:${url}`);
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      if (url === "https://api.printables.com/graphql/")
+        return response({
+          data: {
+            print: {
+              id: "3161",
+              name: "3DBenchy",
+              license: { name: "CC BY-NC 4.0" },
+              stls: [{ id: "stl-1", name: "benchy.stl", fileSize: 4 }],
+            },
+          },
+        });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    fakeBrowser.scripting.executeScript = vi.fn(async () => {
+      events.push("executeScript");
+      return [{ frameId: 0, result: { pageTitle: "3DBenchy", jsonLd: [] } }];
+    });
+
+    await import("../popup.ts");
+    await settle();
+    events.length = 0;
+    vi.mocked(fakeBrowser.scripting.executeScript).mockClear();
+    fetchImpl.mockClear();
+    button("#capture").click();
+    for (let attempt = 0; attempt < 6; attempt += 1) await settle();
+
+    const firstExecute = events.indexOf("executeScript");
+    expect(firstExecute).toBeGreaterThanOrEqual(0);
+    expect(events.slice(0, firstExecute)).toEqual([
+      "contains:https://api.printables.com/*",
+      "request:https://api.printables.com/*",
+    ]);
+    expect(element("#candidate-panel").hidden).toBe(false);
+  });
+
+  it("falls directly to manual Printables attachment when API permission is denied", async () => {
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    fakeBrowser.permissions.contains = vi.fn(
+      async ({ origins }: { origins: string[] }) => origins[0] !== "https://api.printables.com/*",
+    );
+    fakeBrowser.permissions.request = vi.fn().mockResolvedValue(false);
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    fakeBrowser.scripting.executeScript = vi.fn();
+
+    await import("../popup.ts");
+    await settle();
+    vi.mocked(fakeBrowser.scripting.executeScript).mockClear();
+    fetchImpl.mockClear();
+    button("#capture").click();
+    for (let attempt = 0; attempt < 6; attempt += 1) await settle();
+
+    expect(element("#manual-file-panel").hidden).toBe(false);
+    expect(fakeBrowser.scripting.executeScript).not.toHaveBeenCalled();
+    expect(
+      fetchImpl.mock.calls.some(([url]) => url === "https://api.printables.com/graphql/"),
+    ).toBe(false);
+  });
+
+  it("fetches MakerWorld metadata through the MAIN seam with four unchecked live candidates", async () => {
     await fakeBrowser.storage.local.set({
       vault: "https://prints.example.com",
       username: "owner",
@@ -163,30 +252,53 @@ describe("popup browser adapters", () => {
         url: "https://makerworld.com/en/models/1234-calibration-cube",
       },
     ]);
-    const metadata = {
-      id: "1234",
-      title: "Calibration cube",
-      designCreator: { uid: "maker-1", name: "Maker" },
-      instances: [
-        { id: "instance-1", title: "First package" },
-        { id: "instance-2", title: "Second package" },
-        { id: "instance-3", title: "Third package" },
-        { id: "instance-4", title: "Fourth package" },
-      ],
-    };
     const fetchImpl = vi.fn(async (url: string, _options: RequestInit = {}) => {
       if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
       if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
       if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
-      if (url === "https://makerworld.com/api/v1/design-service/design/1234")
-        return response(metadata);
+      if (url.includes("design-service/design")) {
+        throw new Error(`Unexpected extension-context MakerWorld metadata request: ${url}`);
+      }
       throw new Error(`Unexpected MakerWorld request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchImpl);
     fakeBrowser.scripting.executeScript = vi
       .fn()
       .mockResolvedValueOnce([{ result: null }])
-      .mockResolvedValueOnce([{ result: { pageTitle: "Calibration cube", jsonLd: [] } }]);
+      .mockResolvedValueOnce([{ result: { pageTitle: "Calibration cube", jsonLd: [] } }])
+      .mockResolvedValueOnce([
+        {
+          result: {
+            ok: true,
+            metadata: {
+              fixtureVersion: "makerworld-design-service-v1",
+              sourceItemId: "1234",
+              source: { title: "Calibration cube", creatorName: "Maker" },
+              files: [
+                {
+                  id: "instance-default",
+                  filename: "cube—高.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+                { id: "instance-alt", filename: "cube-alt.3mf", fileType: "other", sizeBytes: 4 },
+                {
+                  id: "instance-third",
+                  filename: "cube-third.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+                {
+                  id: "instance-fourth",
+                  filename: "cube-fourth.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+              ],
+            },
+          },
+        },
+      ]);
 
     await import("../popup.ts");
     await settle();
@@ -200,13 +312,6 @@ describe("popup browser adapters", () => {
         (input) => !input.checked,
       ),
     ).toBe(true);
-    const metadataCall = fetchImpl.mock.calls.find(
-      ([url]) => url === "https://makerworld.com/api/v1/design-service/design/1234",
-    );
-    if (!metadataCall?.[1]) throw new Error("Missing MakerWorld metadata request");
-    expect(metadataCall[1].credentials).toBe("omit");
-    expect(metadataCall[1].headers).not.toHaveProperty("Authorization");
-    expect(JSON.stringify(metadataCall[1])).not.toContain("psk_vault_secret");
     const metadataExecutes = vi
       .mocked(fakeBrowser.scripting.executeScript)
       .mock.calls.filter(
@@ -217,7 +322,12 @@ describe("popup browser adapters", () => {
           "endpoint" in details.args[0] &&
           String(details.args[0].endpoint).includes("design-service/design"),
       );
-    expect(metadataExecutes).toHaveLength(0);
+    expect(metadataExecutes).toHaveLength(1);
+    expect(metadataExecutes[0]?.[0].args?.[0]).toMatchObject({
+      sourceItemId: "1234",
+      fixtureVersion: "makerworld-design-service-v1",
+    });
+    expect(fetchImpl.mock.calls.some(([url]) => url.includes("design-service/design"))).toBe(false);
     expect(fakeBrowser.permissions.request).not.toHaveBeenCalledWith({
       origins: ["https://makerworld.com/*"],
     });
@@ -712,6 +822,39 @@ describe("popup browser adapters", () => {
         {
           result: {
             ok: true,
+            metadata: {
+              fixtureVersion: "makerworld-design-service-v1",
+              sourceItemId: "1234",
+              source: { title: "Calibration cube", creatorName: "Maker" },
+              files: [
+                {
+                  id: "instance-default",
+                  filename: "cube—高.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+                { id: "instance-alt", filename: "cube-alt.3mf", fileType: "other", sizeBytes: 4 },
+                {
+                  id: "instance-third",
+                  filename: "cube-third.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+                {
+                  id: "instance-fourth",
+                  filename: "cube-fourth.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+              ],
+            },
+          },
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          result: {
+            ok: true,
             links: [
               {
                 id: "instance-alt",
@@ -822,7 +965,8 @@ describe("popup browser adapters", () => {
     fakeBrowser.scripting.executeScript = vi
       .fn()
       .mockResolvedValueOnce([{ result: null }])
-      .mockResolvedValueOnce([{ result: { pageTitle: "Calibration cube", jsonLd: [] } }]);
+      .mockResolvedValueOnce([{ result: { pageTitle: "Calibration cube", jsonLd: [] } }])
+      .mockResolvedValueOnce([{ result: { ok: false, code: "auth_required" } }]);
     const fetchImpl = vi.fn(async (url: string) => {
       if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
       if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
@@ -840,7 +984,7 @@ describe("popup browser adapters", () => {
 
     expect(element("#manual-file-panel").hidden).toBe(false);
     expect(element("#status").textContent).toContain("Sign in to MakerWorld");
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/api/v1/inbox"))).toBe(false);
     expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/browser-upload"))).toBe(false);
     expect(

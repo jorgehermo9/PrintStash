@@ -41,7 +41,7 @@ import {
   makerWorldFailureMessage,
   downloadMakerWorldCandidate,
   requestMakerWorldLinksInMainWorld,
-  requestMakerWorldMetadataInExtensionContext,
+  requestMakerWorldMetadataInMainWorld,
   validateMakerWorldMetadataDto,
   validateMakerWorldResolvedLinks,
   type MakerWorldFailureCode,
@@ -620,33 +620,20 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
       const sourceItemId = capture.source.source_item_id;
       if (!sourceItemId) return fallbackVisibleCapture("contract_changed", visible.jsonLd);
       const pageOrigin = new URL(pageUrl).origin;
-      const metadataEndpoint = `${pageOrigin}/api/v1/design-service/design/${encodeURIComponent(sourceItemId)}`;
-      let metadataResult: MakerWorldMetadataPageResult =
-        await requestMakerWorldMetadataInExtensionContext({
-          endpoint: metadataEndpoint,
-          sourceItemId,
-          fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
-          maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
-        });
-      if (metadataResult.code === "cors_failure") {
-        const providerOrigin = `${pageOrigin}/*`;
-        const permissionGranted = await browser.permissions
-          .contains({ origins: [providerOrigin] })
-          .catch(() => false);
-        if (!permissionGranted) {
-          try {
-            await ensureMetadataPermission(providerOrigin, "MakerWorld");
-          } catch {
-            return fallbackVisibleCapture("cors_failure", visible.jsonLd);
-          }
-          metadataResult = await requestMakerWorldMetadataInExtensionContext({
-            endpoint: metadataEndpoint,
+      const metadataResults = await browser.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: requestMakerWorldMetadataInMainWorld,
+        args: [
+          {
+            endpoint: `${pageOrigin}/api/v1/design-service/design/${encodeURIComponent(sourceItemId)}`,
             sourceItemId,
             fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
             maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
-          });
-        }
-      }
+          },
+        ],
+      });
+      const metadataResult = metadataResults[0]?.result as MakerWorldMetadataPageResult | undefined;
       if (!metadataResult?.ok || !metadataResult.metadata) {
         return fallbackVisibleCapture(metadataResult?.code, visible.jsonLd);
       }
@@ -675,7 +662,6 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
     }
     const sourceItemId = capture.source.source_item_id;
     if (!sourceItemId) return fallbackVisibleCapture("contract_changed");
-    await ensureMetadataPermission(PRINTABLES_METADATA_PERMISSION_ORIGIN, "Printables");
     const metadataResult = await requestPrintablesMetadataInExtensionContext({
       endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
       query: PRINTABLES_METADATA_QUERY,
@@ -875,6 +861,20 @@ captureButton.addEventListener("click", async () => {
   if (!connectedConfig || connectionState !== "connected") {
     showStatus("Connect PrintStash before importing.", "error");
     return;
+  }
+  if (activeSource === "Printables" && !pendingPrintablesCapture && !pendingManualCapture) {
+    try {
+      await ensureMetadataPermission(PRINTABLES_METADATA_PERMISSION_ORIGIN, "Printables");
+    } catch (error) {
+      const fallback = fallbackVisibleCapture("cors_failure");
+      if (fallback) {
+        renderManualFileSelection(fallback);
+        showStatus(messageFrom(error), "error");
+      } else {
+        showStatus(messageFrom(error), "error");
+      }
+      return;
+    }
   }
   importBusy = true;
   setButtonBusy(captureButton, true, "Sending…");
