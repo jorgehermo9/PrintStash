@@ -6,33 +6,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GcodeViewer } from "@/components/gcode-viewer";
 import { I18nProvider } from "@/lib/i18n";
 
-const fetchMock = vi.fn();
+const fetchMock = vi.fn<typeof fetch>();
 
 vi.stubGlobal("fetch", fetchMock);
 
-vi.mock("@react-three/fiber", () => ({
-  Canvas: () => <div data-testid="canvas" />,
-  useThree: () => ({ camera: { position: { set: vi.fn() } } }),
-}));
-
-vi.mock("@react-three/drei", () => ({
-  OrbitControls: () => null,
-  PerspectiveCamera: () => null,
-}));
-
-vi.mock("@/lib/preview-preferences", () => ({
-  previewPixelRatio: () => 1,
-  usePreviewPreferences: () => ({ previewQuality: "balanced" }),
-}));
+function TestCanvas(_props: { children: React.ReactNode }) {
+  return <div data-testid="canvas" />;
+}
 
 const TOOLPATH = "G90\nM82\nG1 Z0.2\nG1 X10 Y0 E0.1\nG1 X20 Y0 E0.2\n";
 
 function textResponse(text: string, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    text: async () => text,
-  } as unknown as Response;
+  return new Response(text, { status });
 }
 
 beforeEach(() => {
@@ -47,7 +32,11 @@ describe("GcodeViewer", () => {
 
     render(
       <I18nProvider>
-        <GcodeViewer url="/api/v1/files/7/toolpath-preview" printerBedMm={{ x: 220, y: 220 }} />
+        <GcodeViewer
+          url="/api/v1/files/7/toolpath-preview"
+          printerBedMm={{ x: 220, y: 220 }}
+          canvasRenderer={TestCanvas}
+        />
       </I18nProvider>,
     );
 
@@ -81,12 +70,16 @@ describe("GcodeViewer", () => {
     );
     localStorage.setItem("printstash.token", "must-not-leak");
     fetchMock.mockResolvedValue(textResponse('{"detail":"not_authenticated"}', 401));
-    const unauthorized = vi.fn();
+    const unauthorized = vi.fn<(event: Event) => void>();
     window.addEventListener("printstash:unauthorized", unauthorized);
 
     render(
       <I18nProvider>
-        <GcodeViewer url="/api/v1/files/7/toolpath-preview" printerBedMm={{ x: 220, y: 220 }} />
+        <GcodeViewer
+          url="/api/v1/files/7/toolpath-preview"
+          printerBedMm={{ x: 220, y: 220 }}
+          canvasRenderer={TestCanvas}
+        />
       </I18nProvider>,
     );
 

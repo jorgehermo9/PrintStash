@@ -41,7 +41,7 @@ export interface ResolvedPrintJobReproducibility {
   toolpathPreviewUrl: string | null;
 }
 
-const CAPTURE_ERROR_MESSAGES: Record<string, string> = {
+const CAPTURE_ERROR_MESSAGES = {
   artifact_capture_failed: "The printer artifact could not be archived.",
   external_artifact_capture_disabled: "External artifact capture is disabled by configuration.",
   invalid_bambu_artifact_path: "The printer reported an invalid artifact path.",
@@ -62,13 +62,13 @@ const CAPTURE_ERROR_MESSAGES: Record<string, string> = {
   bambu_artifact_too_large: "The printer artifact is larger than the capture limit.",
   bambu_download_size_mismatch: "The downloaded artifact size did not match the printer report.",
   download_failed: "The printer artifact download failed.",
-};
+} satisfies Record<string, string>;
 
-const ARCHIVED_ARTIFACT_EVIDENCE = new Set([
-  "vault",
-  "gcode_archived",
-  "project_archived",
-]);
+function captureErrorMessage(code: string): string | undefined {
+  return Object.entries(CAPTURE_ERROR_MESSAGES).find(([key]) => key === code)?.[1];
+}
+
+const ARCHIVED_ARTIFACT_EVIDENCE = new Set(["vault", "gcode_archived", "project_archived"]);
 
 export const ARCHIVED_ARTIFACT_LABEL = "Archived artifact";
 export const EXTERNAL_PRINT_EVIDENCE_LABEL = "External print evidence";
@@ -110,12 +110,12 @@ function legacyError(job: PrintJobReproducibilityInput): PrintJobReproducibility
   if (!rawError && !explicitCode && !explicitMessage) return null;
 
   const resolvedCode = explicitCode ?? rawError ?? "artifact_capture_failed";
-  const mappedMessage = CAPTURE_ERROR_MESSAGES[resolvedCode];
+  const mappedMessage = captureErrorMessage(resolvedCode);
   const rawMessage = rawError && rawError !== resolvedCode ? rawError : null;
   const message =
     explicitMessage && explicitMessage !== resolvedCode
       ? explicitMessage
-      : rawMessage ?? mappedMessage ?? "The printer artifact could not be archived.";
+      : (rawMessage ?? mappedMessage ?? "The printer artifact could not be archived.");
 
   return {
     code: resolvedCode,
@@ -127,7 +127,7 @@ function normalizeContractError(
   error: PrintJobReproducibilityErrorRead | null | undefined,
 ): PrintJobReproducibilityErrorRead | null {
   if (!error) return null;
-  const mappedMessage = CAPTURE_ERROR_MESSAGES[error.code];
+  const mappedMessage = captureErrorMessage(error.code);
   if (mappedMessage && error.message.trim() === error.code) {
     return { ...error, message: mappedMessage };
   }
@@ -167,9 +167,10 @@ export function resolvePrintJobReproducibility(
         ? "metadata"
         : "basic");
   const error = contract ? normalizeContractError(contract.error) : legacyError(job);
-  const toolpathPreviewUrl = contract?.toolpath_preview_url !== undefined
-    ? contract.toolpath_preview_url
-    : job.toolpath_preview_url;
+  const toolpathPreviewUrl =
+    contract?.toolpath_preview_url !== undefined
+      ? contract.toolpath_preview_url
+      : job.toolpath_preview_url;
 
   return {
     level,
@@ -184,8 +185,6 @@ export function resolvePrintJobReproducibility(
         ? (contract?.download_url ?? job.download_url ?? null)
         : null,
     toolpathPreviewUrl:
-      job.artifact_evidence === "project_archived"
-        ? (toolpathPreviewUrl ?? null)
-        : null,
+      job.artifact_evidence === "project_archived" ? (toolpathPreviewUrl ?? null) : null,
   };
 }

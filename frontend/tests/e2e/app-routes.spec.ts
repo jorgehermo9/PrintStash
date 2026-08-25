@@ -117,10 +117,11 @@ test("print history explains exact, partial, and basic evidence with safe downlo
   expect(download.suggestedFilename()).toBe("benchy.gcode");
 
   const [toolpathRequest] = await Promise.all([
-    page.waitForRequest((request) =>
-      request.url().endsWith("/api/v1/files/2/toolpath-preview"),
-    ),
-    evidence.nth(0).getByRole("button", { name: /preview toolpath/i }).click(),
+    page.waitForRequest((request) => request.url().endsWith("/api/v1/files/2/toolpath-preview")),
+    evidence
+      .nth(0)
+      .getByRole("button", { name: /preview toolpath/i })
+      .click(),
   ]);
   expect(toolpathRequest.method()).toBe("GET");
   const toolpathDialog = page.getByRole("dialog", { name: "Toolpath preview" });

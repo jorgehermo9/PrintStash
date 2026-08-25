@@ -44,12 +44,7 @@ function initOf(callIndex: number): RequestInit {
 }
 
 function blobResponse(headers: HeadersInit = {}): Response {
-  return {
-    ok: true,
-    status: 200,
-    blob: async () => new Blob(["payload"]),
-    headers: new Headers(headers),
-  } as unknown as Response;
+  return new Response(new Blob(["payload"]), { status: 200, headers });
 }
 
 beforeEach(() => {
@@ -79,16 +74,14 @@ describe("getUrl / getWsUrl", () => {
 describe("download filenames", () => {
   it("parses and sanitizes extended, quoted, and plain Content-Disposition names", () => {
     expect(
-      parseContentDispositionFilename(
-        "attachment; filename*=UTF-8''%E2%9C%93%20benchy.gcode",
-      ),
+      parseContentDispositionFilename("attachment; filename*=UTF-8''%E2%9C%93%20benchy.gcode"),
     ).toBe("✓ benchy.gcode");
-    expect(
-      parseContentDispositionFilename('attachment; filename="/tmp/benchy.gcode"'),
-    ).toBe("benchy.gcode");
-    expect(
-      parseContentDispositionFilename("attachment; filename=..\\evil\\benchy.gcode"),
-    ).toBe("benchy.gcode");
+    expect(parseContentDispositionFilename('attachment; filename="/tmp/benchy.gcode"')).toBe(
+      "benchy.gcode",
+    );
+    expect(parseContentDispositionFilename("attachment; filename=..\\evil\\benchy.gcode")).toBe(
+      "benchy.gcode",
+    );
     expect(
       parseContentDispositionFilename(
         `attachment; filename="unsafe${String.fromCharCode(13, 10)}name.gcode"`,
@@ -96,17 +89,17 @@ describe("download filenames", () => {
     ).toBe("unsafename.gcode");
     expect(
       parseContentDispositionFilename(
-        'attachment; filename="fallback.gcode"; filename*=UTF-8\'\'authoritative.gcode',
+        "attachment; filename=\"fallback.gcode\"; filename*=UTF-8''authoritative.gcode",
       ),
     ).toBe("authoritative.gcode");
     expect(
       parseContentDispositionFilename(
-        'attachment; filename="fallback.gcode"; filename*=ISO-8859-1\'\'caf%E9.gcode',
+        "attachment; filename=\"fallback.gcode\"; filename*=ISO-8859-1''caf%E9.gcode",
       ),
     ).toBe("fallback.gcode");
     expect(
       parseContentDispositionFilename(
-        'attachment; filename="fallback.gcode"; filename*=UTF-8\'\'broken%ZZ.gcode',
+        "attachment; filename=\"fallback.gcode\"; filename*=UTF-8''broken%ZZ.gcode",
       ),
     ).toBe("fallback.gcode");
     expect(sanitizeDownloadFilename("C:\\temp\\explicit.gcode")).toBe("explicit.gcode");
@@ -115,13 +108,15 @@ describe("download filenames", () => {
 
   it("uses Content-Disposition when no explicit name is supplied and preserves explicit names", async () => {
     vi.stubGlobal("URL", {
-      createObjectURL: vi.fn().mockReturnValue("blob:test"),
-      revokeObjectURL: vi.fn(),
+      createObjectURL: vi.fn<typeof URL.createObjectURL>().mockReturnValue("blob:test"),
+      revokeObjectURL: vi.fn<typeof URL.revokeObjectURL>(),
     });
     let clickedFilename = "";
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-      clickedFilename = this.download;
-    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function (this: HTMLAnchorElement) {
+        clickedFilename = this.download;
+      },
+    );
 
     fetchMock.mockResolvedValue(
       blobResponse({ "Content-Disposition": 'attachment; filename="project.3mf"' }),

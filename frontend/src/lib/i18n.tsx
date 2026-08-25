@@ -46,7 +46,8 @@ const messages = {
     "repro.toolpathPreview": "Toolpath preview",
     "viewer.loadingToolpath": "Loading toolpath…",
     "viewer.renderFailed": "G-code render failed",
-    "viewer.binaryUnsupported": "Binary G-code (.bgcode) can't be previewed in the browser — download the file to open it in a slicer.",
+    "viewer.binaryUnsupported":
+      "Binary G-code (.bgcode) can't be previewed in the browser — download the file to open it in a slicer.",
     "viewer.loadFailed": "Unable to load the toolpath preview.",
     "viewer.noToolpathData": "No toolpath data",
     "viewer.noToolpathFound": "No toolpath found in file",
@@ -119,7 +120,8 @@ const messages = {
     "repro.toolpathPreview": "Vista previa de la trayectoria",
     "viewer.loadingToolpath": "Cargando trayectoria…",
     "viewer.renderFailed": "No se pudo renderizar el G-code",
-    "viewer.binaryUnsupported": "El G-code binario (.bgcode) no se puede previsualizar en el navegador; descárgalo para abrirlo en un laminador.",
+    "viewer.binaryUnsupported":
+      "El G-code binario (.bgcode) no se puede previsualizar en el navegador; descárgalo para abrirlo en un laminador.",
     "viewer.loadFailed": "No se pudo cargar la vista previa de la trayectoria.",
     "viewer.noToolpathData": "No hay datos de trayectoria",
     "viewer.noToolpathFound": "No se encontró ninguna trayectoria en el archivo",

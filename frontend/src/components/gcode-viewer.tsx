@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
@@ -180,6 +180,21 @@ function viewerCopy(
 
 // ---- Public Component ----
 
+interface CanvasRendererProps {
+  children: React.ReactNode;
+  className: string;
+  dpr: number;
+  gl: { preserveDrawingBuffer: boolean };
+}
+
+function DefaultCanvasRenderer({ children, className, dpr, gl }: CanvasRendererProps) {
+  return (
+    <Canvas className={className} dpr={dpr} gl={gl}>
+      {children}
+    </Canvas>
+  );
+}
+
 /** The outcome of one completed toolpath fetch, tagged with the url it was for. */
 interface LoadedToolpath {
   url: string;
@@ -191,11 +206,13 @@ export interface GcodeViewerProps {
   url: string;
   printerBedMm?: { x: number; y: number } | null;
   screenshotName?: string;
+  canvasRenderer?: ComponentType<CanvasRendererProps>;
 }
 
-export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
+export function GcodeViewer({ url, printerBedMm = null, canvasRenderer }: GcodeViewerProps) {
   const i18n = useOptionalI18n();
   const previewPreferences = usePreviewPreferences();
+  const CanvasRenderer = canvasRenderer ?? DefaultCanvasRenderer;
   // One state for the fetch that has actually completed, tagged with its url,
   // so switching files derives "loading" during render instead of clearing the
   // previous file's toolpath from an effect.
@@ -284,7 +301,7 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
   return (
     <div className="relative h-full w-full">
       <GcodeErrorBoundary renderFailed={renderFailedCopy}>
-        <Canvas
+        <CanvasRenderer
           className="h-full w-full"
           dpr={previewPixelRatio(previewPreferences.previewQuality)}
           gl={{ preserveDrawingBuffer: true }}
@@ -296,7 +313,7 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
             showBed={showBed}
             printerBedMm={printerBedMm ?? null}
           />
-        </Canvas>
+        </CanvasRenderer>
       </GcodeErrorBoundary>
 
       {/* Layer controls overlay */}

@@ -1,11 +1,11 @@
 "use client";
 
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, type ComponentType } from "react";
 import { Download, Eye, ExternalLink, FileWarning, Loader2 } from "lucide-react";
 
 import { downloadAuthenticatedFile } from "@/lib/api/request";
 import { useOptionalI18n } from "@/lib/i18n";
-import { Link } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -22,11 +22,16 @@ const LazyGcodeViewer = lazy(() =>
   import("@/components/gcode-viewer").then(({ GcodeViewer }) => ({ default: GcodeViewer })),
 );
 
-function levelCopy(level: ReproducibilityLevel): {
+interface LevelCopy {
   label: string;
   description: string;
   className: string;
-} {
+}
+
+type DownloadFile = (path: string) => Promise<void>;
+type ToolpathViewer = ComponentType<{ url: string }>;
+
+function levelCopy(level: ReproducibilityLevel): LevelCopy {
   switch (level) {
     case "exact":
       return {
@@ -67,24 +72,29 @@ export function PrintJobReproducibility({
   job,
   previewHref,
   previewLabel = "Open model detail",
+  downloadFile = downloadAuthenticatedFile,
+  toolpathViewer = LazyGcodeViewer,
 }: {
   job: PrintJobReproducibilityInput;
   previewHref?: string | null;
   previewLabel?: string;
+  downloadFile?: DownloadFile;
+  toolpathViewer?: ToolpathViewer;
 }) {
   const i18n = useOptionalI18n();
   const [downloading, setDownloading] = useState(false);
   const [toolpathPreviewOpen, setToolpathPreviewOpen] = useState(false);
   const resolved = resolvePrintJobReproducibility(job);
   const copy = levelCopy(resolved.level);
+  const ToolpathViewer = toolpathViewer;
   const previewToolpathLabel = i18n?.t("repro.previewToolpath") ?? "Preview toolpath";
   const toolpathPreviewTitle = i18n?.t("repro.toolpathPreview") ?? "Toolpath preview";
   const loadingToolpathLabel = i18n?.t("viewer.loadingToolpath") ?? "Loading toolpath…";
   const artifactName = printJobArtifactLabel(job);
   const canDownload = Boolean(
     resolved.level === "exact" &&
-      resolved.downloadUrl &&
-      isArchivedPrintArtifact(job.artifact_evidence),
+    resolved.downloadUrl &&
+    isArchivedPrintArtifact(job.artifact_evidence),
   );
   const canPreview = Boolean(previewHref && isArchivedPrintArtifact(job.artifact_evidence));
   const hasReportedIdentity = Object.values(resolved.identity).some(
@@ -96,7 +106,7 @@ export function PrintJobReproducibility({
     if (!canDownload || !resolved.downloadUrl || downloading) return;
     setDownloading(true);
     try {
-      await downloadAuthenticatedFile(resolved.downloadUrl);
+      await downloadFile(resolved.downloadUrl);
     } catch (error) {
       toast.error(error);
     } finally {
@@ -233,7 +243,7 @@ export function PrintJobReproducibility({
                 </div>
               }
             >
-              <LazyGcodeViewer url={resolved.toolpathPreviewUrl} />
+              <ToolpathViewer url={resolved.toolpathPreviewUrl} />
             </Suspense>
           </div>
         </Modal>

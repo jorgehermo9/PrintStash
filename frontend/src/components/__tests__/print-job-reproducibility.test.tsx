@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
 import { PrintJobReproducibility } from "@/components/print-job-reproducibility";
 import { DomLocalization, Localized } from "@/components/ui/localized";
@@ -11,29 +12,12 @@ import {
   type PrintJobReproducibilityInput,
 } from "@/lib/print-job-reproducibility";
 
-const { downloadAuthenticatedFile } = vi.hoisted(() => ({
-  downloadAuthenticatedFile: vi.fn().mockResolvedValue(undefined),
-}));
+type DownloadFile = (path: string) => Promise<void>;
+const downloadAuthenticatedFile = vi.fn<DownloadFile>().mockResolvedValue(undefined);
 
-vi.mock("@/lib/api/request", () => ({
-  downloadAuthenticatedFile,
-}));
-
-vi.mock("@/lib/toast", () => ({
-  toast: { error: vi.fn() },
-}));
-
-vi.mock("@/lib/navigation", () => ({
-  Link: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a {...props}>{children}</a>
-  ),
-}));
-
-vi.mock("@/components/gcode-viewer", () => ({
-  GcodeViewer: ({ url }: { url: string }) => (
-    <div data-testid="toolpath-viewer">Authenticated toolpath: {url}</div>
-  ),
-}));
+function TestToolpathViewer({ url }: { url: string }) {
+  return <div data-testid="toolpath-viewer">Authenticated toolpath: {url}</div>;
+}
 
 function makeJob(
   overrides: Partial<PrintJobReproducibilityInput> = {},
@@ -81,7 +65,11 @@ describe("PrintJobReproducibility", () => {
     expect(resolved.identity.gcode_file).toBe("cache/real-plate.gcode");
     expect(resolved.downloadUrl).toBeNull();
 
-    render(<PrintJobReproducibility job={job} />);
+    render(
+      <MemoryRouter>
+        <PrintJobReproducibility job={job} />
+      </MemoryRouter>,
+    );
     expect(screen.getByTestId("reproducibility-level")).toHaveTextContent("Partially reproducible");
     expect(screen.getByText("real-plate.gcode")).toBeInTheDocument();
     expect(screen.getByText("Bambu project label")).toBeInTheDocument();
@@ -97,27 +85,30 @@ describe("PrintJobReproducibility", () => {
   it("shows all evidence levels and only downloads an exact archived artifact", async () => {
     const user = userEvent.setup();
     const { rerender } = render(
-      <PrintJobReproducibility
-        job={makeJob({
-          artifact_evidence: "gcode_archived",
-          reproducibility: {
-            level: "exact",
-            identity: {
-              display_name: "Bambu project label",
-              task_id: null,
-              subtask_id: null,
-              project_id: null,
-              profile_id: null,
-              gcode_file: "cache/plate.gcode",
-              plate_index: null,
+      <MemoryRouter>
+        <PrintJobReproducibility
+          job={makeJob({
+            artifact_evidence: "gcode_archived",
+            reproducibility: {
+              level: "exact",
+              identity: {
+                display_name: "Bambu project label",
+                task_id: null,
+                subtask_id: null,
+                project_id: null,
+                profile_id: null,
+                gcode_file: "cache/plate.gcode",
+                plate_index: null,
+              },
+              metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
+              error: null,
+              download_url: "/api/v1/files/7/download",
             },
-            metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
-            error: null,
-            download_url: "/api/v1/files/7/download",
-          },
-        })}
-        previewHref="/models/7"
-      />,
+          })}
+          previewHref="/models/7"
+          downloadFile={downloadAuthenticatedFile}
+        />
+      </MemoryRouter>,
     );
 
     expect(screen.getByTestId("reproducibility-level")).toHaveTextContent("Exactly reproducible");
@@ -129,7 +120,11 @@ describe("PrintJobReproducibility", () => {
     await user.click(screen.getByRole("button", { name: /download archived artifact/i }));
     expect(downloadAuthenticatedFile).toHaveBeenCalledWith("/api/v1/files/7/download");
 
-    rerender(<PrintJobReproducibility job={makeJob({ artifact_evidence: "capture_failed" })} />);
+    rerender(
+      <MemoryRouter>
+        <PrintJobReproducibility job={makeJob({ artifact_evidence: "capture_failed" })} />
+      </MemoryRouter>,
+    );
     expect(screen.getByTestId("reproducibility-level")).toHaveTextContent(
       "External/basic evidence",
     );
@@ -160,7 +155,11 @@ describe("PrintJobReproducibility", () => {
       },
     });
 
-    const { rerender } = render(<PrintJobReproducibility job={exactArchivedJob} />);
+    const { rerender } = render(
+      <MemoryRouter>
+        <PrintJobReproducibility job={exactArchivedJob} downloadFile={downloadAuthenticatedFile} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText("Archived artifact", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText("subtask-name", { exact: true })).not.toBeInTheDocument();
 
@@ -168,12 +167,14 @@ describe("PrintJobReproducibility", () => {
     expect(downloadAuthenticatedFile).toHaveBeenCalledWith("/api/v1/files/7/download");
 
     rerender(
-      <PrintJobReproducibility
-        job={{
-          ...exactArchivedJob,
-          artifact_evidence: "capture_failed",
-        }}
-      />,
+      <MemoryRouter>
+        <PrintJobReproducibility
+          job={{
+            ...exactArchivedJob,
+            artifact_evidence: "capture_failed",
+          }}
+        />
+      </MemoryRouter>,
     );
     expect(
       screen.queryByRole("button", { name: /download archived artifact/i }),
@@ -182,12 +183,14 @@ describe("PrintJobReproducibility", () => {
     expect(screen.queryByText("Archived artifact", { exact: true })).not.toBeInTheDocument();
 
     rerender(
-      <PrintJobReproducibility
-        job={makeJob({
-          remote_filename: "subtask-name",
-          artifact_evidence: "metadata_only",
-        })}
-      />,
+      <MemoryRouter>
+        <PrintJobReproducibility
+          job={makeJob({
+            remote_filename: "subtask-name",
+            artifact_evidence: "metadata_only",
+          })}
+        />
+      </MemoryRouter>,
     );
     expect(screen.getByText("External print evidence", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText("Archived artifact", { exact: true })).not.toBeInTheDocument();
@@ -218,7 +221,11 @@ describe("PrintJobReproducibility", () => {
       },
     });
 
-    const { rerender } = render(<PrintJobReproducibility job={noPreviewJob} />);
+    const { rerender } = render(
+      <MemoryRouter>
+        <PrintJobReproducibility job={noPreviewJob} toolpathViewer={TestToolpathViewer} />
+      </MemoryRouter>,
+    );
     expect(screen.queryByRole("button", { name: "Preview toolpath" })).not.toBeInTheDocument();
 
     expect(
@@ -241,7 +248,11 @@ describe("PrintJobReproducibility", () => {
         toolpath_preview_url: "/api/v1/files/7/nested-preview",
       },
     };
-    rerender(<PrintJobReproducibility job={previewJob} />);
+    rerender(
+      <MemoryRouter>
+        <PrintJobReproducibility job={previewJob} toolpathViewer={TestToolpathViewer} />
+      </MemoryRouter>,
+    );
     const trigger = screen.getByRole("button", { name: "Preview toolpath" });
     await user.click(trigger);
 
@@ -309,15 +320,17 @@ describe("PrintJobReproducibility", () => {
 
     render(
       <I18nProvider>
-        <Localized>
-          <PrintJobReproducibility
-            job={makeJob({
-              remote_filename: "subtask-name",
-              artifact_evidence: "capture_failed",
-              artifact_capture_error: "external_artifact_capture_disabled",
-            })}
-          />
-        </Localized>
+        <MemoryRouter>
+          <Localized>
+            <PrintJobReproducibility
+              job={makeJob({
+                remote_filename: "subtask-name",
+                artifact_evidence: "capture_failed",
+                artifact_capture_error: "external_artifact_capture_disabled",
+              })}
+            />
+          </Localized>
+        </MemoryRouter>
         <DomLocalization />
       </I18nProvider>,
       { container },
@@ -343,27 +356,30 @@ describe("PrintJobReproducibility", () => {
     const user = userEvent.setup();
     render(
       <I18nProvider>
-        <PrintJobReproducibility
-          job={makeJob({
-            artifact_evidence: "project_archived",
-            reproducibility: {
-              level: "exact",
-              identity: {
-                display_name: "Bambu project label",
-                task_id: null,
-                subtask_id: null,
-                project_id: null,
-                profile_id: null,
-                gcode_file: null,
-                plate_index: null,
+        <MemoryRouter>
+          <PrintJobReproducibility
+            job={makeJob({
+              artifact_evidence: "project_archived",
+              reproducibility: {
+                level: "exact",
+                identity: {
+                  display_name: "Bambu project label",
+                  task_id: null,
+                  subtask_id: null,
+                  project_id: null,
+                  profile_id: null,
+                  gcode_file: null,
+                  plate_index: null,
+                },
+                metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
+                error: null,
+                download_url: null,
+                toolpath_preview_url: "/api/v1/files/7/toolpath-preview",
               },
-              metadata: { current_layer: null, total_layers: null, nozzle_diameter: null },
-              error: null,
-              download_url: null,
-              toolpath_preview_url: "/api/v1/files/7/toolpath-preview",
-            },
-          })}
-        />
+            })}
+            toolpathViewer={TestToolpathViewer}
+          />
+        </MemoryRouter>
       </I18nProvider>,
     );
 

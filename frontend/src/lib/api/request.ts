@@ -68,11 +68,7 @@ export function sanitizeDownloadFilename(value: string | null | undefined): stri
       return code > 0x1f && code !== 0x7f;
     })
     .join("");
-  const leaf = withoutControls
-    .replaceAll("\\", "/")
-    .split("/")
-    .pop()
-    ?.trim();
+  const leaf = withoutControls.replaceAll("\\", "/").split("/").pop()?.trim();
   if (!leaf || leaf === "." || leaf === "..") return null;
   return leaf.replace(/[<>:"|?*]/g, "_");
 }
@@ -92,9 +88,7 @@ function decodeExtendedFilename(value: string): string | null {
 export function parseContentDispositionFilename(header: string | null): string | null {
   if (!header) return null;
 
-  const extended = header.match(
-    /(?:^|;)\s*filename\*\s*=\s*(?:"((?:\\.|[^"])*)"|([^;]*))/i,
-  );
+  const extended = header.match(/(?:^|;)\s*filename\*\s*=\s*(?:"((?:\\.|[^"])*)"|([^;]*))/i);
   const extendedValue = extended?.[1] ?? extended?.[2]?.trim();
   if (extendedValue) {
     const unescaped = extendedValue.replace(/\\([\\"])/g, "$1");
@@ -105,9 +99,7 @@ export function parseContentDispositionFilename(header: string | null): string |
     }
   }
 
-  const plain = header.match(
-    /(?:^|;)\s*filename\s*=\s*(?:"((?:\\.|[^"])*)"|([^;]*))/i,
-  );
+  const plain = header.match(/(?:^|;)\s*filename\s*=\s*(?:"((?:\\.|[^"])*)"|([^;]*))/i);
   const plainValue = plain?.[1] ?? plain?.[2]?.trim();
   if (!plainValue) return null;
   return sanitizeDownloadFilename(plainValue.replace(/\\([\\"])/g, "$1"));
