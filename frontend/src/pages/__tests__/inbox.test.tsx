@@ -82,4 +82,49 @@ describe("InboxPage localization", () => {
     await retry.click();
     expect(retryPendingImport).toHaveBeenCalledWith(2);
   });
+
+  it("uses captured metadata in an accessible work queue", async () => {
+    localStorage.setItem("printstash.locale", "en");
+    const richImport: InboxItem = {
+      ...pendingImport,
+      display_title: "Clean model by Maker | Download free STL model | Printables.com",
+      manifest: {
+        schema_version: 2,
+        kind: "model_files",
+        source: {
+          provider: "printables",
+          canonical_url: "https://www.printables.com/model/1-clean-model",
+          source_item_id: "1",
+          source_revision: null,
+          adapter_version: "fixture-1",
+          tags: [],
+          fields: {
+            title: { value: "Clean model", origin: "confirmed" },
+          },
+        },
+        files: [
+          { id: "one", name: "one.stl", file_type: "stl", size: 1_024 },
+          { id: "two", name: "two.3mf", file_type: "3mf", size: 2_048 },
+        ],
+        selected_ids: ["one", "two"],
+      },
+    };
+    vi.mocked(listPendingImports).mockResolvedValue([richImport]);
+
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <InboxPage deps={deps} />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    const queue = await screen.findByRole("list", { name: "Needs review" });
+    expect(queue).toHaveTextContent("Clean model");
+    expect(queue).toHaveTextContent("Printables");
+    expect(queue).toHaveTextContent("Files: 2");
+    expect(
+      screen.queryByText("Clean model by Maker | Download free STL model | Printables.com"),
+    ).not.toBeInTheDocument();
+  });
 });

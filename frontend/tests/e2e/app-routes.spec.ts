@@ -128,6 +128,29 @@ test("mobile navigation reaches Pending Imports and stays active on detail route
   await expect(page.getByRole("link", { name: "Pending" })).toHaveAttribute("aria-current", "page");
 });
 
+test("pending imports render as a responsive review queue", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Upload", exact: true }).click();
+  await page.getByRole("button", { name: "From URL" }).click();
+  await page
+    .getByPlaceholder("Model page, collection, or direct .stl/.zip link")
+    .fill("https://www.printables.com/model/41-capture-bracket");
+  await page.getByRole("button", { name: "Review URL" }).click();
+  await page.goto("/inbox");
+  const problems = await collectPageProblems(page);
+
+  const queue = page.getByRole("list", { name: "Needs review" });
+  await expect(queue.getByRole("heading", { name: "Capture bracket" })).toBeVisible();
+  await expect(queue.getByText("Printables")).toBeVisible();
+  await expect(queue.getByText("Files: 2")).toBeVisible();
+  await expect(queue.getByRole("link", { name: "Review" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  expect(problems).toEqual([]);
+});
+
 test("Source tab displays and replaces a private representative cover", async ({ page }) => {
   await page.goto("/models/1");
   await page.getByRole("tab", { name: "Source" }).click();
