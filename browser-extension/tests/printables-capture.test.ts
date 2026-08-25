@@ -90,13 +90,31 @@ describe("Printables metadata contract", () => {
   });
 
   it("keeps the metadata operation aligned with the verified Printables schema", () => {
-    expect(PRINTABLES_METADATA_QUERY).toContain("    id\n    name\n    title");
-    expect(PRINTABLES_METADATA_QUERY).toContain("user { name username }");
-    expect(PRINTABLES_METADATA_QUERY).toContain("license { name code }");
-    expect(PRINTABLES_METADATA_QUERY).toContain("otherFiles { id name fileSize }");
-    expect(PRINTABLES_METADATA_QUERY).not.toContain("description");
-    expect(PRINTABLES_METADATA_QUERY).not.toContain("profileUrl");
-    expect(PRINTABLES_METADATA_QUERY).not.toContain("licenseUrl");
+    expect(PRINTABLES_METADATA_QUERY.replace(/\s+/g, " ").trim()).toBe(
+      "query ($id: ID!) { print(id: $id) { id name license { name } stls { id name fileSize } gcodes { id name fileSize } slas { id name fileSize } otherFiles { id name fileSize } } }",
+    );
+  });
+
+  it("maps the verified license name while leaving creator metadata to page JSON-LD", () => {
+    const result = parsePrintablesMetadataResponse(
+      {
+        data: {
+          print: {
+            id: sourceItemId,
+            name: "Live Printables model",
+            license: { name: "CC BY 4.0" },
+            stls: [{ id: "live-stl", name: "live.stl", fileSize: 7 }],
+          },
+        },
+      },
+      sourceItemId,
+    );
+
+    expect(result.source).toEqual({
+      title: "Live Printables model",
+      licenseCode: "CC BY 4.0",
+    });
+    expect(result.source.creatorName).toBeUndefined();
   });
 
   it("fails closed for changed, oversized, deep, duplicate, and invalid-size responses", () => {

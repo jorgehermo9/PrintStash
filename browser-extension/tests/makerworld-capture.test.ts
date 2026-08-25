@@ -26,6 +26,20 @@ const MAKERWORLD_DESIGN_SERVICE_V1_FIXTURE = {
   },
 };
 
+const MAKERWORLD_ROOT_DESIGN_FIXTURE = {
+  id: "1574312",
+  title: "Root design",
+  designCreator: "Hiro Maker",
+  license: "CC BY-NC 4.0",
+  defaultInstanceId: "instance-1",
+  instances: [
+    { id: "instance-1", title: "First package" },
+    { id: "instance-2", title: "Second package" },
+    { id: "instance-3", title: "Third package" },
+    { id: "instance-4", title: "Fourth package" },
+  ],
+};
+
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -48,6 +62,23 @@ describe("MakerWorld bounded capture", () => {
       metadata.files[1],
     ]);
     expect(JSON.stringify(metadata)).not.toContain("downloadUrl");
+  });
+
+  it("accepts the live root design shape and enumerates every package without preselection", () => {
+    const metadata = parseMakerWorldMetadataResponse(MAKERWORLD_ROOT_DESIGN_FIXTURE, "1574312");
+
+    expect(metadata.source).toMatchObject({
+      title: "Root design",
+      creatorName: "Hiro Maker",
+      licenseCode: "CC BY-NC 4.0",
+    });
+    expect(metadata.files.map(({ id }) => id)).toEqual([
+      "instance-1",
+      "instance-2",
+      "instance-3",
+      "instance-4",
+    ]);
+    expect(selectMakerWorldCandidates(metadata.files, [])).toEqual([]);
   });
 
   it("fails closed for changed, oversized, deep, duplicate, and invalid-size fixtures", () => {
@@ -168,6 +199,41 @@ describe("MakerWorld MAIN-world seams", () => {
     expect(result.ok).toBe(true);
     expect(JSON.stringify(result)).not.toContain('"instances"');
     expect(JSON.stringify(result)).not.toContain('"defaultInstanceId"');
+  });
+
+  it("parses the serialized MAIN-world seam when the design is returned at the JSON root", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(MAKERWORLD_ROOT_DESIGN_FIXTURE)),
+    );
+    const isolated = new Function(
+      `return (${requestMakerWorldMetadataInMainWorld.toString()})`,
+    )() as typeof requestMakerWorldMetadataInMainWorld;
+
+    const result = await isolated({
+      endpoint: "https://makerworld.com/api/v1/design-service/design/1574312",
+      sourceItemId: "1574312",
+      fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+      maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      metadata: {
+        sourceItemId: "1574312",
+        source: {
+          title: "Root design",
+          creatorName: "Hiro Maker",
+          licenseCode: "CC BY-NC 4.0",
+        },
+        files: [
+          { id: "instance-1" },
+          { id: "instance-2" },
+          { id: "instance-3" },
+          { id: "instance-4" },
+        ],
+      },
+    });
   });
 
   it("rejects an actual streamed metadata body above the response limit", async () => {

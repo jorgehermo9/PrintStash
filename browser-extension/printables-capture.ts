@@ -17,9 +17,7 @@ query ($id: ID!) {
   print(id: $id) {
     id
     name
-    title
-    user { name username }
-    license { name code }
+    license { name }
     stls { id name fileSize }
     gcodes { id name fileSize }
     slas { id name fileSize }

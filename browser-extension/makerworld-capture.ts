@@ -213,15 +213,20 @@ function firstText(object: { [key: string]: unknown }, keys: string[], maximum: 
 
 function sourceFromDesign(design: { [key: string]: unknown }): BrowserSourceMetadata {
   const person = record(design.user) ?? record(design.creator);
-  const license = record(design.license);
+  const licenseValue = design.license;
+  const license = record(licenseValue);
   const source: BrowserSourceMetadata = {};
   const title = firstText(design, ["name", "title"], 512);
   const description = boundedText(design.description, 64 * 1024);
   const instructions = boundedText(design.instructions, 128 * 1024);
-  const creatorName = person ? firstText(person, ["name", "username"], 512) : undefined;
+  const creatorName =
+    boundedText(design.designCreator, 512) ??
+    (person ? firstText(person, ["name", "username"], 512) : undefined);
   const creatorId = person ? boundedId(person.id) : undefined;
   const creatorUrl = person ? safeMetadataUrl(person.url ?? person.profileUrl) : undefined;
-  const licenseCode = license ? firstText(license, ["code", "slug", "name"], 255) : undefined;
+  const licenseCode =
+    boundedText(licenseValue, 255) ??
+    (license ? firstText(license, ["code", "slug", "name"], 255) : undefined);
   const licenseText = license
     ? boundedText(license.description ?? license.text, 64 * 1024)
     : undefined;
@@ -294,7 +299,7 @@ export function parseMakerWorldMetadataResponse(
   const complexity = complexityCheck(value);
   if (complexity !== "ok") throw new Error(`MakerWorld metadata response is ${complexity}.`);
   const root = record(value);
-  const data = root ? record(root.data) : null;
+  const data = root ? (root.data === undefined ? root : record(root.data)) : null;
   if (!data) throw new Error("MakerWorld metadata response changed.");
   const sourceItemId = data.id === undefined ? expectedSourceItemId : boundedId(data.id);
   if (!sourceItemId) throw new Error("MakerWorld model identity changed.");
@@ -604,7 +609,7 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
     if (!response.ok) return { ok: false, code: "request_failed" };
     const parsed: unknown = JSON.parse(await boundedTextResponse(response));
     const root = asRecord(parsed);
-    const data = root ? asRecord(root.data) : null;
+    const data = root ? (root.data === undefined ? root : asRecord(root.data)) : null;
     if (!data) return { ok: false, code: "contract_changed" };
     const queue: Array<{ value: unknown; depth: number }> = [{ value: parsed, depth: 0 }];
     let nodes = 0;
@@ -654,17 +659,20 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
       });
     }
     const person = asRecord(data.user) || asRecord(data.creator);
-    const license = asRecord(data.license);
+    const licenseValue = data.license;
+    const license = asRecord(licenseValue);
     const source: BrowserSourceMetadata = {};
     const title = text(data.name ?? data.title, 512);
     const description = text(data.description, 64 * 1024);
     const instructions = text(data.instructions, 128 * 1024);
-    const creatorName = person ? text(person.name ?? person.username, 512) : undefined;
+    const creatorName =
+      text(data.designCreator, 512) ||
+      (person ? text(person.name ?? person.username, 512) : undefined);
     const creatorId = person ? id(person.id) : undefined;
     const creatorUrl = person ? safeUrl(person.url ?? person.profileUrl) : undefined;
-    const licenseCode = license
-      ? text(license.code ?? license.slug ?? license.name, 255)
-      : undefined;
+    const licenseCode =
+      text(licenseValue, 255) ||
+      (license ? text(license.code ?? license.slug ?? license.name, 255) : undefined);
     const licenseText = license ? text(license.description ?? license.text, 64 * 1024) : undefined;
     if (title) source.title = title;
     if (description) source.description = description;

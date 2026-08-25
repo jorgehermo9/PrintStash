@@ -426,6 +426,17 @@ describe("popup browser adapters", () => {
     expect(element("#candidate-panel").hidden).toBe(false);
     expect(button("#capture").textContent).toBe("Confirm and upload selected files");
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(
+      vi.mocked(fakeBrowser.scripting.executeScript).mock.calls.filter(([details]) => {
+        const args = details.args;
+        return (
+          Array.isArray(args) &&
+          args[0] !== null &&
+          typeof args[0] === "object" &&
+          "groups" in args[0]
+        );
+      }),
+    ).toHaveLength(0);
     const candidates = document.querySelectorAll<HTMLInputElement>("#candidate-list input");
     expect(candidates).toHaveLength(2);
     candidates[1]?.click();
@@ -504,6 +515,18 @@ describe("popup browser adapters", () => {
                   sizeBytes: 4,
                 },
                 { id: "instance-alt", filename: "cube-alt.3mf", fileType: "other", sizeBytes: 4 },
+                {
+                  id: "instance-third",
+                  filename: "cube-third.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+                {
+                  id: "instance-fourth",
+                  filename: "cube-fourth.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
               ],
             },
           },
@@ -566,7 +589,7 @@ describe("popup browser adapters", () => {
 
     expect(element("#candidate-panel").hidden).toBe(false);
     const candidates = document.querySelectorAll<HTMLInputElement>("#candidate-list input");
-    expect(candidates).toHaveLength(2);
+    expect(candidates).toHaveLength(4);
     expect([...candidates].every((input) => !input.checked)).toBe(true);
     candidates[1]?.click();
     button("#capture").click();
