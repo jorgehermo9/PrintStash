@@ -40,12 +40,33 @@ class Capability(StrEnum):
 
 
 class ProviderError(RuntimeError):
-    """Exception boundary shared by provider implementations."""
+    """Exception boundary shared by provider implementations.
 
-    def __init__(self, detail: str, *, code: str = "provider_error") -> None:
+    ``code`` remains the coarse compatibility category used by the provider
+    facade.  ``action_code`` is the stable, actionable reason callers should
+    persist or show to an operator (for example ``bambu_ftps_not_found``).
+    Keeping both lets older integrations continue to branch on
+    ``provider_error`` while newer API contracts can expose the precise cause.
+    Retries are opt-in: transports must explicitly mark an error retryable;
+    arbitrary provider failures remain one-shot by default.
+    """
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        code: str = "provider_error",
+        action_code: str | None = None,
+        retryable: bool = False,
+    ) -> None:
         super().__init__(detail)
         self.detail = detail
         self.code = code
+        # Never promote an arbitrary remote/detail string into an actionable
+        # machine code. Provider implementations opt into a more precise code
+        # explicitly (the Bambu FTPS classifier does so).
+        self.action_code = action_code or code
+        self.retryable = retryable
 
 
 _UNSUPPORTED_ACTION_ORDER: tuple[Capability, ...] = (

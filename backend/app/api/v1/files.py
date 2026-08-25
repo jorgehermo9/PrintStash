@@ -10,10 +10,16 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     HTTPException,
+    Query,
     Request,
     Response,
 )
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -28,6 +34,7 @@ from app.services import auth, rbac
 from app.services.jobs import registry
 from app.services.storage_backend import StorageCollisionError, get_backend
 from app.services.storage_ownership import record_creation
+from app.services.three_mf_preview import EmbeddedGcodeError, read_embedded_gcode
 
 logger = get_logger(__name__)
 
@@ -51,10 +58,13 @@ def _live_file(session: Session, file_id: int) -> File:
 
 def _accessible_file(session: Session, file_id: int, user: User) -> File:
     f = _live_file(session, file_id)
+    model = session.get(Model, f.model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="file_not_found")
     rbac.require_model_collection_role(
         session,
         user,
-        session.get(Model, f.model_id).collection_id,
+        model.collection_id,
         CollectionRole.VIEW,
     )
     return f
@@ -119,6 +129,69 @@ def download_file(
     session: Session = Depends(get_session),
 ):
     return _serve_download(session, file_id, slicer_token, current_user)
+
+
+@router.get(
+    "/{file_id}/embedded-gcode",
+    response_class=PlainTextResponse,
+    responses={
+        200: {
+            "description": "Embedded G-code text",
+            "content": {"text/plain": {"schema": {"type": "string"}}},
+        },
+        404: {"description": "Artifact is inaccessible or preview is unavailable"},
+        410: {"description": "Artifact blob is missing from storage"},
+        413: {"description": "Archive or embedded toolpath exceeds configured limits"},
+        429: {"description": "Preview concurrency capacity is exhausted"},
+    },
+    summary="Serve a Bambu 3MF's embedded G-code preview",
+    description=(
+        "Reads Metadata/plate_<N>.gcode on demand from an authorized 3MF. "
+        "The selected member is bounded and is never extracted or persisted."
+    ),
+)
+def embedded_gcode(
+    file_id: int,
+    plate_index: int | None = Query(default=None, ge=0),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+):
+    artifact = _accessible_file(session, file_id, current_user)
+    if artifact.file_type != FileType.THREE_MF:
+        raise HTTPException(status_code=404, detail="embedded_gcode_not_supported")
+    backend = get_backend()
+    if not backend.exists(artifact.path):
+        raise HTTPException(status_code=410, detail="file_blob_missing")
+    try:
+        embedded = read_embedded_gcode(
+            backend,
+            artifact.path,
+            plate_index=plate_index,
+        )
+    except EmbeddedGcodeError as exc:
+        status_code = (
+            413
+            if exc.code
+            in {
+                "embedded_gcode_too_large",
+                "embedded_gcode_bomb",
+                "embedded_gcode_archive_too_large",
+                "embedded_gcode_too_many_entries",
+                "embedded_gcode_central_directory_too_large",
+            }
+            else 429
+            if exc.code == "embedded_gcode_busy"
+            else 404
+        )
+        raise HTTPException(status_code=status_code, detail=exc.code) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=410, detail="file_blob_missing") from exc
+    return PlainTextResponse(
+        content=embedded.content,
+        headers={
+            "Content-Disposition": f'inline; filename="{embedded.filename}"',
+        },
+    )
 
 
 @router.get(

@@ -1608,6 +1608,17 @@ class PrintJob(SQLModel, table=True):
     external_nozzle_diameter: Optional[float] = None
     artifact_evidence: str = Field(default="vault", max_length=32, index=True)
     artifact_capture_error: Optional[str] = Field(default=None, max_length=1024)
+    # Stable, actionable capture outcome. ``artifact_capture_error`` remains
+    # as the legacy short detail for existing clients; these fields separate a
+    # machine-readable code from an operator-facing message.
+    artifact_capture_error_code: Optional[str] = Field(default=None, max_length=128)
+    artifact_capture_error_message: Optional[str] = Field(default=None, max_length=1024)
+
+    # Rows absorbed by the Bambu identity repair remain for audit/rollback and
+    # are excluded by the live() scope. The survivor is intentionally the
+    # earliest row in the identity group.
+    dedupe_absorbed_at: Optional[datetime] = Field(default=None, index=True)
+    dedupe_survivor_id: Optional[int] = Field(default=None, index=True)
 
     # Measured outcome, captured from Moonraker when the print finishes.
     # filament in mm (raw from print_stats) and grams (derived when a matching

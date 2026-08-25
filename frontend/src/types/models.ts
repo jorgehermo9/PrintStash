@@ -1,4 +1,10 @@
-import type { PrintJobState } from "./printers";
+import type {
+  PrintJobIdentityRead,
+  PrintJobReportedMetadataRead,
+  PrintJobReproducibilityRead,
+  PrintJobState,
+  ReproducibilityLevel,
+} from "./printers";
 
 export interface MetadataRead {
   slicer_name: string | null;
@@ -99,6 +105,15 @@ export interface ModelPrintJobRead {
   source: string;
   external_display_name: string | null;
   artifact_evidence: string;
+  artifact_capture_error?: string | null;
+  artifact_capture_error_code?: string | null;
+  artifact_capture_error_message?: string | null;
+  reproducibility_level?: ReproducibilityLevel;
+  toolpath_preview_url?: string | null;
+  identity?: PrintJobIdentityRead;
+  metadata?: PrintJobReportedMetadataRead;
+  reproducibility?: PrintJobReproducibilityRead;
+  download_url?: string | null;
   gcode_revision_number: number | null;
   revision_label: string | null;
   state: PrintJobState;

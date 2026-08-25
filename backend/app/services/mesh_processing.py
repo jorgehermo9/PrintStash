@@ -37,7 +37,19 @@ _MAX_3MF_THUMBNAIL_BYTES = 32 * 1024 * 1024
 
 
 class FallbackThumbnail(bytes):
-    """PNG bytes produced by the bounded STL fallback."""
+    """PNG bytes produced by the bounded STL fallback.
+
+    ``complete`` records whether the fallback consumed a complete, valid source
+    representation. Callers may persist the image when it is false, but must not
+    treat sampled geometry statistics as exact metadata.
+    """
+
+    complete: bool
+
+    def __new__(cls, value: bytes, *, complete: bool = True):
+        instance = super().__new__(cls, value)
+        instance.complete = complete
+        return instance
 
 
 # Resolved once: the glibc handle used by _reclaim_memory, or False on a libc
@@ -613,8 +625,8 @@ def analyze_mesh(
                 path, width=width, height=height
             )
             if fallback is not None:
-                thumb = FallbackThumbnail(fallback.png)
-                if geometry["triangle_count"] is None:
+                thumb = FallbackThumbnail(fallback.png, complete=fallback.complete)
+                if fallback.complete and geometry["triangle_count"] is None:
                     geometry.update(
                         {
                             "bbox_x_mm": round(
@@ -685,7 +697,7 @@ def render_thumbnail(
                     path, width=width, height=height
                 )
                 if fallback is not None:
-                    return FallbackThumbnail(fallback.png)
+                    return FallbackThumbnail(fallback.png, complete=fallback.complete)
             return None
         finally:
             if mesh is not None:

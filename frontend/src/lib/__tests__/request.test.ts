@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getUrl, getWsUrl, invalidateApiCache } from "@/lib/api/request";
-import { getJson, sendJson, sendAction } from "@/lib/api/request";
+import {
+  downloadAuthenticatedFile,
+  getJson,
+  getUrl,
+  getWsUrl,
+  invalidateApiCache,
+  parseContentDispositionFilename,
+  sanitizeDownloadFilename,
+  sendAction,
+  sendJson,
+} from "@/lib/api/request";
 
 /**
  * request.ts keeps a small in-memory GET cache (30s TTL) with in-flight
@@ -34,6 +43,10 @@ function initOf(callIndex: number): RequestInit {
   return fetchMock.mock.calls[callIndex][1] ?? {};
 }
 
+function blobResponse(headers: HeadersInit = {}): Response {
+  return new Response(new Blob(["payload"]), { status: 200, headers });
+}
+
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockReset();
@@ -43,6 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -54,6 +68,77 @@ describe("getUrl / getWsUrl", () => {
   it("derives a ws/wss URL from the current location", () => {
     const url = getWsUrl("/api/v1/printers/3/ws");
     expect(url).toMatch(/^wss?:\/\/.+\/api\/v1\/printers\/3\/ws$/);
+  });
+});
+
+describe("download filenames", () => {
+  it("parses and sanitizes extended, quoted, and plain Content-Disposition names", () => {
+    expect(
+      parseContentDispositionFilename("attachment; filename*=UTF-8''%E2%9C%93%20benchy.gcode"),
+    ).toBe("✓ benchy.gcode");
+    expect(parseContentDispositionFilename('attachment; filename="/tmp/benchy.gcode"')).toBe(
+      "benchy.gcode",
+    );
+    expect(parseContentDispositionFilename("attachment; filename=..\\evil\\benchy.gcode")).toBe(
+      "benchy.gcode",
+    );
+    expect(
+      parseContentDispositionFilename(
+        `attachment; filename="unsafe${String.fromCharCode(13, 10)}name.gcode"`,
+      ),
+    ).toBe("unsafename.gcode");
+    expect(
+      parseContentDispositionFilename(
+        "attachment; filename=\"fallback.gcode\"; filename*=UTF-8''authoritative.gcode",
+      ),
+    ).toBe("authoritative.gcode");
+    expect(
+      parseContentDispositionFilename(
+        "attachment; filename=\"fallback.gcode\"; filename*=ISO-8859-1''caf%E9.gcode",
+      ),
+    ).toBe("fallback.gcode");
+    expect(
+      parseContentDispositionFilename(
+        "attachment; filename=\"fallback.gcode\"; filename*=UTF-8''broken%ZZ.gcode",
+      ),
+    ).toBe("fallback.gcode");
+    expect(sanitizeDownloadFilename("C:\\temp\\explicit.gcode")).toBe("explicit.gcode");
+    expect(sanitizeDownloadFilename("../")).toBeNull();
+  });
+
+  it("uses Content-Disposition when no explicit name is supplied and preserves explicit names", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn<typeof URL.createObjectURL>().mockReturnValue("blob:test"),
+      revokeObjectURL: vi.fn<typeof URL.revokeObjectURL>(),
+    });
+    let clickedFilename = "";
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function (this: HTMLAnchorElement) {
+        clickedFilename = this.download;
+      },
+    );
+
+    fetchMock.mockResolvedValue(
+      blobResponse({ "Content-Disposition": 'attachment; filename="project.3mf"' }),
+    );
+    await downloadAuthenticatedFile("/api/v1/files/7/download");
+    expect(clickedFilename).toBe("project.3mf");
+
+    fetchMock.mockResolvedValue(
+      blobResponse({ "Content-Disposition": 'attachment; filename="header.gcode"' }),
+    );
+    await downloadAuthenticatedFile("/api/v1/files/7/download", "explicit.gcode");
+    expect(clickedFilename).toBe("explicit.gcode");
+
+    fetchMock.mockResolvedValue(
+      blobResponse({ "Content-Disposition": 'attachment; filename="header.gcode"' }),
+    );
+    await downloadAuthenticatedFile("/api/v1/files/7/download", "../");
+    expect(clickedFilename).toBe("header.gcode");
+
+    fetchMock.mockResolvedValue(blobResponse());
+    await downloadAuthenticatedFile("/api/v1/files/7/download");
+    expect(clickedFilename).toBe("download");
   });
 });
 

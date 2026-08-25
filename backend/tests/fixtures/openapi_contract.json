@@ -5728,6 +5728,39 @@
             ],
             "title": "Actual Duration S"
           },
+          "artifact_capture_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error"
+          },
+          "artifact_capture_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Code"
+          },
+          "artifact_capture_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Message"
+          },
           "artifact_evidence": {
             "default": "vault",
             "title": "Artifact Evidence",
@@ -5737,6 +5770,17 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
           },
           "error": {
             "anyOf": [
@@ -5813,6 +5857,9 @@
             "title": "Id",
             "type": "integer"
           },
+          "identity": {
+            "$ref": "#/components/schemas/PrintJobIdentityRead"
+          },
           "material_type": {
             "anyOf": [
               {
@@ -5823,6 +5870,9 @@
               }
             ],
             "title": "Material Type"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PrintJobReportedMetadataRead"
           },
           "printer_id": {
             "anyOf": [
@@ -5841,6 +5891,19 @@
           },
           "remote_filename": {
             "title": "Remote Filename",
+            "type": "string"
+          },
+          "reproducibility": {
+            "$ref": "#/components/schemas/PrintJobReproducibilityRead"
+          },
+          "reproducibility_level": {
+            "default": "basic",
+            "enum": [
+              "exact",
+              "metadata",
+              "basic"
+            ],
+            "title": "Reproducibility Level",
             "type": "string"
           },
           "revision_label": {
@@ -5895,6 +5958,17 @@
           },
           "state": {
             "$ref": "#/components/schemas/PrintJobState"
+          },
+          "toolpath_preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toolpath Preview Url"
           }
         },
         "required": [
@@ -6555,6 +6629,90 @@
         "title": "PrintBatchRead",
         "type": "object"
       },
+      "PrintJobIdentityRead": {
+        "description": "Identity reported by a printer; absent values stay absent.",
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "gcode_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gcode File"
+          },
+          "plate_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plate Index"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "subtask_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtask Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "title": "PrintJobIdentityRead",
+        "type": "object"
+      },
       "PrintJobRead": {
         "properties": {
           "artifact_capture_error": {
@@ -6567,6 +6725,28 @@
               }
             ],
             "title": "Artifact Capture Error"
+          },
+          "artifact_capture_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Code"
+          },
+          "artifact_capture_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Capture Error Message"
           },
           "artifact_evidence": {
             "default": "vault",
@@ -6631,6 +6811,17 @@
               }
             ],
             "title": "Dispatch Claimed At"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
           },
           "error": {
             "anyOf": [
@@ -6773,6 +6964,9 @@
             "title": "Id",
             "type": "integer"
           },
+          "identity": {
+            "$ref": "#/components/schemas/PrintJobIdentityRead"
+          },
           "material_override_at": {
             "anyOf": [
               {
@@ -6795,6 +6989,9 @@
               }
             ],
             "title": "Material Override By"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PrintJobReportedMetadataRead"
           },
           "model_id": {
             "title": "Model Id",
@@ -6864,6 +7061,19 @@
           },
           "remote_filename": {
             "title": "Remote Filename",
+            "type": "string"
+          },
+          "reproducibility": {
+            "$ref": "#/components/schemas/PrintJobReproducibilityRead"
+          },
+          "reproducibility_level": {
+            "default": "basic",
+            "enum": [
+              "exact",
+              "metadata",
+              "basic"
+            ],
+            "title": "Reproducibility Level",
             "type": "string"
           },
           "requested_by": {
@@ -6939,6 +7149,17 @@
             ],
             "title": "Target Group"
           },
+          "toolpath_preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toolpath Preview Url"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -6956,6 +7177,119 @@
           "updated_at"
         ],
         "title": "PrintJobRead",
+        "type": "object"
+      },
+      "PrintJobReportedMetadataRead": {
+        "description": "Only Bambu MQTT metadata actually supplied by the printer.",
+        "properties": {
+          "current_layer": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Layer"
+          },
+          "nozzle_diameter": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nozzle Diameter"
+          },
+          "total_layers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Layers"
+          }
+        },
+        "title": "PrintJobReportedMetadataRead",
+        "type": "object"
+      },
+      "PrintJobReproducibilityErrorRead": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "PrintJobReproducibilityErrorRead",
+        "type": "object"
+      },
+      "PrintJobReproducibilityRead": {
+        "description": "Evidence level and download seam for reproducible print history.",
+        "properties": {
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrintJobReproducibilityErrorRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "identity": {
+            "$ref": "#/components/schemas/PrintJobIdentityRead"
+          },
+          "level": {
+            "default": "basic",
+            "enum": [
+              "exact",
+              "metadata",
+              "basic"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PrintJobReportedMetadataRead"
+          },
+          "toolpath_preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toolpath Preview Url"
+          }
+        },
+        "title": "PrintJobReproducibilityRead",
         "type": "object"
       },
       "PrintJobState": {
@@ -15112,6 +15446,83 @@
           }
         ],
         "summary": "Get a pre-signed direct download URL (S3 only)",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/{file_id}/embedded-gcode": {
+      "get": {
+        "description": "Reads Metadata/plate_<N>.gcode on demand from an authorized 3MF. The selected member is bounded and is never extracted or persisted.",
+        "operationId": "embedded_gcode_api_v1_files__file_id__embedded_gcode_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plate_index",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Plate Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Embedded G-code text"
+          },
+          "404": {
+            "description": "Artifact is inaccessible or preview is unavailable"
+          },
+          "410": {
+            "description": "Artifact blob is missing from storage"
+          },
+          "413": {
+            "description": "Archive or embedded toolpath exceeds configured limits"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "Preview concurrency capacity is exhausted"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Serve a Bambu 3MF's embedded G-code preview",
         "tags": [
           "files"
         ]

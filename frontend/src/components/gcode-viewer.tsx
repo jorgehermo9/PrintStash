@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import { AlertTriangle, Layers, Loader2 } from "lucide-react";
-import { authHeaders, getUrl } from "@/lib/api/request";
+import { getAuthenticatedText } from "@/lib/api/request";
+import { useOptionalI18n, type MessageKey } from "@/lib/i18n";
 import { previewPixelRatio, usePreviewPreferences } from "@/lib/preview-preferences";
 import { parseGcode, type ToolpathData } from "@/lib/gcode";
 
@@ -138,8 +139,11 @@ function GcodeScene({
 interface EBState {
   hasError: boolean;
 }
-class GcodeErrorBoundary extends React.Component<{ children: React.ReactNode }, EBState> {
-  constructor(props: { children: React.ReactNode }) {
+class GcodeErrorBoundary extends React.Component<
+  { children: React.ReactNode; renderFailed: string },
+  EBState
+> {
+  constructor(props: { children: React.ReactNode; renderFailed: string }) {
     super(props);
     this.state = { hasError: false };
   }
@@ -151,7 +155,7 @@ class GcodeErrorBoundary extends React.Component<{ children: React.ReactNode }, 
       return (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
           <AlertTriangle className="h-8 w-8" />
-          <span className="font-mono text-xs">G-code render failed</span>
+          <span className="font-mono text-xs">{this.props.renderFailed}</span>
         </div>
       );
     }
@@ -159,23 +163,56 @@ class GcodeErrorBoundary extends React.Component<{ children: React.ReactNode }, 
   }
 }
 
+class UnsupportedBinaryGcodeError extends Error {}
+
+function viewerCopy(
+  i18n: ReturnType<typeof useOptionalI18n>,
+  key: MessageKey,
+  fallback: string,
+  values?: Record<string, string>,
+): string {
+  const template = i18n?.t(key) ?? fallback;
+  return Object.entries(values ?? {}).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    template,
+  );
+}
+
 // ---- Public Component ----
+
+interface CanvasRendererProps {
+  children: React.ReactNode;
+  className: string;
+  dpr: number;
+  gl: { preserveDrawingBuffer: boolean };
+}
+
+function DefaultCanvasRenderer({ children, className, dpr, gl }: CanvasRendererProps) {
+  return (
+    <Canvas className={className} dpr={dpr} gl={gl}>
+      {children}
+    </Canvas>
+  );
+}
 
 /** The outcome of one completed toolpath fetch, tagged with the url it was for. */
 interface LoadedToolpath {
   url: string;
   data: ToolpathData | null;
-  error: string | null;
+  errorKind: "binary" | "load" | null;
 }
 
 export interface GcodeViewerProps {
   url: string;
   printerBedMm?: { x: number; y: number } | null;
   screenshotName?: string;
+  canvasRenderer?: ComponentType<CanvasRendererProps>;
 }
 
-export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
+export function GcodeViewer({ url, printerBedMm = null, canvasRenderer }: GcodeViewerProps) {
+  const i18n = useOptionalI18n();
   const previewPreferences = usePreviewPreferences();
+  const CanvasRenderer = canvasRenderer ?? DefaultCanvasRenderer;
   // One state for the fetch that has actually completed, tagged with its url,
   // so switching files derives "loading" during render instead of clearing the
   // previous file's toolpath from an effect.
@@ -187,31 +224,25 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
   const current = loaded?.url === url ? loaded : null;
   const loading = current === null;
   const data = current?.data ?? null;
-  const error = current?.error ?? null;
+  const errorKind = current?.errorKind ?? null;
 
   useEffect(() => {
     // A response for a file the viewer has already left must not be shown as
     // this url's toolpath.
     let live = true;
 
-    fetch(getUrl(url), { headers: authHeaders() })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.text();
-      })
+    getAuthenticatedText(url)
       .then((text) => {
         // PrusaSlicer binary G-code (.bgcode) starts with the "GCDE" magic and
         // carries no plain-text toolpath — its moves are heatshrink-compressed.
         // Its metadata + thumbnail are indexed on the server, but there's
         // nothing here to rasterise, so show a notice instead of an empty plot.
         if (text.startsWith("GCDE")) {
-          throw new Error(
-            "Binary G-code (.bgcode) can't be previewed in the browser — download the file to open it in a slicer.",
-          );
+          throw new UnsupportedBinaryGcodeError();
         }
         const parsed = parseGcode(text);
         if (!live) return;
-        setLoaded({ url, data: parsed, error: null });
+        setLoaded({ url, data: parsed, errorKind: null });
         setCurrentLayer(parsed.totalLayers - 1);
       })
       .catch((cause: unknown) => {
@@ -219,7 +250,7 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
         setLoaded({
           url,
           data: null,
-          error: cause instanceof Error ? cause.message : "Failed to load G-code",
+          errorKind: cause instanceof UnsupportedBinaryGcodeError ? "binary" : "load",
         });
       });
 
@@ -228,20 +259,32 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
     };
   }, [url]);
 
+  const loadingCopy = viewerCopy(i18n, "viewer.loadingToolpath", "Loading toolpath…");
+  const renderFailedCopy = viewerCopy(i18n, "viewer.renderFailed", "G-code render failed");
+  const errorCopy = viewerCopy(
+    i18n,
+    errorKind === "binary" ? "viewer.binaryUnsupported" : "viewer.loadFailed",
+    errorKind === "binary"
+      ? "Binary G-code (.bgcode) can't be previewed in the browser — download the file to open it in a slicer."
+      : "Unable to load the toolpath preview.",
+  );
+  const noDataCopy = viewerCopy(i18n, "viewer.noToolpathData", "No toolpath data");
+  const noToolpathCopy = viewerCopy(i18n, "viewer.noToolpathFound", "No toolpath found in file");
+
   if (loading) {
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin" />
-        <span className="font-mono text-xs">Parsing G-code…</span>
+        <span className="font-mono text-xs">{loadingCopy}</span>
       </div>
     );
   }
 
-  if (error || !data) {
+  if (errorKind || !data) {
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
         <AlertTriangle className="h-8 w-8" />
-        <span className="font-mono text-xs">{error ?? "No toolpath data"}</span>
+        <span className="font-mono text-xs">{errorKind ? errorCopy : noDataCopy}</span>
       </div>
     );
   }
@@ -250,15 +293,15 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
         <Layers className="h-8 w-8 opacity-40" />
-        <span className="font-mono text-xs">No toolpath found in file</span>
+        <span className="font-mono text-xs">{noToolpathCopy}</span>
       </div>
     );
   }
 
   return (
     <div className="relative h-full w-full">
-      <GcodeErrorBoundary>
-        <Canvas
+      <GcodeErrorBoundary renderFailed={renderFailedCopy}>
+        <CanvasRenderer
           className="h-full w-full"
           dpr={previewPixelRatio(previewPreferences.previewQuality)}
           gl={{ preserveDrawingBuffer: true }}
@@ -270,7 +313,7 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
             showBed={showBed}
             printerBedMm={printerBedMm ?? null}
           />
-        </Canvas>
+        </CanvasRenderer>
       </GcodeErrorBoundary>
 
       {/* Layer controls overlay */}
@@ -278,37 +321,63 @@ export function GcodeViewer({ url, printerBedMm = null }: GcodeViewerProps) {
         <div className="bg-surface-container-lowest/90 backdrop-blur border border-outline-variant rounded px-3 py-2 flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <span className="font-mono text-3xs uppercase tracking-wider text-muted-foreground">
-              Layer {currentLayer + 1} / {data.totalLayers}
+              {viewerCopy(i18n, "viewer.layer", "Layer {current} / {total}", {
+                current: String(currentLayer + 1),
+                total: String(data.totalLayers),
+              })}
               {data.layerRanges[currentLayer] && (
-                <> · Z {data.layerRanges[currentLayer].z.toFixed(2)} mm</>
+                <>
+                  {" · "}
+                  {viewerCopy(i18n, "viewer.z", "Z {value} mm", {
+                    value: data.layerRanges[currentLayer].z.toFixed(2),
+                  })}
+                </>
               )}
             </span>
             <div className="flex items-center gap-1">
               <button
+                type="button"
                 onClick={() => setShowTravel((v) => !v)}
+                aria-pressed={showTravel}
+                aria-label={viewerCopy(
+                  i18n,
+                  showTravel ? "viewer.hideTravel" : "viewer.showTravel",
+                  showTravel ? "Hide travel moves" : "Show travel moves",
+                )}
                 className={`font-mono text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded border transition-colors ${
                   showTravel
                     ? "border-primary text-primary bg-secondary-container"
                     : "border-outline-variant text-muted-foreground hover:text-foreground"
                 }`}
               >
-                Travel
+                {viewerCopy(i18n, "viewer.travel", "Travel")}
               </button>
               {printerBedMm && (
                 <button
+                  type="button"
                   onClick={() => setShowBed((v) => !v)}
+                  aria-pressed={showBed}
+                  aria-label={viewerCopy(
+                    i18n,
+                    showBed ? "viewer.hideBed" : "viewer.showBed",
+                    showBed ? "Hide build plate" : "Show build plate",
+                  )}
                   className={`font-mono text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded border transition-colors ${
                     showBed
                       ? "border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30"
                       : "border-outline-variant text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  Bed {printerBedMm.x}×{printerBedMm.y}
+                  {viewerCopy(i18n, "viewer.bed", "Bed {x}×{y}", {
+                    x: String(printerBedMm.x),
+                    y: String(printerBedMm.y),
+                  })}
                 </button>
               )}
             </div>
           </div>
           <input
+            aria-label={viewerCopy(i18n, "viewer.currentLayer", "Current layer")}
             type="range"
             min={0}
             max={data.totalLayers - 1}

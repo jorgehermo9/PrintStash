@@ -116,6 +116,7 @@ def build_routing_snapshot(
             select(PrintJob.printer_id).where(
                 PrintJob.printer_id.in_(printer_ids),  # type: ignore[union-attr]
                 PrintJob.operator_gate_state == OperatorGateState.PENDING,
+                live(PrintJob),
             )
         ).all()
         if printer_id is not None
@@ -696,6 +697,7 @@ def list_queue_page(
                 PrintJob.state.notin_(_ACTIVE_STATES),  # type: ignore[union-attr]
                 live(PrintJob),
                 visibility,
+                live(PrintJob),
             )
             .order_by(
                 PrintJob.finished_at.desc(),  # type: ignore[union-attr]
@@ -711,7 +713,7 @@ def list_queue_page(
 
 def _queued_job(session: Session, job_id: int) -> PrintJob:
     job = session.get(PrintJob, job_id)
-    if job is None or job.deleted_at is not None:
+    if job is None or job.deleted_at is not None or job.dedupe_absorbed_at is not None:
         raise FleetError("queue_job_not_found")
     if job.state != PrintJobState.QUEUED:
         raise FleetError("queue_job_not_editable")

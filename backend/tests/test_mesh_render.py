@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -251,3 +252,55 @@ def test_huge_mesh_never_allocates_full_face_arrays(monkeypatch) -> None:
     assert png is not None
     assert len(mesh.faces) > chunk  # the mesh really needed more than one chunk
     assert 0 < seen_max["n"] <= chunk
+
+
+def test_raster_budget_is_cumulative_across_calls() -> None:
+    img = np.zeros((16, 16, 3), dtype=np.uint8)
+    zbuf = np.full((16, 16), np.inf, dtype=np.float64)
+    triangle = np.array([[[0.0, 0.0, 0.0], [9.0, 0.0, 0.0], [0.0, 9.0, 0.0]]])
+    normals = np.zeros((1, 3, 3), dtype=np.float64)
+    budget = mesh_render.RasterBudget(limit=16)
+
+    mesh_render._rasterise_triangles(
+        img,
+        zbuf,
+        triangle,
+        normals,
+        lambda n: np.ones((n.shape[0], 3)),
+        np.ones(3),
+        16,
+        16,
+        budget=budget,
+    )
+    mesh_render._rasterise_triangles(
+        img,
+        zbuf,
+        triangle,
+        normals,
+        lambda n: np.ones((n.shape[0], 3)),
+        np.ones(3),
+        16,
+        16,
+        budget=budget,
+    )
+
+    assert budget.used == 16
+    assert np.isfinite(zbuf).any()
+
+
+def test_normal_renderer_keeps_large_face_at_1280() -> None:
+    from PIL import Image
+
+    mesh = SimpleNamespace(
+        vertices=np.array(
+            [[-100.0, -100.0, 0.0], [100.0, -100.0, 0.0], [0.0, 100.0, 0.0]]
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+    )
+
+    png = mesh_render.render_mesh_thumbnail(mesh, "large-face.stl", 1280, 1280)
+
+    assert png is not None
+    alpha = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))[:, :, 3]
+    assert alpha.max() == 255
+    assert (alpha > 200).mean() > 0.10

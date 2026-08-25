@@ -13,6 +13,7 @@ a local storage root under ``tmp_path``.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 import tarfile
@@ -31,12 +32,17 @@ import app.services.backup as backup
 import app.services.storage_backend as storage_backend
 from app.core.config import _overlay
 from app.db.models import (
+    SENTINEL_FILE_HASH,
+    SENTINEL_MODEL_HASH,
     Document,
     DocumentKind,
     File,
     FileType,
     Model,
     OwnedStorageObject,
+    Printer,
+    PrintJob,
+    PrintJobState,
     User,
 )
 from app.db.session import (
@@ -287,6 +293,59 @@ def test_backup_excludes_user_owned_external_artifacts(backup_env: BackupEnv):
     meta = backup.create_backup()
 
     assert meta.file_count == 0
+
+
+def test_backup_ignores_external_job_sentinel_but_keeps_vault_artifact(
+    backup_env: BackupEnv,
+):
+    """The /dev/null placeholder is not a blob, while real vault files remain."""
+    _model_id, vault_key = _seed_model_with_blob(
+        backup_env, name="Vault artifact", content=b"real vault bytes"
+    )
+    with backup_env.new_session() as session:
+        sentinel_model = Model(
+            name="__external__",
+            slug="__external__",
+            hash=SENTINEL_MODEL_HASH,
+        )
+        session.add(sentinel_model)
+        session.commit()
+        session.refresh(sentinel_model)
+        sentinel_file = File(
+            model_id=sentinel_model.id,
+            path="/dev/null",
+            original_filename="__external__",
+            file_type=FileType.GCODE,
+            version=1,
+            size_bytes=0,
+            sha256=SENTINEL_FILE_HASH,
+        )
+        session.add(sentinel_file)
+        printer = Printer(name="External history")
+        session.add(printer)
+        session.commit()
+        session.refresh(sentinel_file)
+        session.refresh(printer)
+        session.add(
+            PrintJob(
+                printer_id=printer.id,
+                file_id=sentinel_file.id,
+                model_id=sentinel_model.id,
+                remote_filename="external.gcode",
+                source="external",
+                state=PrintJobState.COMPLETED,
+            )
+        )
+        session.commit()
+
+    meta = backup.create_backup()
+
+    assert meta.file_count == 1
+    with tarfile.open(meta.path, mode="r:gz") as archive:
+        manifest = archive.extractfile("manifest.json")
+        assert manifest is not None
+        entries = json.loads(manifest.read())["files"]
+    assert [entry["key"] for entry in entries] == [vault_key]
 
 
 def test_manifest_is_first_archive_member(backup_env: BackupEnv):

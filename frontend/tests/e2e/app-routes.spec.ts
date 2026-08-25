@@ -140,7 +140,7 @@ test("pending imports render as a responsive review queue", async ({ page }) => 
   await page.goto("/inbox");
   const problems = await collectPageProblems(page);
 
-  const queue = page.getByRole("list", { name: "Needs review" });
+  const queue = page.getByRole("list", { name: "Import queue" });
   await expect(queue.getByRole("heading", { name: "Capture bracket" })).toBeVisible();
   await expect(queue.getByText("Printables")).toBeVisible();
   await expect(queue.getByText("Files: 2")).toBeVisible();
@@ -149,6 +149,43 @@ test("pending imports render as a responsive review queue", async ({ page }) => 
     true,
   );
   expect(problems).toEqual([]);
+});
+
+test("pending imports can be deleted and completed jobs can be cleared", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Upload", exact: true }).click();
+  await page.getByRole("button", { name: "From URL" }).click();
+  await page
+    .getByPlaceholder("Model page, collection, or direct .stl/.zip link")
+    .fill("https://www.printables.com/model/41-capture-bracket");
+  await page.getByRole("button", { name: "Review URL" }).click();
+  await page.goto("/inbox");
+
+  await page.getByRole("button", { name: "Delete import" }).click();
+  await page
+    .getByRole("dialog", { name: "Delete pending import?" })
+    .getByRole("button", { name: "Delete import" })
+    .click();
+  await expect(page.getByText("No imports in the queue")).toBeVisible();
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Upload", exact: true }).click();
+  await page.getByRole("button", { name: "From URL" }).click();
+  await page
+    .getByPlaceholder("Model page, collection, or direct .stl/.zip link")
+    .fill("https://www.printables.com/model/41-capture-bracket");
+  await page.getByRole("button", { name: "Review URL" }).click();
+  await page.getByRole("button", { name: "Import selected" }).click();
+  await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+  await page.goto("/inbox");
+
+  await page.getByRole("tab", { name: /Completed/ }).click();
+  await page.getByRole("button", { name: "Clear completed" }).click();
+  await page
+    .getByRole("dialog", { name: "Clear completed imports?" })
+    .getByRole("button", { name: "Clear completed" })
+    .click();
+  await expect(page.getByText("No completed imports")).toBeVisible();
 });
 
 test("Source tab displays and replaces a private representative cover", async ({ page }) => {
@@ -203,6 +240,54 @@ test("Source tab keeps metadata readable at the minimum details-panel width", as
   expect(sourceUrlBox!.y).toBeGreaterThan(sourceUrlLabelBox!.y + sourceUrlLabelBox!.height);
   expect(descriptionBox!.width).toBeGreaterThan(240);
   expect(useDescriptionBox!.y).toBeGreaterThan(descriptionBox!.y + descriptionBox!.height);
+});
+
+test("print history explains exact, partial, and basic evidence with safe download", async ({
+  page,
+}) => {
+  await page.goto("/models/1");
+  await page.getByRole("tab", { name: /History/ }).click();
+
+  const evidence = page.getByTestId("print-job-reproducibility");
+  await expect(evidence).toHaveCount(3);
+  await expect(
+    evidence.getByTestId("reproducibility-level").filter({ hasText: "Exactly reproducible" }),
+  ).toHaveCount(1);
+  await expect(
+    evidence.getByTestId("reproducibility-level").filter({ hasText: "Partially reproducible" }),
+  ).toHaveCount(1);
+  await expect(
+    evidence.getByTestId("reproducibility-level").filter({ hasText: "External/basic evidence" }),
+  ).toHaveCount(1);
+  await expect(page.getByText(/Error code: bambu_ftps_unavailable/)).toBeVisible();
+  await expect(page.getByText("The printer cache is unavailable.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bambu project label", { exact: true })).toBeVisible();
+  await expect(evidence.nth(0).getByText("Archived artifact", { exact: true })).toHaveCount(1);
+  await expect(evidence.getByRole("button", { name: /download archived artifact/i })).toHaveCount(
+    1,
+  );
+  await expect(evidence.nth(0).getByRole("button", { name: /preview toolpath/i })).toHaveCount(1);
+  await expect(evidence.getByRole("link", { name: "Open model detail" })).toHaveCount(1);
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    evidence.getByRole("button", { name: /download archived artifact/i }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe("benchy.gcode");
+
+  const [toolpathRequest] = await Promise.all([
+    page.waitForRequest((request) => request.url().endsWith("/api/v1/files/2/toolpath-preview")),
+    evidence
+      .nth(0)
+      .getByRole("button", { name: /preview toolpath/i })
+      .click(),
+  ]);
+  expect(toolpathRequest.method()).toBe("GET");
+  const toolpathDialog = page.getByRole("dialog", { name: "Toolpath preview" });
+  await expect(toolpathDialog).toBeVisible();
+  await expect(toolpathDialog.getByText(/Layer 1 \/ 1/)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(toolpathDialog).toHaveCount(0);
 });
 
 test("model detail uses focused send dialog and compact actions", async ({ page }) => {

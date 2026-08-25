@@ -10,6 +10,7 @@ seam, so those two are patched at the instance level (see
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -30,11 +31,13 @@ def _provider(
     printer_access_code: str = ACCESS_CODE,
     expected_access_code: str | None = ACCESS_CODE,
     reject_commands: bool = False,
+    pushall_report: dict[str, Any] | None = None,
 ) -> tuple[BambuLanProvider, list]:
     factory, built = make_mqtt_factory(
         sim,
         expected_access_code=expected_access_code,
         reject_commands=reject_commands,
+        pushall_report=pushall_report,
     )
     provider = BambuLanProvider(
         host="127.0.0.1",
@@ -64,6 +67,8 @@ def test_send_print_completes() -> None:
     async def _run() -> None:
         await provider.start(REMOTE)
         assert built[0].published[0]["print"]["command"] == "gcode_file"
+        assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
+        assert built[0].published_topics == ["device/01S00A000000000/request"]
         await _wait_state(provider, "complete")
 
     asyncio.run(_run())
@@ -88,6 +93,8 @@ def test_status_subscription_uses_one_mqtt_session_and_one_bootstrap_pushall() -
 
     asyncio.run(_run())
     assert len(built) == 1
+    assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
+    assert built[0].published_topics == ["device/01S00A000000000/request"]
     assert built[0].published == [
         {
             "pushing": {
@@ -98,6 +105,47 @@ def test_status_subscription_uses_one_mqtt_session_and_one_bootstrap_pushall() -
             }
         }
     ]
+
+
+def test_project_file_report_preserves_external_capture_hint() -> None:
+    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
+    provider, built = _provider(
+        sim,
+        pushall_report={
+            "print": {
+                "command": "project_file",
+                "gcode_state": "RUNNING",
+                "subtask_name": "Benchy",
+                "task_id": "task-42",
+                "url": "ftps://01S00A000000000/cache/benchy.3mf",
+            }
+        },
+    )
+
+    async def _run() -> None:
+        stop = asyncio.Event()
+        received: list[dict[str, Any]] = []
+
+        async def on_status(status: dict[str, Any]) -> None:
+            received.append(status)
+            stop.set()
+
+        await provider.subscribe_status(on_status, stop_event=stop)
+        assert received == [
+            {
+                "print_stats": {
+                    "state": "printing",
+                    "filename": "Benchy",
+                    "external_display_name": "Benchy",
+                    "external_task_id": "task-42",
+                    "external_artifact_path": "ftps://01S00A000000000/cache/benchy.3mf",
+                }
+            }
+        ]
+
+    asyncio.run(_run())
+    assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
+    assert built[0].published_topics == ["device/01S00A000000000/request"]
 
 
 def test_pause_then_resume_runs_to_completion() -> None:
@@ -197,5 +245,6 @@ def test_upload_with_wrong_access_code_raises_transport_error(tmp_path) -> None:
         with pytest.raises(ProviderError) as exc_info:
             await provider.upload(local, "demo.gcode")
         assert exc_info.value.code == "provider_transport_error"
+        assert exc_info.value.action_code == "bambu_ftps_authentication_failed"
 
     asyncio.run(_run())

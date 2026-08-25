@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,13 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
         "artifact_provenance_links",
         "inbox_item_results",
     } <= tables
+    print_job_columns = {
+        col["name"]: col for col in inspector.get_columns("print_jobs")
+    }
+    assert "artifact_capture_error_code" in print_job_columns
+    assert "artifact_capture_error_message" in print_job_columns
+    assert "dedupe_absorbed_at" in print_job_columns
+    assert "dedupe_survivor_id" in print_job_columns
 
     files_columns = {col["name"]: col for col in inspector.get_columns("files")}
     assert "revision_label" in files_columns
@@ -87,7 +95,6 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
     assert "oidc_issuer" in user_columns
     assert "oidc_subject" in user_columns
     assert user_columns["oidc_managed"]["nullable"] is False
-
     config_columns = {
         col["name"]: col for col in inspector.get_columns("system_config")
     }
@@ -120,6 +127,156 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
         "provenance_source_id": "CASCADE",
         "capture_id": "SET NULL",
     }
+
+
+def test_bambu_identity_migration_absorbs_duplicate_pair_without_delete(
+    tmp_path: Path,
+) -> None:
+    """A project-only/task-only pair keeps the early row and rich evidence."""
+
+    db_path = tmp_path / "bambu-repair.sqlite"
+    cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(cfg, "e7b4c1d9a6f2")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as connection:
+            for job_id, created_at, project_id, task_id, evidence in (
+                (1, "2026-08-24 00:00:00", "project-1", None, "metadata_only"),
+                (2, "2026-08-24 00:00:10", None, "task-1", "gcode_archived"),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO print_jobs "
+                        "(id, printer_id, file_id, model_id, remote_filename, state, "
+                        "progress, source, external_project_id, external_task_id, "
+                        "artifact_evidence, started_at, created_at, updated_at) "
+                        "VALUES (:id, 1, 1, 1, 'plate.gcode', 'PRINTING', 0.5, "
+                        "'external', :project_id, :task_id, :evidence, "
+                        "'2026-08-24 00:00:00', :created_at, :created_at)"
+                    ),
+                    {
+                        "id": job_id,
+                        "project_id": project_id,
+                        "task_id": task_id,
+                        "evidence": evidence,
+                        "created_at": created_at,
+                    },
+                )
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    text(
+                        "SELECT id, dedupe_absorbed_at, dedupe_survivor_id, "
+                        "external_project_id, external_task_id, artifact_evidence "
+                        "FROM print_jobs ORDER BY id"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        assert rows[0]["dedupe_absorbed_at"] is None
+        assert rows[0]["external_project_id"] == "project-1"
+        assert rows[0]["external_task_id"] == "task-1"
+        assert rows[0]["artifact_evidence"] == "gcode_archived"
+        assert rows[1]["dedupe_absorbed_at"] is not None
+        assert rows[1]["dedupe_survivor_id"] == 1
+        with pytest.raises(
+            RuntimeError, match="cannot downgrade Bambu identity repair"
+        ):
+            command.downgrade(cfg, "e7b4c1d9a6f2")
+        assert {
+            column["name"] for column in inspect(engine).get_columns("print_jobs")
+        } >= {"dedupe_absorbed_at", "dedupe_survivor_id"}
+    finally:
+        engine.dispose()
+
+
+def test_bambu_identity_grouping_rejects_fast_reprints_and_transitive_chains() -> None:
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "f8a6c2d9e1b4_bambu_job_identity_repair.py"
+    )
+    spec = spec_from_file_location("bambu_identity_repair", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    def row(
+        job_id: int,
+        *,
+        project: str | None = None,
+        task: str | None = None,
+        started: str = "2026-08-24 00:00:00",
+        finished: str | None = None,
+        created: str = "2026-08-24 00:00:00",
+    ) -> dict[str, object]:
+        return {
+            "id": job_id,
+            "printer_id": 1,
+            "remote_filename": "plate.gcode",
+            "external_project_id": project,
+            "external_task_id": task,
+            "external_subtask_id": None,
+            "provider_job_id": None,
+            "started_at": started,
+            "finished_at": finished,
+            "created_at": created,
+        }
+
+    # A completed print followed by a fast reprint has disjoint lifecycles,
+    # despite sharing a filename and being only seconds apart.
+    fast_reprints = [
+        row(1, project="project-old", finished="2026-08-24 00:00:08"),
+        row(
+            2,
+            task="task-new",
+            started="2026-08-24 00:00:10",
+            created="2026-08-24 00:00:10",
+        ),
+    ]
+    assert migration._groups(fast_reprints) == []
+
+    # A(project), B(project+task), C(task) must not collapse transitively.
+    chain = [
+        row(1, project="project-chain"),
+        row(2, project="project-chain", task="task-chain"),
+        row(3, task="task-chain"),
+    ]
+    groups = migration._groups(chain)
+    assert [[entry["id"] for entry in group] for group in groups] == [[1, 2]]
+
+    # A reused project id in a later, completed lifecycle is a reprint, not a
+    # duplicate callback. Shared identity must be paired with time evidence.
+    separated_reprints = [
+        row(
+            10,
+            project="project-reused",
+            started="2026-08-24 01:00:00",
+            finished="2026-08-24 01:05:00",
+        ),
+        row(
+            11,
+            project="project-reused",
+            started="2026-08-24 02:00:00",
+            finished="2026-08-24 02:05:00",
+            created="2026-08-24 02:00:00",
+        ),
+    ]
+    assert migration._groups(separated_reprints) == []
+
+    # The same token on separate printers is not evidence of one print.
+    multi_printer = [
+        row(20, project="shared-project", started="2026-08-24 03:00:00"),
+        {
+            **row(21, project="shared-project", started="2026-08-24 03:00:00"),
+            "printer_id": 2,
+        },
+    ]
+    assert migration._groups(multi_printer) == []
 
 
 # --------------------------------------------------------------------------- #

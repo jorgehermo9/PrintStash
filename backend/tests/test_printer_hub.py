@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -274,6 +275,8 @@ def test_external_capture_failure_paths_are_persistent(
     failed = db_session.get(PrintJob, job.id)
     assert failed is not None
     assert failed.artifact_capture_error == "external_artifact_capture_disabled"
+    assert failed.artifact_capture_error_code == "external_artifact_capture_disabled"
+    assert failed.artifact_capture_error_message
 
     failed.artifact_evidence = "capture_pending"
     db_session.add(failed)
@@ -298,6 +301,8 @@ def test_external_capture_failure_paths_are_persistent(
     failed = db_session.get(PrintJob, job.id)
     assert failed is not None
     assert failed.artifact_capture_error == "download_failed"
+    assert failed.artifact_capture_error_code == "download_failed"
+    assert failed.artifact_capture_error_message
 
     hub._mark_capture_failed(999_999, "ignored")
     failed.artifact_evidence = "metadata_only"
@@ -713,6 +718,44 @@ class TestPrinterHubSyncActiveJob:
         assert job.state == PrintJobState.PRINTING
         assert job.progress == pytest.approx(0.45)
 
+    def test_identityless_report_reuses_active_vault_job_by_filename(
+        self, hub, db_session
+    ):
+        """Provider-neutral status must not create a duplicate external row."""
+        pid, job = self._setup_job(db_session)
+
+        def _sync() -> None:
+            hub._sync_active_job_db(
+                pid,
+                "printing",
+                "sync.gcode",
+                0.45,
+                {"state": "printing", "filename": "sync.gcode"},
+            )
+            hub._sync_active_job_db(
+                pid,
+                "complete",
+                "sync.gcode",
+                1.0,
+                {"state": "complete", "filename": "sync.gcode"},
+            )
+
+        _sync()
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob).where(
+                    PrintJob.printer_id == pid,
+                    PrintJob.remote_filename == "sync.gcode",
+                )
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].id == job.id
+            assert rows[0].source == "vault"
+            assert rows[0].state == PrintJobState.COMPLETED
+            assert rows[0].progress == pytest.approx(1.0)
+            assert rows[0].finished_at is not None
+
     def test_sync_complete_sets_finished_at(self, hub, db_session):
         pid, job = self._setup_job(db_session)
 
@@ -798,6 +841,218 @@ class TestPrinterHubSyncActiveJob:
             assert job.external_total_layers == 120
             assert job.external_nozzle_diameter == pytest.approx(0.4)
 
+    def test_bambu_project_only_then_task_only_reuses_one_job(self, hub):
+        from sqlmodel import select
+
+        from app.db.session import get_session_factory
+
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "plate_1.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "plate_1.gcode",
+                "external_project_id": "project-transition",
+            },
+        )
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "plate_1.gcode",
+            0.2,
+            {
+                "state": "printing",
+                "filename": "plate_1.gcode",
+                "external_task_id": "task-transition",
+            },
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob).where(PrintJob.printer_id == 1)
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].external_project_id == "project-transition"
+            assert rows[0].external_task_id == "task-transition"
+            assert rows[0].provider_job_id == "task-transition"
+
+    def test_bambu_cross_field_identity_equality_does_not_merge(self, hub):
+        from sqlmodel import select
+
+        from app.db.session import get_session_factory
+
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "same-file.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "same-file.gcode",
+                "external_project_id": "same-id",
+            },
+        )
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "same-file.gcode",
+            0.2,
+            {
+                "state": "printing",
+                "filename": "same-file.gcode",
+                "external_task_id": "same-id",
+            },
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob)
+                .where(PrintJob.printer_id == 1)
+                .order_by(PrintJob.id)
+            ).all()
+            assert len(rows) == 2
+            assert rows[0].external_project_id == "same-id"
+            assert rows[0].external_task_id is None
+            assert rows[1].external_task_id == "same-id"
+            assert rows[1].external_project_id is None
+
+    def test_bambu_conflicting_typed_identity_does_not_merge(self, hub):
+        from sqlmodel import select
+
+        from app.db.session import get_session_factory
+
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "conflict.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "conflict.gcode",
+                "external_task_id": "task-stable",
+                "external_project_id": "project-old",
+            },
+        )
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "conflict.gcode",
+            0.2,
+            {
+                "state": "printing",
+                "filename": "conflict.gcode",
+                "external_task_id": "task-stable",
+                "external_project_id": "project-new",
+            },
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob)
+                .where(PrintJob.printer_id == 1)
+                .order_by(PrintJob.id)
+            ).all()
+            assert len(rows) == 2
+            assert rows[0].external_task_id == "task-stable"
+            assert rows[0].external_project_id == "project-old"
+            assert rows[1].external_task_id == "task-stable"
+            assert rows[1].external_project_id == "project-new"
+
+    def test_identityless_bambu_report_does_not_merge_typed_external_job(
+        self, hub, db_session
+    ):
+        printer = Printer(
+            name="Bambu identity guard",
+            provider=PrinterProvider.BAMBU_LAN,
+            bambu_host="192.0.2.11",
+            bambu_serial="TEST-SERIAL-IDENTITY",
+            bambu_access_code="test-code",
+        )
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        assert printer.id is not None
+
+        hub._sync_active_job_db(
+            printer.id,
+            "printing",
+            "identity.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "identity.gcode",
+                "external_task_id": "task-identity",
+            },
+        )
+        hub._sync_active_job_db(
+            printer.id,
+            "printing",
+            "identity.gcode",
+            0.2,
+            {"state": "printing", "filename": "identity.gcode"},
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob)
+                .where(PrintJob.printer_id == printer.id)
+                .order_by(PrintJob.id)
+            ).all()
+            assert len(rows) == 2
+            assert rows[0].external_task_id == "task-identity"
+            assert rows[1].external_task_id is None
+
+    def test_concurrent_bambu_initial_callbacks_create_one_job(self, threaded_hub_db):
+        from app.db.session import get_session_factory, override_session_factory
+
+        factory = get_session_factory()
+        hub = PrinterHub(InProcessBus(), session_factory=factory)
+        with get_session_factory().session() as session:
+            session.add(
+                Printer(
+                    name="Concurrent Bambu",
+                    provider=PrinterProvider.BAMBU_LAN,
+                    bambu_host="192.0.2.10",
+                    bambu_serial="TEST-SERIAL",
+                    bambu_access_code="test-code",
+                )
+            )
+            session.commit()
+
+        reports = [
+            {
+                "state": "printing",
+                "filename": "concurrent.gcode",
+                "external_project_id": "project-concurrent",
+            },
+            {
+                "state": "printing",
+                "filename": "concurrent.gcode",
+                "external_task_id": "task-concurrent",
+            },
+        ]
+        def reconcile(report):
+            # ContextVars do not cross raw ThreadPoolExecutor workers; mirror
+            # the app's asyncio.to_thread propagation explicitly in this unit.
+            override_session_factory(factory)
+            return hub._sync_active_job_db(
+                1, "printing", "concurrent.gcode", 0.1, report
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(reconcile, reports))
+        assert results == [None, None]
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob).where(PrintJob.printer_id == 1)
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].external_project_id == "project-concurrent"
+            assert rows[0].external_task_id == "task-concurrent"
+
     def test_external_bambu_gcode_is_archived_when_cache_is_available(self, hub):
         from sqlmodel import select
 
@@ -879,16 +1134,14 @@ class TestPrinterHubSyncActiveJob:
         from app.db.models import PrintJob, PrintJobState
         from app.db.session import get_session_factory
 
-        async def _tick(state, progress, stats):
-            await hub._sync_active_job(7, state, "repeat.gcode", progress, stats)
+        def _tick(state, progress, stats):
+            hub._sync_active_job_db(7, state, "repeat.gcode", progress, stats)
 
         # First external print: start -> complete.
-        asyncio.run(_tick("printing", 0.5, {"state": "printing"}))
-        asyncio.run(
-            _tick("complete", 1.0, {"state": "complete", "total_duration": 100})
-        )
+        _tick("printing", 0.5, {"state": "printing"})
+        _tick("complete", 1.0, {"state": "complete", "total_duration": 100})
         # Second external print of the same file begins.
-        asyncio.run(_tick("printing", 0.1, {"state": "printing"}))
+        _tick("printing", 0.1, {"state": "printing"})
 
         with get_session_factory().session() as session:
             jobs = session.exec(
@@ -938,12 +1191,12 @@ class TestPrinterHubSyncActiveJob:
         from app.db.models import PrintJob
         from app.db.session import get_session_factory
 
-        async def _tick(state, stats):
-            await hub._sync_active_job(8, state, "once.gcode", 1.0, stats)
+        def _tick(state, stats):
+            hub._sync_active_job_db(8, state, "once.gcode", 1.0, stats)
 
-        asyncio.run(_tick("printing", {"state": "printing"}))
-        asyncio.run(_tick("complete", {"state": "complete", "total_duration": 50}))
-        asyncio.run(_tick("complete", {"state": "complete", "total_duration": 50}))
+        _tick("printing", {"state": "printing"})
+        _tick("complete", {"state": "complete", "total_duration": 50})
+        _tick("complete", {"state": "complete", "total_duration": 50})
 
         with get_session_factory().session() as session:
             jobs = session.exec(

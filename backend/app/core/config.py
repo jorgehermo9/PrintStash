@@ -116,6 +116,14 @@ class Settings(BaseSettings):
     # Best-effort archive ceiling for files recovered from a Bambu printer's
     # short-lived FTPS cache. Zero disables automatic external-job capture.
     bambu_external_capture_max_mb: int = Field(default=256, ge=0)
+    # On-demand 3MF embedded toolpath preview limits. The service reads at
+    # most cap+1 bytes and rejects high-compression-ratio members before read.
+    three_mf_preview_max_uncompressed_mb: int = Field(default=32, gt=0)
+    three_mf_preview_max_archive_mb: int = Field(default=128, gt=0)
+    three_mf_preview_max_entries: int = Field(default=10_000, gt=0)
+    three_mf_preview_max_central_directory_mb: int = Field(default=8, gt=0)
+    three_mf_preview_max_ratio: float = Field(default=100.0, gt=0)
+    three_mf_preview_max_concurrent: int = Field(default=2, gt=0)
     # Outbound metadata providers are deliberately capped even when an operator
     # raises related application limits. These settings only allow tightening
     # the safe defaults; retry and redirect handling stays in the transport.

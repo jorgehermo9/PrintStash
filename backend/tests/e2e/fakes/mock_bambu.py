@@ -67,11 +67,14 @@ class FakeMqttClient:
         *,
         expected_access_code: Optional[str] = None,
         reject_commands: bool = False,
+        pushall_report: dict[str, Any] | None = None,
     ) -> None:
         self.sim = sim
         self.expected_access_code = expected_access_code
         self.reject_commands = reject_commands
+        self.pushall_report = pushall_report
         self.published: list[dict[str, Any]] = []
+        self.published_topics: list[str] = []
         self.username: Optional[str] = None
         self.password: Optional[str] = None
         self.tls_configured = False
@@ -116,10 +119,11 @@ class FakeMqttClient:
         self, topic: str, payload: str, qos: int = 1, retain: bool = False
     ) -> _FakePublishInfo:
         body = json.loads(payload)
+        self.published_topics.append(topic)
         self.published.append(body)
         report: dict[str, Any]
         if "pushing" in body:
-            report = _status_report(self.sim)
+            report = self.pushall_report or _status_report(self.sim)
         else:
             request = body.get("print", {})
             command = request.get("command")
@@ -156,6 +160,7 @@ def make_mqtt_factory(
     *,
     expected_access_code: Optional[str] = None,
     reject_commands: bool = False,
+    pushall_report: dict[str, Any] | None = None,
 ) -> tuple[Callable[[], FakeMqttClient], list[FakeMqttClient]]:
     """Raw-client factory injected below provider credential/TLS setup."""
     built: list[FakeMqttClient] = []
@@ -165,6 +170,7 @@ def make_mqtt_factory(
             sim,
             expected_access_code=expected_access_code,
             reject_commands=reject_commands,
+            pushall_report=pushall_report,
         )
         built.append(client)
         return client

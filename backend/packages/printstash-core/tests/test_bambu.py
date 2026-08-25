@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import ssl
+from ftplib import error_perm, error_reply
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -91,6 +92,234 @@ class FakeFtpsClient:
 
     def close(self) -> None:
         self.calls.append(("close",))
+
+
+class FailingFtpsClient(FakeFtpsClient):
+    def __init__(self, failure: BaseException | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.failure = failure
+
+    def connect(self, host: str, port: int) -> None:
+        super().connect(host, port)
+        if self.failure is not None:
+            failure, self.failure = self.failure, None
+            raise failure
+
+
+def test_ftps_retries_one_transport_reset_but_not_authentication(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "cube.gcode"
+    source.write_bytes(b"G28\n")
+    first = FailingFtpsClient(ConnectionResetError("peer reset"))
+    second = FakeFtpsClient()
+    clients = iter((first, second))
+    client = make_client(ftps_client_factory=lambda: next(clients))
+
+    client._upload_via_ftps(source, "cube.gcode")
+    assert len([call for call in first.calls if call[0] == "connect"]) == 1
+    assert len([call for call in second.calls if call[0] == "connect"]) == 1
+
+    auth = FailingFtpsClient(error_perm("530 Login incorrect"))
+    auth_client = make_client(ftps_client_factory=lambda: auth)
+    with pytest.raises(ProviderError) as failure:
+        auth_client._upload_via_ftps(source, "cube.gcode")
+    assert failure.value.code == "provider_transport_error"
+    assert failure.value.action_code == "bambu_ftps_authentication_failed"
+    assert len([call for call in auth.calls if call[0] == "connect"]) == 1
+    wrapped_auth = BambuClient._classify_ftps_exception(
+        PermissionError("  530 Login incorrect  ")
+    )
+    assert wrapped_auth.code == "provider_transport_error"
+    assert wrapped_auth.action_code == "bambu_ftps_authentication_failed"
+    local_auth_path = BambuClient._classify_ftps_exception(
+        PermissionError(13, "Permission denied", "/srv/auth/cache.gcode")
+    )
+    assert local_auth_path.action_code == "bambu_ftps_local_error"
+    assert BambuClient._classify_ftps_exception(ConnectionResetError()).retryable is True
+
+
+def test_ftps_retries_eof_once(tmp_path: Path) -> None:
+    source = tmp_path / "cube.gcode"
+    source.write_bytes(b"G28\n")
+    first = FailingFtpsClient(EOFError("unexpected EOF"))
+    second = FakeFtpsClient()
+    clients = iter((first, second))
+    client = make_client(ftps_client_factory=lambda: next(clients))
+
+    client._upload_via_ftps(source, "cube.gcode")
+    assert len([call for call in first.calls if call[0] == "connect"]) == 1
+    assert len([call for call in second.calls if call[0] == "connect"]) == 1
+    eof = BambuClient._classify_ftps_exception(EOFError())
+    assert eof.action_code == "bambu_ftps_eof"
+    assert eof.retryable is True
+
+
+def test_ftps_classification_exposes_actionable_codes() -> None:
+    assert BambuClient._classify_ftps_exception(
+        error_perm("550 file unavailable")
+    ).action_code == "bambu_ftps_not_found"
+    assert BambuClient._classify_ftps_exception(
+        error_perm("552 storage exceeded")
+    ).action_code == "bambu_ftps_too_large"
+    assert BambuClient._classify_ftps_exception(
+        error_perm("450 file unavailable")
+    ).action_code == "bambu_ftps_not_found"
+    assert BambuClient._classify_ftps_exception(TimeoutError()).action_code == (
+        "bambu_ftps_timeout"
+    )
+    assert BambuClient._classify_ftps_exception(
+        error_reply("501 command syntax error")
+    ).action_code == "bambu_ftps_server_rejected"
+    assert BambuClient._classify_ftps_exception(
+        error_reply("452 insufficient storage")
+    ).action_code == "bambu_ftps_server_rejected"
+
+
+def test_provider_error_defaults_action_code_to_safe_coarse_code() -> None:
+    error = ProviderError("remote server detail", code="provider_timeout")
+    assert error.detail == "remote server detail"
+    assert error.action_code == "provider_timeout"
+    assert error.retryable is False
+
+
+def test_ftps_retry_requires_explicit_transport_or_provider_opt_in() -> None:
+    for local_exception in (
+        FileNotFoundError("local source is missing"),
+        PermissionError("local destination is not writable"),
+    ):
+        local_attempts = 0
+
+        def local_failure(exc: BaseException = local_exception) -> None:
+            nonlocal local_attempts
+            local_attempts += 1
+            raise exc
+
+        with pytest.raises(ProviderError) as local_error:
+            BambuClient._with_ftps_retry(local_failure)
+        assert local_error.value.action_code == "bambu_ftps_local_error"
+        assert local_attempts == 1
+
+    unknown_attempts = 0
+
+    def unknown_failure() -> None:
+        nonlocal unknown_attempts
+        unknown_attempts += 1
+        raise RuntimeError("unexpected local callback failure")
+
+    with pytest.raises(ProviderError) as unknown_error:
+        BambuClient._with_ftps_retry(unknown_failure)
+    assert unknown_error.value.action_code == "bambu_ftps_unknown_error"
+    assert unknown_attempts == 1
+
+    provider_attempts = 0
+
+    def explicitly_retryable_provider_failure() -> None:
+        nonlocal provider_attempts
+        provider_attempts += 1
+        if provider_attempts == 1:
+            raise ProviderError("temporary provider outcome", retryable=True)
+
+    with pytest.raises(ProviderError) as generic_error:
+        BambuClient._with_ftps_retry(explicitly_retryable_provider_failure)
+    assert generic_error.value.action_code == "provider_error"
+    assert provider_attempts == 1
+
+    explicit_ftps_attempts = 0
+
+    def explicitly_retryable_ftps_failure() -> None:
+        nonlocal explicit_ftps_attempts
+        explicit_ftps_attempts += 1
+        if explicit_ftps_attempts == 1:
+            raise ProviderError(
+                "temporary FTPS transport outcome",
+                action_code="bambu_ftps_transport_error",
+                retryable=True,
+            )
+
+    BambuClient._with_ftps_retry(explicitly_retryable_ftps_failure)
+    assert explicit_ftps_attempts == 2
+
+
+def test_missing_local_upload_is_not_retried(tmp_path: Path) -> None:
+    factory_attempts = 0
+
+    def client_factory() -> FakeFtpsClient:
+        nonlocal factory_attempts
+        factory_attempts += 1
+        return FakeFtpsClient()
+
+    client = make_client(ftps_client_factory=client_factory)
+    with pytest.raises(ProviderError) as missing:
+        client._upload_via_ftps(tmp_path / "missing.gcode", "cube.gcode")
+    assert missing.value.action_code == "bambu_ftps_local_error"
+    assert factory_attempts == 1
+
+
+def test_ftps_non_retryable_codes_and_path_guards(tmp_path: Path) -> None:
+    source = tmp_path / "cube.gcode"
+    source.write_bytes(b"G28\n")
+    calls = 0
+
+    def not_found_factory() -> FailingFtpsClient:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("non-retryable FTPS error was retried")
+        return FailingFtpsClient(error_perm("450 file unavailable"))
+
+    client = make_client(ftps_client_factory=not_found_factory)
+    with pytest.raises(ProviderError) as not_found:
+        client._download_via_ftps("benchy.3mf", tmp_path / "benchy.3mf", max_bytes=4)
+    assert not_found.value.action_code == "bambu_ftps_not_found"
+    assert calls == 1
+
+    too_large = make_client(
+        ftps_client_factory=lambda: FakeFtpsClient(remote_size=99)
+    )
+    with pytest.raises(ProviderError) as size_limit:
+        too_large._download_via_ftps("benchy.3mf", tmp_path / "too-large.3mf", max_bytes=4)
+    assert size_limit.value.action_code == "bambu_ftps_too_large"
+
+    response_calls = 0
+
+    def too_large_response_factory() -> FailingFtpsClient:
+        nonlocal response_calls
+        response_calls += 1
+        if response_calls > 1:
+            raise AssertionError("552 FTPS error was retried")
+        return FailingFtpsClient(error_perm("552 storage exceeded"))
+
+    response_limit = make_client(ftps_client_factory=too_large_response_factory)
+    with pytest.raises(ProviderError) as response_too_large:
+        response_limit._download_via_ftps(
+            "benchy.3mf", tmp_path / "response-too-large.3mf", max_bytes=4
+        )
+    assert response_too_large.value.action_code == "bambu_ftps_too_large"
+    assert response_calls == 1
+
+    mismatch = make_client(ftps_client_factory=lambda: FakeFtpsClient(remote_size=99))
+    with pytest.raises(ProviderError) as size_mismatch:
+        mismatch._upload_via_ftps(source, "cube.gcode")
+    assert size_mismatch.value.action_code == "bambu_ftps_size_mismatch"
+
+    invalid = make_client()
+    with pytest.raises(ProviderError) as invalid_path:
+        invalid._download_via_ftps("cache/../benchy.3mf", tmp_path / "invalid", max_bytes=4)
+    assert invalid_path.value.action_code == "bambu_ftps_path_invalid"
+
+    unknown_calls = 0
+
+    def unknown_reply_factory() -> FailingFtpsClient:
+        nonlocal unknown_calls
+        unknown_calls += 1
+        return FailingFtpsClient(error_reply("501 command syntax error"))
+
+    unknown = make_client(ftps_client_factory=unknown_reply_factory)
+    with pytest.raises(ProviderError) as unknown_error:
+        unknown._upload_via_ftps(source, "cube.gcode")
+    assert unknown_error.value.action_code == "bambu_ftps_server_rejected"
+    assert unknown_calls == 1
 
 
 def test_bambu_ca_bundle_is_the_characterized_three_certificate_chain() -> None:
