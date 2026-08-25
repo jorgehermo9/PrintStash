@@ -420,7 +420,7 @@ export function validateMakerWorldMetadataDto(
   };
   for (const [key, maximum] of Object.entries(sourceLimits)) {
     const text = boundedText(sourceRecord[key], maximum);
-    if (text) source[key as keyof BrowserSourceMetadata] = text;
+    if (text) source[key as Exclude<keyof BrowserSourceMetadata, "tags">] = text;
   }
   return {
     fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,

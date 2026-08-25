@@ -12,14 +12,20 @@ import { readBoundedMetadataResponse } from "./capture-adapter.ts";
 
 export const PRINTABLES_GRAPHQL_ENDPOINT = "https://api.printables.com/graphql/";
 export const PRINTABLES_METADATA_PERMISSION_ORIGIN = "https://api.printables.com/*";
-export const PRINTABLES_METADATA_FIXTURE_VERSION = "printables-graphql-metadata-v1";
-export const PRINTABLES_METADATA_ADAPTER_VERSION = "printables-graphql-v1";
+export const PRINTABLES_METADATA_FIXTURE_VERSION = "printables-graphql-metadata-v2";
+export const PRINTABLES_METADATA_ADAPTER_VERSION = "printables-graphql-v2";
 
 export const PRINTABLES_METADATA_QUERY = `
 query ($id: ID!) {
   print(id: $id) {
     id
     name
+    description
+    summary
+    datePublished
+    modified
+    user { id publicUsername handle }
+    tags { name }
     license { name }
     stls { id name fileSize }
     gcodes { id name fileSize }
@@ -60,6 +66,9 @@ export interface PrintablesSourceMetadata {
   creatorName?: string;
   creatorId?: string;
   creatorUrl?: string;
+  tags?: string[];
+  publishedAt?: string;
+  updatedAt?: string;
   licenseCode?: string;
   licenseUrl?: string;
   licenseText?: string;
@@ -198,6 +207,8 @@ const SOURCE_FIELD_LIMITS = {
   creatorName: 512,
   creatorId: 255,
   creatorUrl: 2048,
+  publishedAt: 64,
+  updatedAt: 64,
   licenseCode: 255,
   licenseUrl: 2048,
   licenseText: 64 * 1024,
@@ -223,6 +234,54 @@ function boundedText(value: unknown, maximum: number): string | undefined {
     return undefined;
   }
   return normalized;
+}
+
+function boundedHtmlText(value: unknown, maximum: number): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  const withoutDangerousBlocks = value.replace(
+    /<\s*(script|style)[^>]*>[\s\S]*?(?:<\s*\/\s*\1\s*>|$)/gi,
+    "",
+  );
+  const plain = withoutDangerousBlocks
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\s*\/\s*(p|div|li|h[1-6])\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .normalize("NFC")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .trim();
+  return plain &&
+    plain.length <= maximum &&
+    // oxlint-disable-next-line no-control-regex -- reject control bytes from provider HTML, retaining line breaks.
+    !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(plain)
+    ? plain
+    : undefined;
+}
+
+function boundedTags(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > 100) return undefined;
+  const tags = value
+    .map((entry) => {
+      const item = record(entry as JsonValue);
+      return boundedText(item?.name, 255)?.toLowerCase();
+    })
+    .filter((tag): tag is string => Boolean(tag));
+  const unique = [...new Set(tags)];
+  return unique.length > 0 && unique.length <= 100 ? unique : undefined;
+}
+
+function profileUrlFromHandle(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value)) {
+    return undefined;
+  }
+  return `https://www.printables.com/@${value}`;
 }
 
 function boundedFilename(value: unknown): string | undefined {
@@ -294,47 +353,28 @@ function complexityCheck(value: JsonValue): boolean {
 }
 
 function sourceFromPrint(printObject: JsonRecord): PrintablesSourceMetadata {
-  const person = record(printObject.user) ?? record(printObject.creator);
+  const person = record(printObject.user);
   const license = record(printObject.license);
+  const title = boundedText(printObject.name, SOURCE_FIELD_LIMITS.title);
+  const description = boundedHtmlText(printObject.description, SOURCE_FIELD_LIMITS.description);
+  const summary = boundedHtmlText(printObject.summary, SOURCE_FIELD_LIMITS.description);
+  const creatorName = boundedText(person?.publicUsername, SOURCE_FIELD_LIMITS.creatorName);
+  const creatorId = boundedId(person?.id);
+  const creatorUrl = profileUrlFromHandle(person?.handle);
+  const tags = boundedTags(printObject.tags);
+  const publishedAt = boundedText(printObject.datePublished, SOURCE_FIELD_LIMITS.publishedAt);
+  const updatedAt = boundedText(printObject.modified, SOURCE_FIELD_LIMITS.updatedAt);
+  const licenseCode = boundedText(license?.name, SOURCE_FIELD_LIMITS.licenseCode);
   return {
-    ...(boundedText(printObject.name ?? printObject.title, SOURCE_FIELD_LIMITS.title)
-      ? { title: boundedText(printObject.name ?? printObject.title, SOURCE_FIELD_LIMITS.title) }
-      : {}),
-    ...(boundedText(printObject.description, SOURCE_FIELD_LIMITS.description)
-      ? { description: boundedText(printObject.description, SOURCE_FIELD_LIMITS.description) }
-      : {}),
-    ...(boundedText(printObject.instructions, SOURCE_FIELD_LIMITS.instructions)
-      ? { instructions: boundedText(printObject.instructions, SOURCE_FIELD_LIMITS.instructions) }
-      : {}),
-    ...(person && boundedText(person.name ?? person.username, SOURCE_FIELD_LIMITS.creatorName)
-      ? {
-          creatorName: boundedText(person.name ?? person.username, SOURCE_FIELD_LIMITS.creatorName),
-        }
-      : {}),
-    ...(person && boundedId(person.id) ? { creatorId: boundedId(person.id) } : {}),
-    ...(person && boundedUrl(person.url ?? person.profileUrl ?? person.profile_url)
-      ? { creatorUrl: boundedUrl(person.url ?? person.profileUrl ?? person.profile_url) }
-      : {}),
-    ...(license &&
-    boundedText(license.code ?? license.slug ?? license.name, SOURCE_FIELD_LIMITS.licenseCode)
-      ? {
-          licenseCode: boundedText(
-            license.code ?? license.slug ?? license.name,
-            SOURCE_FIELD_LIMITS.licenseCode,
-          ),
-        }
-      : {}),
-    ...(license && boundedUrl(license.url ?? license.link)
-      ? { licenseUrl: boundedUrl(license.url ?? license.link) }
-      : {}),
-    ...(license && boundedText(license.text ?? license.description, SOURCE_FIELD_LIMITS.licenseText)
-      ? {
-          licenseText: boundedText(
-            license.text ?? license.description,
-            SOURCE_FIELD_LIMITS.licenseText,
-          ),
-        }
-      : {}),
+    ...(title ? { title } : {}),
+    ...(description || summary ? { description: description ?? summary } : {}),
+    ...(creatorName ? { creatorName } : {}),
+    ...(creatorId ? { creatorId } : {}),
+    ...(creatorUrl ? { creatorUrl } : {}),
+    ...(tags ? { tags } : {}),
+    ...(publishedAt ? { publishedAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(licenseCode ? { licenseCode } : {}),
   };
 }
 
@@ -513,8 +553,29 @@ export function validatePrintablesMetadataDto(
   const source = dto.source as Record<string, unknown>;
   const sourceMetadata: PrintablesSourceMetadata = {};
   for (const [key, maximum] of Object.entries(SOURCE_FIELD_LIMITS)) {
-    const valueAtKey = boundedText(source[key], maximum);
-    if (valueAtKey) sourceMetadata[key as keyof PrintablesSourceMetadata] = valueAtKey;
+    const rawValue = source[key];
+    const valueAtKey =
+      key === "description" ? boundedHtmlText(rawValue, maximum) : boundedText(rawValue, maximum);
+    if ((key === "creatorUrl" || key === "licenseUrl") && rawValue !== undefined) {
+      const safe = boundedUrl(rawValue as JsonValue);
+      if (!safe) throw new Error("Printables metadata response changed.");
+      sourceMetadata[key as Exclude<keyof PrintablesSourceMetadata, "tags">] = safe;
+      continue;
+    }
+    if (valueAtKey)
+      sourceMetadata[key as Exclude<keyof PrintablesSourceMetadata, "tags">] = valueAtKey;
+  }
+  if (source.tags !== undefined) {
+    const tags = Array.isArray(source.tags)
+      ? source.tags
+          .map((tag) => boundedText(tag, 255)?.toLowerCase())
+          .filter((tag): tag is string => Boolean(tag))
+      : [];
+    const uniqueTags = [...new Set(tags)];
+    if (uniqueTags.length === 0 || uniqueTags.length > 100) {
+      throw new Error("Printables metadata response changed.");
+    }
+    sourceMetadata.tags = uniqueTags;
   }
   return {
     fixtureVersion: PRINTABLES_METADATA_FIXTURE_VERSION,
@@ -703,7 +764,7 @@ export async function requestPrintablesMetadataInMainWorld(args: {
   fixtureVersion: string;
   maxResponseBytes: number;
 }): Promise<PrintablesMetadataPageResult> {
-  const fixtureVersion = "printables-graphql-metadata-v1";
+  const fixtureVersion = "printables-graphql-metadata-v2";
   const maxFiles = 256;
   const maxNameBytes = 255;
   const maxFileSize = 2 * 1024 * 1024 * 1024;
@@ -717,6 +778,8 @@ export async function requestPrintablesMetadataInMainWorld(args: {
     creatorName: 512,
     creatorId: 255,
     creatorUrl: 2048,
+    publishedAt: 64,
+    updatedAt: 64,
     licenseCode: 255,
     licenseUrl: 2048,
     licenseText: 64 * 1024,
@@ -738,6 +801,46 @@ export async function requestPrintablesMetadataInMainWorld(args: {
       ? result
       : undefined;
   };
+  const htmlText = (value: unknown, maximum: number): string | undefined => {
+    if (typeof value !== "string" || !value) return undefined;
+    const plain = value
+      .replace(/<\s*(script|style)[^>]*>[\s\S]*?(?:<\s*\/\s*\1\s*>|$)/gi, "")
+      .replace(/<\s*br\s*\/?>/gi, "\n")
+      .replace(/<\s*\/\s*(p|div|li|h[1-6])\s*>/gi, "\n")
+      .replace(/<[^>]*>/g, "")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'")
+      .normalize("NFC")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .trim();
+    return plain &&
+      plain.length <= maximum &&
+      // oxlint-disable-next-line no-control-regex -- reject control bytes before returning metadata, retaining line breaks.
+      !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(plain)
+      ? plain
+      : undefined;
+  };
+  const handleUrl = (value: unknown): string | undefined =>
+    typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value)
+      ? `https://www.printables.com/@${value}`
+      : undefined;
+  const tagList = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value) || value.length > 100) return undefined;
+    const tags = value
+      .map((entry) => {
+        const item = asRecord(entry);
+        return text(item?.name, 255)?.toLowerCase();
+      })
+      .filter((tag): tag is string => Boolean(tag));
+    const unique = [...new Set(tags)];
+    return unique.length > 0 && unique.length <= 100 ? unique : undefined;
+  };
   const filename = (value: unknown): string | undefined => {
     const result = text(value, maxNameBytes);
     if (!result || new TextEncoder().encode(result).byteLength > maxNameBytes) return undefined;
@@ -751,19 +854,6 @@ export async function requestPrintablesMetadataInMainWorld(args: {
     return Number.isSafeInteger(result) && result >= 0 && result <= maxFileSize
       ? result
       : undefined;
-  };
-  const safeUrl = (value: unknown): string | undefined => {
-    if (typeof value !== "string") return undefined;
-    try {
-      const parsed = new URL(value);
-      if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) {
-        return undefined;
-      }
-      parsed.search = "";
-      return parsed.toString();
-    } catch {
-      return undefined;
-    }
   };
   const bounded = (value: unknown): boolean => {
     const queue: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
@@ -851,24 +941,36 @@ export async function requestPrintablesMetadataInMainWorld(args: {
         if (files.length > maxFiles) return { ok: false, code: "too_many_files" };
       }
     }
-    const person = asRecord(print.user) || asRecord(print.creator);
+    const person = asRecord(print.user);
     const license = asRecord(print.license);
-    const source: Record<string, string> = {};
+    const source: PrintablesSourceMetadata = {};
     const sourceValues: Record<string, unknown> = {
-      title: print.name ?? print.title,
-      description: print.description,
-      instructions: print.instructions,
-      creatorName: person?.name ?? person?.username,
+      title: print.name,
+      description: htmlText(print.description, 64 * 1024) ?? htmlText(print.summary, 64 * 1024),
+      creatorName: person?.publicUsername,
       creatorId: person?.id,
-      creatorUrl: safeUrl(person?.url ?? person?.profileUrl ?? person?.profile_url),
-      licenseCode: license?.code ?? license?.slug ?? license?.name,
-      licenseUrl: safeUrl(license?.url ?? license?.link),
-      licenseText: license?.text ?? license?.description,
+      creatorUrl: handleUrl(person?.handle),
+      publishedAt: print.datePublished,
+      updatedAt: print.modified,
+      licenseCode: license?.name,
     };
     for (const [key, maximum] of Object.entries(sourceLimits)) {
-      const value = text(sourceValues[key], maximum);
-      if (value) source[key] = value;
+      const value =
+        key === "description"
+          ? htmlText(sourceValues[key], maximum)
+          : text(sourceValues[key], maximum);
+      if (!value) continue;
+      if (key === "title") source.title = value;
+      else if (key === "description") source.description = value;
+      else if (key === "creatorName") source.creatorName = value;
+      else if (key === "creatorId") source.creatorId = value;
+      else if (key === "creatorUrl") source.creatorUrl = value;
+      else if (key === "publishedAt") source.publishedAt = value;
+      else if (key === "updatedAt") source.updatedAt = value;
+      else if (key === "licenseCode") source.licenseCode = value;
     }
+    const tags = tagList(print.tags);
+    if (tags) source.tags = tags;
     const metadata = {
       fixtureVersion: fixtureVersion as typeof PRINTABLES_METADATA_FIXTURE_VERSION,
       sourceItemId: args.sourceItemId,

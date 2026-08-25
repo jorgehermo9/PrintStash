@@ -241,7 +241,7 @@ function normalizedTags(value: unknown): string[] | null {
   const tags = [
     ...new Set(
       candidates
-        .map((tag) => plainText(tag, 255)?.toLocaleLowerCase())
+        .map((tag) => plainText(tag, 255)?.toLowerCase())
         .filter((tag): tag is string => Boolean(tag)),
     ),
   ];
@@ -284,6 +284,9 @@ export interface BrowserSourceMetadata {
   creatorName?: string;
   creatorId?: string;
   creatorUrl?: string;
+  tags?: string[];
+  publishedAt?: string;
+  updatedAt?: string;
   licenseCode?: string;
   licenseUrl?: string;
   licenseText?: string;
@@ -359,13 +362,16 @@ export function buildBrowserCaptureMessage({
   );
   add(fields, "creator_url", canonicalUrl(sourceMetadata?.creatorUrl) || author.url);
 
-  const tags = normalizedTags(objects.flatMap((object) => [object.keywords, object.tags])) || [];
-  const publishedAt = firstText(
-    objects,
-    ["datePublished", "dateCreated"],
-    FIELD_LIMITS.published_at,
-  );
-  const updatedAt = firstText(objects, ["dateModified", "dateUpdated"], FIELD_LIMITS.updated_at);
+  const tags =
+    normalizedTags(sourceMetadata?.tags) ||
+    normalizedTags(objects.flatMap((object) => [object.keywords, object.tags])) ||
+    [];
+  const publishedAt =
+    isoDateTime(sourceMetadata?.publishedAt) ||
+    firstText(objects, ["datePublished", "dateCreated"], FIELD_LIMITS.published_at);
+  const updatedAt =
+    isoDateTime(sourceMetadata?.updatedAt) ||
+    firstText(objects, ["dateModified", "dateUpdated"], FIELD_LIMITS.updated_at);
   add(fields, "published_at", isoDateTime(publishedAt));
   add(fields, "updated_at", isoDateTime(updatedAt));
 

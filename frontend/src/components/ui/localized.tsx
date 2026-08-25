@@ -1063,6 +1063,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
     "No print settings recorded yet. Add a sliced G-code revision to capture them.",
     "Aún no hay ajustes de impresión registrados. Añade una revisión G-code laminada para capturarlos.",
   ],
+  [
+    "This file contains mesh geometry only. Printer, material, and slicer settings are not embedded. Add a sliced G-code or 3MF revision to capture them.",
+    "Este archivo solo contiene geometría de malla. No incluye ajustes de impresora, material ni laminador. Añade una revisión G-code o 3MF laminada para capturarlos.",
+  ],
   ["No active print", "No hay ninguna impresión activa"],
   [
     "Printer is offline. Print details will appear after it reconnects.",

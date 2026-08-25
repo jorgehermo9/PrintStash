@@ -87,6 +87,7 @@ function SourceField({
   patchProvenance,
   updateModel,
   onSaved,
+  last = false,
 }: {
   modelId: number;
   source: ProvenanceSourceRead;
@@ -95,6 +96,7 @@ function SourceField({
   patchProvenance: typeof patchModelProvenance;
   updateModel: typeof updateModelApi;
   onSaved: (next: ModelProvenanceRead) => void;
+  last?: boolean;
 }) {
   const i18n = useOptionalI18n();
   const t = (key: MessageKey, fallback: string, values?: Record<string, string>) =>
@@ -137,13 +139,17 @@ function SourceField({
       .catch(toast.error);
   };
   return (
-    <div className="border-t border-border pt-3">
+    <div
+      className={`grid gap-2 px-3 py-3 sm:grid-cols-[minmax(8rem,0.32fr)_minmax(0,1fr)_auto] sm:items-start ${last ? "" : "border-b border-surface-container-high"}`}
+    >
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-medium">{label}</h3>
+        <h3 className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+          {label}
+        </h3>
         <Badge variant="secondary">{provenanceOriginLabel(field.effective_origin, i18n)}</Badge>
       </div>
       {editing ? (
-        <div className="mt-2 space-y-2">
+        <div className="space-y-2">
           <Input
             value={value}
             onChange={(event) => setValue(event.target.value)}
@@ -171,8 +177,8 @@ function SourceField({
           </div>
         </div>
       ) : (
-        <div className="mt-1 flex items-start justify-between gap-3">
-          <div className="whitespace-pre-wrap text-sm text-muted-foreground">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0 whitespace-pre-wrap text-sm text-muted-foreground">
             {safeLink ? (
               <a
                 href={safeLink}
@@ -191,7 +197,7 @@ function SourceField({
             )}
           </div>
           {canEdit && (
-            <div className="flex gap-1">
+            <div className="flex shrink-0 flex-wrap justify-end gap-1">
               {(field.field_name === "title" || field.field_name === "description") && (
                 <Button size="xs" variant="outline" onClick={applyToModel}>
                   {field.field_name === "title"
@@ -207,7 +213,7 @@ function SourceField({
         </div>
       )}
       {field.field_name === "license_text" && (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="col-span-full mt-1 text-xs text-muted-foreground sm:col-start-2">
           {i18n?.t("source.licenseDisclaimer") ??
             "PrintStash preserves published license text and does not grant, interpret, or expand rights."}
         </p>
@@ -227,19 +233,24 @@ function SourceField({
   );
 }
 
-function SourceTags({ tags }: { tags: string[] }) {
+function SourceTags({ tags, last = false }: { tags: string[]; last?: boolean }) {
   const i18n = useOptionalI18n();
   if (tags.length === 0) return null;
   return (
     <div
-      className="mt-3 flex flex-wrap gap-1.5"
+      className={`flex flex-col gap-2 px-3 py-3 sm:grid sm:grid-cols-[minmax(8rem,0.32fr)_minmax(0,1fr)] sm:items-start ${last ? "" : "border-b border-surface-container-high"}`}
       aria-label={i18n?.t("source.tags") ?? "Source tags"}
     >
-      {tags.map((tag) => (
-        <Badge key={tag} variant="secondary">
-          {tag}
-        </Badge>
-      ))}
+      <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+        {i18n?.t("source.tags") ?? "Source tags"}
+      </span>
+      <div className="flex flex-wrap gap-1.5">
+        {tags.map((tag) => (
+          <Badge key={tag} variant="secondary">
+            {tag}
+          </Badge>
+        ))}
+      </div>
     </div>
   );
 }
@@ -361,9 +372,11 @@ function SourceCover({
   };
 
   return (
-    <section className="border-t border-border pt-3" aria-label={t("source.cover")}>
+    <section className="border-y border-surface-container-high py-3" aria-label={t("source.cover")}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">{t("source.cover")}</h3>
+        <h3 className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+          {t("source.cover")}
+        </h3>
         {canEdit && (
           <div className="flex flex-wrap gap-2">
             <input
@@ -412,7 +425,7 @@ function SourceCover({
           {imageUrl ? (
             <img
               src={imageUrl}
-              alt={`${t("source.cover")} — ${source.provider}`}
+              alt={`${t("source.cover")} - ${source.provider}`}
               className="max-h-64 w-full object-contain"
             />
           ) : (
@@ -488,17 +501,31 @@ export function SourceTab({
     <div className="space-y-4">
       {data.sources.map((source) => {
         const canonicalUrl = safeHttpUrl(source.canonical_url);
+        const fieldCount = source.fields.length + (source.tags?.length ? 1 : 0);
         return (
           <Card key={source.id}>
-            <CardContent className="space-y-3 pt-6">
-              <div>
-                <p className="text-sm font-medium">{source.provider}</p>
+            <CardContent className="space-y-5 pt-5">
+              <section aria-labelledby={`source-heading-${source.id}`}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+                      {t("source.title", "Source")}
+                    </p>
+                    <h2
+                      id={`source-heading-${source.id}`}
+                      className="mt-1 text-base font-semibold capitalize"
+                    >
+                      {source.provider}
+                    </h2>
+                  </div>
+                  <Badge variant="secondary">{t("source.capturedStatus", "Captured")}</Badge>
+                </div>
                 {canonicalUrl ? (
                   <a
                     href={canonicalUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                    className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-sm text-primary hover:underline"
                   >
                     {canonicalUrl}
                     <ExternalLink className="h-3.5 w-3.5" />
@@ -506,34 +533,68 @@ export function SourceTab({
                 ) : (
                   <p className="text-sm text-muted-foreground">{source.canonical_url}</p>
                 )}
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t("source.identifiers", "ID: {id} · Revision: {revision}", {
-                    id: source.source_item_id || t("source.notSuppliedGeneric", "Not supplied"),
-                    revision:
-                      source.source_revision || t("source.notSuppliedGeneric", "Not supplied"),
-                  })}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {t("source.capturedAndChecked", "Captured {captured} · Checked {checked}", {
-                    captured: new Date(source.first_captured_at).toLocaleDateString(i18n?.locale),
-                    checked: new Date(source.last_checked_at).toLocaleDateString(i18n?.locale),
-                  })}
-                </p>
-              </div>
+                <div className="mt-4 grid gap-2 border-t border-surface-container-high pt-3 text-xs sm:grid-cols-2">
+                  <div>
+                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+                      {t("source.sourceId", "Source ID")}
+                    </span>
+                    <p className="mt-1 text-muted-foreground">
+                      {source.source_item_id || t("source.notSuppliedGeneric", "Not supplied")}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+                      {t("source.revision", "Revision")}
+                    </span>
+                    <p className="mt-1 text-muted-foreground">
+                      {source.source_revision || t("source.notSuppliedGeneric", "Not supplied")}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+                      {t("source.captured", "Captured")}
+                    </span>
+                    <p className="mt-1 text-muted-foreground">
+                      {new Date(source.first_captured_at).toLocaleDateString(i18n?.locale)}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
+                      {t("source.checked", "Last checked")}
+                    </span>
+                    <p className="mt-1 text-muted-foreground">
+                      {new Date(source.last_checked_at).toLocaleDateString(i18n?.locale)}
+                    </p>
+                  </div>
+                </div>
+              </section>
               <SourceCover modelId={modelId} source={source} canEdit={canEdit} api={api} />
-              <SourceTags tags={source.tags ?? []} />
-              {source.fields.map((field) => (
-                <SourceField
-                  key={field.field_name}
-                  modelId={modelId}
-                  source={source}
-                  field={field}
-                  canEdit={canEdit}
-                  patchProvenance={api.patchProvenance}
-                  updateModel={api.updateModel}
-                  onSaved={setData}
-                />
-              ))}
+              {fieldCount > 0 && (
+                <section aria-labelledby={`metadata-heading-${source.id}`}>
+                  <h3
+                    id={`metadata-heading-${source.id}`}
+                    className="mb-2 font-mono text-2xs uppercase tracking-wider text-on-surface-variant"
+                  >
+                    {t("source.metadata", "Captured metadata")}
+                  </h3>
+                  <div className="overflow-hidden rounded border border-outline-variant bg-surface">
+                    <SourceTags tags={source.tags ?? []} last={source.fields.length === 0} />
+                    {source.fields.map((field, index) => (
+                      <SourceField
+                        key={field.field_name}
+                        modelId={modelId}
+                        source={source}
+                        field={field}
+                        canEdit={canEdit}
+                        patchProvenance={api.patchProvenance}
+                        updateModel={api.updateModel}
+                        onSaved={setData}
+                        last={index === source.fields.length - 1}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
             </CardContent>
           </Card>
         );

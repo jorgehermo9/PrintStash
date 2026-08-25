@@ -24,15 +24,18 @@ function metadataPayload() {
       print: {
         id: sourceItemId,
         name: "3DBenchy",
-        description: "A bounded description",
+        description: "<p>A bounded <strong>description</strong>.</p><script>drop()</script>",
+        summary: "A short summary that should not replace the description",
+        datePublished: "2026-08-20T10:20:30Z",
+        modified: "2026-08-21T11:22:33Z",
         user: {
           id: "ada-7",
-          name: "Ada Maker",
-          url: "https://www.printables.com/@ada?tracking=discarded",
+          publicUsername: "Ada Maker",
+          handle: "ada-maker",
         },
+        tags: [{ name: " Calibration " }, { name: "boat" }, { name: "boat" }],
         license: {
-          code: "CC-BY-4.0",
-          url: "https://creativecommons.org/licenses/by/4.0/?tracking=discarded",
+          name: "CC-BY-4.0",
         },
         stls: [{ id: "stl-1", name: "benchy.stl", fileSize: 42 }],
         gcodes: [{ id: "gcode-1", name: "benchy.gcode", fileSize: "43" }],
@@ -98,12 +101,14 @@ describe("Printables metadata contract", () => {
       sourceItemId,
       source: {
         title: "3DBenchy",
-        description: "A bounded description",
+        description: "A bounded description.",
         creatorName: "Ada Maker",
         creatorId: "ada-7",
-        creatorUrl: "https://www.printables.com/@ada",
+        creatorUrl: "https://www.printables.com/@ada-maker",
         licenseCode: "CC-BY-4.0",
-        licenseUrl: "https://creativecommons.org/licenses/by/4.0/",
+        tags: ["calibration", "boat"],
+        publishedAt: "2026-08-20T10:20:30Z",
+        updatedAt: "2026-08-21T11:22:33Z",
       },
       files: [
         { id: "stl-1", filename: "benchy.stl", fileType: "stl", sizeBytes: 42 },
@@ -119,7 +124,7 @@ describe("Printables metadata contract", () => {
 
   it("keeps the metadata operation aligned with the verified Printables schema", () => {
     expect(PRINTABLES_METADATA_QUERY.replace(/\s+/g, " ").trim()).toBe(
-      "query ($id: ID!) { print(id: $id) { id name license { name } stls { id name fileSize } gcodes { id name fileSize } slas { id name fileSize } otherFiles { id name fileSize } } }",
+      "query ($id: ID!) { print(id: $id) { id name description summary datePublished modified user { id publicUsername handle } tags { name } license { name } stls { id name fileSize } gcodes { id name fileSize } slas { id name fileSize } otherFiles { id name fileSize } } }",
     );
   });
 
@@ -183,13 +188,20 @@ describe("Printables metadata contract", () => {
     expect(JSON.stringify(fetchImpl.mock.calls[0]?.[1])).not.toContain("secret");
   });
 
-  it("maps the verified license name while leaving creator metadata to page JSON-LD", () => {
+  it("maps verified creator, tags, dates, and sanitized description without page JSON-LD", () => {
     const result = parsePrintablesMetadataResponse(
       {
         data: {
           print: {
             id: sourceItemId,
             name: "Live Printables model",
+            description:
+              "<p>Visible <em>description</em></p><p>Second paragraph</p><style>.x{}</style>",
+            summary: "Summary fallback",
+            datePublished: "2026-08-20",
+            modified: "2026-08-21",
+            user: { id: "user-7", publicUsername: "Maker", handle: "maker" },
+            tags: [{ name: "speedboat" }, { name: "calibration" }],
             license: { name: "CC BY 4.0" },
             stls: [{ id: "live-stl", name: "live.stl", fileSize: 7 }],
           },
@@ -200,9 +212,64 @@ describe("Printables metadata contract", () => {
 
     expect(result.source).toEqual({
       title: "Live Printables model",
+      description: "Visible description\nSecond paragraph",
+      creatorName: "Maker",
+      creatorId: "user-7",
+      creatorUrl: "https://www.printables.com/@maker",
+      tags: ["speedboat", "calibration"],
+      publishedAt: "2026-08-20",
+      updatedAt: "2026-08-21",
       licenseCode: "CC BY 4.0",
     });
-    expect(result.source.creatorName).toBeUndefined();
+  });
+
+  it("rejects oversized or unsafe HTML instead of persisting provider markup", () => {
+    const result = parsePrintablesMetadataResponse(
+      {
+        data: {
+          print: {
+            id: sourceItemId,
+            name: "Safe model",
+            description: `<p>${"x".repeat(65 * 1024)}</p>`,
+            summary: "Safe summary",
+            user: { id: "user-7", publicUsername: "Maker", handle: "maker" },
+            tags: [{ name: "<script>bad</script>" }],
+            license: { name: "CC BY 4.0" },
+            stls: [{ id: "live-stl", name: "live.stl", fileSize: 7 }],
+          },
+        },
+      },
+      sourceItemId,
+    );
+
+    expect(result.source.description).toBe("Safe summary");
+    expect(result.source.tags).toBeUndefined();
+    expect(JSON.stringify(result)).not.toMatch(/<script>|drop\(\)/i);
+  });
+
+  it("drops unclosed script and style blocks after preserving safe paragraphs", () => {
+    const parse = (description: string) =>
+      parsePrintablesMetadataResponse(
+        {
+          data: {
+            print: {
+              id: sourceItemId,
+              name: "Safe model",
+              description,
+              license: { name: "CC BY 4.0" },
+              stls: [{ id: "live-stl", name: "live.stl", fileSize: 7 }],
+            },
+          },
+        },
+        sourceItemId,
+      ).source.description;
+
+    expect(parse("<p>First paragraph</p><p>Second paragraph</p><script>leaked()")).toBe(
+      "First paragraph\nSecond paragraph",
+    );
+    expect(
+      parse("<p>First paragraph</p><p>Second paragraph</p><style>.secret { color: red; }"),
+    ).toBe("First paragraph\nSecond paragraph");
   });
 
   it("fails closed for changed, oversized, deep, duplicate, and invalid-size responses", () => {

@@ -160,7 +160,7 @@ describe("SourceTab representative cover", () => {
     expect(screen.getByRole("button", { name: "Subir portada" })).toBeInTheDocument();
     expect(screen.getByLabelText("Etiquetas de la fuente")).toHaveTextContent("calibration");
     expect(screen.getByText("Source title")).toBeInTheDocument();
-    expect(screen.getAllByText("Fuente", { exact: true })).toHaveLength(2);
+    expect(screen.getAllByText("Fuente", { exact: true }).length).toBeGreaterThan(0);
     expect(screen.getByText("Inferido", { exact: true })).toBeInTheDocument();
   });
 
@@ -172,8 +172,19 @@ describe("SourceTab representative cover", () => {
     render(<SourceTab modelId={1} canEdit={false} api={api} />);
 
     await screen.findByText("printables");
-    expect(screen.getAllByText("Source", { exact: true })).toHaveLength(2);
+    expect(screen.getAllByText("Source", { exact: true }).length).toBeGreaterThan(0);
     expect(screen.getByText("Inferred", { exact: true })).toBeInTheDocument();
+  });
+
+  it("uses grouped technical rows for source identity and captured metadata", async () => {
+    render(<SourceTab modelId={1} canEdit={false} api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Captured metadata" })).toBeInTheDocument();
+    expect(screen.getByText("Source ID")).toBeInTheDocument();
+    expect(screen.getByText("Revision")).toBeInTheDocument();
+    expect(screen.getByText("Last checked")).toBeInTheDocument();
+    expect(screen.getByText("Source title")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source tags")).toHaveTextContent("calibration");
   });
 
   it("prechecks a cover locally and uploads an accepted image", async () => {

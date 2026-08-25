@@ -16,13 +16,41 @@ export function SettingsTab({
   printSettingRows: PrintSettingRow[];
   preferences: MetadataPreferences;
 }) {
+  const hasMeshGeometry = Boolean(meta?.volume_mm3 || meta?.triangle_count);
+  const hasEmbeddedSlicerMetadata = Boolean(
+    meta &&
+    [
+      meta.slicer_name,
+      meta.slicer_version,
+      meta.printer_model,
+      meta.nozzle_diameter_mm,
+      meta.layer_height_mm,
+      meta.first_layer_height_mm,
+      meta.material_type,
+      meta.material_brand,
+      meta.infill_percent,
+      meta.wall_loops,
+      meta.top_shell_layers,
+      meta.bottom_shell_layers,
+      meta.support_material,
+      meta.nozzle_temperature_c,
+      meta.bed_temperature_c,
+      meta.estimated_time_s,
+      meta.filament_weight_g,
+      meta.filament_length_mm,
+      meta.filament_cost,
+    ].some((value) => value !== null && value !== undefined),
+  );
+  const geometryOnly = hasMeshGeometry && !hasEmbeddedSlicerMetadata;
   return (
     <Localized>
       <>
-        {printSettingRows.length === 0 && (
-          <p className="font-mono text-xs text-on-surface-variant">
-            No print settings recorded yet. Add a sliced G-code revision to capture them.
-          </p>
+        {printSettingRows.length === 0 && !geometryOnly && (
+          <div className="rounded border border-outline-variant bg-surface px-3 py-3">
+            <p className="font-mono text-xs leading-relaxed text-on-surface-variant">
+              No print settings recorded yet. Add a sliced G-code revision to capture them.
+            </p>
+          </div>
         )}
         {printSettingRows.length > 0 && (
           <section>
@@ -42,6 +70,15 @@ export function SettingsTab({
               ))}
             </div>
           </section>
+        )}
+
+        {geometryOnly && (
+          <div className="rounded border border-outline-variant bg-surface px-3 py-3">
+            <p className="font-mono text-xs leading-relaxed text-on-surface-variant">
+              This file contains mesh geometry only. Printer, material, and slicer settings are not
+              embedded. Add a sliced G-code or 3MF revision to capture them.
+            </p>
+          </div>
         )}
 
         {/* Mesh Geometry */}

@@ -833,6 +833,15 @@ describe("popup browser adapters", () => {
             print: {
               id: "3161",
               name: "3DBenchy",
+              description:
+                "<p>Live <strong>description</strong></p><p>Second paragraph</p><script>document.cookie = 'session-cookie'</script>",
+              summary: "Fallback summary",
+              datePublished: "2026-08-20T10:20:30Z",
+              modified: "2026-08-21T11:22:33Z",
+              user: { id: "ada-7", publicUsername: "Ada Maker", handle: "ada-maker" },
+              tags: [{ name: " Calibration " }, { name: "boat" }, { name: "boat" }],
+              contentUrl: "https://media.printables.com/files/secret.3mf?signature=signed-secret",
+              sessionCookie: "session-cookie",
               license: { name: "CC BY-NC 4.0" },
               otherFiles: [{ id: "file-3mf", name: "benchy.3mf", fileSize: 4 }],
               stls: [{ id: "file-stl", name: "benchy.stl", fileSize: 4 }],
@@ -937,7 +946,25 @@ describe("popup browser adapters", () => {
     }
     const createBody = stringBody(createCall[1]);
     expect(JSON.parse(createBody)).toMatchObject({
-      capture_source: { provider: "printables", source_item_id: "3161" },
+      capture_source: {
+        provider: "printables",
+        source_item_id: "3161",
+        fields: {
+          description: {
+            value: "Live description\nSecond paragraph",
+            origin: "confirmed",
+          },
+          creator_name: { value: "Ada Maker", origin: "confirmed" },
+          creator_id: { value: "ada-7", origin: "confirmed" },
+          creator_url: {
+            value: "https://www.printables.com/@ada-maker",
+            origin: "confirmed",
+          },
+          published_at: { value: "2026-08-20T10:20:30Z", origin: "confirmed" },
+          updated_at: { value: "2026-08-21T11:22:33Z", origin: "confirmed" },
+        },
+        tags: ["calibration", "boat"],
+      },
       files: [
         {
           id: "file-3mf",
@@ -948,6 +975,8 @@ describe("popup browser adapters", () => {
       ],
     });
     expect(createBody).not.toContain("signed-secret");
+    expect(createBody).not.toContain("session-cookie");
+    expect(createBody).not.toContain("document.cookie");
     expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/api/v1/inbox"))).toBe(false);
     expect(JSON.stringify(await fakeBrowser.storage.local.get())).not.toContain("signed-secret");
     expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/capture-upload-finalize"))).toBe(
