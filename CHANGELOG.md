@@ -43,6 +43,13 @@
 - The i18n coverage test parses JSX with `oxc-parser` instead of the TypeScript
   compiler API, which TypeScript 7 no longer exposes.
 
+### Fixed
+
+- Pending Imports can now be dismissed after a completed capture without
+  affecting its imported Model or Artifacts; expired terminal import jobs no
+  longer make a subsequent upload fail during pruning, and dismissed items
+  leave the visible inbox.
+
 ## 0.12.1
 
 ### Fixed
