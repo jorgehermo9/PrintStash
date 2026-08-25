@@ -152,21 +152,59 @@ _BAMBU_ID_FIELDS = (
 )
 
 
-def _bambu_identity(values: Dict[str, Any] | PrintJob) -> set[str]:
-    """Return the non-empty task/subtask/project identity set."""
+def _bambu_identity(values: Dict[str, Any] | PrintJob) -> dict[str, str]:
+    """Return non-empty Bambu identity fields without erasing their types."""
 
-    return {
-        text
-        for field in _BAMBU_ID_FIELDS
-        if (
-            text := _reported_text(
-                values.get(field)
-                if isinstance(values, dict)
-                else getattr(values, field, None)
-            )
+    identity: dict[str, str] = {}
+    for field in _BAMBU_ID_FIELDS:
+        value = (
+            values.get(field)
+            if isinstance(values, dict)
+            else getattr(values, field, None)
         )
-        not in (None, "0")
-    }
+        text = _reported_text(value)
+        if text not in (None, "0"):
+            identity[field] = text
+    return identity
+
+
+def _bambu_identity_matches(
+    incoming: dict[str, str], candidate: dict[str, str]
+) -> bool:
+    """Match only same-typed identities and reject conflicting fields."""
+
+    shared_fields = incoming.keys() & candidate.keys()
+    return bool(shared_fields) and all(
+        incoming[field] == candidate[field] for field in shared_fields
+    )
+
+
+def _bambu_project_task_transition(
+    incoming: dict[str, str],
+    candidate: PrintJob,
+    filename: str,
+    ms_state: str,
+) -> bool:
+    """Allow only an active project-only to task-only filename hand-off."""
+
+    candidate_identity = _bambu_identity(candidate)
+    if (
+        candidate.source != "external"
+        or candidate.remote_filename != filename
+        or candidate.finished_at is not None
+        or candidate.started_at is None
+        or candidate.state not in (PrintJobState.PRINTING, PrintJobState.PAUSED)
+        or ms_state not in ("printing", "paused")
+        or set(candidate_identity) != {"external_project_id"}
+        or set(incoming) != {"external_task_id"}
+    ):
+        return False
+    # Equal serialized values across different typed fields are not evidence
+    # of continuity; they must not bypass the typed matcher.
+    return (
+        candidate_identity["external_project_id"]
+        != incoming["external_task_id"]
+    )
 
 
 class PrinterHub:
@@ -779,10 +817,11 @@ class PrinterHub:
                     and cached_job.dedupe_absorbed_at is None
                     and cached_job.finished_at is None
                     and (
-                        incoming_identity.intersection(_bambu_identity(cached_job))
-                        or (
-                            cached_job.source == "external"
-                            and cached_job.remote_filename == filename
+                        _bambu_identity_matches(
+                            incoming_identity, _bambu_identity(cached_job)
+                        )
+                        or _bambu_project_task_transition(
+                            incoming_identity, cached_job, filename, ms_state
                         )
                     )
                 ):
@@ -797,18 +836,17 @@ class PrinterHub:
                 # Identity matching is set-based rather than provider_job_id
                 # matching: any task/subtask/project overlap is one job.
                 for candidate in rows:
-                    if incoming_identity.intersection(_bambu_identity(candidate)):
+                    candidate_identity = _bambu_identity(candidate)
+                    if _bambu_identity_matches(incoming_identity, candidate_identity):
                         job = candidate
                         break
                 # A project-only -> task-only transition has no overlapping
-                # value. Match the active external row by the same reported
-                # filename as a bounded continuity fallback.
+                # value. Match only that active external row by the same
+                # reported filename; filename alone is never an identity.
                 if job is None:
                     for candidate in rows:
-                        if (
-                            candidate.finished_at is None
-                            and candidate.source == "external"
-                            and candidate.remote_filename == filename
+                        if _bambu_project_task_transition(
+                            incoming_identity, candidate, filename, ms_state
                         ):
                             job = candidate
                             break
@@ -911,7 +949,17 @@ class PrinterHub:
                 ),
             }
             for field_name, value in reported_fields.items():
-                if value is not None and getattr(job, field_name) != value:
+                if value is None:
+                    continue
+                current = getattr(job, field_name)
+                if field_name in _BAMBU_ID_FIELDS:
+                    current_text = _reported_text(current)
+                    if current_text not in (None, "0") and current_text != value:
+                        # Identity matching above rejects this case. Keep the
+                        # guard here so a future selection path cannot
+                        # overwrite an established typed identity.
+                        continue
+                if current != value:
                     setattr(job, field_name, value)
                     changed = True
             if provider_job_id and job.provider_job_id != provider_job_id:

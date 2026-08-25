@@ -840,6 +840,88 @@ class TestPrinterHubSyncActiveJob:
             assert rows[0].external_task_id == "task-transition"
             assert rows[0].provider_job_id == "task-transition"
 
+    def test_bambu_cross_field_identity_equality_does_not_merge(self, hub):
+        from sqlmodel import select
+
+        from app.db.session import get_session_factory
+
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "same-file.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "same-file.gcode",
+                "external_project_id": "same-id",
+            },
+        )
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "same-file.gcode",
+            0.2,
+            {
+                "state": "printing",
+                "filename": "same-file.gcode",
+                "external_task_id": "same-id",
+            },
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob)
+                .where(PrintJob.printer_id == 1)
+                .order_by(PrintJob.id)
+            ).all()
+            assert len(rows) == 2
+            assert rows[0].external_project_id == "same-id"
+            assert rows[0].external_task_id is None
+            assert rows[1].external_task_id == "same-id"
+            assert rows[1].external_project_id is None
+
+    def test_bambu_conflicting_typed_identity_does_not_merge(self, hub):
+        from sqlmodel import select
+
+        from app.db.session import get_session_factory
+
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "conflict.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "conflict.gcode",
+                "external_task_id": "task-stable",
+                "external_project_id": "project-old",
+            },
+        )
+        hub._sync_active_job_db(
+            1,
+            "printing",
+            "conflict.gcode",
+            0.2,
+            {
+                "state": "printing",
+                "filename": "conflict.gcode",
+                "external_task_id": "task-stable",
+                "external_project_id": "project-new",
+            },
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob)
+                .where(PrintJob.printer_id == 1)
+                .order_by(PrintJob.id)
+            ).all()
+            assert len(rows) == 2
+            assert rows[0].external_task_id == "task-stable"
+            assert rows[0].external_project_id == "project-old"
+            assert rows[1].external_task_id == "task-stable"
+            assert rows[1].external_project_id == "project-new"
+
     def test_concurrent_bambu_initial_callbacks_create_one_job(
         self, hub, threaded_hub_db
     ):
