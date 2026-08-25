@@ -3,6 +3,8 @@ move_in) and the live/trashed query scopes."""
 
 from __future__ import annotations
 
+import hashlib
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -336,6 +338,58 @@ def test_s3_create_is_conditional_and_rollback_requires_operation_token() -> Non
     )
     assert backend.rollback_create(receipt) is False
     assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
+
+
+def test_s3_adopt_existing_reconciles_exact_object_and_preserves_collision() -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
+
+        def head_object(self, **kwargs):
+            data, metadata, etag = self.objects[kwargs["Key"]]
+            return {
+                "ContentLength": len(data),
+                "Metadata": metadata,
+                "ETag": etag,
+                "VersionId": "version-1",
+            }
+
+        def get_object(self, **kwargs):
+            data, _metadata, _etag = self.objects[kwargs["Key"]]
+            return {"Body": BytesIO(data)}
+
+    backend = object.__new__(S3StorageBackend)
+    backend._client = _Client()  # type: ignore[attr-defined]
+    backend._bucket = "vault"  # type: ignore[attr-defined]
+    key = "vault-data/capture-slots/pending"
+    payload = b"published-before-receipt"
+    backend._client.objects[key] = (  # type: ignore[attr-defined]
+        payload,
+        {"printstash-create-token": "operation-token"},
+        '"etag-1"',
+    )
+
+    receipt = backend.adopt_existing(
+        key,
+        expected_size=len(payload),
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    assert receipt.token == "operation-token"
+    assert receipt.version_id == "version-1"
+    assert backend.creation_matches(receipt)
+
+    backend._client.objects[key] = (  # type: ignore[attr-defined]
+        b"different-owner-bytes",
+        {"printstash-create-token": "operation-token"},
+        '"etag-2"',
+    )
+    with pytest.raises(StorageCollisionError):
+        backend.adopt_existing(
+            key,
+            expected_size=len(payload),
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+        )
+    assert backend._client.objects[key][0] == b"different-owner-bytes"  # type: ignore[attr-defined]
 
     # Copying PrintStash metadata onto different bytes is still not proof that
     # the current object is the exact create operation in the receipt.

@@ -16,23 +16,31 @@ import pytest
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from printstash_core.imports import CaptureManifestV2
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, create_engine, select
 
 from app.db.migrate import run_migrations
 from app.db.models import (
+    ArtifactProvenanceLink,
     Collection,
     CollectionPermission,
     CollectionRole,
+    File,
+    FileType,
+    Model,
+    ModelProvenanceSource,
     Printer,
     PrinterPermission,
     PrinterRole,
+    ProvenanceCapture,
     User,
 )
 from app.db.session import create_async_engine_for_db
 from app.db.url import normalize_database_url
+from app.services import provenance
 from app.services.auth import create_refresh_token, rotate_refresh_token
 from app.services.printer_rbac import effective_printer_role
 from app.services.rbac import effective_collection_role
@@ -144,6 +152,101 @@ def test_refresh_token_is_consumed_exactly_once_concurrently(postgres_engine) ->
 
     assert results.count(user_id) == 1
     assert results.count(None) == 1
+
+
+def test_concurrent_identical_provenance_capture_converges_at_savepoints(
+    postgres_engine,
+) -> None:
+    """A uniqueness race must not poison either caller's outer transaction."""
+    manifest = CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://printables.com/model/42?utm_source=pg",
+                "source_item_id": "42",
+                "source_revision": None,
+                "adapter_version": "printables-v1",
+                "fields": {"title": {"value": "Bracket", "origin": "confirmed"}},
+            },
+            "files": [
+                {
+                    "id": "42:file-a",
+                    "name": "part.stl",
+                    "file_type": "stl",
+                    "size": None,
+                }
+            ],
+            "selected_ids": ["42:file-a"],
+        }
+    )
+    with Session(postgres_engine) as session:
+        model = Model(name="PG provenance", slug="pg-provenance", hash="p" * 64)
+        session.add(model)
+        session.flush()
+        assert model.id is not None
+        artifact = File(
+            model_id=model.id,
+            path="external/pg-provenance.stl",
+            original_filename="part.stl",
+            file_type=FileType.STL,
+            size_bytes=1,
+            sha256="a" * 64,
+            is_external=True,
+        )
+        session.add(artifact)
+        session.commit()
+        assert artifact.id is not None and model.id is not None
+        file_id: int = artifact.id
+        model_id: int = model.id
+
+    barrier = Barrier(2)
+
+    def attach(index: int) -> int:
+        with Session(postgres_engine) as session:
+            artifact = session.get(File, file_id)
+            assert artifact is not None
+            barrier.wait(timeout=10)
+            link = provenance.attach_ingested_artifact(
+                session,
+                artifact,
+                provenance.ProvenanceContext(
+                    manifest=manifest,
+                    source_file_id="42:file-a",
+                    source_filename="part.stl",
+                    blob_sha256="a" * 64,
+                ),
+            )
+            # This write occurs *after* the raced savepoints.  It proves that
+            # retrying a unique insert did not abort the outer transaction.
+            session.add(User(username=f"pg-provenance-outer-{index}", hashed_password="x"))
+            session.commit()
+            assert link.id is not None
+            return link.id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        link_ids = list(executor.map(attach, range(2)))
+
+    assert link_ids[0] == link_ids[1]
+    with Session(postgres_engine) as session:
+        assert len(
+            session.exec(
+                select(ModelProvenanceSource).where(
+                    ModelProvenanceSource.model_id == model_id
+                )
+            ).all()
+        ) == 1
+        assert len(session.exec(select(ProvenanceCapture)).all()) == 1
+        assert len(session.exec(select(ArtifactProvenanceLink)).all()) == 1
+        assert len(session.exec(select(File).where(File.model_id == model_id)).all()) == 1
+        assert len(
+            [
+                user
+                for user in session.exec(select(User)).all()
+                if user.username.startswith("pg-provenance-outer-")
+            ]
+        ) == 2
 
 
 @pytest.mark.asyncio

@@ -22,17 +22,22 @@ from sqlmodel import SQLModel, create_engine
 
 from app.core.config import _overlay
 from app.core.time import utcnow
-from app.db.models import PrintJob, PrintJobState
+from app.db.models import File, PrintJob, PrintJobState
 from app.db.session import SQLiteSessionFactory, override_session_factory
-from app.services import storage_backend
+from app.schemas.provenance import CaptureManifestV2
+from app.services import provenance, storage_backend
 from app.services.setup_token import current_setup_token
 
 pytestmark = pytest.mark.e2e
 
-FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "real_orca_ender3_benchy.gcode"
+FIXTURE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "real_orca_ender3_benchy.gcode"
+)
 
 
-async def _setup_instance(api, tmp_path: Path, *, name: str, username: str) -> dict[str, str]:
+async def _setup_instance(
+    api, tmp_path: Path, *, name: str, username: str
+) -> dict[str, str]:
     r = await api.post(
         "/api/v1/setup",
         json={
@@ -76,7 +81,9 @@ async def test_export_from_instance_a_import_into_instance_b_preserves_everythin
     api, tmp_path, e2e_db
 ):
     # -- Instance A: seed via the real pipeline -----------------------------
-    headers_a = await _setup_instance(api, tmp_path, name="instance-a", username="owner-a")
+    headers_a = await _setup_instance(
+        api, tmp_path, name="instance-a", username="owner-a"
+    )
 
     upload = await api.post(
         "/api/v1/ingest/orca",
@@ -131,6 +138,46 @@ async def test_export_from_instance_a_import_into_instance_b_preserves_everythin
     e2e_db.add(job)
     e2e_db.commit()
 
+    artifact = e2e_db.get(File, file_id)
+    assert artifact is not None
+    capture = CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://www.printables.com/model/transfer-benchy",
+                "source_item_id": "transfer-benchy",
+                "source_revision": "r1",
+                "adapter_version": "e2e-adapter-1",
+                "fields": {
+                    "title": {"value": "Transfer Benchy", "origin": "confirmed"}
+                },
+            },
+            "files": [
+                {
+                    "id": "transfer-benchy:gcode",
+                    "name": artifact.original_filename,
+                    "file_type": "gcode",
+                    "size": artifact.size_bytes,
+                }
+            ],
+            "selected_ids": ["transfer-benchy:gcode"],
+        }
+    )
+    provenance.attach_existing_artifact(
+        e2e_db,
+        artifact,
+        provenance.ProvenanceContext(
+            manifest=capture,
+            source_file_id="transfer-benchy:gcode",
+            source_filename=artifact.original_filename,
+            blob_sha256=artifact.sha256,
+        ),
+        imported_overrides={"title": "My Benchy"},
+    )
+    e2e_db.commit()
+
     export = await api.get("/api/v1/models/library-archive", headers=headers_a)
     assert export.status_code == 200, export.text
     archive_bytes = export.content
@@ -138,7 +185,9 @@ async def test_export_from_instance_a_import_into_instance_b_preserves_everythin
 
     # -- Instance B: a genuinely separate DB + storage tree ------------------
     _switch_to_fresh_instance(tmp_path, "instance-b")
-    headers_b = await _setup_instance(api, tmp_path, name="instance-b", username="owner-b")
+    headers_b = await _setup_instance(
+        api, tmp_path, name="instance-b", username="owner-b"
+    )
 
     imported = await api.post(
         "/api/v1/models/library-import",
@@ -174,6 +223,14 @@ async def test_export_from_instance_a_import_into_instance_b_preserves_everythin
     assert len(history_b) == 1
     assert history_b[0]["printer_name"] == "Voron 2.4"
     assert history_b[0]["filament_used_g"] == 15.5
+
+    provenance_b = (
+        await api.get(f"/api/v1/models/{model_b['id']}/provenance", headers=headers_b)
+    ).json()
+    assert (
+        provenance_b["sources"][0]["captures"][0]["adapter_version"] == "e2e-adapter-1"
+    )
+    assert provenance_b["sources"][0]["fields"][0]["effective_value"] == "My Benchy"
 
 
 @pytest.mark.asyncio

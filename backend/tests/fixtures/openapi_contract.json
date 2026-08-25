@@ -489,6 +489,18 @@
       },
       "Body_capture_browser_upload_api_v1_inbox_browser_upload_post": {
         "properties": {
+          "capture_source": {
+            "anyOf": [
+              {
+                "maxLength": 262144,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Source"
+          },
           "file": {
             "contentMediaType": "application/octet-stream",
             "title": "File",
@@ -714,6 +726,20 @@
         "title": "Body_inspect_archive_background_api_v1_ingest_archive_inspect_post",
         "type": "object"
       },
+      "Body_put_model_source_cover_api_v1_models__model_id__provenance__source_id__cover_put": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_put_model_source_cover_api_v1_models__model_id__provenance__source_id__cover_put",
+        "type": "object"
+      },
       "Body_upload_collection_image_api_v1_collections__collection_id__images_post": {
         "properties": {
           "file": {
@@ -777,6 +803,507 @@
           "file"
         ],
         "title": "Body_upload_document_image_api_v1_documents__document_id__images_post",
+        "type": "object"
+      },
+      "BrowserDevicePatch": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "BrowserDevicePatch",
+        "type": "object"
+      },
+      "BrowserDeviceRead": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "title": "BrowserDeviceRead",
+        "type": "object"
+      },
+      "BrowserPairingClaim": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 256,
+            "minLength": 8,
+            "title": "Code",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ],
+        "title": "BrowserPairingClaim",
+        "type": "object"
+      },
+      "BrowserPairingClaimRead": {
+        "properties": {
+          "credential": {
+            "title": "Credential",
+            "type": "string"
+          },
+          "device": {
+            "$ref": "#/components/schemas/BrowserDeviceRead"
+          }
+        },
+        "required": [
+          "credential",
+          "device"
+        ],
+        "title": "BrowserPairingClaimRead",
+        "type": "object"
+      },
+      "BrowserPairingCreateRead": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "expires_at"
+        ],
+        "title": "BrowserPairingCreateRead",
+        "type": "object"
+      },
+      "CaptureFieldDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "enum": [
+              "confirmed",
+              "inferred"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "origin"
+        ],
+        "title": "CaptureFieldDraft",
+        "type": "object"
+      },
+      "CaptureManifestFileRead": {
+        "additionalProperties": false,
+        "properties": {
+          "file_type": {
+            "title": "File Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "file_type"
+        ],
+        "title": "CaptureManifestFileRead",
+        "type": "object"
+      },
+      "CaptureManifestV2Read": {
+        "additionalProperties": false,
+        "description": "Strict additive read shape for a finalized rich capture manifest.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureManifestFileRead"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "kind": {
+            "const": "model_files",
+            "title": "Kind",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "selected_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Ids",
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CaptureSourceDraft"
+          }
+        },
+        "required": [
+          "schema_version",
+          "kind",
+          "source",
+          "files",
+          "selected_ids"
+        ],
+        "title": "CaptureManifestV2Read",
+        "type": "object"
+      },
+      "CaptureProvider": {
+        "enum": [
+          "myminifactory",
+          "cults"
+        ],
+        "title": "CaptureProvider",
+        "type": "string"
+      },
+      "CaptureSourceDraft": {
+        "additionalProperties": false,
+        "description": "Bounded, transport-free capture provenance supplied by a browser.",
+        "properties": {
+          "adapter_version": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Adapter Version",
+            "type": "string"
+          },
+          "canonical_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Canonical Url",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CaptureFieldDraft"
+            },
+            "maxProperties": 32,
+            "title": "Fields",
+            "type": "object"
+          },
+          "provider": {
+            "enum": [
+              "makerworld",
+              "printables",
+              "thingiverse"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "source_item_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Item Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "provider",
+          "canonical_url",
+          "adapter_version"
+        ],
+        "title": "CaptureSourceDraft",
+        "type": "object"
+      },
+      "CaptureUploadFileDeclaration": {
+        "additionalProperties": false,
+        "properties": {
+          "filename": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "exclusiveMinimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "filename",
+          "media_type",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "CaptureUploadFileDeclaration",
+        "type": "object"
+      },
+      "CaptureUploadSlotRead": {
+        "properties": {
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "file",
+              "cover"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "source_file_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source File Id"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "uploaded"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "filename",
+          "media_type",
+          "size_bytes",
+          "sha256",
+          "state"
+        ],
+        "title": "CaptureUploadSlotRead",
+        "type": "object"
+      },
+      "CaptureUploadSlotsCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "capture_source": {
+            "$ref": "#/components/schemas/CaptureSourceDraft"
+          },
+          "collection_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
+          "cover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureUploadFileDeclaration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureUploadFileDeclaration"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Files",
+            "type": "array"
+          },
+          "source_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Source Url",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Tags",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "source_url",
+          "capture_source",
+          "files"
+        ],
+        "title": "CaptureUploadSlotsCreate",
+        "type": "object"
+      },
+      "CaptureUploadSlotsRead": {
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/InboxItemRead"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureUploadSlotRead"
+            },
+            "title": "Slots",
+            "type": "array"
+          }
+        },
+        "required": [
+          "item",
+          "slots"
+        ],
+        "title": "CaptureUploadSlotsRead",
         "type": "object"
       },
       "ChannelCreate": {
@@ -1321,6 +1848,29 @@
           "printer_ids"
         ],
         "title": "CompatibilityRequest",
+        "type": "object"
+      },
+      "CultsConnectRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "CultsConnectRequest",
         "type": "object"
       },
       "DocumentCreate": {
@@ -2503,9 +3053,27 @@
         "title": "InboxImportRequest",
         "type": "object"
       },
+      "InboxItemCompletion": {
+        "enum": [
+          "complete",
+          "partial"
+        ],
+        "title": "InboxItemCompletion",
+        "type": "string"
+      },
       "InboxItemCreate": {
         "additionalProperties": false,
         "properties": {
+          "capture_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureSourceDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "collection_id": {
             "anyOf": [
               {
@@ -2584,6 +3152,16 @@
             ],
             "title": "Completed At"
           },
+          "completion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxItemCompletion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -2616,9 +3194,15 @@
             "type": "integer"
           },
           "manifest": {
-            "additionalProperties": true,
-            "title": "Manifest",
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureManifestV2Read"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyInboxManifestRead"
+              }
+            ],
+            "title": "Manifest"
           },
           "owner_user_id": {
             "title": "Owner User Id",
@@ -2641,6 +3225,13 @@
               }
             ],
             "title": "Resulting Model Id"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/InboxItemResultRead"
+            },
+            "title": "Results",
+            "type": "array"
           },
           "retryable": {
             "title": "Retryable",
@@ -2702,6 +3293,100 @@
           "updated_at"
         ],
         "title": "InboxItemRead",
+        "type": "object"
+      },
+      "InboxItemResultRead": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
+          "provenance_source_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Source Id"
+          },
+          "result_key": {
+            "title": "Result Key",
+            "type": "string"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "source_selection_id": {
+            "title": "Source Selection Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_selection_id",
+          "result_key",
+          "original_filename",
+          "state",
+          "retryable",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "InboxItemResultRead",
         "type": "object"
       },
       "InboxItemState": {
@@ -3115,6 +3800,12 @@
         ],
         "title": "JobPriority",
         "type": "string"
+      },
+      "LegacyInboxManifestRead": {
+        "additionalProperties": true,
+        "description": "Compatibility wrapper for the pre-capture manifest variants.",
+        "title": "LegacyInboxManifestRead",
+        "type": "object"
       },
       "LibraryCreate": {
         "additionalProperties": false,
@@ -5291,6 +5982,49 @@
         "title": "ModelPrinterPresenceRead",
         "type": "object"
       },
+      "ModelProvenancePatch": {
+        "additionalProperties": false,
+        "description": "Explicit user overrides. Empty string is a real override, not a clear.",
+        "properties": {
+          "clear_overrides": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 12,
+            "title": "Clear Overrides",
+            "type": "array"
+          },
+          "overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 12,
+            "title": "Overrides",
+            "type": "object"
+          }
+        },
+        "title": "ModelProvenancePatch",
+        "type": "object"
+      },
+      "ModelProvenanceRead": {
+        "properties": {
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceSourceRead"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "title": "ModelProvenanceRead",
+        "type": "object"
+      },
       "ModelRead": {
         "properties": {
           "collection": {
@@ -5431,6 +6165,41 @@
         ],
         "title": "ModelSort",
         "type": "string"
+      },
+      "ModelSourceCoverRead": {
+        "properties": {
+          "content_type": {
+            "const": "image/webp",
+            "title": "Content Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "provenance_source_id": {
+            "title": "Provenance Source Id",
+            "type": "integer"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "provenance_source_id",
+          "content_type",
+          "size_bytes",
+          "updated_at"
+        ],
+        "title": "ModelSourceCoverRead",
+        "type": "object"
       },
       "ModelStarRead": {
         "properties": {
@@ -5622,6 +6391,19 @@
           "enabled"
         ],
         "title": "NotificationsSettingsUpdate",
+        "type": "object"
+      },
+      "OAuthAuthorizeRead": {
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "OAuthAuthorizeRead",
         "type": "object"
       },
       "OperatorDecision": {
@@ -7978,6 +8760,246 @@
           }
         },
         "title": "PrinterUpdate",
+        "type": "object"
+      },
+      "ProvenanceCaptureSummaryRead": {
+        "properties": {
+          "adapter_version": {
+            "title": "Adapter Version",
+            "type": "string"
+          },
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "snapshot_sha256": {
+            "title": "Snapshot Sha256",
+            "type": "string"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          }
+        },
+        "required": [
+          "id",
+          "snapshot_sha256",
+          "adapter_version",
+          "captured_at",
+          "checked_at"
+        ],
+        "title": "ProvenanceCaptureSummaryRead",
+        "type": "object"
+      },
+      "ProvenanceFieldRead": {
+        "properties": {
+          "captured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "captured_origin": {
+            "enum": [
+              "confirmed",
+              "inferred"
+            ],
+            "title": "Captured Origin",
+            "type": "string"
+          },
+          "captured_value": {
+            "title": "Captured Value",
+            "type": "string"
+          },
+          "effective_origin": {
+            "enum": [
+              "confirmed",
+              "inferred",
+              "user"
+            ],
+            "title": "Effective Origin",
+            "type": "string"
+          },
+          "effective_value": {
+            "title": "Effective Value",
+            "type": "string"
+          },
+          "field_name": {
+            "title": "Field Name",
+            "type": "string"
+          },
+          "user_override_set": {
+            "title": "User Override Set",
+            "type": "boolean"
+          },
+          "user_updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Updated At"
+          },
+          "user_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Value"
+          }
+        },
+        "required": [
+          "field_name",
+          "captured_value",
+          "captured_origin",
+          "user_override_set",
+          "effective_value",
+          "effective_origin"
+        ],
+        "title": "ProvenanceFieldRead",
+        "type": "object"
+      },
+      "ProvenanceSourceRead": {
+        "properties": {
+          "canonical_url": {
+            "title": "Canonical Url",
+            "type": "string"
+          },
+          "captures": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceCaptureSummaryRead"
+            },
+            "title": "Captures",
+            "type": "array"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceFieldRead"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "first_captured_at": {
+            "format": "date-time",
+            "title": "First Captured At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_checked_at": {
+            "format": "date-time",
+            "title": "Last Checked At",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "source_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Item Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "canonical_url",
+          "first_captured_at",
+          "last_checked_at"
+        ],
+        "title": "ProvenanceSourceRead",
+        "type": "object"
+      },
+      "ProviderConnectionRead": {
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "provider": {
+            "enum": [
+              "myminifactory",
+              "cults"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "provider",
+          "connected"
+        ],
+        "title": "ProviderConnectionRead",
         "type": "object"
       },
       "QueueJobCreate": {
@@ -12102,6 +13124,196 @@
         ]
       }
     },
+    "/api/v1/browser-pairings": {
+      "get": {
+        "operationId": "list_devices_api_v1_browser_pairings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrowserDeviceRead"
+                  },
+                  "title": "Response List Devices Api V1 Browser Pairings Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Devices",
+        "tags": [
+          "browser-pairings"
+        ]
+      },
+      "post": {
+        "operationId": "create_pairing_api_v1_browser_pairings_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserPairingCreateRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Pairing",
+        "tags": [
+          "browser-pairings"
+        ]
+      }
+    },
+    "/api/v1/browser-pairings/claim": {
+      "post": {
+        "operationId": "claim_pairing_api_v1_browser_pairings_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserPairingClaim"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserPairingClaimRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Pairing",
+        "tags": [
+          "browser-pairings"
+        ]
+      }
+    },
+    "/api/v1/browser-pairings/{device_id}": {
+      "delete": {
+        "operationId": "revoke_device_api_v1_browser_pairings__device_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Revoke Device",
+        "tags": [
+          "browser-pairings"
+        ]
+      },
+      "patch": {
+        "operationId": "rename_device_api_v1_browser_pairings__device_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserDevicePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserDeviceRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Rename Device",
+        "tags": [
+          "browser-pairings"
+        ]
+      }
+    },
     "/api/v1/collections": {
       "get": {
         "operationId": "list_collections_api_v1_collections_get",
@@ -15283,7 +16495,7 @@
     },
     "/api/v1/inbox/browser-upload": {
       "post": {
-        "description": "Accept MakerWorld bytes selected by the authenticated browser extension.",
+        "description": "Accept browser-selected model bytes and optional bounded provenance.",
         "operationId": "capture_browser_upload_api_v1_inbox_browser_upload_post",
         "requestBody": {
           "content": {
@@ -15323,6 +16535,99 @@
           }
         ],
         "summary": "Capture Browser Upload",
+        "tags": [
+          "pending imports"
+        ]
+      }
+    },
+    "/api/v1/inbox/capture-upload-slots": {
+      "post": {
+        "operationId": "create_capture_upload_slots_api_v1_inbox_capture_upload_slots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureUploadSlotsCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureUploadSlotsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Capture Upload Slots",
+        "tags": [
+          "pending imports"
+        ]
+      }
+    },
+    "/api/v1/inbox/capture-upload-slots/{slot_id}": {
+      "put": {
+        "operationId": "put_capture_upload_slot_api_v1_inbox_capture_upload_slots__slot_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slot_id",
+            "required": true,
+            "schema": {
+              "title": "Slot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureUploadSlotRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Put Capture Upload Slot",
         "tags": [
           "pending imports"
         ]
@@ -15463,6 +16768,53 @@
           }
         ],
         "summary": "Update Item",
+        "tags": [
+          "pending imports"
+        ]
+      }
+    },
+    "/api/v1/inbox/{item_id}/capture-upload-finalize": {
+      "post": {
+        "operationId": "finalize_capture_upload_api_v1_inbox__item_id__capture_upload_finalize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxItemRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Finalize Capture Upload",
         "tags": [
           "pending imports"
         ]
@@ -19189,6 +20541,340 @@
         ]
       }
     },
+    "/api/v1/models/{model_id}/provenance": {
+      "get": {
+        "operationId": "get_model_provenance_api_v1_models__model_id__provenance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelProvenanceRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get model capture provenance",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}/provenance/{source_id}": {
+      "patch": {
+        "operationId": "patch_model_provenance_api_v1_models__model_id__provenance__source_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelProvenancePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelProvenanceRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Set or clear explicit provenance field overrides",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}/provenance/{source_id}/cover": {
+      "delete": {
+        "operationId": "delete_model_source_cover_api_v1_models__model_id__provenance__source_id__cover_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete Model Source Cover",
+        "tags": [
+          "models"
+        ]
+      },
+      "get": {
+        "operationId": "get_model_source_cover_api_v1_models__model_id__provenance__source_id__cover_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSourceCoverRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Model Source Cover",
+        "tags": [
+          "models"
+        ]
+      },
+      "put": {
+        "operationId": "put_model_source_cover_api_v1_models__model_id__provenance__source_id__cover_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_put_model_source_cover_api_v1_models__model_id__provenance__source_id__cover_put"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSourceCoverRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Put Model Source Cover",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}/provenance/{source_id}/cover/content": {
+      "get": {
+        "operationId": "stream_model_source_cover_api_v1_models__model_id__provenance__source_id__cover_content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Stream Model Source Cover",
+        "tags": [
+          "models"
+        ]
+      }
+    },
     "/api/v1/models/{model_id}/purge": {
       "delete": {
         "operationId": "purge_model_api_v1_models__model_id__purge_delete",
@@ -21393,6 +23079,216 @@
         "summary": "Create Ws Ticket",
         "tags": [
           "printers"
+        ]
+      }
+    },
+    "/api/v1/provider-connections": {
+      "get": {
+        "operationId": "list_connections_api_v1_provider_connections_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderConnectionRead"
+                  },
+                  "title": "Response List Connections Api V1 Provider Connections Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Connections",
+        "tags": [
+          "provider-connections"
+        ]
+      }
+    },
+    "/api/v1/provider-connections/cults/connect": {
+      "post": {
+        "operationId": "connect_cults_api_v1_provider_connections_cults_connect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CultsConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderConnectionRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Connect Cults",
+        "tags": [
+          "provider-connections"
+        ]
+      }
+    },
+    "/api/v1/provider-connections/myminifactory/authorize": {
+      "post": {
+        "operationId": "authorize_myminifactory_api_v1_provider_connections_myminifactory_authorize_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAuthorizeRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Authorize Myminifactory",
+        "tags": [
+          "provider-connections"
+        ]
+      }
+    },
+    "/api/v1/provider-connections/myminifactory/callback": {
+      "get": {
+        "operationId": "myminifactory_callback_api_v1_provider_connections_myminifactory_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Myminifactory Callback Api V1 Provider Connections Myminifactory Callback Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Myminifactory Callback",
+        "tags": [
+          "provider-connections"
+        ]
+      }
+    },
+    "/api/v1/provider-connections/{provider}/disconnect": {
+      "delete": {
+        "operationId": "disconnect_api_v1_provider_connections__provider__disconnect_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CaptureProvider"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Disconnect",
+        "tags": [
+          "provider-connections"
         ]
       }
     },

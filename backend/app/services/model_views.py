@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Any, List, Literal, Optional
+from typing import cast as type_cast
 
 from sqlalchemy import Float, String, case, cast, func, literal, union_all
 from sqlmodel import Session, select
@@ -28,6 +29,7 @@ from app.core.config import settings
 from app.core.time import ensure_utc, utcnow
 from app.db.models import (
     SENTINEL_MODEL_HASH,
+    ArtifactProvenanceLink,
     Collection,
     CollectionRole,
     FilamentProfile,
@@ -36,12 +38,16 @@ from app.db.models import (
     FileType,
     Metadata,
     Model,
+    ModelProvenanceField,
+    ModelProvenanceSource,
+    ModelSourceCover,
     ModelStar,
     ModelTagLink,
     Printer,
     PrinterFile,
     PrintJob,
     PrintJobState,
+    ProvenanceCapture,
     Tag,
     User,
 )
@@ -69,7 +75,13 @@ from app.schemas.models import (
     TrashedModelRead,
     VaultStatsRead,
 )
-from app.services import rbac
+from app.schemas.provenance import (
+    ModelProvenanceRead,
+    ProvenanceCaptureSummaryRead,
+    ProvenanceFieldRead,
+    ProvenanceSourceRead,
+)
+from app.services import provenance, rbac
 from app.services.storage_backend import get_backend
 from app.services.trash import trash_expires_at
 
@@ -78,7 +90,9 @@ def set_revision_labels(
     session: Session, files: list[File], revision_label: str | None
 ) -> None:
     """Set one label across prevalidated live G-code revisions, without commit."""
-    label = revision_label.strip() if revision_label and revision_label.strip() else None
+    label = (
+        revision_label.strip() if revision_label and revision_label.strip() else None
+    )
     touched_models: set[int] = set()
     for file_row in files:
         file_row.revision_label = label
@@ -89,6 +103,7 @@ def set_revision_labels(
     ).all():
         model.updated_at = utcnow()
         session.add(model)
+
 
 _EXPORT_CSV_FIELDS = [
     "model_id",
@@ -425,20 +440,30 @@ def _apply_structured_filters(stmt, filters: ModelFilters):
                 File.is_external == (filters.storage[0] == "external")
             )
         if filters.uploaded_after:
-            artifact_ids = artifact_ids.where(File.uploaded_at >= filters.uploaded_after)
+            artifact_ids = artifact_ids.where(
+                File.uploaded_at >= filters.uploaded_after
+            )
         if filters.uploaded_before:
-            artifact_ids = artifact_ids.where(File.uploaded_at <= filters.uploaded_before)
+            artifact_ids = artifact_ids.where(
+                File.uploaded_at <= filters.uploaded_before
+            )
         if filters.material_type:
             artifact_ids = artifact_ids.where(
-                func.lower(Metadata.material_type).in_(value.lower() for value in filters.material_type)
+                func.lower(Metadata.material_type).in_(
+                    value.lower() for value in filters.material_type
+                )
             )
         if filters.slicer_name:
             artifact_ids = artifact_ids.where(
-                func.lower(Metadata.slicer_name).in_(value.lower() for value in filters.slicer_name)
+                func.lower(Metadata.slicer_name).in_(
+                    value.lower() for value in filters.slicer_name
+                )
             )
         if filters.printer_model:
             artifact_ids = artifact_ids.where(
-                func.lower(Metadata.printer_model).in_(value.lower() for value in filters.printer_model)
+                func.lower(Metadata.printer_model).in_(
+                    value.lower() for value in filters.printer_model
+                )
             )
         stmt = stmt.where(Model.id.in_(artifact_ids))  # type: ignore[union-attr]
 
@@ -449,7 +474,8 @@ def _apply_structured_filters(stmt, filters: ModelFilters):
         stmt = stmt.where(Model.id.not_in(live_jobs))  # type: ignore[attr-defined]
     if filters.print_outcome:
         matching_jobs = select(PrintJob.model_id).where(
-            live(PrintJob), PrintJob.state.in_(filters.print_outcome)  # type: ignore[union-attr]
+            live(PrintJob),
+            PrintJob.state.in_(filters.print_outcome),  # type: ignore[union-attr]
         )
         stmt = stmt.where(Model.id.in_(matching_jobs))  # type: ignore[union-attr]
     return stmt
@@ -504,7 +530,9 @@ def _filtered_stmt(session: Session, user: User, filters: ModelFilters):
     )
     if filters.printer_id is not None:
         stmt = stmt.where(
-            Model.id.in_(present_model_ids.where(PrinterFile.printer_id == filters.printer_id))  # type: ignore[union-attr]
+            Model.id.in_(
+                present_model_ids.where(PrinterFile.printer_id == filters.printer_id)
+            )  # type: ignore[union-attr]
         )
     elif filters.printer_presence == "any":
         stmt = stmt.where(Model.id.in_(present_model_ids))  # type: ignore[union-attr]
@@ -571,9 +599,7 @@ def facets(session: Session, user: User, filters: ModelFilters) -> ModelFacetsRe
         grouped_branch("material_type", metadata.c.material_type, metadata.c.model_id),
         grouped_branch("slicer_name", metadata.c.slicer_name, metadata.c.model_id),
         grouped_branch("printer_model", metadata.c.printer_model, metadata.c.model_id),
-        grouped_branch(
-            "revision_status", files.c.revision_status, files.c.model_id
-        ),
+        grouped_branch("revision_status", files.c.revision_status, files.c.model_id),
         grouped_branch(
             "print_outcome",
             jobs.c.state,
@@ -613,9 +639,7 @@ def facets(session: Session, user: User, filters: ModelFilters) -> ModelFacetsRe
 
     enum_values = {
         "file_type": {member.name: member.value for member in FileType},
-        "revision_status": {
-            member.name: member.value for member in FileRevisionStatus
-        },
+        "revision_status": {member.name: member.value for member in FileRevisionStatus},
         "print_outcome": {member.name: member.value for member in PrintJobState},
     }
     values: dict[str, list[FacetValueRead]] = defaultdict(list)
@@ -732,7 +756,9 @@ def _hydrate_list_rows(
             live(File),
         )
         .order_by(
-            File.model_id.asc(), File.uploaded_at.desc(), File.id.desc()  # type: ignore[attr-defined]
+            File.model_id.asc(),
+            File.uploaded_at.desc(),
+            File.id.desc(),  # type: ignore[attr-defined]
         )
     ).all():
         if int(model_id) not in summaries:
@@ -744,11 +770,28 @@ def _hydrate_list_rows(
                 slicer_name=md.slicer_name,
             )
 
-    for model_id, completed, decided, last_printed, average_duration, total_cost in session.exec(
+    for (
+        model_id,
+        completed,
+        decided,
+        last_printed,
+        average_duration,
+        total_cost,
+    ) in session.exec(
         select(
             PrintJob.model_id,
             func.sum(case((PrintJob.state == PrintJobState.COMPLETED, 1), else_=0)),
-            func.sum(case((PrintJob.state.in_([PrintJobState.COMPLETED, PrintJobState.FAILED]), 1), else_=0)),
+            func.sum(
+                case(
+                    (
+                        PrintJob.state.in_(
+                            [PrintJobState.COMPLETED, PrintJobState.FAILED]
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
             func.max(PrintJob.finished_at),
             func.avg(PrintJob.actual_duration_s),
             func.sum(PrintJob.cost),
@@ -759,7 +802,9 @@ def _hydrate_list_rows(
         summary = summaries.setdefault(int(model_id), PrintSummaryRead())
         summary.success_rate = float(completed or 0) / int(decided) if decided else None
         summary.last_printed_at = ensure_utc(last_printed) if last_printed else None
-        summary.average_duration_s = float(average_duration) if average_duration is not None else None
+        summary.average_duration_s = (
+            float(average_duration) if average_duration is not None else None
+        )
         summary.total_cost = float(total_cost) if total_cost is not None else None
 
     roles = rbac.effective_roles_for_collections(
@@ -837,9 +882,7 @@ def list_items(
 
 
 def _job_sort_stats():
-    completed = func.sum(
-        case((PrintJob.state == PrintJobState.COMPLETED, 1), else_=0)
-    )
+    completed = func.sum(case((PrintJob.state == PrintJobState.COMPLETED, 1), else_=0))
     decided = func.sum(
         case(
             (
@@ -1005,9 +1048,7 @@ def _apply_model_cursor(
         else:
             value_after = expression < value if descending else expression > value
             stmt = stmt.where(
-                value_after
-                | ((expression == value) & id_after)
-                | expression.is_(None)
+                value_after | ((expression == value) & id_after) | expression.is_(None)
             )
     null_rank = case((expression.is_(None), 1), else_=0)
     order_value = expression.desc() if descending else expression.asc()
@@ -1027,9 +1068,7 @@ def page_items(
     """Globally sorted keyset page; the browser never drains the full library."""
     filtered = _filtered_stmt(session, user, filters)
     filter_key = _model_filter_key(filters, user)
-    decoded_cursor = (
-        _decode_model_cursor(cursor, sort, filter_key) if cursor else None
-    )
+    decoded_cursor = _decode_model_cursor(cursor, sort, filter_key) if cursor else None
     if decoded_cursor is None:
         total = int(
             session.exec(
@@ -1088,6 +1127,86 @@ def outliner_items(
 # ---------------------------------------------------------------------------
 
 
+def provenance_detail(session: Session, model_id: int) -> ModelProvenanceRead:
+    """Compose the safe provenance read model with fixed query count.
+
+    Raw snapshots and actor identifiers deliberately stay inside persistence;
+    this model-view exposes only values, origins, and capture summaries.
+    """
+    sources = list(
+        session.exec(
+            select(ModelProvenanceSource)
+            .where(ModelProvenanceSource.model_id == model_id)
+            .order_by(ModelProvenanceSource.id.asc())
+        ).all()
+    )
+    source_ids = [source.id for source in sources if source.id is not None]
+    if not source_ids:
+        return ModelProvenanceRead()
+    fields_by_source: dict[int, list[ProvenanceFieldRead]] = defaultdict(list)
+    for field in session.exec(
+        select(ModelProvenanceField)
+        .where(ModelProvenanceField.provenance_source_id.in_(source_ids))  # type: ignore[union-attr]
+        .order_by(ModelProvenanceField.field_name.asc())
+    ).all():
+        fields_by_source[field.provenance_source_id].append(
+            ProvenanceFieldRead(
+                field_name=field.field_name,
+                captured_value=json.loads(field.captured_value_json),
+                captured_origin=field.captured_origin,
+                user_value=json.loads(field.user_value_json)
+                if field.user_value_json is not None
+                else None,
+                user_override_set=field.user_override_set,
+                effective_value=provenance.effective_value(field),
+                effective_origin=(
+                    "user"
+                    if field.user_override_set
+                    else type_cast(
+                        Literal["confirmed", "inferred"], field.captured_origin
+                    )
+                ),
+                captured_at=field.captured_at,
+                user_updated_at=field.user_updated_at,
+            )
+        )
+    captures_by_source: dict[int, list[ProvenanceCaptureSummaryRead]] = defaultdict(
+        list
+    )
+    for capture in session.exec(
+        select(ProvenanceCapture)
+        .where(ProvenanceCapture.provenance_source_id.in_(source_ids))  # type: ignore[union-attr]
+        .order_by(ProvenanceCapture.captured_at.desc())
+    ).all():
+        captures_by_source[capture.provenance_source_id].append(
+            ProvenanceCaptureSummaryRead(
+                id=capture.id,  # type: ignore[arg-type]
+                snapshot_sha256=capture.snapshot_sha256,
+                adapter_version=capture.adapter_version,
+                source_revision=capture.source_revision,
+                captured_at=capture.captured_at,
+                checked_at=capture.checked_at,
+            )
+        )
+    return ModelProvenanceRead(
+        sources=[
+            ProvenanceSourceRead(
+                id=source.id,  # type: ignore[arg-type]
+                provider=source.provider,
+                source_item_id=source.source_item_id,
+                canonical_url=source.canonical_url,
+                source_revision=source.source_revision,
+                tags=json.loads(source.tags_json),
+                first_captured_at=source.first_captured_at,
+                last_checked_at=source.last_checked_at,
+                fields=fields_by_source[source.id],  # type: ignore[index]
+                captures=captures_by_source[source.id],  # type: ignore[index]
+            )
+            for source in sources
+        ]
+    )
+
+
 def detail(session: Session, model_id: int, user: User) -> ModelRead | None:
     """Full model detail with files + metadata. None when missing or trashed."""
     m = session.get(Model, model_id)
@@ -1104,11 +1223,14 @@ def detail(session: Session, model_id: int, user: User) -> ModelRead | None:
         .outerjoin(Metadata, Metadata.file_id == File.id)
         .order_by(File.version.asc())  # type: ignore[attr-defined]
     ).all()
-    starred = session.exec(
-        select(ModelStar.id).where(
-            ModelStar.user_id == user.id, ModelStar.model_id == model_id
-        )
-    ).first() is not None
+    starred = (
+        session.exec(
+            select(ModelStar.id).where(
+                ModelStar.user_id == user.id, ModelStar.model_id == model_id
+            )
+        ).first()
+        is not None
+    )
 
     return ModelRead(
         id=m.id,  # type: ignore[arg-type]
@@ -1154,20 +1276,30 @@ def artifact_outcomes(
         failed = [job for job in rows if job.state == PrintJobState.FAILED]
         cancelled = [job for job in rows if job.state == PrintJobState.CANCELLED]
         decided = len(completed) + len(failed)
-        durations = [job.actual_duration_s for job in rows if job.actual_duration_s is not None]
-        filament = [job.filament_g_effective for job in rows if job.filament_g_effective is not None]
+        durations = [
+            job.actual_duration_s for job in rows if job.actual_duration_s is not None
+        ]
+        filament = [
+            job.filament_g_effective
+            for job in rows
+            if job.filament_g_effective is not None
+        ]
         costs = [job.cost for job in rows if job.cost is not None]
-        result.append({
-            "file_id": file_id,
-            "print_count": len(rows),
-            "completed_count": len(completed),
-            "failed_count": len(failed),
-            "cancelled_count": len(cancelled),
-            "success_rate": len(completed) / decided if decided else None,
-            "average_duration_s": sum(durations) / len(durations) if durations else None,
-            "total_filament_g": sum(filament) if filament else None,
-            "total_cost": sum(costs) if costs else None,
-        })
+        result.append(
+            {
+                "file_id": file_id,
+                "print_count": len(rows),
+                "completed_count": len(completed),
+                "failed_count": len(failed),
+                "cancelled_count": len(cancelled),
+                "success_rate": len(completed) / decided if decided else None,
+                "average_duration_s": sum(durations) / len(durations)
+                if durations
+                else None,
+                "total_filament_g": sum(filament) if filament else None,
+                "total_cost": sum(costs) if costs else None,
+            }
+        )
     return result
 
 
@@ -1186,6 +1318,89 @@ def export_payload(session: Session, user: User) -> dict:
     stmt = _apply_model_access(stmt, session, user)
     model_rows = session.exec(stmt).all()
     model_ids = [m.id for m in model_rows if m.id is not None]
+    provenance_by_model: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    if model_ids:
+        source_rows = session.exec(
+            select(ModelProvenanceSource)
+            .where(ModelProvenanceSource.model_id.in_(model_ids))  # type: ignore[union-attr]
+            .order_by(
+                ModelProvenanceSource.model_id.asc(), ModelProvenanceSource.id.asc()
+            )  # type: ignore[attr-defined]
+        ).all()
+        source_ids = [row.id for row in source_rows if row.id is not None]
+        captures_by_source: dict[int, list[ProvenanceCapture]] = defaultdict(list)
+        links_by_source: dict[int, list[ArtifactProvenanceLink]] = defaultdict(list)
+        covers_by_source: dict[int, ModelSourceCover] = {}
+        if source_ids:
+            for row in session.exec(
+                select(ProvenanceCapture)
+                .where(ProvenanceCapture.provenance_source_id.in_(source_ids))  # type: ignore[union-attr]
+                .order_by(ProvenanceCapture.captured_at.desc())  # type: ignore[attr-defined]
+            ).all():
+                captures_by_source[row.provenance_source_id].append(row)
+            for row in session.exec(
+                select(ArtifactProvenanceLink)
+                .where(ArtifactProvenanceLink.provenance_source_id.in_(source_ids))  # type: ignore[union-attr]
+                .order_by(ArtifactProvenanceLink.file_id.asc())  # type: ignore[attr-defined]
+            ).all():
+                links_by_source[row.provenance_source_id].append(row)
+            covers_by_source = {
+                row.provenance_source_id: row
+                for row in session.exec(
+                    select(ModelSourceCover).where(
+                        ModelSourceCover.provenance_source_id.in_(source_ids)  # type: ignore[union-attr]
+                    )
+                ).all()
+            }
+        for source in source_rows:
+            if source.id is None or source.model_id is None:
+                continue
+            artifacts = []
+            for link in links_by_source[source.id]:
+                if link.file_id is None:
+                    continue
+                artifacts.append(
+                    {
+                        "artifact_id": link.file_id,
+                        "artifact_api_ref": f"/api/v1/files/{link.file_id}/download",
+                        "source_file_id": link.source_file_id,
+                        "source_filename": link.source_filename,
+                        "source_revision": link.source_revision,
+                        "blob_sha256": link.blob_sha256,
+                    }
+                )
+            captures = [
+                {
+                    "snapshot_sha256": capture.snapshot_sha256,
+                    "adapter_version": capture.adapter_version,
+                    "source_revision": capture.source_revision,
+                    "captured_at": capture.captured_at.isoformat(),
+                }
+                for capture in captures_by_source[source.id]
+            ]
+            cover = covers_by_source.get(source.id)
+            cover_summary = None
+            if cover is not None and source.model_id is not None:
+                cover_summary = {
+                    "api_ref": f"/api/v1/models/{source.model_id}/provenance/{source.id}/cover",
+                    "content_api_ref": f"/api/v1/models/{source.model_id}/provenance/{source.id}/cover/content",
+                    "content_type": cover.content_type,
+                    "size_bytes": cover.size_bytes,
+                    "updated_at": cover.updated_at.isoformat(),
+                }
+            provenance_by_model[source.model_id].append(
+                {
+                    "id": source.id,
+                    "provider": source.provider,
+                    "source_item_id": source.source_item_id,
+                    "canonical_url": source.canonical_url,
+                    "source_revision": source.source_revision,
+                    "tags": json.loads(source.tags_json),
+                    "captures": captures,
+                    "artifacts": artifacts,
+                    "cover": cover_summary,
+                }
+            )
     if not model_ids:
         models = []
         file_count = 0
@@ -1266,13 +1481,17 @@ def export_payload(session: Session, user: User) -> dict:
                 "created_at": model.created_at.isoformat(),
                 "updated_at": model.updated_at.isoformat(),
                 "files": files_by_model.get(model.id or 0, []),
+                "provenance": {
+                    "schema_version": 2,
+                    "sources": provenance_by_model.get(model.id or 0, []),
+                },
             }
             for model in model_rows
         ]
         file_count = sum(len(model["files"]) for model in models)
 
     return {
-        "export_version": 1,
+        "export_version": 2,
         "app": {"name": settings.app_name, "version": settings.app_version},
         "generated_at": utcnow().isoformat(),
         "contents": {
@@ -1284,6 +1503,7 @@ def export_payload(session: Session, user: User) -> dict:
                 "stored file metadata",
                 "slicer/mesh metadata",
                 "G-code revision labels and outcomes",
+                "provenance/source summaries and API references",
             ],
             "excludes": ["raw STL/3MF/G-code blobs", "secrets", "printer credentials"],
         },
@@ -1479,9 +1699,7 @@ def vault_stats(session: Session, user: User) -> VaultStatsRead:
             file_stats.c.indexed_size,
             file_stats.c.source_file_count,
             file_stats.c.gcode_file_count,
-            select(func.count(Collection.id))
-            .where(live(Collection))
-            .scalar_subquery(),
+            select(func.count(Collection.id)).where(live(Collection)).scalar_subquery(),
             select(func.count(Tag.id)).where(live(Tag)).scalar_subquery(),
             select(func.count(Printer.id)).where(live(Printer)).scalar_subquery(),
         ).select_from(file_stats)

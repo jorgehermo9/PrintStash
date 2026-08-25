@@ -25,6 +25,8 @@ from app.db.models import (
     InboxItem,
     Metadata,
     Model,
+    ModelProvenanceSource,
+    ModelSourceCover,
     ModelStar,
     Printer,
     PrinterFile,
@@ -349,6 +351,24 @@ def hard_delete_model(
     model.thumbnail_path = None
     session.add(model)
     session.flush()
+    # Covers belong to provenance rows, which cascade with their Model. Move
+    # each exact receipt into the delete outbox before that cascade removes the
+    # row; soft-delete/restore deliberately never touch these private bytes.
+    covers = session.exec(
+        select(ModelSourceCover)
+        .join(ModelProvenanceSource)
+        .where(ModelProvenanceSource.model_id == model.id)
+    ).all()
+    backend = get_backend()
+    for cover in covers:
+        enqueue_owned_key(
+            session,
+            backend,
+            cover.storage_key,
+            required_proof=True,
+            resource_kind="model_source_cover",
+            resource_id=cover.id,
+        )
     for file_row in file_rows:
         hard_delete_file(
             session,

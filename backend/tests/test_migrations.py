@@ -34,6 +34,13 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
     assert "refresh_tokens" in tables
     assert "printer_profiles" in tables
     assert "share_links" in tables
+    assert {
+        "model_provenance_sources",
+        "model_provenance_fields",
+        "provenance_captures",
+        "artifact_provenance_links",
+        "inbox_item_results",
+    } <= tables
 
     files_columns = {col["name"]: col for col in inspector.get_columns("files")}
     assert "revision_label" in files_columns
@@ -87,6 +94,32 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
     assert "oidc_enabled" in config_columns
     assert "oidc_client_secret" in config_columns
     assert "oidc_admin_groups" in config_columns
+
+    inbox_columns = {col["name"]: col for col in inspector.get_columns("inbox_items")}
+    assert "completion" in inbox_columns
+    provenance_source_indexes = {
+        index["name"]: index
+        for index in inspector.get_indexes("model_provenance_sources")
+    }
+    assert provenance_source_indexes["ix_provenance_source_provider_item"][
+        "column_names"
+    ] == [
+        "provider",
+        "source_item_id",
+    ]
+    provenance_link_columns = {
+        col["name"]: col for col in inspector.get_columns("artifact_provenance_links")
+    }
+    assert "import_key" in provenance_link_columns
+    provenance_link_fks = {
+        fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+        for fk in inspector.get_foreign_keys("artifact_provenance_links")
+    }
+    assert provenance_link_fks == {
+        "file_id": "CASCADE",
+        "provenance_source_id": "CASCADE",
+        "capture_id": "SET NULL",
+    }
 
 
 # --------------------------------------------------------------------------- #

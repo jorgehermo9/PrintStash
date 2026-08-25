@@ -6,13 +6,21 @@ from pathlib import Path
 
 import pytest
 
+from app.core.config import settings
 from app.services.storage import (
     UploadTooLarge,
     ensure_unique_slug,
     slugify,
     stream_to_path,
 )
+from app.services.storage_backend import LocalStorageBackend
 from app.services.storage_paths import StoragePathOverlapError, unlink_managed_file
+
+
+def test_local_capture_upload_slot_key_is_in_managed_data_namespace() -> None:
+    assert LocalStorageBackend().capture_upload_slot_key("slot-1") == str(
+        settings.data_dir / "capture-slots" / "slot-1"
+    )
 
 
 def test_slugify_normalises_unicode_punctuation_and_empty_names() -> None:

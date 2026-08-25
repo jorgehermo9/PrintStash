@@ -64,6 +64,10 @@ def s3_backend() -> Iterator[S3StorageBackend]:
             _overlay.pop(field, None)
 
 
+def test_capture_upload_slot_key_uses_s3_prefix(s3_backend: S3StorageBackend):
+    assert s3_backend.capture_upload_slot_key("slot-1").endswith("capture-slots/slot-1")
+
+
 def test_round_trips_bytes(s3_backend: S3StorageBackend):
     key = "models/round-trip.txt"
     assert not s3_backend.exists(key)

@@ -12,17 +12,22 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.core.time import utcnow
 from app.db.models import (
+    ArtifactProvenanceLink,
     File,
     FileType,
     Metadata,
     Model,
+    ModelProvenanceField,
+    ModelProvenanceSource,
     ModelStar,
     PrintJob,
     PrintJobState,
+    ProvenanceCapture,
     SavedView,
     User,
 )
-from app.services import library_transfer
+from app.schemas.provenance import CaptureManifestV2
+from app.services import library_transfer, provenance
 
 
 def _seed(db: Session, tmp_path: Path) -> tuple[User, Model, File]:
@@ -75,6 +80,179 @@ def test_library_archive_manifest_blobs_and_idempotent_import(
             "skipped_files": 1,
             "imported_jobs": 0,
         }
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_library_archive_emits_optional_prevalidated_provenance_sidecar(
+    db_session: Session, auth_headers: dict[str, str], tmp_path: Path
+) -> None:
+    user, model, file_row = _seed(db_session, tmp_path)
+    capture = CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://www.printables.com/model/42",
+                "source_item_id": "42",
+                "source_revision": "r1",
+                "adapter_version": "printables-v1",
+                "fields": {"title": {"value": "Captured", "origin": "confirmed"}},
+            },
+            "files": [
+                {"id": "42:cube", "name": "cube.stl", "file_type": "stl", "size": 1}
+            ],
+            "selected_ids": ["42:cube"],
+        }
+    )
+    provenance.attach_existing_artifact(
+        db_session,
+        file_row,
+        provenance.ProvenanceContext(
+            manifest=capture,
+            source_file_id="42:cube",
+            source_filename="cube.stl",
+            blob_sha256=file_row.sha256,
+        ),
+        imported_overrides={"title": "Local"},
+    )
+    db_session.commit()
+
+    archive_path = library_transfer.create_archive(db_session, user)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            assert (
+                json.loads(archive.read("manifest.json"))["format"]
+                == "printstash-library-v1"
+            )
+            sidecar = json.loads(archive.read("provenance.json"))
+        assert sidecar["format"] == "printstash-provenance-v2"
+        field = sidecar["models"][0]["sources"][0]["fields"][0]
+        assert "overrides" not in sidecar["models"][0]["sources"][0]
+        assert field == {
+            "field_name": "title",
+            "captured_value": "Captured",
+            "captured_origin": "confirmed",
+            "user_value": "Local",
+            "user_override_set": True,
+        }
+        assert (
+            sidecar["models"][0]["sources"][0]["latest_capture"]["adapter_version"]
+            == "printables-v1"
+        )
+        assert sidecar["models"][0]["sources"][0]["latest_capture"][
+            "snapshot_sha256"
+        ] == provenance.snapshot_sha256(capture)
+        assert (
+            sidecar["models"][0]["sources"][0]["artifact_links"][0]["source_file_id"]
+            == "42:cube"
+        )
+        assert "actor" not in json.dumps(sidecar).lower()
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_library_archive_round_trips_override_for_absent_captured_field(
+    db_session: Session, auth_headers: dict[str, str], tmp_path: Path
+) -> None:
+    """A sparse capture must not serialize its DB compatibility sentinel."""
+    user, model, file_row = _seed(db_session, tmp_path)
+    capture = CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://www.printables.com/model/absent-title",
+                "source_item_id": "absent-title",
+                "source_revision": None,
+                "adapter_version": "printables-v1",
+                "fields": {},
+            },
+            "files": [
+                {
+                    "id": "absent-title:cube",
+                    "name": "cube.stl",
+                    "file_type": "stl",
+                    "size": file_row.size_bytes,
+                }
+            ],
+            "selected_ids": ["absent-title:cube"],
+        }
+    )
+    provenance.attach_existing_artifact(
+        db_session,
+        file_row,
+        provenance.ProvenanceContext(
+            manifest=capture,
+            source_file_id="absent-title:cube",
+            source_filename="cube.stl",
+            blob_sha256=file_row.sha256,
+        ),
+        imported_overrides={"title": "Local title"},
+    )
+    db_session.commit()
+
+    archive_path = library_transfer.create_archive(db_session, user)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            sidecar = json.loads(archive.read("provenance.json"))
+        source = sidecar["models"][0]["sources"][0]
+        assert source["fields"] == []
+        assert source["overrides"] == [
+            {"field_name": "title", "user_value": "Local title"}
+        ]
+        assert source["latest_capture"]["snapshot"]["fields"] == {}
+
+        # Simulate a separate target vault in this shared database.  The
+        # target still receives a strict CaptureManifestV2 parse from the
+        # sidecar before any import writes.
+        db_session.delete(
+            db_session.exec(
+                select(ArtifactProvenanceLink).where(
+                    ArtifactProvenanceLink.file_id == file_row.id
+                )
+            ).one()
+        )
+        db_session.delete(
+            db_session.exec(
+                select(ModelProvenanceSource).where(
+                    ModelProvenanceSource.model_id == model.id
+                )
+            ).one()
+        )
+        db_session.commit()
+        _rewrite_manifest(
+            archive_path,
+            lambda manifest: manifest["models"][0].update({"hash": "e" * 64}),
+            strip_provenance=False,
+        )
+        result = library_transfer.import_archive(db_session, archive_path, user)
+        assert result["created_files"] == 1
+        imported = db_session.exec(select(Model).where(Model.hash == "e" * 64)).one()
+        imported_source = db_session.exec(
+            select(ModelProvenanceSource).where(
+                ModelProvenanceSource.model_id == imported.id
+            )
+        ).one()
+        imported_field = db_session.exec(
+            select(ModelProvenanceField).where(
+                ModelProvenanceField.provenance_source_id == imported_source.id,
+                ModelProvenanceField.field_name == "title",
+            )
+        ).one()
+        assert provenance.effective_value(imported_field) == "Local title"
+        assert (
+            len(
+                db_session.exec(
+                    select(ProvenanceCapture).where(
+                        ProvenanceCapture.provenance_source_id == imported_source.id
+                    )
+                ).all()
+            )
+            == 1
+        )
     finally:
         archive_path.unlink(missing_ok=True)
 
@@ -218,7 +396,9 @@ def test_library_archive_api_reports_preflight_failure(
     assert response.json() == {"detail": detail}
 
 
-def _rewrite_manifest(archive_path: Path, mutate) -> Path:
+def _rewrite_manifest(
+    archive_path: Path, mutate, *, strip_provenance: bool = True
+) -> Path:
     """Rewrite an archive's manifest.json via ``mutate(manifest_dict)`` in place.
 
     ``ZipFile`` has no in-place edit, so this reads every entry into a new
@@ -237,10 +417,228 @@ def _rewrite_manifest(archive_path: Path, mutate) -> Path:
                 manifest = json.loads(data)
                 mutate(manifest)
                 data = json.dumps(manifest).encode("utf-8")
+            elif info.filename == "provenance.json" and strip_provenance:
+                data = json.dumps(
+                    {"format": library_transfer.PROVENANCE_FORMAT, "models": []}
+                ).encode("utf-8")
             dst.writestr(info, data)
     archive_path.unlink()
     rewritten.rename(archive_path)
     return archive_path
+
+
+def _rewrite_sidecar(archive_path: Path, mutate) -> Path:
+    rewritten = archive_path.with_suffix(".rewritten.zip")
+    with (
+        zipfile.ZipFile(archive_path) as src,
+        zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_DEFLATED) as dst,
+    ):
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename == "provenance.json":
+                sidecar = json.loads(data)
+                mutate(sidecar)
+                data = json.dumps(sidecar).encode("utf-8")
+            dst.writestr(info, data)
+    archive_path.unlink()
+    rewritten.rename(archive_path)
+    return archive_path
+
+
+def test_library_import_restores_provenance_into_new_model(
+    db_session: Session, auth_headers: dict[str, str], tmp_path: Path
+) -> None:
+    user, model, file_row = _seed(db_session, tmp_path)
+    capture = CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://printables.com/model/portable-roundtrip-42",
+                "source_item_id": "portable-roundtrip-42",
+                "source_revision": "r1",
+                "adapter_version": "adapter-1",
+                "fields": {"title": {"value": "Captured", "origin": "confirmed"}},
+            },
+            "files": [
+                {
+                    "id": "portable-roundtrip-42:cube",
+                    "name": "cube.stl",
+                    "file_type": "stl",
+                    "size": file_row.size_bytes,
+                }
+            ],
+            "selected_ids": ["portable-roundtrip-42:cube"],
+        }
+    )
+    provenance.attach_existing_artifact(
+        db_session,
+        file_row,
+        provenance.ProvenanceContext(
+            manifest=capture,
+            source_file_id="portable-roundtrip-42:cube",
+            source_filename="cube.stl",
+            blob_sha256=file_row.sha256,
+        ),
+        imported_overrides={"title": "Local"},
+    )
+    db_session.commit()
+    archive_path = library_transfer.create_archive(db_session, user)
+    try:
+        # The archive is imported into an independent Vault. Remove the
+        # source-side link from this one-process fixture before exercising the
+        # target path; a real second Vault has no global import-key collision.
+        db_session.delete(
+            db_session.exec(
+                select(ArtifactProvenanceLink).where(
+                    ArtifactProvenanceLink.file_id == file_row.id
+                )
+            ).one()
+        )
+        db_session.delete(
+            db_session.exec(
+                select(ModelProvenanceSource).where(
+                    ModelProvenanceSource.model_id == model.id
+                )
+            ).one()
+        )
+        db_session.commit()
+        _rewrite_manifest(
+            archive_path,
+            lambda manifest: manifest["models"][0].update({"hash": "f" * 64}),
+            strip_provenance=False,
+        )
+        result = library_transfer.import_archive(db_session, archive_path, user)
+        assert result["created_files"] == 1
+        imported = db_session.exec(select(Model).where(Model.hash == "f" * 64)).one()
+        source = db_session.exec(
+            select(ModelProvenanceSource).where(
+                ModelProvenanceSource.model_id == imported.id
+            )
+        ).one()
+        assert source.provider == "printables"
+        field = db_session.exec(
+            select(ModelProvenanceField).where(
+                ModelProvenanceField.provenance_source_id == source.id
+            )
+        ).one()
+        assert json.loads(field.user_value_json) == "Local"
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda sidecar: sidecar["models"][0]["sources"][0]["artifact_links"][0].update(
+            {"artifact_source_id": 999}
+        ),
+        lambda sidecar: sidecar["models"][0]["sources"][0]["artifact_links"][0].update(
+            {"blob_sha256": "0" * 64}
+        ),
+        lambda sidecar: sidecar["models"][0]["sources"][0]["artifact_links"][0].update(
+            {"source_filename": "../escape.stl"}
+        ),
+    ],
+)
+def test_library_import_rejects_invalid_provenance_sidecar_before_writes(
+    db_session: Session, auth_headers: dict[str, str], tmp_path: Path, mutate
+) -> None:
+    user, _model, file_row = _seed(db_session, tmp_path)
+    capture = CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://printables.com/model/42",
+                "source_item_id": "42",
+                "source_revision": None,
+                "adapter_version": "adapter-1",
+                "fields": {},
+            },
+            "files": [
+                {
+                    "id": "42:cube",
+                    "name": "cube.stl",
+                    "file_type": "stl",
+                    "size": file_row.size_bytes,
+                }
+            ],
+            "selected_ids": ["42:cube"],
+        }
+    )
+    provenance.attach_existing_artifact(
+        db_session,
+        file_row,
+        provenance.ProvenanceContext(
+            manifest=capture,
+            source_file_id="42:cube",
+            source_filename="cube.stl",
+            blob_sha256=file_row.sha256,
+        ),
+    )
+    db_session.commit()
+    archive_path = library_transfer.create_archive(db_session, user)
+    try:
+        _rewrite_sidecar(archive_path, mutate)
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer.import_archive(db_session, archive_path, user)
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def test_library_import_rejects_empty_captured_sidecar_value(
+    db_session: Session, auth_headers: dict[str, str], tmp_path: Path
+) -> None:
+    user, _model, file_row = _seed(db_session, tmp_path)
+    capture = CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://printables.com/model/strict-captured",
+                "source_item_id": "strict-captured",
+                "source_revision": None,
+                "adapter_version": "adapter-1",
+                "fields": {"title": {"value": "Captured", "origin": "confirmed"}},
+            },
+            "files": [
+                {
+                    "id": "strict-captured:cube",
+                    "name": "cube.stl",
+                    "file_type": "stl",
+                    "size": file_row.size_bytes,
+                }
+            ],
+            "selected_ids": ["strict-captured:cube"],
+        }
+    )
+    provenance.attach_existing_artifact(
+        db_session,
+        file_row,
+        provenance.ProvenanceContext(
+            manifest=capture,
+            source_file_id="strict-captured:cube",
+            source_filename="cube.stl",
+            blob_sha256=file_row.sha256,
+        ),
+    )
+    db_session.commit()
+    archive_path = library_transfer.create_archive(db_session, user)
+    try:
+        _rewrite_sidecar(
+            archive_path,
+            lambda sidecar: sidecar["models"][0]["sources"][0]["fields"][0].update(
+                {"captured_value": ""}
+            ),
+        )
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer.import_archive(db_session, archive_path, user)
+    finally:
+        archive_path.unlink(missing_ok=True)
 
 
 def test_library_import_creates_new_model_star_and_print_job(

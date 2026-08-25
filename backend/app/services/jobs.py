@@ -16,7 +16,7 @@ from time import monotonic
 from typing import Any, Dict, Optional
 
 from sqlalchemy import delete, func, or_
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from app.core.time import utcnow
 from app.db.models import BackgroundJob
@@ -254,6 +254,7 @@ class JobRegistry:
         *,
         visible: bool = True,
         kind: str = "ingest",
+        session: Session | None = None,
     ) -> str:
         job_id = uuid.uuid4().hex
         with self._lock:
@@ -265,7 +266,22 @@ class JobRegistry:
                 state="pending",
                 kind=kind[:64] or "ingest",
             )
-            self._persist(self._jobs[job_id])
+            if session is None:
+                self._persist(self._jobs[job_id])
+            else:
+                session.add(
+                    BackgroundJob(
+                        id=job_id,
+                        owner_user_id=owner_user_id,
+                        visible=visible,
+                        kind=kind[:64] or "ingest",
+                        state="pending",
+                        status_json=self._status_payload(self._jobs[job_id]),
+                        created_at=utcnow(),
+                        updated_at=utcnow(),
+                    )
+                )
+                session.flush()
         return job_id
 
     def update(

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, ParamSpec, TypeVar
 
 from sqlalchemy import case, func, update
 from sqlalchemy.exc import IntegrityError
@@ -39,6 +39,9 @@ from app.services.mesh_processing import FallbackThumbnail
 from app.services.profile_detection import upsert_detected_profiles
 from app.services.storage_backend import StorageCollisionError, get_backend
 from app.services.storage_ownership import record_creation
+
+if TYPE_CHECKING:
+    from app.services.provenance import ProvenanceContext
 
 logger = get_logger(__name__)
 
@@ -83,6 +86,21 @@ class ThumbnailDurabilityError(RuntimeError):
 
 def _fault_injection_checkpoint(_stage: str, _job_id: str) -> None:
     """Stable monkeypatch seam for commit-boundary regression tests."""
+
+
+def _attach_ingested_artifact(
+    session: Session, file_row: File, context: ProvenanceContext
+) -> None:
+    """Attach provenance without taking over artifact transaction ownership.
+
+    The import is deliberately deferred so all existing ingestion callers stay
+    independent of the optional capture/provenance feature until they pass a
+    context.  The provenance service must not commit here: this caller owns the
+    File, metadata, storage receipts, and their rollback as one transaction.
+    """
+    from app.services.provenance import attach_ingested_artifact
+
+    attach_ingested_artifact(session, file_row, context)
 
 
 def verify_durable_artifact(
@@ -289,6 +307,7 @@ def persist_artifact(
     external_library_id: int | None = None,
     source_mtime: float | None = None,
     ingestion_key: str | None = None,
+    provenance_context: ProvenanceContext | None = None,
 ) -> File:
     """Persist a parsed, staged artifact onto *model* — the deep core shared
     by background ingestion and synchronous revision attachment.
@@ -403,6 +422,11 @@ def persist_artifact(
         session.add(file_row)
         session.flush()
         assert file_row.id is not None
+        if provenance_context is not None:
+            # The File id exists, but the Artifact has not yet become visible.
+            # A provenance failure therefore follows the established rollback
+            # path for both its link and the bytes/row it describes.
+            _attach_ingested_artifact(session, file_row, provenance_context)
         if blob_receipt is not None and not is_external:
             record_creation(session, blob_receipt, object_kind="artifact")
 
@@ -576,6 +600,7 @@ def run_ingestion_pipeline(
     session_factory: SessionFactory | None = None,
     source_url: Optional[str] = None,
     target_library_id: int | None = None,
+    provenance_context: ProvenanceContext | None = None,
 ) -> None:
     """Full ingestion pipeline.
 
@@ -645,7 +670,8 @@ def run_ingestion_pipeline(
                 with session_factory.scoped_session() as cleanup_session:
                     lease = cleanup_session.exec(
                         select(StagingLease).where(
-                            StagingLease.background_job_id == job_id
+                            StagingLease.background_job_id == job_id,
+                            StagingLease.capture_upload_slot_origin_id.is_(None),
                         )
                     ).first()
                     if lease is not None:
@@ -655,6 +681,47 @@ def run_ingestion_pipeline(
         report("hashing")
         blob_hash = sha256_file(staged_path)
         logger.info("ingestion_job job_id=%s stage=hashed result=running", job_id)
+
+        if provenance_context is not None:
+            provenance_context = replace(provenance_context, blob_sha256=blob_hash)
+            from app.services.provenance import preflight_existing_artifact
+
+            with session_factory.scoped_session() as session:
+                preflight = preflight_existing_artifact(session, provenance_context)
+            if preflight.status == "reusable":
+                assert preflight.model_id is not None and preflight.file_id is not None
+                # A byte-level duplicate can still carry a newer source
+                # snapshot.  Upsert it before returning the existing Artifact;
+                # this preserves the dedupe invariant without making capture
+                # freshness depend on a new blob write.
+                from app.services.provenance import attach_existing_artifact
+
+                with session_factory.scoped_session() as session:
+                    existing_file = session.get(File, preflight.file_id)
+                    if existing_file is None:
+                        raise RuntimeError("captured_artifact_missing")
+                    attach_existing_artifact(session, existing_file, provenance_context)
+                    session.commit()
+                registry.finish(
+                    job_id,
+                    state="completed",
+                    completion="complete",
+                    model_id=preflight.model_id,
+                    file_id=preflight.file_id,
+                    processed=1,
+                    total=1,
+                    succeeded=1,
+                    deduplicated=1,
+                    result={
+                        "created": False,
+                        "deduplicated": True,
+                        "name": original_filename,
+                    },
+                )
+                staged_path.unlink(missing_ok=True)
+                return
+            if preflight.status == "trashed":
+                raise RuntimeError("captured_artifact_trashed")
 
         meta, thumb_bytes = strategy.process(staged_path, report)
         if thumb_bytes is None and strategy.file_type not in (FileType.GCODE,):
@@ -731,6 +798,7 @@ def run_ingestion_pipeline(
                 external_library_id=dest.external_library_id,
                 source_mtime=dest.source_mtime,
                 ingestion_key=job_id,
+                provenance_context=provenance_context,
             )
             assert file_row.id is not None
             durable_ids = (model.id, file_row.id)
@@ -785,7 +853,10 @@ def run_ingestion_pipeline(
         staged_path.unlink(missing_ok=True)
         with session_factory.scoped_session() as cleanup_session:
             lease = cleanup_session.exec(
-                select(StagingLease).where(StagingLease.background_job_id == job_id)
+                select(StagingLease).where(
+                    StagingLease.background_job_id == job_id,
+                    StagingLease.capture_upload_slot_origin_id.is_(None),
+                )
             ).first()
             if lease is not None:
                 cleanup_session.delete(lease)
@@ -878,6 +949,7 @@ def ingest_orca_gcode(
     session_factory: SessionFactory | None = None,
     source_url: Optional[str] = None,
     target_library_id: int | None = None,
+    provenance_context: ProvenanceContext | None = None,
 ) -> None:
     """Public entry point for G-code ingestion (called from the OrcaSlicer router)."""
     run_ingestion_pipeline(
@@ -893,6 +965,7 @@ def ingest_orca_gcode(
         session_factory=session_factory,
         source_url=source_url,
         target_library_id=target_library_id,
+        provenance_context=provenance_context,
     )
 
 
@@ -910,6 +983,7 @@ def ingest_mesh(
     session_factory: SessionFactory | None = None,
     source_url: Optional[str] = None,
     target_library_id: int | None = None,
+    provenance_context: ProvenanceContext | None = None,
 ) -> None:
     """Public entry point for mesh ingestion (called from the model upload router)."""
     run_ingestion_pipeline(
@@ -925,6 +999,7 @@ def ingest_mesh(
         session_factory=session_factory,
         source_url=source_url,
         target_library_id=target_library_id,
+        provenance_context=provenance_context,
     )
 
 

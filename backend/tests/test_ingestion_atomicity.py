@@ -13,13 +13,22 @@ import threading
 from pathlib import Path
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import Engine, event
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.core.config import _overlay
-from app.db.models import File, FileType, Metadata, Model
-from app.db.session import _set_sqlite_pragmas
-from app.services import ingestion, thumbnail
+from app.db.models import (
+    File,
+    FileType,
+    Metadata,
+    Model,
+    ModelProvenanceField,
+    ProvenanceCapture,
+    User,
+)
+from app.db.session import SQLiteSessionFactory, _set_sqlite_pragmas
+from app.services import ingestion, provenance, thumbnail
+from app.services.jobs import registry
 from app.services.storage_backend import get_backend
 
 
@@ -75,6 +84,141 @@ def test_persists_file_and_metadata_together(
         select(Metadata).where(Metadata.file_id == file_row.id)
     ).first()
     assert md is not None and md.estimated_time_s == 120
+
+
+def test_provenance_attachment_shares_artifact_transaction(
+    db_session: Session,
+    storage,
+    model: Model,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provenance failure must roll back the freshly-flushed Artifact too."""
+
+    seen_file_ids: list[int] = []
+
+    def _boom(session: Session, file_row: File, context: object) -> None:
+        del session, context
+        assert file_row.id is not None
+        seen_file_ids.append(file_row.id)
+        raise RuntimeError("provenance boom")
+
+    monkeypatch.setattr(ingestion, "_attach_ingested_artifact", _boom)
+
+    with pytest.raises(RuntimeError, match="provenance boom"):
+        _persist(
+            db_session,
+            model,
+            _staged(tmp_path),
+            provenance_context=object(),
+        )
+
+    db_session.rollback()
+    assert seen_file_ids
+    assert db_session.exec(select(File).where(File.model_id == model.id)).all() == []
+
+
+def test_deduplicated_pipeline_recapture_refreshes_provenance_without_new_artifact(
+    db_session: Session, storage, tmp_path: Path
+) -> None:
+    """A reusable blob still records a newer source snapshot before terminal dedupe."""
+    staged = _staged(tmp_path)
+    blob_hash = hashlib.sha256(staged.read_bytes()).hexdigest()
+    actor = User(
+        username="capture-owner", hashed_password="not-used", is_superuser=True
+    )
+    model = Model(name="Bracket", slug="bracket", hash=blob_hash)
+    db_session.add_all([actor, model])
+    db_session.commit()
+    db_session.refresh(actor)
+    db_session.refresh(model)
+    assert model.id is not None
+    file_row = File(
+        model_id=model.id,
+        path="provenance/existing.stl",
+        original_filename=staged.name,
+        file_type=FileType.STL,
+        size_bytes=staged.stat().st_size,
+        sha256=blob_hash,
+    )
+    db_session.add(file_row)
+    db_session.flush()
+
+    def manifest(title: str, revision: str):
+        return provenance.CaptureManifestV2.from_dict(
+            {
+                "schema_version": 2,
+                "kind": "model_files",
+                "source": {
+                    "provider": "printables",
+                    "canonical_url": "https://printables.com/model/42",
+                    "source_item_id": "42",
+                    "source_revision": revision,
+                    "adapter_version": "test",
+                    "tags": [],
+                    "fields": {"title": {"value": title, "origin": "confirmed"}},
+                },
+                "files": [
+                    {
+                        "id": "42:file",
+                        "name": staged.name,
+                        "file_type": "stl",
+                        "size": staged.stat().st_size,
+                    }
+                ],
+                "selected_ids": ["42:file"],
+            }
+        )
+
+    first = provenance.ProvenanceContext(
+        manifest=manifest("Original", "r1"),
+        source_file_id="42:file",
+        source_filename=staged.name,
+        blob_sha256=blob_hash,
+        actor_id=actor.id,
+    )
+    link = provenance.attach_ingested_artifact(db_session, file_row, first)
+    provenance.set_user_override(
+        db_session,
+        provenance_source_id=link.provenance_source_id,
+        field_name="title",
+        value="Local",
+    )
+    db_session.commit()
+    job_id = registry.create(owner_user_id=actor.id)
+    strategy = ingestion.IngestionStrategy(
+        FileType.STL, True, lambda _path, _report: ({}, None), ()
+    )
+    engine = db_session.get_bind()
+    assert isinstance(engine, Engine)
+    ingestion.run_ingestion_pipeline(
+        job_id=job_id,
+        staged_path=staged,
+        original_filename=staged.name,
+        model_name="Ignored",
+        collection=None,
+        tags=None,
+        source_hash=None,
+        strategy=strategy,
+        actor_user_id=actor.id,
+        session_factory=SQLiteSessionFactory(engine),
+        provenance_context=provenance.ProvenanceContext(
+            manifest=manifest("Changed", "r2"),
+            source_file_id="42:file",
+            source_filename=staged.name,
+            actor_id=actor.id,
+        ),
+    )
+    assert db_session.exec(select(File).where(File.model_id == model.id)).all() == [
+        file_row
+    ]
+    assert len(db_session.exec(select(ProvenanceCapture)).all()) == 2
+    title = db_session.exec(
+        select(ModelProvenanceField).where(
+            ModelProvenanceField.provenance_source_id == link.provenance_source_id
+        )
+    ).one()
+    assert provenance.effective_value(title) == "Local"
 
 
 def test_failed_thumbnail_preserves_artifact_without_derived_pointer(

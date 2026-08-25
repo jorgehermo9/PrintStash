@@ -1,6 +1,18 @@
 """Framework-neutral clients and contracts for importing external content."""
 
 from . import resolvers
+from .contracts import (
+    CaptureContractError,
+    CapturedField,
+    CaptureFile,
+    CaptureManifestV2,
+    CaptureSource,
+    ResolvedAsset,
+    StagedAsset,
+    canonicalize_provider_url,
+    sanitize_canonical_url,
+    sanitize_provider_canonical_url,
+)
 from .resolvers import (
     CollectionMember,
     ModelFile,
@@ -15,6 +27,7 @@ from .resolvers import (
     makerworld_collection_title,
     makerworld_id,
     makerworld_instance_id,
+    parse_printables_capture,
     pick_printables_pack,
     printables_files_from_print,
     printables_id,
@@ -25,6 +38,11 @@ from .resolvers import (
 
 __all__ = [
     "CollectionMember",
+    "CaptureContractError",
+    "CaptureFile",
+    "CaptureManifestV2",
+    "CaptureSource",
+    "CapturedField",
     "ModelFile",
     "classify_collection",
     "classify_page",
@@ -39,9 +57,15 @@ __all__ = [
     "makerworld_instance_id",
     "pick_printables_pack",
     "printables_files_from_print",
+    "parse_printables_capture",
     "printables_id",
     "printables_link_from_output",
     "printables_links_from_output",
     "resolvers",
+    "ResolvedAsset",
+    "StagedAsset",
+    "canonicalize_provider_url",
+    "sanitize_canonical_url",
+    "sanitize_provider_canonical_url",
     "thingiverse_id",
 ]

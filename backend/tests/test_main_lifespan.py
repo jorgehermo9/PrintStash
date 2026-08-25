@@ -10,16 +10,34 @@ This starts it for real via Starlette's TestClient context-manager protocol.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
+from sqlmodel import select
 from starlette.requests import Request as StarletteRequest
 
 import app.main as app_main
 from app.core.config import _overlay
-from app.db.models import Printer, PrinterProvider, PrinterStatus, User
+from app.db.models import (
+    CaptureUploadSlot,
+    CaptureUploadSlotState,
+    InboxItem,
+    InboxItemState,
+    InboxSourceKind,
+    Model,
+    ModelProvenanceSource,
+    OwnedStorageObject,
+    Printer,
+    PrinterProvider,
+    PrinterStatus,
+    StagingLease,
+    User,
+)
 from app.services import storage_backend
 from app.services.auth import create_access_token, hash_password
 from app.services.realtime import InProcessBus
@@ -111,6 +129,178 @@ def test_safe_db_url_returns_placeholder_for_unparseable_url() -> None:
     assert app_main._safe_db_url("sqlite:///tmp/x.db").endswith("x.db")
 
 
+def test_storage_composition_runs_publication_recovery_after_binding(
+    _local_storage: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services import inbox
+
+    events: list[str] = []
+
+    class _Backend:
+        def ensure_setup(self) -> None:
+            events.append("ensure")
+
+    backend = _Backend()
+    monkeypatch.setattr(app_main, "LocalStorageBackend", lambda: backend)
+    monkeypatch.setattr(
+        app_main,
+        "bind_backend",
+        lambda value: events.append("bind") or value,
+    )
+    monkeypatch.setattr(
+        inbox,
+        "reconcile_storage_publications",
+        lambda: events.append("recover") or 1,
+    )
+
+    assert app_main._compose_storage_backend() is backend
+    assert events == ["ensure", "bind", "recover"]
+
+
+def test_storage_composition_recovers_cover_published_before_restart_binding(
+    _local_storage: None, db_session
+) -> None:
+    from app.services import source_covers, storage_backend
+    from app.services.storage_backend import LocalStorageBackend, get_backend
+
+    model = Model(
+        name="Startup recovery model",
+        slug="startup-recovery-model",
+        hash="a" * 64,
+    )
+    db_session.add(model)
+    db_session.flush()
+    source = ModelProvenanceSource(
+        model_id=model.id,
+        provider="test",
+        canonical_url="https://example.test/startup-recovery",
+        identity_key="startup-recovery",
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    # The fixture has a local backend bound for service setup. Simulate a
+    # process crash after publication and before the caller's receipt commit.
+    storage_backend.bind_backend(LocalStorageBackend())
+    image = BytesIO()
+    Image.new("RGB", (1, 1), "navy").save(image, format="PNG")
+    result = source_covers.put(
+        db_session,
+        get_backend(),
+        provenance_source_id=source.id,
+        actor_id=None,
+        data=image.getvalue(),
+        content_type="image/png",
+    )
+    db_session.rollback()
+    assert db_session.exec(select(StagingLease)).all()
+
+    storage_backend._backend = None
+    app_main._compose_storage_backend()
+    assert db_session.exec(select(StagingLease)).all() == []
+    assert (
+        db_session.exec(select(OwnedStorageObject)).one().key
+        == result.cover.storage_key
+    )
+
+
+def test_startup_reconciles_completed_capture_slot_after_storage_binding(
+    _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed browser capture must recover its publication at startup.
+
+    This is deliberately a bounded startup seam test instead of a TestClient
+    lifespan portal: the ordering under test is synchronous and should not
+    depend on background-task shutdown completing.
+    """
+    from app.db.session import get_session_factory
+    from app.services import inbox, staging_leases, storage_backend
+    from app.services.storage_backend import LocalStorageBackend
+
+    owner = User(username="startup-capture-owner", hashed_password="hash")
+    db_session.add(owner)
+    db_session.flush()
+    assert owner.id is not None
+    item = InboxItem(
+        owner_user_id=owner.id,
+        source_kind=InboxSourceKind.BROWSER,
+        state=InboxItemState.COMPLETED,
+    )
+    db_session.add(item)
+    db_session.flush()
+    assert item.id is not None
+
+    payload = b"completed capture slot publication"
+    slot_id = "startup-completed-slot"
+    unbound_backend = LocalStorageBackend()
+    storage_key = unbound_backend.capture_upload_slot_key(slot_id)
+    slot = CaptureUploadSlot(
+        id=slot_id,
+        inbox_item_id=item.id,
+        role="file",
+        filename="capture.stl",
+        media_type="model/stl",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        state=CaptureUploadSlotState.PENDING,
+        storage_key=storage_key,
+    )
+    db_session.add(slot)
+    db_session.flush()
+    staging_leases.create_capture_slot_lease(
+        db_session,
+        slot_id=slot.id,
+        owner_user_id=owner.id,
+        destination_key=storage_key,
+        size_bytes=slot.size_bytes,
+        sha256=slot.sha256,
+    )
+    db_session.commit()
+    Path(storage_key).parent.mkdir(parents=True, exist_ok=True)
+    Path(storage_key).write_bytes(payload)
+
+    events: list[str] = []
+
+    class _TrackingBackend(LocalStorageBackend):
+        def ensure_setup(self) -> None:
+            events.append("ensure")
+            super().ensure_setup()
+
+        def adopt_existing(self, key: str, *, expected_size: int, expected_sha256: str):
+            events.append("recover")
+            return super().adopt_existing(
+                key, expected_size=expected_size, expected_sha256=expected_sha256
+            )
+
+    backend = _TrackingBackend()
+    monkeypatch.setattr(app_main, "LocalStorageBackend", lambda: backend)
+    real_bind = storage_backend.bind_backend
+
+    def record_bind(value):
+        events.append("bind")
+        return real_bind(value)
+
+    monkeypatch.setattr(app_main, "bind_backend", record_bind)
+
+    def record_interrupted_reconcile() -> int:
+        events.append("inbox")
+        assert storage_backend.get_backend() is backend
+        with get_session_factory().scoped_session() as session:
+            recovered = session.get(CaptureUploadSlot, slot_id)
+            assert recovered is not None
+            assert recovered.state == CaptureUploadSlotState.UPLOADED
+            assert recovered.receipt_json
+        return 0
+
+    monkeypatch.setattr(
+        inbox, "reconcile_interrupted_items", record_interrupted_reconcile
+    )
+    storage_backend._backend = None
+
+    assert app_main._prepare_storage_for_startup() is backend
+    assert events == ["ensure", "bind", "recover", "inbox"]
+
+
 def test_parse_cors_origins_accepts_list_and_filters_blanks() -> None:
     assert app_main._parse_cors_origins(
         ["http://a.example", "  ", "http://b.example"]
@@ -135,6 +325,60 @@ async def test_cancel_tasks_awaits_cleanup_and_consumes_cancellation() -> None:
 
     assert cleaned_up.is_set()
     assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_close_outbound_clients_closes_provider_after_existing_client_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    async def close_http_client() -> None:
+        events.append("shared")
+        raise RuntimeError("shared client failed")
+
+    async def close_provider_transport() -> None:
+        events.append("provider")
+
+    import app.services.capture_provider_transport as provider_transport
+    import app.services.moonraker as moonraker
+
+    monkeypatch.setattr(moonraker, "close_http_client", close_http_client)
+    monkeypatch.setattr(
+        provider_transport, "close_provider_transport", close_provider_transport
+    )
+
+    with pytest.raises(RuntimeError, match="shared client failed"):
+        await app_main._close_outbound_clients()
+
+    assert events == ["shared", "provider"]
+
+
+@pytest.mark.asyncio
+async def test_close_outbound_clients_logs_provider_close_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def close_provider_transport() -> None:
+        raise RuntimeError("provider close failed")
+
+    import app.services.capture_provider_transport as provider_transport
+    import app.services.moonraker as moonraker
+
+    monkeypatch.setattr(moonraker, "close_http_client", lambda: _done())
+    monkeypatch.setattr(
+        provider_transport, "close_provider_transport", close_provider_transport
+    )
+
+    with caplog.at_level(logging.ERROR, logger=app_main.logger.name):
+        await app_main._close_outbound_clients()
+
+    assert "failed to close capture provider transport" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "provider close failed" not in caplog.text
+
+
+async def _done() -> None:
+    pass
 
 
 def _fake_request(
