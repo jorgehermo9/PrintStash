@@ -1,6 +1,6 @@
 ---
 name: create-tests
-description: Use when touching any test — creating a test file, adding a case to an existing file, editing or deleting a test, auditing whether a module is covered, or choosing which layer (pure / in-process / boundary / e2e / Playwright) a scenario belongs to. Carries the mandatory coverage matrix, the test-type policy, and the per-runtime conventions for pytest, vitest, and Playwright in this repo. Not for merely running tests — AGENTS.md has the commands.
+description: Use when touching any test — creating a test file, adding a case to an existing file, editing or deleting a test, auditing whether a module is covered, or choosing which tier (unit / integration / contract / e2e / Playwright) a scenario belongs to. Carries the mandatory coverage matrix, the tier policy, the mirrored test layout, file anatomy and parametrization rules, and the per-runtime conventions for pytest, vitest, and Playwright in this repo. Not for merely running tests — AGENTS.md has the commands.
 ---
 
 # Create Tests
@@ -22,9 +22,9 @@ Read this file in full, then the one reference for the runtime you're writing in
 Two independent questions decide a feature's tests:
 
 1. **How much** — coverage completeness. *This section.*
-2. **Which kind** — pure vs. in-process vs. boundary vs. e2e. *Test Type Policy, below.*
+2. **Which tier** — unit vs. integration vs. contract vs. e2e. *Tier Policy, below.*
 
-Pick the *type* per scenario; pick the *count* by covering every scenario. The
+Pick the *tier* per scenario; pick the *count* by covering every scenario. The
 two don't trade off: **exhaustive** means every distinct behaviour has a test;
 **not too many** means no redundant tests for the same behaviour and no
 assertions on implementation details. One test per behaviour satisfies both.
@@ -55,7 +55,7 @@ classes for each feature so none are silently skipped:
   without metadata, thumbnail failing after persist); atomicity holds
 - **Storage backend** — behaviour is identical through `StorageBackend`
   (local default; S3 branch when the change touches storage keys)
-- **SQLite and PostgreSQL** — dialect-sensitive SQL (`tests/postgres/`) when
+- **SQLite and PostgreSQL** — dialect-sensitive SQL (`postgres` marker) when
   the change adds a query, index, or migration
 
 The fixtures make the Nth test nearly free — `db_session`, `client`,
@@ -83,15 +83,15 @@ prove the exhaustive bar is met instead of asserting it.
 
 **Standard format** (a Markdown table — use these exact columns):
 
-| # | Behaviour (test name) | Category | Precondition / input | Observable outcome asserted | Type | Status |
+| # | Behaviour (test name) | Category | Precondition / input | Observable outcome asserted | Tier | Status |
 |---|----------------------|----------|----------------------|-----------------------------|------|--------|
-| 1 | persists the file row and metadata together | Happy | staged STL, well-formed meta | `File` + `Metadata` rows exist; returned row has id | In-process | ✅ `test_ingestion_atomicity.py::test_persists_file_and_metadata_together` |
-| 2 | dedupes a re-upload by content hash | Edge | same bytes uploaded twice | job state `duplicate`; one `Model` row | E2E | ✅ `test_e2e_ingest.py::test_gcode_upload_parses_metadata_and_dedups` |
-| 3 | accepts a model name at the length limit | Edge | name = MAX chars | 201; row persisted untruncated | In-process | ❌ missing |
-| 4 | hides a trashed model from the list | Edge | model with `deleted_at` set | `GET /models` omits it | In-process | ❌ missing |
-| 5 | denies a `read`-scope token | Error | token scope `read` | 403; no row written | In-process | ❌ missing |
-| 6 | returns all-None metadata for a file with no comments | Edge | G-code with no `;` lines | every metadata field is `None`; no exception | Pure | ✅ `test_gcode_parser.py::test_no_comments_returns_all_none` |
-| 7 | surfaces a provider upload rejection | Error | emulator started with `reject_commands=True` | `ProviderError`; job state `failed` | Boundary | ❌ missing |
+| 1 | persists the file row and metadata together | Happy | staged STL, well-formed meta | `File` + `Metadata` rows exist; returned row has id | Integration | ✅ `unit/services/test_ingestion.py::TestPersistArtifact::test_persists_file_and_metadata_together` |
+| 2 | dedupes a re-upload by content hash | Edge | same bytes uploaded twice | job state `duplicate`; one `Model` row | E2E | ✅ `e2e/test_ingest.py::test_gcode_upload_dedups_by_content_hash` |
+| 3 | accepts a model name at the length limit | Edge | name = MAX chars | 201; row persisted untruncated | Integration | ❌ missing |
+| 4 | hides a trashed model from the list | Edge | model with `deleted_at` set | `GET /models` omits it | Integration | ❌ missing |
+| 5 | denies a `read`-scope token | Error | token scope `read` | 403; no row written | Integration | ❌ missing |
+| 6 | returns all-None metadata for a file with no comments | Edge | G-code with no `;` lines | every metadata field is `None`; no exception | Unit | ✅ `gcode/test_parser.py::TestParse::test_no_comments_returns_all_none` |
+| 7 | surfaces a provider upload rejection | Error | emulator started with `reject_commands=True` | `ProviderError`; job state `failed` | Contract | ❌ missing |
 
 **What each column holds:**
 
@@ -99,19 +99,19 @@ prove the exhaustive bar is met instead of asserting it.
 - **Category** — `Happy` / `Edge` / `Error`. Scanning this column shows at a
   glance whether all three were swept.
 - **Precondition / input** — the arrange step: state and input driving this
-  behaviour.
+  behaviour. For a parametrized test, the list of cases.
 - **Observable outcome asserted** — the *real* artifact you assert on: a DB
   row, an HTTP status + body, a returned value, a file on the storage backend,
   a request the emulator's `Recorder` received. The boundary is the
   observable, not a spy on internal calls. Never "method X was called." If you
   can't name an observable outcome, the row isn't a behaviour — drop or
   rewrite it.
-- **Type** — `Pure` / `In-process` / `Boundary` / `E2E` / `Playwright` /
-  `Frontend unit`, chosen via the Test Type Policy below. Don't re-justify
-  the choice in the cell; the policy is the source of truth.
-- **Status** — exactly one of `✅ file::test_name` (covered), `❌ missing`
-  (planned, not written), or `⏭️ N/A — <reason>` (deliberately not tested,
-  reason inline).
+- **Tier** — `Unit` / `Integration` / `Contract` / `E2E` / `Frontend unit` /
+  `Playwright`, chosen via the Tier Policy below. Don't re-justify the choice
+  in the cell; the policy is the source of truth.
+- **Status** — exactly one of `✅ <tier dir>/<file>::<test>` (covered),
+  `❌ missing` (planned, not written), or `⏭️ N/A — <reason>` (deliberately
+  not tested, reason inline).
 
 **Surface the matrix** in your response and in the PR description (the PR
 template has a section for it). An empty or `❌` cell is a visible missing
@@ -140,7 +140,7 @@ reading the **current** suite — `✅` where a test already covers the row,
 `❌ missing` where none does. The `❌` rows are the coverage gap; report them
 as the deliverable.
 
-## Test Type Policy
+## Tier Policy
 
 **"Write tests. Not too many. Mostly integration."** The highest
 confidence-per-test comes from tests that wire real components together.
@@ -150,26 +150,43 @@ section exists to counteract that.
 In this repo the real database is *free*: every test that takes `db_session`
 or `client` runs against a real SQLite engine with the production pragmas
 (`foreign_keys=ON`), real routers, real services, and a table wipe between
-tests. So the default test type is **in-process**, and the only things you
-ever stand in for are egress boundaries.
+tests. So the default tier is **integration**, and the only things you ever
+stand in for are egress boundaries.
 
-### The layers
+### The tiers
 
-| Type | Where | What is real | What is stood in for | Lane |
+| Tier | Where | What is real | What is stood in for | Lane |
 | --- | --- | --- | --- | --- |
-| **Pure** | `backend/tests/test_<concern>.py`, `printstash-core/tests/` | the function | nothing | `fast` |
-| **In-process** *(default)* | `backend/tests/test_<concern>.py` | SQLite, routers, services, storage backend, RBAC | outbound HTTP (`get_http_client`), provider clients | `fast` |
-| **Boundary** *(`integration` marker)* | `backend/tests/test_<provider>_integration.py`, `test_real_*.py`, `tests/postgres/`, `test_migrations.py`, `test_storage_s3.py` | a loopback emulator over a real socket, a real slicer file, PostgreSQL, SeaweedFS, Alembic | nothing | `integration` |
-| **E2E** *(`e2e` marker)* | `backend/tests/e2e/` | the whole app via `httpx.ASGITransport` + contract-enforcing fakes | nothing (`is_public_ip` relaxed for loopback) | `e2e` |
-| **Frontend unit** | `frontend/src/**/__tests__/` | component/hook + real collaborators (query hooks, api client, router, auth context) | `fetch` via `vi.stubGlobal`, or `QueryApiProvider` stubs | `pnpm test` |
-| **Playwright real** | `frontend/tests/e2e-real/` | browser + Vite + real uvicorn + throwaway SQLite (+ mock printer) | nothing | `pnpm test:e2e:real` |
+| **Unit** | `backend/tests/unit/<app path>/`, `printstash-core/tests/<pkg path>/` | the function | nothing | `fast` |
+| **Integration** *(default)* | `backend/tests/integration/<app path>/` | SQLite, routers, services, storage backend, RBAC; real fixture files | outbound HTTP (`get_http_client`), provider transports | `fast` (minus `slow`/`postgres`/`s3`-marked subsets) |
+| **Contract** | `backend/tests/contract/<app path>/` | our client against a contract-enforcing fake over a real loopback socket (emulators, Bambu MQTT/FTPS, OIDC) | nothing | `contract` |
+| **E2E** | `backend/tests/e2e/` | the whole app via `httpx.ASGITransport` + fakes | nothing (`is_public_ip` relaxed for loopback) | `e2e` |
+| **Frontend unit** | `frontend/src/<path>/__tests__/<module>.test.ts(x)` | component/hook + real collaborators (query hooks, api client, router, auth context) | `fetch` via `vi.stubGlobal`, or `QueryApiProvider` stubs | `pnpm test` |
+| **Playwright real** | `frontend/tests/e2e-real/<feature>.spec.ts` | browser + Vite + real uvicorn + throwaway SQLite (+ mock printer) | nothing | `pnpm test:e2e:real` |
 | **Playwright mock-API** | `frontend/tests/e2e/` | browser + Vite | the API (`mock-api.ts`) | `pnpm test:e2e` |
 
-The `integration`/`e2e` markers are applied by filename convention in
-`backend/tests/conftest.py::pytest_collection_modifyitems` — name the file
-correctly and it lands in the right lane.
+A directory is a tier; **resource markers** (`postgres`, `s3`, `slow`) gate
+subsets *within* a tier and auto-skip when the resource is absent. There is no
+"integration" marker — the directory says it.
 
-### When in-process (or deeper) tests are MANDATORY
+### Category → tier: the default mapping
+
+The matrix's Category column decides the tier before you think about
+convenience:
+
+| Category | Default tier | Because |
+| --- | --- | --- |
+| **Happy** | **Integration** (Contract when the behaviour *is* the wire protocol; E2E once, for the headline flow) | the happy path must be proven through the real DB, real router, real storage backend — a mocked happy path proves the mock |
+| **Edge** | **Integration** | boundaries, empties, duplicates, live/trashed visibility and RBAC only mean something against real rows and real constraints |
+| **Error — contract** (401/403/404/409/422, `IntegrityError`, trashed row invisible, quota exceeded) | **Integration** | the app itself raises these; no fault injection needed |
+| **Error — dependency misbehaving on cue** (timeout, malformed provider JSON, raise-once-then-succeed, disk full mid-write) | **Unit**, or **Integration with only the egress patched** | the behaviour is our reaction to the dependency's *outcome*; real infra can't produce it deterministically |
+| **Error — real fake fault** (wrong access code, rejected command, flaky webhook, `PrintSim` → `ERROR`) | **Contract** via the fake's fault flag | the fake can produce it for real, so the wire-level reaction is testable without patching |
+
+"It was easier to mock" is never a reason to move a Happy or Edge row down a
+tier. "It's hard to reproduce for real" is the *only* reason an Error row
+moves to a patched test — and then only the fault is patched, not the DB.
+
+### When integration (or deeper) tests are MANDATORY
 
 - **Every router endpoint** — the full request→response cycle through
   `TestClient`: auth scope, RBAC, validation, response shape, DB side effect.
@@ -181,17 +198,17 @@ correctly and it lands in the right lane.
 - **Every query over a soft-deletable table** — a test that a trashed row is
   invisible through the read path (`scopes.live()`), and visible through
   `scopes.trashed()`.
-- **Every migration** — `test_migrations.py` upgrade path; add a
-  `tests/postgres/` case when the SQL is dialect-sensitive.
-- **Every provider change** — the shared conformance pack
-  (`test_provider_conformance.py`) picks it up automatically; behaviour goes in
-  `test_<provider>.py`, and wire-level behaviour in
-  `test_<provider>_integration.py` against its emulator.
-- **Every new feature** — AGENTS.md rule: *unit tests + one e2e test for its
+- **Every migration** — the upgrade-path test; a `postgres`-marked case when
+  the SQL is dialect-sensitive.
+- **Every provider change** — the shared conformance pack picks it up
+  automatically; normalisation goes in `integration/services/test_<provider>.py`,
+  wire-level behaviour in `contract/services/test_<provider>.py` against its
+  emulator.
+- **Every new feature** — AGENTS.md rule: *tests + one e2e test for its
   headline capability* (backend `tests/e2e/`; for UI features also
   `frontend/tests/e2e-real/`).
 
-### When pure / mocked tests are the right choice
+### When unit tests are the right choice
 
 - **Pure logic** — parsers (`gcode_parser`, `bgcode`), hashing, URL safety,
   slug/taxonomy helpers, `model_views` mapping given built rows, frontend
@@ -205,44 +222,132 @@ correctly and it lands in the right lane.
 
 ### Decision matrix
 
-| What you're testing | Type | Stand-in strategy |
+| What you're testing | Tier | Stand-in strategy |
 | --- | --- | --- |
-| Router endpoint | **In-process** | `client` + `auth_headers`; mock egress only |
-| Service with DB writes | **In-process** | `db_session`; real storage backend |
-| Live/trashed visibility, RBAC resolution | **In-process** | real rows, real roles |
-| Dialect-sensitive SQL, migration | **Boundary** | `tests/postgres/` with `PRINTSTASH_TEST_POSTGRES_URL` |
-| Provider wire protocol | **Boundary** | emulator over loopback (`start_server`, `PrintSim`, `Recorder`) |
-| Real slicer output | **Boundary** | fixture under `tests/fixtures/` (`test_real_*`) |
+| Router endpoint | **Integration** | `client` + `auth_headers`; mock egress only |
+| Service with DB writes | **Integration** | `db_session`; real storage backend |
+| Live/trashed visibility, RBAC resolution | **Integration** | real rows, real roles |
+| Real slicer output | **Integration** | fixture under `tests/fixtures/`; `slow` marker if it's a large file |
+| Dialect-sensitive SQL, migration | **Integration** + `postgres` marker | real `postgres:16` via `PRINTSTASH_TEST_POSTGRES_URL` |
+| S3 storage paths | **Integration** + `s3` marker | SeaweedFS in the `storage-s3` job |
+| Provider wire protocol | **Contract** | emulator over loopback (`start_server`, `PrintSim`, `Recorder`) |
 | Headline flow of a feature | **E2E** | `api` + `fakes` fixtures in `tests/e2e/` |
-| Pure function | Pure | none |
-| Reaction to a dependency failing | Pure/In-process | `patch("<module>.get_http_client")`, injected factory |
+| Pure function | Unit | none |
+| Reaction to a dependency failing | Unit / Integration | `patch("<module>.get_http_client")`, injected factory |
 | React component / hook | Frontend unit | `vi.stubGlobal("fetch")`, `QueryApiProvider`, seeded `QueryClient` |
 | UI flow with persistence | Playwright real | none |
 | Route renders without console errors | Playwright mock-API | `mock-api.ts` |
 
-### Never mock inside a boundary or e2e test — induce only real faults
+### Never mock inside a contract or e2e test — induce only real faults
 
-A boundary or e2e test exercises real wiring end to end. The moment you
+A contract or e2e test exercises real wiring end to end. The moment you
 `patch`, `monkeypatch`, or override a seam *inside* one to force a failure, it
-stops being a boundary test on that path — it's a unit test in an integration
+stops being a contract test on that path — it's a unit test in an integration
 costume, and it proves nothing about the real system.
 
-The fault you want decides the type:
+The fault you want decides the tier:
 
-- **Reachable against the real fake, deterministically → boundary test, real
+- **Reachable against the real fake, deterministically → contract test, real
   fault.** The emulators take fault flags for exactly this:
   `reject_commands=True`, a wrong `expected_access_code`, `PrintSim` driven
   to `ERROR`, the `/flaky/{key}` webhook target, `--auth-mode` on PrusaLink.
   Add a flag to the fake when the fault you need isn't there yet.
 - **A dependency misbehaving on cue (raises once, returns garbage, times out
-  N times then succeeds) → in-process/pure test, patched boundary.** "How does
-  our code react when the client raises?" is logic over the dependency's
+  N times then succeeds) → unit or integration test, patched egress.** "How
+  does our code react when the client raises?" is logic over the dependency's
   *outcome*, not a property of real infra.
 
-The smell test: **if making the boundary test fail requires replacing part of
-the real system with a fake, that assertion belongs in an in-process test.**
+The smell test: **if making the contract test fail requires replacing part of
+the real system with a fake, that assertion belongs in an integration test.**
 The e2e conftest's single monkeypatch (`is_public_ip` for loopback) is the
 ceiling, not a precedent.
+
+## Where tests live: mirror the production tree
+
+A test file is found by translating the production path, never by guessing a
+topic name. One production module ↔ one test module, same basename, under the
+tier directory:
+
+| Production | Test |
+| --- | --- |
+| `backend/app/services/ingestion.py` | `backend/tests/integration/services/test_ingestion.py` (and `unit/services/test_ingestion.py` only if it has pure helpers worth isolating) |
+| `backend/app/api/v1/printers.py` | `backend/tests/integration/api/v1/test_printers.py` — or, when one file would exceed ~600 lines, the folder `integration/api/v1/printers/` with `test_create.py`, `test_rbac.py`, … split by endpoint/method group |
+| `backend/app/services/moonraker.py` (wire level, emulator) | `backend/tests/contract/services/test_moonraker.py` |
+| `backend/app/db/migrate.py` + `alembic/` | `backend/tests/integration/db/test_migrations.py` |
+| `backend/packages/printstash-core/src/printstash_core/gcode/parser.py` | `backend/packages/printstash-core/tests/gcode/test_parser.py` |
+| `frontend/src/lib/auth-store.ts` | `frontend/src/lib/__tests__/auth-store.test.ts` |
+| `frontend/src/components/printers-list.tsx` | `frontend/src/components/__tests__/printers-list.test.tsx` |
+| a UI feature area (route/page) | `frontend/tests/e2e-real/<feature>.spec.ts` |
+
+Everything that is not a mirror has one home: `backend/tests/fixtures/` (data
+files), `backend/tests/fakes/` (emulators and contract fakes, shared by
+`contract/` and `e2e/`), `backend/tests/repo/` (repo-level invariants:
+OpenAPI snapshot, CI config, import boundaries), `backend/tests/e2e/` (flows,
+`test_<flow>.py`). Every test directory is a package (`__init__.py`) so
+`integration/services/test_auth.py` and `e2e/test_auth.py` coexist.
+
+The mirror is load-bearing for the matrix: "does `app/services/trash.py` have
+tests?" is answered by one `ls`, and an audit of a module is an audit of one
+file. A test that can't be placed by this rule is testing something that
+isn't a unit — find the unit first.
+
+## Inside a test file
+
+Every test file, in every runtime, has the same anatomy, top to bottom:
+
+1. **Contract header** — module docstring (pytest) or leading block comment
+   (vitest/Playwright) stating in prose what this file defends and why it
+   matters when it goes red. Not a restatement of the filename.
+2. **Imports**, then **module constants** — absolute instants, round numbers,
+   fake credentials that are obviously fake.
+3. **Local fixtures / `_make_*` builders** — only what two or more tests
+   share. Single-use setup stays inline in its test. Anything three files
+   share moves to the nearest `conftest.py` / shared helper.
+4. **One group per production unit, in the production module's order** —
+   `class Test<Function|Endpoint|Method>` in pytest, `describe("<unit>")` in
+   vitest. Never an ad-hoc group (`TestMisc`, `describe("extra cases")`); a
+   new aspect of a unit is a sibling test in that unit's group.
+5. **Inside a group, tests in matrix order: Happy → Edge → Error.** Reading
+   the file top to bottom reads the matrix.
+
+Each test body is **Arrange / Act / Assert** separated by blank lines, with no
+section comments. Rules that keep it that way:
+
+- **No conditionals or loops in a test body.** A loop is a parametrized test;
+  a branch is two tests.
+- **Assertions carry context**: `assert r.status_code == 201, r.text`;
+  `expect(rows).toEqual([...])` over `toHaveLength` when the content matters.
+- **The name is the matrix row**: `test_<verb phrase>` / `it("<verb
+  phrase>")`. No `test_1`, no `test_works`, no `it("should work")`.
+- **No `skip`/`xfail`/`.skip` without an issue URL in the reason**, and no
+  commented-out tests. A test you can't make pass is a `❌` row in the
+  matrix, visible, not a dead block.
+
+### Parametrized tests
+
+Parametrize when — and only when — **one behaviour** is exercised across
+**several inputs** and the **assertion has the same shape for every case**:
+
+- boundary sweeps (`0`, `1`, `MAX`, `MAX + 1`)
+- format/dialect variants (Orca / Prusa / Cura / Bambu headers; SQLite / Postgres)
+- every member of a production registry (`PROVIDERS`, `PrinterRole`,
+  `FileType`, every locale) — **derive the list from the registry**, never
+  copy it, so a new member is covered the day it's added (this is the
+  conformance-pack pattern)
+
+Don't parametrize when the cases assert *different things*, when the body
+would need `if case.kind:` to pick an assertion, when one case needs a
+materially different arrange, or when there is only one case. A parameter
+list where one entry means "no error expected" and the others mean "raises X"
+is two tests wearing one decorator — split it.
+
+In the matrix, a parametrized test is **one row** (list the cases in the
+Precondition column) as long as the assertion is identical; a case with its
+own assertion is its own row and its own test. Every case gets a readable
+id (`ids=` / `pytest.param(id=...)`; vitest `$label`) so a failure names the
+variant, not `[3]`.
+
+Runtime mechanics are in the references.
 
 ### One behaviour per test
 
@@ -254,16 +359,16 @@ which. If the natural name needs the word "and", split.
 def test_create_printer_returns_201_and_persists_row(): ...
 
 # ✅ one behaviour per test
-def test_create_printer_returns_the_created_printer(): ...
-def test_create_printer_persists_a_row(): ...
-def test_create_printer_rejects_read_scope(): ...
+def test_returns_the_created_printer(): ...
+def test_persists_a_row(): ...
+def test_rejects_read_scope(): ...
 ```
 
 Why: the failing test's name tells you which behaviour broke; each test is
 independently skippable; setup is paid per fixture, not per test, so splitting
-costs nothing. Applies equally to in-process, boundary, e2e, and Playwright
-specs — the Playwright real suite's long lifecycle specs are the one deliberate
-exception, because each one *is* a single headline flow.
+costs nothing. Applies equally to every tier and to Playwright specs — the
+Playwright real suite's lifecycle specs are the one deliberate exception,
+because each one *is* a single headline flow.
 
 Common conflations: "captures X and Y" → one test per dimension; "returns 200
 and writes to DB" → response shape vs. side effect; "handles success and
@@ -272,9 +377,9 @@ channel.
 
 ### Anti-patterns
 
-- **Superficial integration** — a `_integration.py` or e2e test that boots
+- **Superficial contract test** — a `contract/` or `e2e/` test that boots
   the emulator, then patches the provider client. Either drive the real fake
-  or move to an in-process test.
+  or move to an integration test.
 - **Mocking the DB** — never. `db_session` is real and cheap. A `MagicMock`
   session tests nothing about `scopes`, cascades, or constraints.
 - **Asserting on mock call arguments as the outcome** —
@@ -293,6 +398,13 @@ channel.
   state: a module-level singleton not reset in `_patch_engine`, an
   `_overlay` key set without cleanup, a file written outside `tmp_path`. Fix
   the state, not the order.
+- **A tier violation in disguise** — a file under `tests/unit/` that takes
+  `db_session`, or a file under `unit/`/`integration/` that opens a socket
+  (the socket guard fails it). Move it to the tier whose directory says what
+  it does; don't widen the guard.
+- **A topic-named test file** — `test_new_features.py`, `test_pure_helpers.py`,
+  `test_api_hardening.py`. Tests live in the mirror of the unit they defend;
+  a file that spans units gets split into their mirrors.
 - **Cross-test collisions on the shared Playwright DB** — the real suite runs
   serially on one DB and only wipes it per *launch*. Any name a spec writes
   must be per-run unique (`` `e2e-model-${Date.now()}` ``) and the spec cleans up
@@ -304,11 +416,11 @@ channel.
   failure message.
 - **Real secrets or access codes in fixtures** — never. Use obviously fake
   values (`"12345678"`, `"key"`).
-- **Skipping the changelog/contract fallout** — a response-shape change
-  updates `tests/fixtures/openapi_contract.json`
-  (`UPDATE_OPENAPI_CONTRACT=1`) and, for provider contracts,
-  `frontend/src/generated/printer-contracts.ts` via the codegen `--check`.
-  Regenerating without reading the diff hides an accidental API break.
+- **Skipping the contract fallout** — a response-shape change updates
+  `tests/fixtures/openapi_contract.json` (`UPDATE_OPENAPI_CONTRACT=1`) and,
+  for provider contracts, `frontend/src/generated/printer-contracts.ts` via
+  the codegen `--check`. Regenerating without reading the diff hides an
+  accidental API break.
 
 ## Test data
 

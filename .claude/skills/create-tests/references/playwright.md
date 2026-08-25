@@ -14,6 +14,11 @@ layer.
 
 ## Real suite
 
+- **One spec per feature area** (`models.spec.ts`, `collections.spec.ts`,
+  `rbac.spec.ts`), named after the page/route it drives; each `test()` is one
+  headline flow. Shared browser helpers live in `helpers.ts` (auth) and
+  `util.ts` (upload/model/collection actions) — extend those, don't add a
+  third helper file per spec.
 - Import `test`/`expect` from `./helpers`, not `@playwright/test`. The `page`
   fixture arrives authenticated as the seeded admin (real JWT installed as the
   HttpOnly cookie + `printstash.user` in localStorage). For a second identity

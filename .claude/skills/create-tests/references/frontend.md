@@ -6,10 +6,12 @@ Conventions for `frontend/src/**/__tests__/**` and
 
 ## Where a test lives
 
-- Beside the unit: `src/lib/__tests__/<module>.test.ts`,
-  `src/components/__tests__/<component>.test.tsx`,
-  `src/pages/__tests__/<page>.test.tsx`. Workspace packages own theirs
-  (`packages/ui/src/__tests__/`, `packages/domain/src/__tests__/`).
+- **Mirror by basename, co-located**: `src/<dir>/<module>.ts(x)` ↔
+  `src/<dir>/__tests__/<module>.test.ts(x)`. One test file per module; a
+  component folder (`src/components/model-detail/`) gets its own `__tests__/`.
+  Workspace packages own theirs (`packages/ui/src/__tests__/`,
+  `packages/domain/src/__tests__/`). A test file whose basename matches no
+  source module is testing something that isn't a unit — find the unit.
 - `pnpm test` runs the root project and both packages; a package test that
   isn't under `src/**/*.{test,spec}.{ts,tsx}` is silently skipped.
 - `vitest.fast.config.ts` is an **audited** shared-worker lane for pure files
@@ -93,13 +95,62 @@ code under test owns the timer (debounce, polling interval); restore with
 `Date` fixtures as absolute ISO strings; never build one from `Date.now()` at
 module scope.
 
-## Naming
+## File anatomy (vitest specifics)
 
-Top-level `describe` = the unit (component, hook, module); nested `describe`
-= method or scenario group; `it` reads as one behaviour: `it("expires an
-established session once across concurrent 401 responses")`. A file-level
-comment states the contract the file locks down (see `request.test.ts`,
-`queries.test.tsx`).
+Follow the anatomy in SKILL.md. In vitest:
+
+```ts
+/**
+ * request.ts keeps a 30s GET cache with in-flight dedup under TanStack Query.
+ * These tests pin that contract: hits skip the network, concurrent calls share
+ * one request, `fresh` bypasses, any mutation clears.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getJson, sendJson } from "@/lib/api/request";
+
+const FROZEN_NOW = "2026-01-01T00:00:00Z";
+const fetchMock = vi.fn<typeof fetch>();
+
+function jsonResponse(data: JsonValue, status = 200): Response { ... }   // shared builder
+
+describe("getJson", () => {                       // ↔ the exported unit, in source order
+  beforeEach(() => { vi.stubGlobal("fetch", fetchMock); fetchMock.mockReset(); });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it("returns the parsed body on 200", async () => { ... });          // Happy
+  it("serves a repeat call from cache without a second fetch", ...);  // Edge
+  it("rejects with ApiError carrying the status on 500", ...);        // Error
+});
+
+describe("sendJson", () => { ... });
+```
+
+- Top-level `describe` = the exported unit; nested `describe` = a method or a
+  scenario group when a unit has many; `it` reads as one behaviour.
+- Hooks live inside the `describe` they serve; a single-unit file may keep
+  them at module scope.
+- Component tests: one `render<Component>(seed)` helper per file that wires
+  the real providers (`QueryClientProvider`, `AuthContext`, `MemoryRouter`);
+  tests differ only in seed and interaction.
+
+### `it.each` / `describe.each`
+
+Same rule as SKILL.md: one behaviour, several inputs, identical assertion
+shape. Use object cases with a `label` so the name reads as the variant:
+
+```ts
+it.each([
+  { label: "bytes", input: 512, expected: "512 B" },
+  { label: "kibibytes", input: 2048, expected: "2.0 KiB" },
+  { label: "zero", input: 0, expected: "0 B" },
+])("formats $label", ({ input, expected }) => {
+  expect(formatBytes(input)).toBe(expected);
+});
+```
+
+`describe.each` for sweeping a component across a registry (every provider
+in `PRINTER_PROVIDERS`, every locale) — derive the array from the production
+constant, never copy it. A case whose assertion differs is its own `it`.
 
 ## Repo-specific gates a test change can trip
 
