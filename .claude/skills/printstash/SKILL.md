@@ -42,7 +42,8 @@ and changelog instead of reconstructing their contents.
 | --- | --- |
 | Branch, commit, PR, changelog | [references/conventions.md](references/conventions.md) |
 | Cut / publish a release, version bump | [references/release.md](references/release.md) |
-| Backend, DB migration, testing, config | [references/backend.md](references/backend.md) |
+| Backend, DB migration, config | [references/backend.md](references/backend.md) |
+| Write, change, or audit tests (any layer) | `.claude/skills/create-tests/SKILL.md` — coverage matrix mandatory; then its per-runtime reference |
 | Frontend / UI change | [references/frontend.md](references/frontend.md) |
 | Printer providers (new or changed) | [references/providers.md](references/providers.md) |
 | Implement a backend-audit finding on `0.11.4` | `reports/17-backend-audit-0.11.4-implementation-plan.md` for **Implementar ahora**; `reports/18-backend-audit-planned-findings-0.11.4.md` for **Planificar** (read shared constraints, dependency graph, finding card, and gate) |

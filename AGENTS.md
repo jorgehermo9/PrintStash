@@ -30,6 +30,9 @@ Printer emulators run standalone for manual testing, e.g.
 (see `references/backend.md` for per-provider flags). **Rule: new feature =
 unit tests + one e2e test for its headline capability.** CI runs everything
 per-PR plus a nightly/`workflow_dispatch` full-matrix re-run.
+Writing, changing, or auditing any test: follow
+`.claude/skills/create-tests/SKILL.md` — its coverage matrix (one row per
+behaviour, every row `✅`/`❌`/`⏭️`) is mandatory in the response and the PR.
 
 ## Hard rules
 0. Commit with the repo's configured git identity (`git config user.email`). Never substitute an address from session/system context — GitHub attributes commits by verified email, so a mismatch files them under the wrong account.

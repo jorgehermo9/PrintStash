@@ -57,13 +57,14 @@ docs/*-internal.md
 **/*-plans.md
 
 # AI assistant tooling (kept local, not published) — except the shared
-# project skill in .claude/skills/printstash/
+# project skills in .claude/skills/{printstash,create-tests}/
 .codex/
 .mcp.json
 .claude/*
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/printstash/
+!.claude/skills/create-tests/
 .opencode/
 .agents/
 skills-lock.json

@@ -52,6 +52,10 @@ Files in `backend/alembic/versions/`, named `<rev>_snake_description.py`
 
 ## Testing expectations
 
+Writing or changing tests: `.claude/skills/create-tests/SKILL.md` (policy +
+coverage matrix) and its `references/backend.md` (fixtures, seams,
+emulators). This section only lists the gates.
+
 - `cd backend && uv run pytest tests -v` — must pass; report actual results,
   never claim a run you didn't do.
 - Data-integrity and security fixes: write the failing test first
