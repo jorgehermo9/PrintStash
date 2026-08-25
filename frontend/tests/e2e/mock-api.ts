@@ -195,6 +195,7 @@ const modelList = [
 ];
 
 // Mutable server state a test can flip before navigating (workers: 1, serial).
+let inboxCollectionId: number | null = null;
 const state = {
   externalLibrariesEnabled: false,
   ingestJobQueued: false,
@@ -212,6 +213,7 @@ export function resetMockApiState(): void {
   state.thumbnailRebuildQueued = false;
   state.apiKeySequence = 0;
   state.inboxCaptured = false;
+  inboxCollectionId = null;
   state.sourceOverride = false;
   state.sourceCover = true;
   state.browserDeviceRevoked = false;
@@ -235,6 +237,7 @@ function inboxItem() {
         source_item_id: "41",
         source_revision: "v2",
         adapter_version: "fixture-1",
+        tags: [],
         fields: {},
       },
       files: [
@@ -243,7 +246,7 @@ function inboxItem() {
       ],
       selected_ids: ["bracket-stl", "bracket-3mf"],
     },
-    target_collection_id: 1,
+    target_collection_id: inboxCollectionId,
     requested_tags: ["fixture"],
     background_job_id: null,
     resulting_model_id: null,
@@ -573,7 +576,26 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (url.pathname === "/api/v1/collections") {
-    sendJson(res, [
+    if (req.method === "POST") {
+      drainRequest(req, () => {
+        inboxCollectionId = 42;
+        sendJson(
+          res,
+          {
+            id: 42,
+            name: "Capture bracket",
+            slug: "capture-bracket",
+            path: "capture-bracket",
+            parent_id: null,
+            model_count: 0,
+            effective_role: "admin",
+          },
+          201,
+        );
+      });
+      return;
+    }
+    const collections = [
       {
         id: 1,
         name: "maraio",
@@ -583,7 +605,19 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
         model_count: 1,
         effective_role: "admin",
       },
-    ]);
+    ];
+    if (inboxCollectionId !== null) {
+      collections.push({
+        id: 42,
+        name: "Capture bracket",
+        slug: "capture-bracket",
+        path: "capture-bracket",
+        parent_id: null,
+        model_count: 0,
+        effective_role: "admin",
+      });
+    }
+    sendJson(res, collections);
     return;
   }
   if (url.pathname === "/api/v1/collections/1/permissions") {
@@ -610,6 +644,17 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (url.pathname === "/api/v1/inbox/41") {
+    if (req.method === "DELETE") {
+      state.inboxCaptured = false;
+      inboxCollectionId = null;
+      res.writeHead(204, { "access-control-allow-origin": "*" });
+      res.end();
+      return;
+    }
+    if (req.method === "PATCH") {
+      drainRequest(req, () => sendJson(res, inboxItem()));
+      return;
+    }
     sendJson(
       res,
       state.inboxCaptured ? inboxItem() : { detail: "not_found" },
@@ -618,6 +663,10 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (url.pathname === "/api/v1/inbox/41/import" && req.method === "POST") {
+    if (inboxCollectionId === null) {
+      drainRequest(req, () => sendJson(res, { detail: "collection_required" }, 409));
+      return;
+    }
     drainRequest(req, () => sendJson(res, importedInboxItem()));
     return;
   }

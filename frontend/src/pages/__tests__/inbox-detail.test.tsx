@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -8,9 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import InboxDetailPage, { type InboxDetailApi } from "@/pages/inbox-detail";
 import { I18nProvider } from "@/lib/i18n";
 import { defaultQueryApi, QueryApiProvider } from "@/lib/queries";
-import type { InboxItem } from "@/types";
+import type { CollectionRead, InboxItem } from "@/types";
 
 const api: InboxDetailApi = {
+  createCollection: vi.fn<InboxDetailApi["createCollection"]>(),
   dismissPendingImport: vi.fn<InboxDetailApi["dismissPendingImport"]>(),
   getPendingImport: vi.fn<InboxDetailApi["getPendingImport"]>(),
   importPendingImport: vi.fn<InboxDetailApi["importPendingImport"]>(),
@@ -45,14 +46,15 @@ const reviewItem: InboxItem = {
   completion: null,
 };
 
-function renderPage() {
+function renderPage(collections: CollectionRead[] = []) {
   return render(
     <I18nProvider>
       <QueryClientProvider client={new QueryClient()}>
-        <QueryApiProvider value={{ ...defaultQueryApi, listCollections: async () => [] }}>
+        <QueryApiProvider value={{ ...defaultQueryApi, listCollections: async () => collections }}>
           <MemoryRouter initialEntries={["/inbox/7"]}>
             <Routes>
               <Route path="/inbox/:id" element={<InboxDetailPage api={api} />} />
+              <Route path="/inbox" element={<p>Inbox destination</p>} />
             </Routes>
           </MemoryRouter>
         </QueryApiProvider>
@@ -65,7 +67,92 @@ describe("InboxDetailPage", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     localStorage.setItem("printstash.locale", "en");
+    vi.mocked(api.createCollection).mockResolvedValue({
+      id: 88,
+      name: "Calibration cube",
+      slug: "calibration-cube",
+      path: "calibration-cube",
+      parent_id: null,
+      model_count: 0,
+      effective_role: "admin",
+    });
+    vi.mocked(api.dismissPendingImport).mockResolvedValue();
     vi.mocked(api.updatePendingImport).mockResolvedValue(reviewItem);
+  });
+
+  it("defaults a new collection to the capture title and creates it on import", async () => {
+    vi.mocked(api.getPendingImport).mockResolvedValue(reviewItem);
+    vi.mocked(api.importPendingImport).mockResolvedValue({
+      ...reviewItem,
+      state: "completed",
+      completion: "complete",
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByRole("combobox", { name: "Destination" })).toHaveValue("new");
+    expect(screen.getByRole("textbox", { name: "Collection name" })).toHaveValue(
+      "Calibration cube",
+    );
+    expect(api.createCollection).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Import selected" }));
+
+    await waitFor(() =>
+      expect(api.createCollection).toHaveBeenCalledWith({
+        name: "Calibration cube",
+        parent_id: null,
+      }),
+    );
+    expect(api.updatePendingImport).toHaveBeenCalledWith(7, {
+      collection_id: 88,
+      tags: [],
+      selected_ids: ["file-1"],
+    });
+    expect(api.importPendingImport).toHaveBeenCalledWith(7, ["file-1"]);
+  });
+
+  it("reuses an existing root collection with the capture title", async () => {
+    const existing: CollectionRead = {
+      id: 12,
+      name: "Calibration cube",
+      slug: "calibration-cube",
+      path: "calibration-cube",
+      parent_id: null,
+      model_count: 2,
+      effective_role: "edit",
+    };
+    vi.mocked(api.getPendingImport).mockResolvedValue(reviewItem);
+    vi.mocked(api.importPendingImport).mockResolvedValue({
+      ...reviewItem,
+      state: "completed",
+      completion: "complete",
+    });
+    renderPage([existing]);
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Import selected" }));
+
+    await waitFor(() => expect(api.updatePendingImport).toHaveBeenCalled());
+    expect(api.createCollection).not.toHaveBeenCalled();
+    expect(api.updatePendingImport).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ collection_id: 12 }),
+    );
+  });
+
+  it("deletes the pending item after explicit confirmation", async () => {
+    vi.mocked(api.getPendingImport).mockResolvedValue(reviewItem);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Delete import" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete pending import?" });
+    expect(api.dismissPendingImport).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Delete import" }));
+
+    await waitFor(() => expect(api.dismissPendingImport).toHaveBeenCalledWith(7));
+    expect(await screen.findByText("Inbox destination")).toBeInTheDocument();
   });
 
   it("polls after an import response still says review, then stops at a terminal state", async () => {
@@ -159,7 +246,7 @@ describe("InboxDetailPage", () => {
     expect(screen.getByText("Destino")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("separadas por comas")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Importar seleccionados" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Descartar captura" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Eliminar importación" })).toBeInTheDocument();
     expect(screen.getByText("example.test")).toBeInTheDocument();
     expect(screen.getByText("cube.stl")).toBeInTheDocument();
   });

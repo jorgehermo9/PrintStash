@@ -542,6 +542,45 @@ test("URL capture is reviewable, reports a partial result, and restores a source
   expect(problems).toEqual([]);
 });
 
+test("pending import defaults its collection to the captured title", async ({ page }) => {
+  const problems = await collectPageProblems(page);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Upload", exact: true }).click();
+  await page.getByRole("button", { name: "From URL" }).click();
+  await page
+    .getByPlaceholder("Model page, collection, or direct .stl/.zip link")
+    .fill("https://www.printables.com/model/41-capture-bracket");
+  await page.getByRole("button", { name: "Review URL" }).click();
+
+  await expect(page.getByRole("combobox", { name: "Destination" })).toHaveValue("new");
+  await expect(page.getByRole("textbox", { name: "Collection name" })).toHaveValue(
+    "Capture bracket",
+  );
+  await page.getByRole("button", { name: "Import selected" }).click();
+  await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
+test("pending import can be deleted with its staged capture", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Upload", exact: true }).click();
+  await page.getByRole("button", { name: "From URL" }).click();
+  await page
+    .getByPlaceholder("Model page, collection, or direct .stl/.zip link")
+    .fill("https://www.printables.com/model/41-capture-bracket");
+  await page.getByRole("button", { name: "Review URL" }).click();
+  await expect(page).toHaveURL(/\/inbox\/41$/);
+
+  await page.getByRole("button", { name: "Delete import" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete pending import?" });
+  await expect(dialog).toContainText("deletes its staged files");
+  await dialog.getByRole("button", { name: "Delete import" }).click();
+
+  await expect(page).toHaveURL(/\/inbox$/);
+  await expect(page.getByText("Capture a source URL", { exact: true })).toBeVisible();
+});
+
 test.describe("shared volumes enabled", () => {
   test.beforeEach(() => setExternalLibrariesEnabled(true));
   test.afterEach(() => setExternalLibrariesEnabled(false));
