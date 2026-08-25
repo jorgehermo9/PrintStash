@@ -2,12 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- **Rich URL capture and Model Source records.** Pending Imports can now accept
+  browser-transferred files, show complete/partial outcomes, retry only failed
+  or partial captures, and preserve per-Artifact source snapshots, confirmed or
+  inferred fields, and explicit user overrides. Portable library archives carry
+  optional provenance sidecars while remaining compatible with earlier exports.
+- **Capture provider connections and browser pairing.** Per-user MyMiniFactory
+  OAuth and Cults metadata connections, plus named and revocable paired browser
+  devices, support source-aware capture without sharing source-site sessions.
+
 ### Security
 
 - Delegated printer administrators can no longer redirect provider endpoints or
   forward stored credentials, view-only shares no longer expose original G-code,
   blank JWT secrets are replaced automatically, and optional Postgres, SeaweedFS,
   and migration MinIO services stay off host interfaces by default.
+- Capture rejects URL credentials and strips secret-shaped URL parameters. It
+  does not retain raw HTML, source-site cookies, OAuth codes, signed download
+  URLs, resolved credentials, or staging paths; active provider credentials are
+  encrypted at rest and never returned. Provider traffic is restricted to
+  bounded, validated endpoints.
 
 ### Changed
 
