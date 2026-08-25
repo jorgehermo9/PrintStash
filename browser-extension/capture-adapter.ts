@@ -58,26 +58,6 @@ function canonicalUrl(value: unknown): string | null {
   }
 }
 
-function printablesDownloadUrl(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  try {
-    const parsed = new URL(value);
-    const hostname = parsed.hostname.toLocaleLowerCase();
-    if (
-      parsed.protocol !== "https:" ||
-      (hostname !== "printables.com" && !hostname.endsWith(".printables.com"))
-    ) {
-      return null;
-    }
-    parsed.username = "";
-    parsed.password = "";
-    parsed.hash = "";
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-}
-
 function sourceItemId(provider: keyof typeof PROVIDER_CODES, pageUrl: string): string | null {
   const pathname = new URL(pageUrl).pathname;
   if (provider === "Printables") return pathname.match(/\/model\/(\d+)/)?.[1] || null;
@@ -108,22 +88,6 @@ export function stableCaptureFileId(
   const prefix = (providerItemId || "source").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
   if (!filename) throw new Error("Capture filename cannot produce a stable file ID.");
   return `${prefix}:${stableIdentity(providerFileIdentity)}`;
-}
-
-function printablesFileIdentity(record: JsonRecord, url: string): string {
-  for (const key of ["identifier", "id", "fileId", "file_id", "contentUrl"]) {
-    if (typeof record[key] === "string" && record[key]) {
-      if (key === "contentUrl") {
-        const path = new URL(record[key]).pathname;
-        const segments = path.split("/").filter(Boolean);
-        return segments.length === 2 && segments[0] === "files"
-          ? segments[1]
-          : path || deterministicDigest(url);
-      }
-      return record[key];
-    }
-  }
-  return deterministicDigest(url);
 }
 
 function jsonLdObjects(jsonLd: string[]): JsonRecord[] {
@@ -268,6 +232,18 @@ export interface CaptureSourceDraft {
   fields: Record<string, CaptureSourceField>;
 }
 
+export interface BrowserSourceMetadata {
+  title?: string;
+  description?: string;
+  instructions?: string;
+  creatorName?: string;
+  creatorId?: string;
+  creatorUrl?: string;
+  licenseCode?: string;
+  licenseUrl?: string;
+  licenseText?: string;
+}
+
 export interface BrowserCaptureMessage {
   schema_version: 2;
   kind: "browser_source";
@@ -278,7 +254,7 @@ export interface BrowserCaptureMessage {
   candidates: Array<{
     id: string;
     filename: string;
-    url: string;
+    fileType: "stl" | "gcode" | "sla" | "other";
     mediaType?: string;
     sizeBytes?: number;
   }>;
@@ -289,11 +265,13 @@ export function buildBrowserCaptureMessage({
   pageUrl,
   pageTitle,
   jsonLd = [],
+  sourceMetadata,
 }: {
   provider: keyof typeof PROVIDER_CODES;
   pageUrl: string;
   pageTitle?: string;
   jsonLd?: string[];
+  sourceMetadata?: BrowserSourceMetadata;
 }): BrowserCaptureMessage {
   const providerCode = PROVIDER_CODES[provider] as CaptureSourceDraft["provider"];
   if (!providerCode) throw new Error("Capture provider is not supported.");
@@ -301,20 +279,40 @@ export function buildBrowserCaptureMessage({
   if (!canonical) throw new Error("Capture page URL must be an absolute HTTP(S) URL.");
   const objects = jsonLdObjects(jsonLd);
   const fields: Record<string, CaptureSourceField> = {};
-  const title = firstText(objects, ["name", "headline"], FIELD_LIMITS.title);
+  const title =
+    plainText(sourceMetadata?.title, FIELD_LIMITS.title) ||
+    firstText(objects, ["name", "headline"], FIELD_LIMITS.title);
   add(
     fields,
     "title",
     title || plainText(pageTitle, FIELD_LIMITS.title),
     title ? "confirmed" : "inferred",
   );
-  add(fields, "description", firstText(objects, ["description"], FIELD_LIMITS.description));
-  add(fields, "instructions", firstText(objects, ["instructions"], FIELD_LIMITS.instructions));
+  add(
+    fields,
+    "description",
+    plainText(sourceMetadata?.description, FIELD_LIMITS.description) ||
+      firstText(objects, ["description"], FIELD_LIMITS.description),
+  );
+  add(
+    fields,
+    "instructions",
+    plainText(sourceMetadata?.instructions, FIELD_LIMITS.instructions) ||
+      firstText(objects, ["instructions"], FIELD_LIMITS.instructions),
+  );
 
   const author = person(objects);
-  add(fields, "creator_name", author.name);
-  add(fields, "creator_id", author.id);
-  add(fields, "creator_url", author.url);
+  add(
+    fields,
+    "creator_name",
+    plainText(sourceMetadata?.creatorName, FIELD_LIMITS.creator_name) || author.name,
+  );
+  add(
+    fields,
+    "creator_id",
+    plainText(sourceMetadata?.creatorId, FIELD_LIMITS.creator_id) || author.id,
+  );
+  add(fields, "creator_url", canonicalUrl(sourceMetadata?.creatorUrl) || author.url);
 
   const tags = normalizedTags(objects.flatMap((object) => [object.keywords, object.tags])) || [];
   const publishedAt = firstText(
@@ -327,52 +325,22 @@ export function buildBrowserCaptureMessage({
   add(fields, "updated_at", isoDateTime(updatedAt));
 
   const license = firstText(objects, ["license"], FIELD_LIMITS.license_text);
-  if (license) {
+  add(fields, "license_url", canonicalUrl(sourceMetadata?.licenseUrl));
+  add(fields, "license_code", plainText(sourceMetadata?.licenseCode, FIELD_LIMITS.license_code));
+  add(fields, "license_text", plainText(sourceMetadata?.licenseText, FIELD_LIMITS.license_text));
+  if (
+    !sourceMetadata?.licenseUrl &&
+    !sourceMetadata?.licenseCode &&
+    !sourceMetadata?.licenseText &&
+    license
+  ) {
     const licenseUrl = canonicalUrl(license);
     if (licenseUrl) add(fields, "license_url", licenseUrl);
     else add(fields, "license_code", license);
   }
-  const candidates =
-    provider === "Printables"
-      ? objects.flatMap((object) => {
-          const distributions = Array.isArray(object.distribution)
-            ? object.distribution
-            : [object.distribution];
-          return distributions.flatMap((distribution) => {
-            if (!distribution || typeof distribution !== "object") return [];
-            const record = distribution as JsonRecord;
-            const url = printablesDownloadUrl(record.contentUrl);
-            if (!url) return [];
-            const filename = new URL(url).pathname.split("/").pop();
-            if (!filename) return [];
-            const size =
-              typeof record.contentSize === "string" ? Number(record.contentSize) : undefined;
-            return [
-              {
-                id: stableCaptureFileId(
-                  sourceItemId(provider, canonical),
-                  filename,
-                  printablesFileIdentity(record, url),
-                ),
-                filename,
-                url,
-                ...(typeof record.encodingFormat === "string"
-                  ? { mediaType: record.encodingFormat }
-                  : {}),
-                ...(Number.isFinite(size) ? { sizeBytes: size } : {}),
-              },
-            ];
-          });
-        })
-      : [];
-  const printablesDistributionChanged =
-    providerCode === "printables" &&
-    objects.some((object) => Object.hasOwn(object, "distribution")) &&
-    candidates.length === 0;
+  const candidates: BrowserCaptureMessage["candidates"] = [];
   const manualFileRequired =
-    providerCode === "thingiverse" ||
-    providerCode === "cults" ||
-    (providerCode === "printables" && candidates.length === 0);
+    providerCode === "thingiverse" || providerCode === "cults" || providerCode === "printables";
 
   return {
     schema_version: 2,
@@ -386,9 +354,7 @@ export function buildBrowserCaptureMessage({
               ? "Choose a downloaded Thingiverse file to attach it to this metadata draft."
               : providerCode === "cults"
                 ? "Choose a downloaded Cults file to attach it to this metadata draft."
-                : printablesDistributionChanged
-                  ? "Printables file capture is unavailable. Download the selected file and attach it in Pending Imports."
-                  : "Choose a downloaded Printables file to attach it to this metadata draft.",
+                : "Choose a downloaded Printables file to attach it in Pending Imports.",
           manual_file: {
             mapping: "user_selected_file",
             source_item_id: sourceItemId(provider, canonical),

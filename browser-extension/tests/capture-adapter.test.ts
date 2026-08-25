@@ -40,7 +40,7 @@ const makerWorldJsonLd = JSON.stringify({
 });
 
 describe("browser-visible provider capture adapters", () => {
-  it("normalizes bounded HTTPS Printables file candidates from browser-visible JSON-LD", () => {
+  it("does not create URL-bearing Printables candidates from browser-visible JSON-LD", () => {
     const capture = buildBrowserCaptureMessage({
       provider: "Printables",
       pageUrl: "https://www.printables.com/model/9-safe",
@@ -58,18 +58,11 @@ describe("browser-visible provider capture adapters", () => {
         }),
       ],
     });
-    expect(capture.candidates).toEqual([
-      {
-        id: "9:safe.3mf",
-        filename: "safe.3mf",
-        url: "https://media.printables.com/files/safe.3mf?signature=temporary",
-        mediaType: "model/3mf",
-        sizeBytes: 12,
-      },
-    ]);
+    expect(capture.candidates).toEqual([]);
+    expect(JSON.stringify(capture)).not.toContain("signature");
   });
 
-  it("uses provider file identity for duplicate Printables names before candidates are filtered", () => {
+  it("does not retain duplicate Printables distribution identities from JSON-LD", () => {
     const capture = buildBrowserCaptureMessage({
       provider: "Printables",
       pageUrl: "https://www.printables.com/model/9-safe",
@@ -90,17 +83,11 @@ describe("browser-visible provider capture adapters", () => {
       ],
     });
 
-    expect(capture.candidates.map((candidate) => candidate.id)).toEqual([
-      "9:file-first",
-      "9:file-second",
-    ]);
-    expect(capture.candidates.map((candidate) => candidate.filename)).toEqual([
-      "cube.3mf",
-      "cube.3mf",
-    ]);
+    expect(capture.candidates).toEqual([]);
+    expect(JSON.stringify(capture)).not.toContain("signature");
   });
 
-  it("keeps fallback Printables identifiers stable when duplicate names are reordered or filtered", () => {
+  it("ignores reordered Printables distributions", () => {
     const first = {
       contentUrl: "https://media.printables.com/files/first/cube.3mf?signature=one",
     };
@@ -117,10 +104,8 @@ describe("browser-visible provider capture adapters", () => {
     const forward = capture([first, { contentUrl: "https://evilprintables.com/nope.stl" }, second]);
     const reversed = capture([second, first]);
 
-    expect(forward.candidates.map((candidate) => candidate.id).sort()).toEqual(
-      reversed.candidates.map((candidate) => candidate.id).sort(),
-    );
-    expect(new Set(forward.candidates.map((candidate) => candidate.id)).size).toBe(2);
+    expect(forward.candidates).toEqual([]);
+    expect(reversed.candidates).toEqual([]);
   });
 
   it("requires manual attachment when Printables exposes an unsupported distribution contract", () => {

@@ -127,8 +127,12 @@ describe("capture transport local HTTP contract", () => {
         }),
       ],
     });
-    expect(capture.state).toBe("ready");
-    const candidate = capture.candidates[0];
+    const captureWithMetadataCandidate = {
+      ...capture,
+      state: "ready" as const,
+      candidates: [{ id: "321:benchy.3mf", filename: "benchy.3mf", fileType: "other" as const }],
+    };
+    const candidate = captureWithMetadataCandidate.candidates[0];
     if (candidate === undefined) throw new Error("Provider fixture did not produce a candidate");
 
     const result = await captureRichFiles({
@@ -140,9 +144,9 @@ describe("capture transport local HTTP contract", () => {
       files: [
         {
           id: candidate.id,
-          file: new Blob([bytes], { type: candidate.mediaType }),
+          file: new Blob([bytes], { type: "model/3mf" }),
           filename: candidate.filename,
-          mediaType: candidate.mediaType || "application/octet-stream",
+          mediaType: "model/3mf",
         },
       ],
     });

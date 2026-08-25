@@ -24,13 +24,13 @@ describe("browser capture popup routing", () => {
       provider: "Printables",
       pageUrl: "https://www.printables.com/model/3161-3d-benchy/files",
       pageTitle: "3DBenchy",
-      jsonLd: [
-        JSON.stringify({
-          distribution: [{ contentUrl: "https://media.printables.com/files/benchy.3mf" }],
-        }),
-      ],
     });
+    const withCandidates: BrowserCaptureMessage = {
+      ...capture,
+      state: "ready",
+      candidates: [{ id: "file-1", filename: "benchy.3mf", fileType: "other" }],
+    };
 
-    expect(browserCaptureRoute(capture)).toBe("candidate_confirmation");
+    expect(browserCaptureRoute(withCandidates)).toBe("candidate_confirmation");
   });
 });

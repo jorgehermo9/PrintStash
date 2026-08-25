@@ -347,26 +347,39 @@ describe("popup browser adapters", () => {
       username: "owner",
       apiKey: "psk_vault_secret",
     });
-    fakeBrowser.scripting.executeScript = vi.fn().mockResolvedValue([
-      {
-        result: {
-          pageTitle: "3DBenchy",
-          jsonLd: [
-            JSON.stringify({
-              name: "3DBenchy",
-              distribution: [
-                {
-                  contentUrl:
-                    "https://media.printables.com/files/benchy.3mf?signature=signed-secret",
-                  encodingFormat: "model/3mf",
-                  contentSize: "4",
-                },
+    fakeBrowser.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([{ result: null }])
+      .mockResolvedValueOnce([{ result: { pageTitle: "3DBenchy", jsonLd: [] } }])
+      .mockResolvedValueOnce([
+        {
+          result: {
+            ok: true,
+            metadata: {
+              fixtureVersion: "printables-graphql-metadata-v1",
+              sourceItemId: "3161",
+              source: { title: "3DBenchy" },
+              files: [
+                { id: "file-3mf", filename: "benchy.3mf", fileType: "other", sizeBytes: 4 },
+                { id: "file-stl", filename: "benchy.stl", fileType: "stl", sizeBytes: 4 },
               ],
-            }),
-          ],
+            },
+          },
         },
-      },
-    ]);
+      ])
+      .mockResolvedValueOnce([
+        {
+          result: {
+            ok: true,
+            links: [
+              {
+                id: "file-3mf",
+                link: "https://media.printables.com/files/benchy.3mf?signature=signed-secret",
+              },
+            ],
+          },
+        },
+      ]);
     const fetchImpl = vi.fn(async (url: string, options: RequestInit = {}) => {
       if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
       if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
@@ -386,7 +399,7 @@ describe("popup browser adapters", () => {
               {
                 id: "slot-printables",
                 role: "file",
-                source_file_id: "3161:benchy.3mf",
+                source_file_id: "file-3mf",
                 filename: "benchy.3mf",
                 media_type: "model/3mf",
                 size_bytes: 4,
@@ -413,6 +426,9 @@ describe("popup browser adapters", () => {
     expect(element("#candidate-panel").hidden).toBe(false);
     expect(button("#capture").textContent).toBe("Confirm and upload selected files");
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const candidates = document.querySelectorAll<HTMLInputElement>("#candidate-list input");
+    expect(candidates).toHaveLength(2);
+    candidates[1]?.click();
 
     button("#capture").click();
     for (let attempt = 0; attempt < 10; attempt += 1) await settle();
@@ -420,6 +436,14 @@ describe("popup browser adapters", () => {
     expect(
       fetchImpl.mock.calls.filter(([url]) => url.startsWith("https://media.printables.com/")),
     ).toHaveLength(1);
+    const executeScript = vi.mocked(fakeBrowser.scripting.executeScript);
+    const linkRequest = executeScript.mock.calls.find(([details]) => {
+      const args = details.args;
+      return Array.isArray(args) && args[0] && typeof args[0] === "object" && "groups" in args[0];
+    });
+    expect(linkRequest?.[0].args?.[0]).toMatchObject({
+      groups: [{ fileType: "other", ids: ["file-3mf"] }],
+    });
     const createCall = fetchImpl.mock.calls.find(([url]) => url.endsWith("/capture-upload-slots"));
     if (createCall === undefined || createCall[1] === undefined) {
       throw new Error(
@@ -431,7 +455,7 @@ describe("popup browser adapters", () => {
       capture_source: { provider: "printables", source_item_id: "3161" },
       files: [
         {
-          id: "3161:benchy.3mf",
+          id: "file-3mf",
           filename: "benchy.3mf",
           size_bytes: 4,
           sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -439,6 +463,8 @@ describe("popup browser adapters", () => {
       ],
     });
     expect(createBody).not.toContain("signed-secret");
+    expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/api/v1/inbox"))).toBe(false);
+    expect(JSON.stringify(await fakeBrowser.storage.local.get())).not.toContain("signed-secret");
     expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/capture-upload-finalize"))).toBe(
       true,
     );

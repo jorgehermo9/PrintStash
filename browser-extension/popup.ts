@@ -17,6 +17,24 @@ import {
   stableCaptureFileId,
   type BrowserCaptureMessage,
 } from "./capture-adapter.ts";
+import {
+  PRINTABLES_GRAPHQL_ENDPOINT,
+  PRINTABLES_LINK_MUTATION,
+  PRINTABLES_MAX_RESPONSE_BYTES,
+  PRINTABLES_METADATA_ADAPTER_VERSION,
+  PRINTABLES_METADATA_FIXTURE_VERSION,
+  PRINTABLES_METADATA_QUERY,
+  printablesFailureMessage,
+  readBoundedPrintablesResponse,
+  requestPrintablesLinksInMainWorld,
+  requestPrintablesMetadataInMainWorld,
+  selectedGroups,
+  validatePrintablesResolvedLinks,
+  validatePrintablesMetadataDto,
+  type PrintablesFailureCode,
+  type PrintablesMetadataPageResult,
+  type PrintablesSelectedFile,
+} from "./printables-capture.ts";
 import { captureRichFiles, type BrowserCaptureFile } from "./capture-transport.ts";
 import {
   createBrowserProviderAdapter,
@@ -120,6 +138,9 @@ function clearManualFileSelection() {
 }
 
 function renderManualFileSelection(capture: BrowserCaptureMessage) {
+  pendingPrintablesCapture = null;
+  candidatePanel.hidden = true;
+  candidateList.replaceChildren();
   pendingManualCapture = capture;
   manualFilePanel.hidden = false;
   captureButton.textContent = "Upload selected file";
@@ -424,10 +445,11 @@ async function ensureOriginPermission(origin: string) {
 
 async function downloadPrintablesCandidate(
   candidate: BrowserCaptureMessage["candidates"][number],
+  link: string,
 ): Promise<BrowserCaptureFile> {
-  const origin = `${new URL(candidate.url).origin}/*`;
+  const origin = `${new URL(link).origin}/*`;
   await ensureOriginPermission(origin);
-  const response = await fetch(candidate.url, {
+  const response = await fetch(link, {
     credentials: "omit",
     cache: "no-store",
   });
@@ -436,19 +458,70 @@ async function downloadPrintablesCandidate(
       "user_file_required: Printables could not provide the selected file. Attach it manually in Pending Imports.",
     );
   }
-  const file = await response.blob();
-  if (candidate.sizeBytes !== undefined && file.size !== candidate.sizeBytes) {
-    throw new Error(
-      "user_file_required: The selected Printables file changed. Attach it manually in Pending Imports.",
-    );
+  if (response.url) {
+    const redirected = new URL(response.url);
+    const redirectedHost = redirected.hostname.toLowerCase();
+    if (
+      redirected.protocol !== "https:" ||
+      (redirectedHost !== "printables.com" && !redirectedHost.endsWith(".printables.com"))
+    ) {
+      throw new Error(
+        "user_file_required: Printables redirected the selected file to an unsafe host. Attach it manually in Pending Imports.",
+      );
+    }
   }
+  const file = await readBoundedPrintablesResponse(response, candidate.sizeBytes);
   return {
     id: candidate.id,
     file,
     filename: candidate.filename,
-    mediaType:
-      candidate.mediaType || response.headers.get("Content-Type") || "application/octet-stream",
+    mediaType: printablesMediaType(candidate.filename, candidate.fileType),
   };
+}
+
+function printablesMediaType(
+  filename: string,
+  fileType: BrowserCaptureMessage["candidates"][number]["fileType"],
+): string {
+  if (fileType === "gcode") return "text/plain";
+  if (fileType === "stl") return "model/stl";
+  if (fileType === "sla") return "application/octet-stream";
+  if (/\.3mf$/i.test(filename)) return "model/3mf";
+  if (/\.stl$/i.test(filename)) return "model/stl";
+  if (/\.(?:gcode|gco|g|bgcode)$/i.test(filename)) return "text/plain";
+  return "application/octet-stream";
+}
+
+async function resolvePrintablesLinks(
+  capture: BrowserCaptureMessage,
+  selected: readonly PrintablesSelectedFile[],
+): Promise<Array<{ id: string; url: string }>> {
+  if (!activePage?.id || !capture.source.source_item_id) {
+    throw new Error(
+      "user_file_required: The Printables tab is unavailable. Attach a downloaded file in Pending Imports.",
+    );
+  }
+  const results = await browser.scripting.executeScript({
+    target: { tabId: activePage.id },
+    world: "MAIN",
+    func: requestPrintablesLinksInMainWorld,
+    args: [
+      {
+        endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
+        query: PRINTABLES_LINK_MUTATION,
+        sourceItemId: capture.source.source_item_id,
+        groups: selectedGroups(selected),
+        maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
+      },
+    ],
+  });
+  const result = results[0]?.result as
+    | { ok: boolean; links?: Array<{ id: string; link: string }>; code?: PrintablesFailureCode }
+    | undefined;
+  if (!result?.ok || !result.links) {
+    throw new Error(printablesFailureMessage(result?.code));
+  }
+  return validatePrintablesResolvedLinks(selected, result.links);
 }
 
 function isRichProvider(source: Source): source is Exclude<Source, "Direct file" | null> {
@@ -464,70 +537,140 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
   const tabId = activePage.id;
   const pageUrl = activePage.url;
   const provider = activeSource;
-  const results = await browser.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: (limits: { maxScripts: number; maxScriptBytes: number; maxTotalBytes: number }) => {
-      const pageTitle = document.title;
-      const challengeDetected =
-        /captcha|verify you are human|access denied/i.test(document.title) ||
-        Boolean(document.querySelector('iframe[src*="challenge"], [class*="captcha"]'));
-      const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
-      const safeResult = () => ({ pageTitle, challengeDetected, jsonLd: [] });
-      if (scripts.length > limits.maxScripts) return safeResult();
+  try {
+    const results = await browser.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: (limits: { maxScripts: number; maxScriptBytes: number; maxTotalBytes: number }) => {
+        const pageTitle = document.title;
+        const challengeDetected =
+          /captcha|verify you are human|access denied/i.test(document.title) ||
+          Boolean(document.querySelector('iframe[src*="challenge"], [class*="captcha"]'));
+        const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
+        const safeResult = () => ({ pageTitle, challengeDetected, jsonLd: [] });
+        if (scripts.length > limits.maxScripts) return safeResult();
 
-      const encoder = new TextEncoder();
-      const jsonLd: string[] = [];
-      let totalBytes = 0;
-      for (const script of scripts) {
-        const text = script.textContent || "";
-        const scriptBytes = encoder.encode(text).byteLength;
-        if (
-          scriptBytes > limits.maxScriptBytes ||
-          totalBytes + scriptBytes > limits.maxTotalBytes
-        ) {
-          return safeResult();
+        const encoder = new TextEncoder();
+        const jsonLd: string[] = [];
+        let totalBytes = 0;
+        for (const script of scripts) {
+          const text = script.textContent || "";
+          const scriptBytes = encoder.encode(text).byteLength;
+          if (
+            scriptBytes > limits.maxScriptBytes ||
+            totalBytes + scriptBytes > limits.maxTotalBytes
+          ) {
+            return safeResult();
+          }
+          totalBytes += scriptBytes;
+          jsonLd.push(text);
         }
-        totalBytes += scriptBytes;
-        jsonLd.push(text);
-      }
-      return { pageTitle, challengeDetected, jsonLd };
-    },
-    args: [
-      {
-        maxScripts: JSON_LD_MAX_SCRIPTS,
-        maxScriptBytes: JSON_LD_MAX_SCRIPT_BYTES,
-        maxTotalBytes: JSON_LD_MAX_TOTAL_BYTES,
+        return { pageTitle, challengeDetected, jsonLd };
       },
-    ],
-  });
-  const visible = results[0]?.result as VisibleCaptureResult | undefined;
-  if (!visible || !Array.isArray(visible.jsonLd)) return null;
-  const capture = buildBrowserCaptureMessage({
-    provider,
-    pageUrl,
-    pageTitle: visible.pageTitle || activePage.title,
-    jsonLd: visible.jsonLd,
-  });
-  if (provider === "Printables" && visible.challengeDetected) {
+      args: [
+        {
+          maxScripts: JSON_LD_MAX_SCRIPTS,
+          maxScriptBytes: JSON_LD_MAX_SCRIPT_BYTES,
+          maxTotalBytes: JSON_LD_MAX_TOTAL_BYTES,
+        },
+      ],
+    });
+    const visible = results[0]?.result as VisibleCaptureResult | undefined;
+    if (!visible || !Array.isArray(visible.jsonLd)) return fallbackVisibleCapture();
+    const capture = buildBrowserCaptureMessage({
+      provider,
+      pageUrl,
+      pageTitle: visible.pageTitle || activePage.title,
+      jsonLd: visible.jsonLd,
+    });
+    if (provider !== "Printables") return capture;
+    if (visible.challengeDetected) {
+      return {
+        ...capture,
+        state: "manual_file_required",
+        message: printablesFailureMessage("challenge"),
+        manual_file: {
+          mapping: "user_selected_file",
+          source_item_id: capture.source.source_item_id,
+        },
+      };
+    }
+    const sourceItemId = capture.source.source_item_id;
+    if (!sourceItemId) return fallbackVisibleCapture("contract_changed");
+    const metadataResults = await browser.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: requestPrintablesMetadataInMainWorld,
+      args: [
+        {
+          endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
+          query: PRINTABLES_METADATA_QUERY,
+          sourceItemId,
+          fixtureVersion: PRINTABLES_METADATA_FIXTURE_VERSION,
+          maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
+        },
+      ],
+    });
+    const metadataResult = metadataResults[0]?.result as PrintablesMetadataPageResult | undefined;
+    if (!metadataResult?.ok || !metadataResult.metadata) {
+      return fallbackVisibleCapture(metadataResult?.code, visible.jsonLd);
+    }
+    let metadata;
+    try {
+      metadata = validatePrintablesMetadataDto(metadataResult.metadata, sourceItemId);
+    } catch {
+      return fallbackVisibleCapture("contract_changed", visible.jsonLd);
+    }
+    const enriched = buildBrowserCaptureMessage({
+      provider,
+      pageUrl,
+      pageTitle: visible.pageTitle || activePage.title,
+      jsonLd: visible.jsonLd,
+      sourceMetadata: metadata.source,
+    });
+    const candidates = metadata.files.map((file) => ({
+      id: file.id,
+      filename: file.filename,
+      fileType: file.fileType,
+      ...(file.sizeBytes === undefined ? {} : { sizeBytes: file.sizeBytes }),
+    }));
     return {
-      ...capture,
-      state: "manual_file_required",
-      message:
-        "user_file_required: Printables blocked browser capture. Choose a downloaded file to attach it to this metadata draft.",
-      manual_file: { mapping: "user_selected_file", source_item_id: capture.source.source_item_id },
+      ...enriched,
+      source: {
+        ...enriched.source,
+        adapter_version: PRINTABLES_METADATA_ADAPTER_VERSION,
+      },
+      state: candidates.length > 0 ? "ready" : "manual_file_required",
+      candidates,
+      ...(candidates.length > 0
+        ? {}
+        : {
+            message: printablesFailureMessage("contract_changed"),
+            manual_file: { mapping: "user_selected_file", source_item_id: sourceItemId },
+          }),
     };
+  } catch {
+    return fallbackVisibleCapture("request_failed");
   }
-  return capture;
 }
 
-function fallbackVisibleCapture() {
+function fallbackVisibleCapture(code?: PrintablesFailureCode, jsonLd: string[] = []) {
   if (!activePage?.url || activeSource !== "Printables") return null;
-  return buildBrowserCaptureMessage({
+  const capture = buildBrowserCaptureMessage({
     provider: activeSource,
     pageUrl: activePage.url,
     pageTitle: activePage.title,
+    jsonLd,
   });
+  return {
+    ...capture,
+    state: "manual_file_required" as const,
+    message: printablesFailureMessage(code),
+    manual_file: {
+      mapping: "user_selected_file" as const,
+      source_item_id: capture.source.source_item_id,
+    },
+  };
 }
 
 async function takePreparedSetup(page: Page) {
@@ -689,7 +832,15 @@ captureButton.addEventListener("click", async () => {
       const authorization = accessToken || connectedConfig.deviceCredential;
       if (!authorization)
         throw new Error("The browser connection expired. Connect PrintStash again.");
-      const files = await Promise.all(selected.map(downloadPrintablesCandidate));
+      const links = await resolvePrintablesLinks(pendingPrintablesCapture, selected);
+      const linksById = new Map(links.map((link) => [link.id, link.url]));
+      const files = await Promise.all(
+        selected.map((candidate) => {
+          const link = linksById.get(candidate.id);
+          if (!link) throw new Error("Printables link mapping changed.");
+          return downloadPrintablesCandidate(candidate, link);
+        }),
+      );
       await captureRichFiles({
         vault: connectedConfig.vault,
         authorization,
@@ -738,6 +889,20 @@ captureButton.addEventListener("click", async () => {
     showStatus(`Model from ${result.source} sent to Pending Imports.`, "success");
   } catch (error) {
     const message = messageFrom(error);
+    if (
+      pendingPrintablesCapture &&
+      (message.startsWith("user_file_required") || message.startsWith("Printables"))
+    ) {
+      const capture = pendingPrintablesCapture;
+      renderManualFileSelection(capture);
+      showStatus(
+        message.startsWith("user_file_required")
+          ? message
+          : printablesFailureMessage("contract_changed"),
+        "error",
+      );
+      return;
+    }
     const connectionLost = [
       "Couldn't reach PrintStash",
       "connection expired",
