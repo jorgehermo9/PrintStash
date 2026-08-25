@@ -51,6 +51,11 @@ describe("popup browser adapters", () => {
     fakeBrowser.tabs.create = vi.fn();
   });
 
+  it("shows the loaded capture protocol marker", () => {
+    expect(element("#runtime-marker").textContent).toBe("Capture protocol v2");
+    expect(element("#runtime-marker").hidden).toBe(false);
+  });
+
   it("restores settings and checks the vault through fake storage and permission APIs", async () => {
     await fakeBrowser.storage.local.set({
       vault: "https://prints.example.com",

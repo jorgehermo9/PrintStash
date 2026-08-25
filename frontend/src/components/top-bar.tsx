@@ -9,6 +9,7 @@ import {
   Box,
   ChevronDown,
   BookOpen,
+  Inbox,
   LogOut,
   Printer,
   Search,
@@ -301,6 +302,7 @@ function ProfileMenu({
   const { t } = useI18n();
   const items = [
     { href: "/", label: t("nav.vault"), icon: Box },
+    { href: "/inbox", label: t("nav.inbox"), icon: Inbox },
     { href: "/printers", label: t("nav.printers"), icon: Printer, adminOnly: true },
     { href: "/statistics", label: t("nav.statistics"), icon: BarChart3, adminOnly: true },
     { href: "/profiles", label: t("nav.profiles"), icon: SlidersHorizontal },
