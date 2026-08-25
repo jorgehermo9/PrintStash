@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeBrowser } from "@webext-core/fake-browser";
 
 const popupHtml = await readFile("entrypoints/popup/index.html", "utf8");
+const popupCss = await readFile("popup.css", "utf8");
 
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -23,6 +24,16 @@ const element = (selector: string) => requiredElement(selector, HTMLElement);
 function stringBody(options: RequestInit): string {
   if (typeof options.body !== "string") throw new TypeError("Expected a string request body");
   return options.body;
+}
+
+function cssBlock(selector: string): string {
+  const selectorIndex = popupCss.indexOf(selector);
+  const blockStart = popupCss.indexOf("{", selectorIndex);
+  const blockEnd = popupCss.indexOf("}", blockStart);
+  if (selectorIndex < 0 || blockStart < 0 || blockEnd < 0) {
+    throw new Error(`Missing CSS block for ${selector}`);
+  }
+  return popupCss.slice(blockStart + 1, blockEnd);
 }
 
 async function settle() {
@@ -54,6 +65,15 @@ describe("popup browser adapters", () => {
   it("shows the loaded capture protocol marker", () => {
     expect(element("#runtime-marker").textContent).toBe("Capture protocol v2");
     expect(element("#runtime-marker").hidden).toBe(false);
+  });
+
+  it("keeps candidate checkboxes compact instead of inheriting text-input dimensions", () => {
+    const checkboxStyles = cssBlock('.candidate-option input[type="checkbox"]');
+    expect(checkboxStyles).toMatch(/width:\s*16px/);
+    expect(checkboxStyles).toMatch(/height:\s*16px/);
+    expect(checkboxStyles).toMatch(/min-height:\s*16px/);
+    expect(checkboxStyles).toMatch(/flex:\s*0 0 16px/);
+    expect(checkboxStyles).toMatch(/padding:\s*0/);
   });
 
   it("restores settings and checks the vault through fake storage and permission APIs", async () => {
@@ -424,6 +444,7 @@ describe("popup browser adapters", () => {
     for (let attempt = 0; attempt < 4; attempt += 1) await settle();
 
     expect(element("#candidate-panel").hidden).toBe(false);
+    expect(element("#candidate-panel legend").textContent).toBe("Select Printables files");
     expect(button("#capture").textContent).toBe("Confirm and upload selected files");
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(
@@ -588,6 +609,7 @@ describe("popup browser adapters", () => {
     for (let attempt = 0; attempt < 5; attempt += 1) await settle();
 
     expect(element("#candidate-panel").hidden).toBe(false);
+    expect(element("#candidate-panel legend").textContent).toBe("Select MakerWorld packages");
     const candidates = document.querySelectorAll<HTMLInputElement>("#candidate-list input");
     expect(candidates).toHaveLength(4);
     expect([...candidates].every((input) => !input.checked)).toBe(true);

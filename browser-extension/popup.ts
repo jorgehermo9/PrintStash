@@ -95,6 +95,7 @@ const inboxButton = requiredElement("#open-inbox", HTMLButtonElement);
 const importPanel = requiredElement("#import-panel", HTMLElement);
 const importHint = requiredElement("#import-hint", HTMLElement);
 const candidatePanel = requiredElement("#candidate-panel", HTMLFieldSetElement);
+const candidateLegend = requiredElement("#candidate-panel legend", HTMLElement);
 const candidateList = requiredElement("#candidate-list", HTMLElement);
 const manualFilePanel = requiredElement("#manual-file-panel", HTMLFieldSetElement);
 const manualFileInput = requiredElement("#manual-file", HTMLInputElement);
@@ -180,6 +181,10 @@ function renderCandidateSelection(capture: BrowserCaptureMessage) {
     pendingPrintablesCapture = capture;
     pendingMakerWorldCapture = null;
   }
+  candidateLegend.textContent =
+    capture.source.provider === "makerworld"
+      ? "Select MakerWorld packages"
+      : "Select Printables files";
   candidateList.replaceChildren();
   capture.candidates.forEach((candidate, index) => {
     const label = document.createElement("label");

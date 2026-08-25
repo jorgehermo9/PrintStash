@@ -40,6 +40,57 @@ const MAKERWORLD_ROOT_DESIGN_FIXTURE = {
   ],
 };
 
+function liveRootDesignWithUnrelatedPayload() {
+  const unrelatedDepth: Record<string, unknown> = {};
+  let cursor = unrelatedDepth;
+  for (let index = 0; index < 9; index += 1) {
+    cursor.next = {};
+    cursor = cursor.next as Record<string, unknown>;
+  }
+  const wide = Array.from({ length: 29 }, () =>
+    Array.from({ length: 29 }, () => ({ first: 1, second: 2, third: 3 })),
+  );
+  return {
+    id: "1574312",
+    title: "Root design",
+    designCreator: { uid: "8901", name: "Hiro Maker", handle: "hiro-maker" },
+    license: "CC BY-NC 4.0",
+    instances: [
+      { id: "instance-1", title: "First package" },
+      { id: "instance-2", title: "Second package" },
+      { id: "instance-3", title: "Third package" },
+      { id: "instance-4", title: "Fourth package" },
+    ],
+    unrelated: {
+      deep: unrelatedDepth,
+      wide,
+      extra: Array.from({ length: 29 }, (_, index) => index),
+      padding: Array.from({ length: 11 }, () => 0),
+    },
+  };
+}
+
+function payloadMetrics(value: unknown) {
+  const queue: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  let nodes = 0;
+  let maxDepth = 0;
+  let maxArrayLength = 0;
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) throw new Error("Missing payload node");
+    nodes += 1;
+    maxDepth = Math.max(maxDepth, current.depth);
+    if (Array.isArray(current.value)) {
+      maxArrayLength = Math.max(maxArrayLength, current.value.length);
+      for (const child of current.value) queue.push({ value: child, depth: current.depth + 1 });
+    } else if (current.value !== null && typeof current.value === "object") {
+      for (const child of Object.values(current.value))
+        queue.push({ value: child, depth: current.depth + 1 });
+    }
+  }
+  return { nodes, maxDepth, maxArrayLength };
+}
+
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -78,8 +129,93 @@ describe("MakerWorld bounded capture", () => {
       "instance-3",
       "instance-4",
     ]);
+    expect(metadata.files.map(({ filename }) => filename)).toEqual([
+      "First package.3mf",
+      "Second package.3mf",
+      "Third package.3mf",
+      "Fourth package.3mf",
+    ]);
     expect(selectMakerWorldCandidates(metadata.files, [])).toEqual([]);
   });
+
+  it("projects consumed live fields while ignoring an unrelated deep and wide payload", async () => {
+    const fixture = liveRootDesignWithUnrelatedPayload();
+    const metrics = payloadMetrics(fixture);
+    expect(metrics.maxArrayLength).toBe(29);
+    expect(metrics.maxDepth).toBe(11);
+    expect(metrics.nodes).toBeGreaterThanOrEqual(3467);
+    expect(metrics.nodes).toBeLessThan(3500);
+    expect(JSON.stringify(fixture).length).toBeLessThan(512 * 1024);
+
+    const metadata = parseMakerWorldMetadataResponse(fixture, "1574312");
+    expect(metadata.source).toMatchObject({
+      creatorId: "8901",
+      creatorName: "Hiro Maker",
+      licenseCode: "CC BY-NC 4.0",
+    });
+    expect(metadata.files).toHaveLength(4);
+    expect(metadata.files.map(({ filename }) => filename)).toEqual([
+      "First package.3mf",
+      "Second package.3mf",
+      "Third package.3mf",
+      "Fourth package.3mf",
+    ]);
+    expect(JSON.stringify(metadata)).not.toContain("unrelated");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(fixture)),
+    );
+    const isolated = new Function(
+      `return (${requestMakerWorldMetadataInMainWorld.toString()})`,
+    )() as typeof requestMakerWorldMetadataInMainWorld;
+    const result = await isolated({
+      endpoint: "https://makerworld.com/api/v1/design-service/design/1574312",
+      sourceItemId: "1574312",
+      fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+      maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      metadata: {
+        source: { creatorId: "8901", creatorName: "Hiro Maker" },
+        files: [
+          { id: "instance-1", filename: "First package.3mf" },
+          { id: "instance-2", filename: "Second package.3mf" },
+          { id: "instance-3", filename: "Third package.3mf" },
+          { id: "instance-4", filename: "Fourth package.3mf" },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("unrelated");
+  });
+
+  it.each(["filename", "fileName"])(
+    "rejects a malicious explicit %s in both pure and serialized projections",
+    async (field) => {
+      const fixture = {
+        id: "1574312",
+        instances: [{ id: "instance-1", [field]: "\u0000escape.3mf" }],
+      };
+      expect(() => parseMakerWorldMetadataResponse(fixture, "1574312")).toThrow(/filename changed/);
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => response(fixture)),
+      );
+      const isolated = new Function(
+        `return (${requestMakerWorldMetadataInMainWorld.toString()})`,
+      )() as typeof requestMakerWorldMetadataInMainWorld;
+      await expect(
+        isolated({
+          endpoint: "https://makerworld.com/api/v1/design-service/design/1574312",
+          sourceItemId: "1574312",
+          fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+          maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+        }),
+      ).resolves.toMatchObject({ ok: false, code: "contract_changed" });
+    },
+  );
 
   it("fails closed for changed, oversized, deep, duplicate, and invalid-size fixtures", () => {
     expect(() => parseMakerWorldMetadataResponse({ data: {} }, "1234")).toThrow();

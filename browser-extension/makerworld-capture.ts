@@ -22,10 +22,6 @@ export const MAKERWORLD_MAX_FILE_NAME_BYTES = 255;
 export const MAKERWORLD_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
 export const MAKERWORLD_MAX_TOTAL_SIZE_BYTES = 1024 * 1024 * 1024;
 
-const MAKERWORLD_MAX_DEPTH = 10;
-const MAKERWORLD_MAX_NODES = 4096;
-const MAKERWORLD_MAX_ARRAY_ITEMS = 256;
-
 export type MakerWorldFailureCode =
   | "auth_required"
   | "challenge"
@@ -181,28 +177,6 @@ function record(value: unknown): { [key: string]: unknown } | null {
     : null;
 }
 
-function complexityCheck(value: unknown): "ok" | "too_deep" | "too_many" {
-  const queue: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
-  let nodes = 0;
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current) return "too_deep";
-    nodes += 1;
-    if (nodes > MAKERWORLD_MAX_NODES || current.depth > MAKERWORLD_MAX_DEPTH) return "too_deep";
-    if (Array.isArray(current.value)) {
-      if (current.value.length > MAKERWORLD_MAX_ARRAY_ITEMS) return "too_many";
-      for (const child of current.value) queue.push({ value: child, depth: current.depth + 1 });
-      continue;
-    }
-    const object = record(current.value);
-    if (object) {
-      for (const child of Object.values(object))
-        queue.push({ value: child, depth: current.depth + 1 });
-    }
-  }
-  return "ok";
-}
-
 function firstText(object: { [key: string]: unknown }, keys: string[], maximum: number) {
   for (const key of keys) {
     const text = boundedText(object[key], maximum);
@@ -219,10 +193,17 @@ function sourceFromDesign(design: { [key: string]: unknown }): BrowserSourceMeta
   const title = firstText(design, ["name", "title"], 512);
   const description = boundedText(design.description, 64 * 1024);
   const instructions = boundedText(design.instructions, 128 * 1024);
-  const creatorName =
-    boundedText(design.designCreator, 512) ??
-    (person ? firstText(person, ["name", "username"], 512) : undefined);
-  const creatorId = person ? boundedId(person.id) : undefined;
+  const creator = record(design.designCreator);
+  const creatorName = creator
+    ? (firstText(creator, ["name", "handle"], 512) ??
+      (person ? firstText(person, ["name", "username"], 512) : undefined))
+    : (boundedText(design.designCreator, 512) ??
+      (person ? firstText(person, ["name", "username"], 512) : undefined));
+  const creatorId = creator
+    ? (boundedId(creator.uid ?? creator.id) ?? (person ? boundedId(person.id) : undefined))
+    : person
+      ? boundedId(person.id)
+      : undefined;
   const creatorUrl = person ? safeMetadataUrl(person.url ?? person.profileUrl) : undefined;
   const licenseCode =
     boundedText(licenseValue, 255) ??
@@ -255,8 +236,15 @@ function safeMetadataUrl(value: unknown): string | undefined {
 }
 
 function filenameForInstance(instance: { [key: string]: unknown }, index: number): string {
-  const supplied = firstText(instance, ["filename", "fileName", "name", "title"], 255);
-  const filename = supplied && /\.[a-z0-9]{1,8}$/i.test(supplied) ? supplied : `${index + 1}.3mf`;
+  const explicit = instance.filename ?? instance.fileName;
+  if (explicit !== undefined && explicit !== null) {
+    const filename = boundedFilename(explicit);
+    if (!filename) throw new Error("MakerWorld package filename changed.");
+    return filename;
+  }
+  const supplied = firstText(instance, ["name", "title"], 255);
+  if (!supplied) return `${index + 1}.3mf`;
+  const filename = /\.[a-z0-9]{1,8}$/i.test(supplied) ? supplied : `${supplied}.3mf`;
   return boundedFilename(filename) || `${index + 1}.3mf`;
 }
 
@@ -264,8 +252,18 @@ function filesFromDesign(
   design: { [key: string]: unknown },
   sourceItemId: string,
 ): MakerWorldPackageFile[] {
-  const instances = Array.isArray(design.instances) ? design.instances : [];
-  const defaultId = boundedId(design.defaultInstanceId);
+  const rawInstances = design.instances;
+  if (rawInstances !== undefined && !Array.isArray(rawInstances)) {
+    throw new Error("MakerWorld package response changed.");
+  }
+  const instances = Array.isArray(rawInstances) ? rawInstances : [];
+  if (instances.length > MAKERWORLD_MAX_FILES) throw new Error("MakerWorld has too many packages.");
+  const rawDefaultId = design.defaultInstanceId;
+  const defaultId =
+    rawDefaultId === undefined || rawDefaultId === null ? undefined : boundedId(rawDefaultId);
+  if (rawDefaultId !== undefined && rawDefaultId !== null && !defaultId) {
+    throw new Error("MakerWorld model identity changed.");
+  }
   const entries = instances.length > 0 ? instances : defaultId ? [{ id: defaultId }] : [];
   const files: MakerWorldPackageFile[] = [];
   const ids = new Set<string>();
@@ -286,7 +284,6 @@ function filesFromDesign(
       fileType: "other",
       ...(sizeBytes === undefined ? {} : { sizeBytes }),
     });
-    if (files.length > MAKERWORLD_MAX_FILES) throw new Error("MakerWorld has too many packages.");
   }
   if (files.length === 0) throw new Error(`MakerWorld model ${sourceItemId} has no packages.`);
   return files;
@@ -296,8 +293,6 @@ export function parseMakerWorldMetadataResponse(
   value: unknown,
   expectedSourceItemId: string,
 ): MakerWorldMetadataResponse {
-  const complexity = complexityCheck(value);
-  if (complexity !== "ok") throw new Error(`MakerWorld metadata response is ${complexity}.`);
   const root = record(value);
   const data = root ? (root.data === undefined ? root : record(root.data)) : null;
   if (!data) throw new Error("MakerWorld metadata response changed.");
@@ -527,9 +522,6 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
   const fixtureVersion = "makerworld-design-service-v1";
   const maxResponseBytes = 512 * 1024;
   const maxFiles = 64;
-  const maxDepth = 10;
-  const maxNodes = 4096;
-  const maxArrayItems = 256;
   const asRecord = (value: unknown): { [key: string]: unknown } | null =>
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as { [key: string]: unknown })
@@ -547,9 +539,15 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
       ? result
       : undefined;
   };
-  const filename = (value: unknown, index: number): string | undefined => {
+  const filename = (value: unknown, index: number, explicit = false): string | undefined => {
     const supplied = text(value, 255);
-    const result = supplied && /\.[a-z0-9]{1,8}$/i.test(supplied) ? supplied : `${index + 1}.3mf`;
+    if (explicit && !supplied) return undefined;
+    if (!supplied) return `${index + 1}.3mf`;
+    const result = explicit
+      ? supplied
+      : /\.[a-z0-9]{1,8}$/i.test(supplied)
+        ? supplied
+        : `${supplied}.3mf`;
     if (
       new TextEncoder().encode(result).byteLength > 255 ||
       result === "." ||
@@ -557,7 +555,7 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
       result.includes("/") ||
       result.includes("\\")
     )
-      return undefined;
+      return explicit ? undefined : `${index + 1}.3mf`;
     return result;
   };
   const size = (value: unknown): number | undefined => {
@@ -611,28 +609,18 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
     const root = asRecord(parsed);
     const data = root ? (root.data === undefined ? root : asRecord(root.data)) : null;
     if (!data) return { ok: false, code: "contract_changed" };
-    const queue: Array<{ value: unknown; depth: number }> = [{ value: parsed, depth: 0 }];
-    let nodes = 0;
-    while (queue.length) {
-      const current = queue.shift();
-      if (!current) return { ok: false, code: "response_too_deep" };
-      nodes += 1;
-      if (nodes > maxNodes || current.depth > maxDepth)
-        return { ok: false, code: "response_too_deep" };
-      if (Array.isArray(current.value)) {
-        if (current.value.length > maxArrayItems) return { ok: false, code: "response_too_deep" };
-        for (const child of current.value) queue.push({ value: child, depth: current.depth + 1 });
-      } else {
-        const object = asRecord(current.value);
-        if (object)
-          for (const child of Object.values(object))
-            queue.push({ value: child, depth: current.depth + 1 });
-      }
-    }
-    const returnedId = id(data.id) || args.sourceItemId;
+    const returnedId = data.id === undefined ? args.sourceItemId : id(data.id);
     if (returnedId !== args.sourceItemId) return { ok: false, code: "contract_changed" };
+    if (data.instances !== undefined && !Array.isArray(data.instances))
+      return { ok: false, code: "contract_changed" };
     const instances = Array.isArray(data.instances) ? data.instances : [];
-    const defaultId = id(data.defaultInstanceId);
+    if (instances.length > maxFiles) return { ok: false, code: "too_many_files" };
+    const defaultId =
+      data.defaultInstanceId === undefined || data.defaultInstanceId === null
+        ? undefined
+        : id(data.defaultInstanceId);
+    if (data.defaultInstanceId !== undefined && data.defaultInstanceId !== null && !defaultId)
+      return { ok: false, code: "contract_changed" };
     const entries = instances.length > 0 ? instances : defaultId ? [{ id: defaultId }] : [];
     if (!entries.length) return { ok: false, code: "contract_changed" };
     if (entries.length > maxFiles) return { ok: false, code: "too_many_files" };
@@ -641,8 +629,15 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
     for (const [index, entry] of entries.entries()) {
       const instance = asRecord(entry);
       const instanceId = instance ? id(instance.id) : undefined;
+      const explicitFilename = instance?.filename ?? instance?.fileName;
       const fileName = instance
-        ? filename(instance.filename ?? instance.fileName ?? instance.name ?? instance.title, index)
+        ? filename(
+            explicitFilename !== undefined && explicitFilename !== null
+              ? explicitFilename
+              : (instance.name ?? instance.title),
+            index,
+            explicitFilename !== undefined && explicitFilename !== null,
+          )
         : undefined;
       if (!instance || !instanceId || !fileName || seen.has(instanceId))
         return { ok: false, code: "contract_changed" };
@@ -665,10 +660,17 @@ export async function requestMakerWorldMetadataInMainWorld(args: {
     const title = text(data.name ?? data.title, 512);
     const description = text(data.description, 64 * 1024);
     const instructions = text(data.instructions, 128 * 1024);
-    const creatorName =
-      text(data.designCreator, 512) ||
-      (person ? text(person.name ?? person.username, 512) : undefined);
-    const creatorId = person ? id(person.id) : undefined;
+    const creator = asRecord(data.designCreator);
+    const creatorName = creator
+      ? text(creator.name ?? creator.handle, 512) ||
+        (person ? text(person.name ?? person.username, 512) : undefined)
+      : text(data.designCreator, 512) ||
+        (person ? text(person.name ?? person.username, 512) : undefined);
+    const creatorId = creator
+      ? id(creator.uid ?? creator.id) || (person ? id(person.id) : undefined)
+      : person
+        ? id(person.id)
+        : undefined;
     const creatorUrl = person ? safeUrl(person.url ?? person.profileUrl) : undefined;
     const licenseCode =
       text(licenseValue, 255) ||
