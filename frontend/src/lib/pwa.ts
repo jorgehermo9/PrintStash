@@ -1,6 +1,19 @@
+export function createControllerChangeHandler(reload: () => void): () => void {
+  let reloading = false;
+  return () => {
+    if (reloading) return;
+    reloading = true;
+    reload();
+  };
+}
+
 export function registerPwa(enabled = import.meta.env.PROD): void {
   // Feature detection, in order: opted in, running in a DOM, service workers supported.
   if (!enabled || !("window" in globalThis) || !("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.addEventListener(
+    "controllerchange",
+    createControllerChangeHandler(() => window.location.reload()),
+  );
   window.addEventListener(
     "load",
     () => {

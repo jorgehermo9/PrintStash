@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -283,6 +282,7 @@ function SourceCover({
       | "source.coverInvalid"
       | "source.coverTooLarge"
       | "source.coverAvailable"
+      | "source.coverEmpty"
       | "source.coverUnavailable",
   ) =>
     i18n?.t(key) ??
@@ -300,6 +300,7 @@ function SourceCover({
       "source.coverInvalid": "Choose a JPEG, PNG, or WebP image.",
       "source.coverTooLarge": "Cover images must be 15 MiB or smaller.",
       "source.coverAvailable": "A private representative cover is available.",
+      "source.coverEmpty": "No private representative cover uploaded.",
       "source.coverUnavailable": "Private representative cover preview is unavailable.",
     }[key];
   const [cover, setCover] = useState<ModelSourceCoverRead | null>(null);
@@ -372,67 +373,72 @@ function SourceCover({
   };
 
   return (
-    <section className="border-y border-surface-container-high py-3" aria-label={t("source.cover")}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
-          {t("source.cover")}
-        </h3>
-        {canEdit && (
-          <div className="flex flex-wrap gap-2">
-            <input
-              ref={inputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              className="sr-only"
-              aria-label={cover ? t("source.coverReplace") : t("source.coverUpload")}
-              onChange={(event) => {
-                selectFile(event.currentTarget.files?.[0]);
-                event.currentTarget.value = "";
-              }}
-            />
-            <Button
-              size="xs"
-              variant="outline"
-              loading={busy === "upload"}
-              onClick={() => inputRef.current?.click()}
-            >
-              {cover ? t("source.coverReplace") : t("source.coverUpload")}
-            </Button>
-            {cover && (
+    <section aria-labelledby={`cover-heading-${source.id}`}>
+      <h2
+        id={`cover-heading-${source.id}`}
+        className="mb-4 border-b border-outline-variant pb-1 text-lg font-semibold text-on-surface"
+      >
+        {t("source.cover")}
+      </h2>
+      <div className="overflow-hidden rounded border border-outline-variant bg-surface">
+        <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-on-surface-variant" aria-live="polite" role="status">
+            {busy === "upload"
+              ? t("source.coverUpload")
+              : busy === "delete"
+                ? t("source.coverDelete")
+                : cover
+                  ? t("source.coverAvailable")
+                  : t("source.coverEmpty")}
+          </p>
+          {canEdit && (
+            <div className="flex flex-wrap gap-2">
+              <input
+                ref={inputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="sr-only"
+                aria-label={cover ? t("source.coverReplace") : t("source.coverUpload")}
+                onChange={(event) => {
+                  selectFile(event.currentTarget.files?.[0]);
+                  event.currentTarget.value = "";
+                }}
+              />
               <Button
                 size="xs"
-                variant="destructive"
-                loading={busy === "delete"}
-                onClick={() => setDeleteOpen(true)}
+                variant="outline"
+                loading={busy === "upload"}
+                onClick={() => inputRef.current?.click()}
               >
-                {t("source.coverDelete")}
+                {cover ? t("source.coverReplace") : t("source.coverUpload")}
               </Button>
+              {cover && (
+                <Button
+                  size="xs"
+                  variant="destructive"
+                  loading={busy === "delete"}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  {t("source.coverDelete")}
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+        {cover && (
+          <div className="border-t border-surface-container-high bg-surface-container-low p-3">
+            {imageUrl ? (
+              <img
+                src={imageUrl}
+                alt={`${t("source.cover")} - ${source.provider}`}
+                className="max-h-64 w-full rounded object-contain"
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">{t("source.coverUnavailable")}</p>
             )}
           </div>
         )}
       </div>
-      <p className="mt-1 text-xs text-muted-foreground" aria-live="polite" role="status">
-        {busy === "upload"
-          ? t("source.coverUpload")
-          : busy === "delete"
-            ? t("source.coverDelete")
-            : cover
-              ? t("source.coverAvailable")
-              : ""}
-      </p>
-      {cover && (
-        <div className="mt-2 overflow-hidden rounded-md border border-border bg-muted">
-          {imageUrl ? (
-            <img
-              src={imageUrl}
-              alt={`${t("source.cover")} - ${source.provider}`}
-              className="max-h-64 w-full object-contain"
-            />
-          ) : (
-            <p className="p-3 text-sm text-muted-foreground">{t("source.coverUnavailable")}</p>
-          )}
-        </div>
-      )}
       <ConfirmModal
         open={replaceOpen}
         onClose={() => {
@@ -457,6 +463,27 @@ function SourceCover({
         onConfirm={remove}
       />
     </section>
+  );
+}
+
+function SourceIdentityRow({
+  label,
+  children,
+  last = false,
+}: {
+  label: string;
+  children: ReactNode;
+  last?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-col gap-1 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between ${last ? "" : "border-b border-surface-container-high"}`}
+    >
+      <dt className="font-mono text-xs uppercase tracking-wider text-on-surface-variant">
+        {label}
+      </dt>
+      <dd className="min-w-0 text-sm text-on-surface sm:text-right">{children}</dd>
+    </div>
   );
 }
 
@@ -498,105 +525,86 @@ export function SourceTab({
       />
     );
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       {data.sources.map((source) => {
         const canonicalUrl = safeHttpUrl(source.canonical_url);
         const fieldCount = source.fields.length + (source.tags?.length ? 1 : 0);
         return (
-          <Card key={source.id}>
-            <CardContent className="space-y-5 pt-5">
-              <section aria-labelledby={`source-heading-${source.id}`}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
-                      {t("source.title", "Source")}
-                    </p>
-                    <h2
-                      id={`source-heading-${source.id}`}
-                      className="mt-1 text-base font-semibold capitalize"
+          <article key={source.id} className="space-y-7">
+            <section aria-labelledby={`source-heading-${source.id}`}>
+              <h2
+                id={`source-heading-${source.id}`}
+                className="mb-4 border-b border-outline-variant pb-1 text-lg font-semibold text-on-surface"
+              >
+                {t("source.title", "Source")}
+              </h2>
+              <dl
+                className="overflow-hidden rounded border border-outline-variant bg-surface"
+                data-testid="source-identity-panel"
+              >
+                <SourceIdentityRow label={t("source.provider", "Provider")}>
+                  <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                    <span className="capitalize">{source.provider}</span>
+                    <Badge variant="secondary">{t("source.capturedStatus", "Captured")}</Badge>
+                  </span>
+                </SourceIdentityRow>
+                <SourceIdentityRow label={t("source.url", "Source URL")}>
+                  {canonicalUrl ? (
+                    <a
+                      href={canonicalUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex max-w-full items-center justify-end gap-1 break-all text-primary hover:underline"
                     >
-                      {source.provider}
-                    </h2>
-                  </div>
-                  <Badge variant="secondary">{t("source.capturedStatus", "Captured")}</Badge>
-                </div>
-                {canonicalUrl ? (
-                  <a
-                    href={canonicalUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-sm text-primary hover:underline"
-                  >
-                    {canonicalUrl}
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </a>
-                ) : (
-                  <p className="text-sm text-muted-foreground">{source.canonical_url}</p>
-                )}
-                <div className="mt-4 grid gap-2 border-t border-surface-container-high pt-3 text-xs sm:grid-cols-2">
-                  <div>
-                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
-                      {t("source.sourceId", "Source ID")}
-                    </span>
-                    <p className="mt-1 text-muted-foreground">
-                      {source.source_item_id || t("source.notSuppliedGeneric", "Not supplied")}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
-                      {t("source.revision", "Revision")}
-                    </span>
-                    <p className="mt-1 text-muted-foreground">
-                      {source.source_revision || t("source.notSuppliedGeneric", "Not supplied")}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
-                      {t("source.captured", "Captured")}
-                    </span>
-                    <p className="mt-1 text-muted-foreground">
-                      {new Date(source.first_captured_at).toLocaleDateString(i18n?.locale)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
-                      {t("source.checked", "Last checked")}
-                    </span>
-                    <p className="mt-1 text-muted-foreground">
-                      {new Date(source.last_checked_at).toLocaleDateString(i18n?.locale)}
-                    </p>
-                  </div>
+                      {canonicalUrl}
+                      <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                    </a>
+                  ) : (
+                    <span className="break-all text-muted-foreground">{source.canonical_url}</span>
+                  )}
+                </SourceIdentityRow>
+                <SourceIdentityRow label={t("source.sourceId", "Source ID")}>
+                  {source.source_item_id || t("source.notSuppliedGeneric", "Not supplied")}
+                </SourceIdentityRow>
+                <SourceIdentityRow label={t("source.revision", "Revision")}>
+                  {source.source_revision || t("source.notSuppliedGeneric", "Not supplied")}
+                </SourceIdentityRow>
+                <SourceIdentityRow label={t("source.captured", "Captured")}>
+                  {new Date(source.first_captured_at).toLocaleDateString(i18n?.locale)}
+                </SourceIdentityRow>
+                <SourceIdentityRow label={t("source.checked", "Last checked")} last>
+                  {new Date(source.last_checked_at).toLocaleDateString(i18n?.locale)}
+                </SourceIdentityRow>
+              </dl>
+            </section>
+            <SourceCover modelId={modelId} source={source} canEdit={canEdit} api={api} />
+            {fieldCount > 0 && (
+              <section aria-labelledby={`metadata-heading-${source.id}`}>
+                <h2
+                  id={`metadata-heading-${source.id}`}
+                  className="mb-4 border-b border-outline-variant pb-1 text-lg font-semibold text-on-surface"
+                >
+                  {t("source.metadata", "Captured metadata")}
+                </h2>
+                <div className="overflow-hidden rounded border border-outline-variant bg-surface">
+                  <SourceTags tags={source.tags ?? []} last={source.fields.length === 0} />
+                  {source.fields.map((field, index) => (
+                    <SourceField
+                      key={field.field_name}
+                      modelId={modelId}
+                      source={source}
+                      field={field}
+                      canEdit={canEdit}
+                      patchProvenance={api.patchProvenance}
+                      updateModel={api.updateModel}
+                      onSaved={setData}
+                      last={index === source.fields.length - 1}
+                    />
+                  ))}
                 </div>
               </section>
-              <SourceCover modelId={modelId} source={source} canEdit={canEdit} api={api} />
-              {fieldCount > 0 && (
-                <section aria-labelledby={`metadata-heading-${source.id}`}>
-                  <h3
-                    id={`metadata-heading-${source.id}`}
-                    className="mb-2 font-mono text-2xs uppercase tracking-wider text-on-surface-variant"
-                  >
-                    {t("source.metadata", "Captured metadata")}
-                  </h3>
-                  <div className="overflow-hidden rounded border border-outline-variant bg-surface">
-                    <SourceTags tags={source.tags ?? []} last={source.fields.length === 0} />
-                    {source.fields.map((field, index) => (
-                      <SourceField
-                        key={field.field_name}
-                        modelId={modelId}
-                        source={source}
-                        field={field}
-                        canEdit={canEdit}
-                        patchProvenance={api.patchProvenance}
-                        updateModel={api.updateModel}
-                        onSaved={setData}
-                        last={index === source.fields.length - 1}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-            </CardContent>
-          </Card>
+            )}
+          </article>
         );
       })}
     </div>

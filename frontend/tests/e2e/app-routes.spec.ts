@@ -132,6 +132,9 @@ test("Source tab displays and replaces a private representative cover", async ({
   await page.goto("/models/1");
   await page.getByRole("tab", { name: "Source" }).click();
 
+  await expect(page.getByRole("heading", { name: "Source", exact: true })).toBeVisible();
+  await expect(page.getByTestId("source-identity-panel")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Captured metadata" })).toBeVisible();
   await expect(page.getByRole("img", { name: /private representative cover/i })).toBeVisible();
   await page.getByLabel("Replace cover").setInputFiles({
     name: "replacement.png",

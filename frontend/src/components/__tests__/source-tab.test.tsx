@@ -179,6 +179,8 @@ describe("SourceTab representative cover", () => {
   it("uses grouped technical rows for source identity and captured metadata", async () => {
     render(<SourceTab modelId={1} canEdit={false} api={api} />);
 
+    expect(await screen.findByRole("heading", { name: "Source" })).toBeInTheDocument();
+    expect(screen.getByTestId("source-identity-panel")).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Captured metadata" })).toBeInTheDocument();
     expect(screen.getByText("Source ID")).toBeInTheDocument();
     expect(screen.getByText("Revision")).toBeInTheDocument();
