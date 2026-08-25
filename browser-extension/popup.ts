@@ -24,25 +24,24 @@ import {
   PRINTABLES_METADATA_ADAPTER_VERSION,
   PRINTABLES_METADATA_FIXTURE_VERSION,
   PRINTABLES_METADATA_QUERY,
+  PRINTABLES_METADATA_PERMISSION_ORIGIN,
   printablesFailureMessage,
   readBoundedPrintablesResponse,
-  requestPrintablesLinksInMainWorld,
-  requestPrintablesMetadataInMainWorld,
-  selectedGroups,
-  validatePrintablesResolvedLinks,
+  requestPrintablesLinksInExtensionContext,
+  requestPrintablesMetadataInExtensionContext,
   validatePrintablesMetadataDto,
   type PrintablesFailureCode,
-  type PrintablesMetadataPageResult,
   type PrintablesSelectedFile,
 } from "./printables-capture.ts";
 import { captureRichFiles, type BrowserCaptureFile } from "./capture-transport.ts";
 import {
   MAKERWORLD_MAX_RESPONSE_BYTES,
+  MAKERWORLD_METADATA_FIXTURE_VERSION,
   makerWorldCaptureFromMetadata,
   makerWorldFailureMessage,
   downloadMakerWorldCandidate,
   requestMakerWorldLinksInMainWorld,
-  requestMakerWorldMetadataInMainWorld,
+  requestMakerWorldMetadataInExtensionContext,
   validateMakerWorldMetadataDto,
   validateMakerWorldResolvedLinks,
   type MakerWorldFailureCode,
@@ -441,6 +440,18 @@ async function ensureOriginPermission(origin: string) {
   if (!granted) throw new Error("Permission to download the selected source file was not granted.");
 }
 
+async function ensureMetadataPermission(origin: string, provider: "Printables" | "MakerWorld") {
+  const origins = [origin];
+  const alreadyGranted = await browser.permissions.contains({ origins }).catch(() => false);
+  if (alreadyGranted) return;
+  const granted = await browser.permissions.request({ origins });
+  if (!granted) {
+    throw new Error(
+      `user_file_required: Permission to read public ${provider} metadata was not granted. Choose a downloaded ${provider} file to attach it in Pending Imports.`,
+    );
+  }
+}
+
 async function downloadPrintablesCandidate(
   candidate: BrowserCaptureMessage["candidates"][number],
   link: string,
@@ -499,27 +510,17 @@ async function resolvePrintablesLinks(
       "user_file_required: The Printables tab is unavailable. Attach a downloaded file in Pending Imports.",
     );
   }
-  const results = await browser.scripting.executeScript({
-    target: { tabId: activePage.id },
-    world: "MAIN",
-    func: requestPrintablesLinksInMainWorld,
-    args: [
-      {
-        endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
-        query: PRINTABLES_LINK_MUTATION,
-        sourceItemId: capture.source.source_item_id,
-        groups: selectedGroups(selected),
-        maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
-      },
-    ],
+  const result = await requestPrintablesLinksInExtensionContext({
+    endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
+    query: PRINTABLES_LINK_MUTATION,
+    sourceItemId: capture.source.source_item_id,
+    selected,
+    maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
   });
-  const result = results[0]?.result as
-    | { ok: boolean; links?: Array<{ id: string; link: string }>; code?: PrintablesFailureCode }
-    | undefined;
   if (!result?.ok || !result.links) {
     throw new Error(printablesFailureMessage(result?.code));
   }
-  return validatePrintablesResolvedLinks(selected, result.links);
+  return result.links;
 }
 
 async function resolveMakerWorldLinks(
@@ -619,20 +620,33 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
       const sourceItemId = capture.source.source_item_id;
       if (!sourceItemId) return fallbackVisibleCapture("contract_changed", visible.jsonLd);
       const pageOrigin = new URL(pageUrl).origin;
-      const metadataResults = await browser.scripting.executeScript({
-        target: { tabId },
-        world: "MAIN",
-        func: requestMakerWorldMetadataInMainWorld,
-        args: [
-          {
-            endpoint: `${pageOrigin}/api/v1/design-service/design/${encodeURIComponent(sourceItemId)}`,
+      const metadataEndpoint = `${pageOrigin}/api/v1/design-service/design/${encodeURIComponent(sourceItemId)}`;
+      let metadataResult: MakerWorldMetadataPageResult =
+        await requestMakerWorldMetadataInExtensionContext({
+          endpoint: metadataEndpoint,
+          sourceItemId,
+          fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+          maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+        });
+      if (metadataResult.code === "cors_failure") {
+        const providerOrigin = `${pageOrigin}/*`;
+        const permissionGranted = await browser.permissions
+          .contains({ origins: [providerOrigin] })
+          .catch(() => false);
+        if (!permissionGranted) {
+          try {
+            await ensureMetadataPermission(providerOrigin, "MakerWorld");
+          } catch {
+            return fallbackVisibleCapture("cors_failure", visible.jsonLd);
+          }
+          metadataResult = await requestMakerWorldMetadataInExtensionContext({
+            endpoint: metadataEndpoint,
             sourceItemId,
-            fixtureVersion: "makerworld-design-service-v1",
+            fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
             maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
-          },
-        ],
-      });
-      const metadataResult = metadataResults[0]?.result as MakerWorldMetadataPageResult | undefined;
+          });
+        }
+      }
       if (!metadataResult?.ok || !metadataResult.metadata) {
         return fallbackVisibleCapture(metadataResult?.code, visible.jsonLd);
       }
@@ -661,21 +675,14 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
     }
     const sourceItemId = capture.source.source_item_id;
     if (!sourceItemId) return fallbackVisibleCapture("contract_changed");
-    const metadataResults = await browser.scripting.executeScript({
-      target: { tabId },
-      world: "MAIN",
-      func: requestPrintablesMetadataInMainWorld,
-      args: [
-        {
-          endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
-          query: PRINTABLES_METADATA_QUERY,
-          sourceItemId,
-          fixtureVersion: PRINTABLES_METADATA_FIXTURE_VERSION,
-          maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
-        },
-      ],
+    await ensureMetadataPermission(PRINTABLES_METADATA_PERMISSION_ORIGIN, "Printables");
+    const metadataResult = await requestPrintablesMetadataInExtensionContext({
+      endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
+      query: PRINTABLES_METADATA_QUERY,
+      sourceItemId,
+      fixtureVersion: PRINTABLES_METADATA_FIXTURE_VERSION,
+      maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
     });
-    const metadataResult = metadataResults[0]?.result as PrintablesMetadataPageResult | undefined;
     if (!metadataResult?.ok || !metadataResult.metadata) {
       return fallbackVisibleCapture(metadataResult?.code, visible.jsonLd);
     }

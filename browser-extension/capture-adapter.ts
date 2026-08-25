@@ -23,6 +23,40 @@ export const JSON_LD_MAX_NODES = 4_096;
 export const JSON_LD_MAX_OBJECTS = 2_048;
 export const JSON_LD_MAX_QUEUE = 2_048;
 
+/** Read a provider metadata response without allowing an unbounded body into memory. */
+export async function readBoundedMetadataResponse(
+  response: Response,
+  maximumBytes: number,
+): Promise<string> {
+  const contentLengthHeader = response.headers.get("Content-Length");
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > maximumBytes) {
+      throw new Error("response too large");
+    }
+  }
+  if (!response.body) throw new Error("response body missing");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let body = "";
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maximumBytes) {
+        await reader.cancel();
+        throw new Error("response too large");
+      }
+      body += decoder.decode(next.value, { stream: true });
+    }
+    return body + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 const PROVIDER_CODES = {
   Printables: "printables",
   MakerWorld: "makerworld",

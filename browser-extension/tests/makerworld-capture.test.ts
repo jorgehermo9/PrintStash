@@ -8,6 +8,7 @@ import {
   makerWorldCaptureFromMetadata,
   parseMakerWorldMetadataResponse,
   requestMakerWorldLinksInMainWorld,
+  requestMakerWorldMetadataInExtensionContext,
   requestMakerWorldMetadataInMainWorld,
   readBoundedMakerWorldResponse,
   selectMakerWorldCandidates,
@@ -103,6 +104,31 @@ afterEach(() => {
 });
 
 describe("MakerWorld bounded capture", () => {
+  it("maps a streamed metadata body over the supplied cap to response_too_large", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"id":"1234"'));
+              controller.enqueue(new Uint8Array(64));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    await expect(
+      requestMakerWorldMetadataInExtensionContext({
+        fetchImpl,
+        endpoint: "https://makerworld.com/api/v1/design-service/design/1234",
+        sourceItemId: "1234",
+        fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+        maxResponseBytes: 16,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "response_too_large" });
+  });
+
   it("enumerates shaped instances without choosing the default package", () => {
     const metadata = parseMakerWorldMetadataResponse(MAKERWORLD_DESIGN_SERVICE_V1_FIXTURE, "1234");
 

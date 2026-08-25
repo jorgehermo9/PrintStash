@@ -27,7 +27,7 @@ instance.
 After rebuilding, confirm Chrome is loading the exact unpacked directory
 `browser-extension/.output/chrome-mv3`, then click **Reload** for PrintStash on
 `chrome://extensions`. Close and reopen the popup and confirm its header shows
-**Capture protocol v2**. If the marker is missing, Chrome has a stale or
+**Capture protocol v2 · metadata transport 2**. If the marker is missing, Chrome has a stale or
 different unpacked directory loaded: use **Load unpacked** to select
 `browser-extension/.output/chrome-mv3` again, click **Reload**, and reopen the
 popup before testing capture behavior.

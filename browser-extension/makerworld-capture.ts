@@ -12,6 +12,7 @@ import {
   type BrowserCaptureMessage,
   type BrowserSourceMetadata,
 } from "./capture-adapter.ts";
+import { readBoundedMetadataResponse } from "./capture-adapter.ts";
 import type { BrowserCaptureFile } from "./capture-transport.ts";
 
 export const MAKERWORLD_METADATA_FIXTURE_VERSION = "makerworld-design-service-v1";
@@ -306,6 +307,61 @@ export function parseMakerWorldMetadataResponse(
     source: sourceFromDesign(data),
     files,
   };
+}
+
+/** Fetch public MakerWorld metadata from the extension context, without page credentials. */
+export async function requestMakerWorldMetadataInExtensionContext({
+  fetchImpl = fetch,
+  endpoint,
+  sourceItemId,
+  fixtureVersion,
+  maxResponseBytes,
+}: {
+  fetchImpl?: typeof fetch;
+  endpoint: string;
+  sourceItemId: string;
+  fixtureVersion: string;
+  maxResponseBytes: number;
+}): Promise<MakerWorldMetadataPageResult> {
+  if (fixtureVersion !== MAKERWORLD_METADATA_FIXTURE_VERSION) {
+    return { ok: false, code: "contract_changed" };
+  }
+  let response: Response;
+  try {
+    response = await fetchImpl(endpoint, {
+      credentials: "omit",
+      headers: { Accept: "application/json" },
+    });
+  } catch {
+    return { ok: false, code: "cors_failure" };
+  }
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, code: "auth_required" };
+  }
+  if (!response.ok) return { ok: false, code: "request_failed" };
+  let body: string;
+  try {
+    body = await readBoundedMetadataResponse(response, maxResponseBytes);
+  } catch (error) {
+    if (error instanceof Error && error.message === "response too large") {
+      return { ok: false, code: "response_too_large" };
+    }
+    return { ok: false, code: "cors_failure" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { ok: false, code: "contract_changed" };
+  }
+  try {
+    return {
+      ok: true,
+      metadata: parseMakerWorldMetadataResponse(parsed, sourceItemId),
+    };
+  } catch {
+    return { ok: false, code: "contract_changed" };
+  }
 }
 
 export function validateMakerWorldMetadataDto(

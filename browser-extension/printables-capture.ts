@@ -1,3 +1,5 @@
+import { readBoundedMetadataResponse } from "./capture-adapter.ts";
+
 /**
  * The Printables browser boundary.
  *
@@ -9,6 +11,7 @@
  */
 
 export const PRINTABLES_GRAPHQL_ENDPOINT = "https://api.printables.com/graphql/";
+export const PRINTABLES_METADATA_PERMISSION_ORIGIN = "https://api.printables.com/*";
 export const PRINTABLES_METADATA_FIXTURE_VERSION = "printables-graphql-metadata-v1";
 export const PRINTABLES_METADATA_ADAPTER_VERSION = "printables-graphql-v1";
 
@@ -95,6 +98,12 @@ export interface PrintablesSelectedFile {
 export interface PrintablesResolvedLink {
   id: string;
   url: string;
+}
+
+export interface PrintablesLinksPageResult {
+  ok: boolean;
+  links?: PrintablesResolvedLink[];
+  code?: PrintablesFailureCode;
 }
 
 export async function readBoundedPrintablesResponse(
@@ -352,6 +361,7 @@ export function parsePrintablesMetadataResponse(
   const json = value as JsonValue;
   if (!complexityCheck(json)) throw new Error("Printables metadata response is too deep.");
   const root = record(json);
+  if (root && root.errors !== undefined) throw new Error("Printables metadata response changed.");
   const data = root ? record(root.data) : null;
   const printObject = data ? record(data.print) : null;
   if (!printObject || boundedId(printObject.id) !== expectedSourceItemId) {
@@ -364,6 +374,68 @@ export function parsePrintablesMetadataResponse(
     source: sourceFromPrint(printObject),
     files,
   };
+}
+
+/** Fetch public Printables metadata from the extension context, without page credentials. */
+export async function requestPrintablesMetadataInExtensionContext({
+  fetchImpl = fetch,
+  endpoint,
+  query,
+  sourceItemId,
+  fixtureVersion,
+  maxResponseBytes,
+}: {
+  fetchImpl?: typeof fetch;
+  endpoint: string;
+  query: string;
+  sourceItemId: string;
+  fixtureVersion: string;
+  maxResponseBytes: number;
+}): Promise<PrintablesMetadataPageResult> {
+  if (fixtureVersion !== PRINTABLES_METADATA_FIXTURE_VERSION) {
+    return { ok: false, code: "contract_changed" };
+  }
+  let response: Response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "POST",
+      credentials: "omit",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables: { id: sourceItemId } }),
+    });
+  } catch {
+    return { ok: false, code: "cors_failure" };
+  }
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, code: "auth_required" };
+  }
+  if (!response.ok) return { ok: false, code: "request_failed" };
+  let body: string;
+  try {
+    body = await readBoundedMetadataResponse(response, maxResponseBytes);
+  } catch (error) {
+    if (error instanceof Error && error.message === "response too large") {
+      return { ok: false, code: "response_too_large" };
+    }
+    return { ok: false, code: "cors_failure" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { ok: false, code: "contract_changed" };
+  }
+  try {
+    return {
+      ok: true,
+      metadata: parsePrintablesMetadataResponse(parsed, sourceItemId),
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("too deep")) {
+      return { ok: false, code: "response_too_deep" };
+    }
+    return { ok: false, code: "contract_changed" };
+  }
 }
 
 export function validatePrintablesMetadataDto(
@@ -502,6 +574,105 @@ export function validatePrintablesResolvedLinks(
     if (!url) throw new Error("Printables link mapping changed.");
     return { id, url };
   });
+}
+
+function parsePrintablesResolvedLinkPayload(value: unknown): Array<{ id: string; link: string }> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Printables link response changed.");
+  }
+  const root = value as { data?: unknown; errors?: unknown };
+  if (Array.isArray(root.errors) && root.errors.length > 0) {
+    throw new Error("Printables link response changed.");
+  }
+  const data =
+    root.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as { getDownloadLink?: unknown })
+      : null;
+  const mutation = data?.getDownloadLink;
+  if (!mutation || typeof mutation !== "object" || Array.isArray(mutation)) {
+    throw new Error("Printables link response changed.");
+  }
+  const output = (mutation as { output?: unknown }).output;
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    throw new Error("Printables link response changed.");
+  }
+  const entries = (output as { files?: unknown }).files;
+  if (!Array.isArray(entries) || entries.length > PRINTABLES_MAX_FILES) {
+    throw new Error("Printables link response changed.");
+  }
+  return entries.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("Printables link response changed.");
+    }
+    const item = entry as { id?: unknown; fileId?: unknown; link?: unknown };
+    const id = boundedId(item.id ?? item.fileId);
+    const link = printablesDownloadUrl(item.link);
+    if (!id || !link) throw new Error("Printables link response changed.");
+    return { id, link };
+  });
+}
+
+/** Resolve selected Printables links from the extension context after confirmation. */
+export async function requestPrintablesLinksInExtensionContext({
+  fetchImpl = fetch,
+  endpoint,
+  query,
+  sourceItemId,
+  selected,
+  maxResponseBytes,
+}: {
+  fetchImpl?: typeof fetch;
+  endpoint: string;
+  query: string;
+  sourceItemId: string;
+  selected: readonly PrintablesSelectedFile[];
+  maxResponseBytes: number;
+}): Promise<PrintablesLinksPageResult> {
+  if (!selected.length) return { ok: false, code: "contract_changed" };
+  let response: Response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "POST",
+      credentials: "omit",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        variables: {
+          printId: sourceItemId,
+          source: "model_detail",
+          files: selectedGroups(selected),
+        },
+      }),
+    });
+  } catch {
+    return { ok: false, code: "cors_failure" };
+  }
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, code: "auth_required" };
+  }
+  if (!response.ok) return { ok: false, code: "request_failed" };
+  let body: string;
+  try {
+    body = await readBoundedMetadataResponse(response, maxResponseBytes);
+  } catch (error) {
+    if (error instanceof Error && error.message === "response too large") {
+      return { ok: false, code: "response_too_large" };
+    }
+    return { ok: false, code: "cors_failure" };
+  }
+  let parsed: JsonValue;
+  try {
+    parsed = JSON.parse(body) as JsonValue;
+  } catch {
+    return { ok: false, code: "contract_changed" };
+  }
+  if (!complexityCheck(parsed)) return { ok: false, code: "response_too_deep" };
+  try {
+    const links = parsePrintablesResolvedLinkPayload(parsed);
+    return { ok: true, links: validatePrintablesResolvedLinks(selected, links) };
+  } catch {
+    return { ok: false, code: "contract_changed" };
+  }
 }
 
 /**
