@@ -6,8 +6,7 @@ const SOURCE_RULES = [
   },
   {
     source: "MakerWorld",
-    host: (hostname: string) =>
-      hostname === "makerworld.com" || hostname.endsWith(".makerworld.com"),
+    host: (hostname: string) => hostname === "makerworld.com" || hostname === "www.makerworld.com",
     path: /^\/(?:[^/]+\/)?models\/\d+(?:[-/]|$)/,
   },
   {
@@ -314,122 +313,6 @@ async function fetchVault(
   }
 }
 
-function findValue(payload: unknown, keys: string[]): unknown {
-  const queue = [payload];
-  while (queue.length) {
-    const value = queue.shift();
-    if (Array.isArray(value)) {
-      queue.push(...value);
-      continue;
-    }
-    if (!value || typeof value !== "object") continue;
-    for (const key of keys) {
-      const record = value as Record<string, unknown>;
-      if (record[key] !== undefined && record[key] !== null && record[key] !== "") {
-        return record[key];
-      }
-    }
-    queue.push(...Object.values(value));
-  }
-  return null;
-}
-
-function makerWorldInstanceId(payload: unknown): unknown {
-  const explicit = findValue(payload, ["defaultInstanceId", "instanceId"]);
-  if (explicit) return explicit;
-  const queue = [payload];
-  while (queue.length) {
-    const value = queue.shift();
-    if (Array.isArray(value)) {
-      queue.push(...value);
-      continue;
-    }
-    if (!value || typeof value !== "object") continue;
-    const record = value as Record<string, unknown>;
-    if (Array.isArray(record.instances)) {
-      const instance = record.instances.find(
-        (item) => item && typeof item === "object" && "id" in item,
-      ) as Record<string, unknown> | undefined;
-      if (instance) return instance.id;
-    }
-    queue.push(...Object.values(value));
-  }
-  return null;
-}
-
-function firstDownloadUrl(payload: unknown): string | null {
-  const queue = [payload];
-  let fallback = null;
-  while (queue.length) {
-    const value = queue.shift();
-    if (Array.isArray(value)) {
-      queue.push(...value);
-      continue;
-    }
-    if (!value || typeof value !== "object") continue;
-    for (const key of ["downloadUrl", "download_url", "url", "link"]) {
-      const candidate = (value as Record<string, unknown>)[key];
-      if (typeof candidate !== "string" || !candidate.startsWith("https://")) continue;
-      fallback ??= candidate;
-      if (/\.(?:3mf|zip|stl|obj|step|stp)(?:[?#]|$)|\/download(?:[/?#]|$)/i.test(candidate)) {
-        return candidate;
-      }
-    }
-    queue.push(...Object.values(value));
-  }
-  return fallback;
-}
-
-function filenameFromUrl(value: string, fallback: string): string {
-  try {
-    const name = decodeURIComponent(new URL(value).pathname.split("/").pop() || "");
-    if (name && /\.[a-z0-9]{1,8}$/i.test(name)) return name;
-  } catch {
-    // The caller will use its stable model-id fallback.
-  }
-  return fallback;
-}
-
-function contentDispositionFilename(value: string | null): string | null {
-  if (!value) return null;
-  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i);
-  if (encoded) {
-    try {
-      return decodeURIComponent(encoded[1].trim());
-    } catch {
-      return null;
-    }
-  }
-  const plain = value.match(/filename="?([^";]+)"?/i);
-  return plain?.[1]?.trim() || null;
-}
-
-export async function makerWorldDownload({
-  pageUrl,
-  requestPageJson,
-}: {
-  pageUrl: string;
-  requestPageJson?: (url: string) => Promise<Record<string, unknown> | unknown[]>;
-}) {
-  if (typeof requestPageJson !== "function") {
-    throw new Error("MakerWorld must be opened in the active browser tab.");
-  }
-  const page = new URL(pageUrl);
-  const match = page.pathname.match(/\/models\/(\d+)/);
-  if (!match) throw new Error("Open an individual MakerWorld model page first.");
-  const designId = match[1];
-  const apiBase = `${page.origin}/api/v1/design-service`;
-  const design = await requestPageJson(`${apiBase}/design/${designId}`);
-  const instanceId = makerWorldInstanceId(design);
-  if (!instanceId) throw new Error("MakerWorld did not expose a downloadable model instance.");
-  const payload = await requestPageJson(
-    `${apiBase}/instance/${encodeURIComponent(String(instanceId))}/f3mf?type=download&fileType=3mfstl`,
-  );
-  const url = firstDownloadUrl(payload);
-  if (!url) throw new Error("MakerWorld did not return a download link for this model.");
-  return { url, filename: filenameFromUrl(url, `${designId}.3mf`) };
-}
-
 async function vaultLogin({
   fetchImpl,
   base,
@@ -564,8 +447,6 @@ export async function captureModelPage({
   accessToken,
   pageUrl,
   title,
-  requestPageJson,
-  ensureOriginPermission = async () => {},
   captureSource,
 }: {
   fetchImpl?: typeof fetch;
@@ -576,8 +457,6 @@ export async function captureModelPage({
   accessToken?: string;
   pageUrl: string;
   title?: string;
-  requestPageJson?: (url: string) => Promise<Record<string, unknown> | unknown[]>;
-  ensureOriginPermission?: (origin: string) => Promise<void>;
   captureSource?: CaptureSourceDraft;
 }) {
   const base = normalizeVault(vault);
@@ -588,47 +467,17 @@ export async function captureModelPage({
       "user_file_required: Printables captures require a selected local file. Choose a downloaded Printables file before sending it to Pending Imports.",
     );
   }
+  if (source === "MakerWorld") {
+    throw new Error(
+      "user_file_required: MakerWorld capture requires the active-tab package confirmation flow. Download the package normally, then attach it in Pending Imports.",
+    );
+  }
   const hasDeviceCredential = typeof deviceCredential === "string" && deviceCredential.length > 0;
   if (!hasDeviceCredential) requireCredentials(username, apiKey);
   const sourceUrl = captureUrlForVault(pageUrl);
 
   const token =
     accessToken || deviceCredential || (await vaultLogin({ fetchImpl, base, username, apiKey }));
-
-  if (source === "MakerWorld") {
-    const validatedSource = validatedCaptureSource(captureSource, "makerworld");
-    let resolved;
-    try {
-      resolved = await makerWorldDownload({ pageUrl, requestPageJson });
-    } catch (error) {
-      throw new Error(
-        `MakerWorld package capture is unavailable. Download the model normally, then select the file in PrintStash. ${error instanceof Error ? error.message : "Unknown adapter error."}`,
-      );
-    }
-    const permission = `${new URL(resolved.url).origin}/*`;
-    await ensureOriginPermission(permission);
-    const download = await fetchImpl(resolved.url, { credentials: "omit" });
-    if (!download.ok) {
-      throw new Error(`MakerWorld download returned ${download.status}.`);
-    }
-    const blob = await download.blob();
-    const headerName = contentDispositionFilename(download.headers.get("Content-Disposition"));
-    const filename = headerName || resolved.filename;
-    const form = new FormData();
-    form.append("source_url", sourceUrl);
-    if (String(title ?? "").trim()) form.append("title", String(title).trim());
-    if (validatedSource) form.append("capture_source", JSON.stringify(validatedSource));
-    form.append("file", blob, filename);
-    const uploaded = await fetchVault(fetchImpl, base, "/api/v1/inbox/browser-upload", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: form,
-    });
-    if (!uploaded.ok) {
-      throw new Error(await responseDetail(uploaded, `PrintStash returned ${uploaded.status}.`));
-    }
-    return { source, item: await uploaded.json(), inboxUrl: `${base}/inbox` };
-  }
 
   const captured = await fetchVault(fetchImpl, base, "/api/v1/inbox", {
     method: "POST",

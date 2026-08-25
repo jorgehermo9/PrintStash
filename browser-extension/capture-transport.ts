@@ -8,6 +8,10 @@ export interface BrowserCaptureFile {
   role?: "file" | "cover";
 }
 
+export const CAPTURE_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
+export const CAPTURE_MAX_TOTAL_SIZE_BYTES = 1024 * 1024 * 1024;
+export const CAPTURE_MAX_FILES = 64;
+
 interface CaptureUploadSlot {
   id: string;
   role: "file" | "cover";
@@ -47,6 +51,13 @@ async function prepareCaptureFile(
   id: string,
   role: "file" | "cover",
 ): Promise<PreparedCaptureFile> {
+  if (
+    !Number.isSafeInteger(upload.file.size) ||
+    upload.file.size < 0 ||
+    upload.file.size > CAPTURE_MAX_FILE_SIZE_BYTES
+  ) {
+    throw new Error(`Capture file ${upload.filename} exceeds the supported size limit.`);
+  }
   return {
     declaration: {
       id,
@@ -98,14 +109,30 @@ export async function captureRichFiles({
   cover?: BrowserCaptureFile;
 }): Promise<unknown> {
   const base = vault.replace(/\/$/, "");
+  if (files.length === 0 || files.length > CAPTURE_MAX_FILES) {
+    throw new Error("Capture file count is outside the supported limit.");
+  }
   const ids = files.map((file) => file.id);
   if (ids.some((id) => !/^[a-zA-Z0-9._:-]{1,255}$/.test(id)) || new Set(ids).size !== ids.length) {
     throw new Error("Capture file IDs must be unique, bounded identifiers.");
   }
-  const preparedFiles = await Promise.all(
-    files.map((upload) => prepareCaptureFile(upload, upload.id, "file")),
-  );
+  const preparedFiles: PreparedCaptureFile[] = [];
+  let totalBytes = 0;
+  for (const upload of files) {
+    const prepared = await prepareCaptureFile(upload, upload.id, "file");
+    totalBytes += prepared.declaration.size_bytes;
+    if (totalBytes > CAPTURE_MAX_TOTAL_SIZE_BYTES) {
+      throw new Error("Capture files exceed the supported aggregate size limit.");
+    }
+    preparedFiles.push(prepared);
+  }
   const preparedCover = cover ? await prepareCaptureFile(cover, "cover", "cover") : undefined;
+  if (preparedCover) {
+    totalBytes += preparedCover.declaration.size_bytes;
+    if (totalBytes > CAPTURE_MAX_TOTAL_SIZE_BYTES) {
+      throw new Error("Capture files exceed the supported aggregate size limit.");
+    }
+  }
   const uploads = preparedCover ? [...preparedFiles, preparedCover] : preparedFiles;
   const created = await fetchImpl(`${base}/api/v1/inbox/capture-upload-slots`, {
     method: "POST",

@@ -37,6 +37,19 @@ import {
 } from "./printables-capture.ts";
 import { captureRichFiles, type BrowserCaptureFile } from "./capture-transport.ts";
 import {
+  MAKERWORLD_MAX_RESPONSE_BYTES,
+  makerWorldCaptureFromMetadata,
+  makerWorldFailureMessage,
+  downloadMakerWorldCandidate,
+  requestMakerWorldLinksInMainWorld,
+  requestMakerWorldMetadataInMainWorld,
+  validateMakerWorldMetadataDto,
+  validateMakerWorldResolvedLinks,
+  type MakerWorldFailureCode,
+  type MakerWorldMetadataPageResult,
+  type MakerWorldPackageFile,
+} from "./makerworld-capture.ts";
+import {
   createBrowserProviderAdapter,
   type BrowserExtensionApi,
   type BrowserProviderAdapter,
@@ -64,7 +77,6 @@ type Config = {
 };
 type Profile = { username: string; is_superuser: boolean };
 type ConnectionState = "checking" | "connected" | "error" | "disconnected";
-type PageFetchResult = { ok: boolean; status: number; body: string };
 type VisibleCaptureResult = {
   pageTitle: string;
   challengeDetected?: boolean;
@@ -106,6 +118,7 @@ let accessToken: string | null = null;
 let editingConnection = false;
 let importBusy = false;
 let pendingPrintablesCapture: BrowserCaptureMessage | null = null;
+let pendingMakerWorldCapture: BrowserCaptureMessage | null = null;
 let pendingManualCapture: BrowserCaptureMessage | null = null;
 
 function messageFrom(error: unknown) {
@@ -125,6 +138,7 @@ function clearInboxAction() {
 
 function clearCandidateSelection() {
   pendingPrintablesCapture = null;
+  pendingMakerWorldCapture = null;
   candidatePanel.hidden = true;
   candidateList.replaceChildren();
   captureButton.textContent = "Send to Pending Imports";
@@ -139,6 +153,7 @@ function clearManualFileSelection() {
 
 function renderManualFileSelection(capture: BrowserCaptureMessage) {
   pendingPrintablesCapture = null;
+  pendingMakerWorldCapture = null;
   candidatePanel.hidden = true;
   candidateList.replaceChildren();
   pendingManualCapture = capture;
@@ -158,14 +173,20 @@ function selectedManualFile(capture: BrowserCaptureMessage): BrowserCaptureFile 
 }
 
 function renderCandidateSelection(capture: BrowserCaptureMessage) {
-  pendingPrintablesCapture = capture;
+  if (capture.source.provider === "makerworld") {
+    pendingMakerWorldCapture = capture;
+    pendingPrintablesCapture = null;
+  } else {
+    pendingPrintablesCapture = capture;
+    pendingMakerWorldCapture = null;
+  }
   candidateList.replaceChildren();
   capture.candidates.forEach((candidate, index) => {
     const label = document.createElement("label");
     label.className = "candidate-option";
     const input = document.createElement("input");
     input.type = "checkbox";
-    input.checked = true;
+    input.checked = capture.source.provider !== "makerworld";
     input.dataset.candidateIndex = String(index);
     const filename = document.createElement("span");
     filename.textContent = candidate.filename;
@@ -410,34 +431,6 @@ async function establishConnection(
   }
 }
 
-async function requestPageJson(url: string): Promise<Record<string, unknown> | unknown[]> {
-  if (!activePage?.id) throw new Error("The active tab is unavailable.");
-  const results = await browser.scripting.executeScript({
-    target: { tabId: activePage.id },
-    world: "MAIN",
-    func: async (requestUrl) => {
-      const response = await fetch(requestUrl, {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-      return { ok: response.ok, status: response.status, body: await response.text() };
-    },
-    args: [url],
-  });
-  const result = results[0]?.result as PageFetchResult | undefined;
-  if (!result?.ok) {
-    if (result?.status === 401 || result?.status === 403) {
-      throw new Error("Log in to MakerWorld in this tab, then try again.");
-    }
-    throw new Error(`MakerWorld returned ${result?.status || "an invalid response"}.`);
-  }
-  try {
-    return JSON.parse(result.body);
-  } catch {
-    throw new Error("MakerWorld returned an invalid response.");
-  }
-}
-
 async function ensureOriginPermission(origin: string) {
   const granted = await browser.permissions.request({ origins: [origin] });
   if (!granted) throw new Error("Permission to download the selected source file was not granted.");
@@ -524,6 +517,39 @@ async function resolvePrintablesLinks(
   return validatePrintablesResolvedLinks(selected, result.links);
 }
 
+async function resolveMakerWorldLinks(
+  capture: BrowserCaptureMessage,
+  selected: readonly BrowserCaptureMessage["candidates"][number][],
+): Promise<Array<{ id: string; url: string }>> {
+  if (!activePage?.id || !capture.source.source_item_id || !activePage.url) {
+    throw new Error(makerWorldFailureMessage("contract_changed"));
+  }
+  const origin = new URL(activePage.url).origin;
+  const results = await browser.scripting.executeScript({
+    target: { tabId: activePage.id },
+    world: "MAIN",
+    func: requestMakerWorldLinksInMainWorld,
+    args: [
+      {
+        endpoint: `${origin}/api/v1/design-service/instance`,
+        selectedIds: selected.map((candidate) => candidate.id),
+        maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+      },
+    ],
+  });
+  const result = results[0]?.result as
+    | { ok: boolean; links?: Array<{ id: string; url: string }>; code?: MakerWorldFailureCode }
+    | undefined;
+  if (!result?.ok || !result.links) throw new Error(makerWorldFailureMessage(result?.code));
+  const selectedFiles: MakerWorldPackageFile[] = selected.map((candidate) => ({
+    id: candidate.id,
+    filename: candidate.filename,
+    fileType: "other",
+    ...(candidate.sizeBytes === undefined ? {} : { sizeBytes: candidate.sizeBytes }),
+  }));
+  return validateMakerWorldResolvedLinks(selectedFiles, result.links);
+}
+
 function isRichProvider(source: Source): source is Exclude<Source, "Direct file" | null> {
   return (
     source === "Printables" ||
@@ -583,6 +609,39 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
       pageTitle: visible.pageTitle || activePage.title,
       jsonLd: visible.jsonLd,
     });
+    if (provider === "MakerWorld") {
+      if (visible.challengeDetected) return fallbackVisibleCapture("challenge", visible.jsonLd);
+      const sourceItemId = capture.source.source_item_id;
+      if (!sourceItemId) return fallbackVisibleCapture("contract_changed", visible.jsonLd);
+      const pageOrigin = new URL(pageUrl).origin;
+      const metadataResults = await browser.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: requestMakerWorldMetadataInMainWorld,
+        args: [
+          {
+            endpoint: `${pageOrigin}/api/v1/design-service/design/${encodeURIComponent(sourceItemId)}`,
+            sourceItemId,
+            fixtureVersion: "makerworld-design-service-v1",
+            maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+          },
+        ],
+      });
+      const metadataResult = metadataResults[0]?.result as MakerWorldMetadataPageResult | undefined;
+      if (!metadataResult?.ok || !metadataResult.metadata) {
+        return fallbackVisibleCapture(metadataResult?.code, visible.jsonLd);
+      }
+      try {
+        const metadata = validateMakerWorldMetadataDto(metadataResult.metadata, sourceItemId);
+        return makerWorldCaptureFromMetadata(
+          metadata,
+          pageUrl,
+          visible.pageTitle || activePage.title,
+        );
+      } catch {
+        return fallbackVisibleCapture("contract_changed", visible.jsonLd);
+      }
+    }
     if (provider !== "Printables") return capture;
     if (visible.challengeDetected) {
       return {
@@ -654,8 +713,12 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
   }
 }
 
-function fallbackVisibleCapture(code?: PrintablesFailureCode, jsonLd: string[] = []) {
-  if (!activePage?.url || activeSource !== "Printables") return null;
+function fallbackVisibleCapture(
+  code?: PrintablesFailureCode | MakerWorldFailureCode,
+  jsonLd: string[] = [],
+) {
+  if (!activePage?.url || (activeSource !== "Printables" && activeSource !== "MakerWorld"))
+    return null;
   const capture = buildBrowserCaptureMessage({
     provider: activeSource,
     pageUrl: activePage.url,
@@ -665,7 +728,10 @@ function fallbackVisibleCapture(code?: PrintablesFailureCode, jsonLd: string[] =
   return {
     ...capture,
     state: "manual_file_required" as const,
-    message: printablesFailureMessage(code),
+    message:
+      activeSource === "MakerWorld"
+        ? makerWorldFailureMessage(code as MakerWorldFailureCode | undefined)
+        : printablesFailureMessage(code as PrintablesFailureCode | undefined),
     manual_file: {
       mapping: "user_selected_file" as const,
       source_item_id: capture.source.source_item_id,
@@ -856,6 +922,51 @@ captureButton.addEventListener("click", async () => {
       showStatus("Selected Printables files sent to Pending Imports.", "success");
       return;
     }
+    if (pendingMakerWorldCapture) {
+      const selected = selectedPrintablesCandidates(pendingMakerWorldCapture);
+      if (selected.length === 0) {
+        showStatus("Select at least one MakerWorld package to upload.", "error");
+        return;
+      }
+      const authorization = accessToken || connectedConfig.deviceCredential;
+      if (!authorization)
+        throw new Error("The browser connection expired. Connect PrintStash again.");
+      const links = await resolveMakerWorldLinks(pendingMakerWorldCapture, selected);
+      const linksById = new Map(links.map((link) => [link.id, link.url]));
+      const files: BrowserCaptureFile[] = [];
+      let totalBytes = 0;
+      for (const candidate of selected) {
+        const link = linksById.get(candidate.id);
+        if (!link) throw new Error("MakerWorld link mapping changed.");
+        const file = await downloadMakerWorldCandidate({
+          candidate: {
+            id: candidate.id,
+            filename: candidate.filename,
+            fileType: "other",
+            ...(candidate.sizeBytes === undefined ? {} : { sizeBytes: candidate.sizeBytes }),
+          },
+          link,
+          totalBefore: totalBytes,
+          ensureOriginPermission,
+        });
+        totalBytes += file.file.size;
+        files.push(file);
+      }
+      await captureRichFiles({
+        vault: connectedConfig.vault,
+        authorization,
+        sourceUrl: pendingMakerWorldCapture.source.canonical_url,
+        title: activePage?.title,
+        captureSource: pendingMakerWorldCapture.source,
+        files,
+      });
+      const inboxUrl = `${normalizeVault(connectedConfig.vault)}/inbox`;
+      clearCandidateSelection();
+      inboxButton.hidden = false;
+      inboxButton.dataset.url = inboxUrl;
+      showStatus("Selected MakerWorld packages sent to Pending Imports.", "success");
+      return;
+    }
     const visibleCapture = (await readVisibleCapture()) ?? fallbackVisibleCapture();
     const captureRoute = browserCaptureRoute(visibleCapture);
     if (captureRoute === "manual_file") {
@@ -870,7 +981,11 @@ captureButton.addEventListener("click", async () => {
     if (captureRoute === "candidate_confirmation") {
       if (!visibleCapture) throw new Error("The active tab has no normalized capture source.");
       renderCandidateSelection(visibleCapture);
-      showStatus("Review the selected Printables files, then confirm the upload.");
+      showStatus(
+        visibleCapture.source.provider === "makerworld"
+          ? "Select MakerWorld packages, then confirm the upload."
+          : "Review the selected Printables files, then confirm the upload.",
+      );
       return;
     }
     const pageUrl = activePage?.url;
@@ -881,8 +996,6 @@ captureButton.addEventListener("click", async () => {
       pageUrl,
       title: activePage?.title ?? undefined,
       captureSource: visibleCapture?.source,
-      requestPageJson,
-      ensureOriginPermission,
     });
     inboxButton.hidden = false;
     inboxButton.dataset.url = result.inboxUrl;
@@ -890,15 +1003,20 @@ captureButton.addEventListener("click", async () => {
   } catch (error) {
     const message = messageFrom(error);
     if (
-      pendingPrintablesCapture &&
-      (message.startsWith("user_file_required") || message.startsWith("Printables"))
+      (pendingPrintablesCapture || pendingMakerWorldCapture) &&
+      (message.startsWith("user_file_required") ||
+        message.startsWith("Printables") ||
+        message.startsWith("MakerWorld"))
     ) {
-      const capture = pendingPrintablesCapture;
+      const capture = pendingPrintablesCapture || pendingMakerWorldCapture;
+      if (!capture) throw new Error("Missing pending capture.");
       renderManualFileSelection(capture);
       showStatus(
         message.startsWith("user_file_required")
           ? message
-          : printablesFailureMessage("contract_changed"),
+          : capture.source.provider === "makerworld"
+            ? makerWorldFailureMessage("contract_changed")
+            : printablesFailureMessage("contract_changed"),
         "error",
       );
       return;
@@ -922,7 +1040,7 @@ captureButton.addEventListener("click", async () => {
   } finally {
     importBusy = false;
     setButtonBusy(captureButton, false);
-    if (pendingPrintablesCapture) {
+    if (pendingPrintablesCapture || pendingMakerWorldCapture) {
       captureButton.textContent = "Confirm and upload selected files";
     } else if (pendingManualCapture) {
       captureButton.textContent = "Upload selected file";

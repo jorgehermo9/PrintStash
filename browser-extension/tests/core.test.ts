@@ -7,7 +7,6 @@ import {
   claimBrowserPairing,
   classifyModelPage,
   isLocalVault,
-  makerWorldDownload,
   normalizeVault,
   parseBrowserExtensionSetup,
   verifyVaultConnection,
@@ -32,11 +31,6 @@ function headerValue(options: RequestInit, name: string): string | undefined {
 
 function stringBody(options: RequestInit): string {
   if (typeof options.body !== "string") throw new TypeError("Expected a string request body");
-  return options.body;
-}
-
-function formDataBody(options: RequestInit): FormData {
-  if (!(options.body instanceof FormData)) throw new TypeError("Expected a FormData request body");
   return options.body;
 }
 
@@ -212,64 +206,27 @@ test("recognizes supported provider pages and direct model downloads", () => {
   assert.equal(classifyModelPage("https://cdn.example.com/archive/parts.ZIP#files"), "Direct file");
   assert.equal(classifyModelPage("https://example.com/model/3161"), null);
   assert.equal(classifyModelPage("https://evilmakerworld.com/models/123"), null);
+  assert.equal(classifyModelPage("https://evil.makerworld.com/models/123"), null);
   assert.equal(classifyModelPage("https://evilthingiverse.com/thing:763622"), null);
   assert.equal(classifyModelPage("https://cdn.example.com/models/widget.pdf"), null);
 });
 
-test("resolves the MakerWorld package inside the authenticated page", async () => {
-  const requests: string[] = [];
-  const result = await makerWorldDownload({
-    pageUrl: "https://makerworld.com/en/models/1234-widget",
-    requestPageJson: async (url) => {
-      requests.push(url);
-      if (url.endsWith("/design/1234")) {
-        return { data: { defaultInstanceId: 77 } };
-      }
-      return {
-        data: {
-          files: [
-            { downloadUrl: "https://makerworld.bblmw.com/makerlab/widget.3mf?signature=secret" },
-          ],
-        },
-      };
-    },
-  });
-
-  assert.deepEqual(requests, [
-    "https://makerworld.com/api/v1/design-service/design/1234",
-    "https://makerworld.com/api/v1/design-service/instance/77/f3mf?type=download&fileType=3mfstl",
-  ]);
-  assert.equal(result.filename, "widget.3mf");
-  assert.match(result.url, /^https:\/\/makerworld\.bblmw\.com\//);
-});
-
-test("falls back to MakerWorld's first listed instance, not the design id", async () => {
-  const requests: string[] = [];
-  await makerWorldDownload({
-    pageUrl: "https://makerworld.com/en/models/1234-widget",
-    requestPageJson: async (url) => {
-      requests.push(url);
-      if (url.endsWith("/design/1234")) {
-        return { data: { id: 1234, instances: [{ id: 88 }] } };
-      }
-      return { url: "https://makerworld.bblmw.com/files/widget.3mf" };
-    },
-  });
-  assert.match(requests[1], /\/instance\/88\/f3mf/);
-});
-
-test("directs unavailable MakerWorld package capture to the normal file workflow", async () => {
+test("keeps the generic capture seam from using the legacy MakerWorld upload path", async () => {
+  let called = false;
   await assert.rejects(
     captureModelPage({
-      fetchImpl: async () => Response.json({ access_token: "jwt" }),
+      fetchImpl: async () => {
+        called = true;
+        return Response.json({ access_token: "jwt" });
+      },
       vault: "https://prints.example.com",
       username: "owner",
       apiKey: "psk_secret",
       pageUrl: "https://makerworld.com/en/models/1234-widget",
-      requestPageJson: async () => ({ data: {} }),
     }),
-    /Download the model normally, then select the file in PrintStash/,
+    /active-tab package confirmation flow/,
   );
+  assert.equal(called, false);
 });
 
 test("normalizes a self-hosted Vault URL without accepting credentials", () => {
@@ -533,116 +490,6 @@ test("reuses an already verified access token for capture", async () => {
   const captureCall = itemAt(calls, 0);
   assert.equal(captureCall.url, "https://prints.example.com/api/v1/inbox");
   assert.equal(headerValue(captureCall.options, "Authorization"), "Bearer verified-jwt");
-});
-
-test("uploads MakerWorld bytes without sending site cookies to the Vault", async () => {
-  const calls: Array<{ url: string; options: RequestInit }> = [];
-  const granted: string[] = [];
-  const fetchImpl = async (url: URL | RequestInfo, options: RequestInit = {}) => {
-    const normalizedUrl = requestUrl(url);
-    calls.push({ url: normalizedUrl, options });
-    if (normalizedUrl.endsWith("/auth/login")) {
-      return new Response(JSON.stringify({ access_token: "jwt" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    if (normalizedUrl.startsWith("https://makerworld.bblmw.com/")) {
-      return new Response(new Blob(["3mf bytes"]), {
-        status: 200,
-        headers: { "Content-Type": "application/octet-stream" },
-      });
-    }
-    return new Response(JSON.stringify({ id: 10, state: "review" }), {
-      status: 201,
-      headers: { "Content-Type": "application/json" },
-    });
-  };
-
-  const result = await captureModelPage({
-    fetchImpl,
-    vault: "https://prints.example.com/",
-    username: "owner",
-    apiKey: "psk_secret",
-    pageUrl: "https://makerworld.com/en/models/1234-widget",
-    title: "Widget",
-    requestPageJson: async (url) => {
-      if (url.endsWith("/design/1234")) return { data: { defaultInstanceId: "77" } };
-      return { url: "https://makerworld.bblmw.com/files/widget.3mf?signature=secret" };
-    },
-    ensureOriginPermission: async (origin) => {
-      granted.push(origin);
-    },
-  });
-
-  assert.equal(result.item.id, 10);
-  assert.deepEqual(granted, ["https://makerworld.bblmw.com/*"]);
-  assert.equal(calls.length, 3);
-  const upload = itemAt(calls, 2);
-  const uploadBody = formDataBody(upload.options);
-  assert.equal(upload.url, "https://prints.example.com/api/v1/inbox/browser-upload");
-  assert.equal(headerValue(upload.options, "Authorization"), "Bearer jwt");
-  assert.equal(headerValue(upload.options, "Cookie"), undefined);
-  assert.equal(uploadBody.get("source_url"), "https://makerworld.com/en/models/1234-widget");
-  assert.equal(uploadBody.get("title"), "Widget");
-  const uploadedFile = uploadBody.get("file");
-  if (!(uploadedFile instanceof File)) throw new TypeError("Expected an uploaded File");
-  assert.equal(uploadedFile.name, "widget.3mf");
-});
-
-test("sends the bounded rich MakerWorld source in browser-upload FormData", async () => {
-  const calls: Array<{ url: string; options: RequestInit }> = [];
-  await captureModelPage({
-    fetchImpl: async (url, options = {}) => {
-      const normalizedUrl = requestUrl(url);
-      calls.push({ url: normalizedUrl, options });
-      if (normalizedUrl.startsWith("https://makerworld.bblmw.com/")) {
-        return new Response(new Blob(["3mf bytes"]), { status: 200 });
-      }
-      return Response.json({ id: 25, state: "review" }, { status: 201 });
-    },
-    vault: "https://prints.example.com",
-    username: "owner",
-    apiKey: "psk_secret",
-    accessToken: "vault-jwt",
-    pageUrl: "https://makerworld.com/en/models/1234-widget",
-    title: "Widget",
-    requestPageJson: async (url) =>
-      url.endsWith("/design/1234")
-        ? { data: { defaultInstanceId: "77" } }
-        : { url: "https://makerworld.bblmw.com/files/widget.3mf?signature=signed-secret" },
-    captureSource: {
-      provider: "makerworld",
-      canonical_url: "https://makerworld.com/en/models/1234-widget?session=secret",
-      source_item_id: "1234",
-      source_revision: null,
-      adapter_version: "browser-visible-v1",
-      tags: [],
-      fields: {
-        title: { value: "Widget", origin: "confirmed" },
-        description: { value: "A safe widget", origin: "confirmed" },
-      },
-    },
-  });
-
-  const captureSource = formDataBody(itemAt(calls, -1).options).get("capture_source");
-  if (typeof captureSource !== "string") throw new TypeError("Expected capture_source text");
-  const source = JSON.parse(captureSource);
-  assert.deepEqual(source, {
-    provider: "makerworld",
-    canonical_url: "https://makerworld.com/en/models/1234-widget",
-    source_item_id: "1234",
-    source_revision: null,
-    adapter_version: "browser-visible-v1",
-    tags: [],
-    fields: {
-      title: { value: "Widget", origin: "confirmed" },
-      description: { value: "A safe widget", origin: "confirmed" },
-    },
-  });
-  assert.equal(JSON.stringify(source).includes("signed-secret"), false);
-  assert.equal(JSON.stringify(source).includes("psk_secret"), false);
-  assert.equal(JSON.stringify(source).includes("vault-jwt"), false);
 });
 
 test("keeps vault and source credentials out of the capture payload", async () => {

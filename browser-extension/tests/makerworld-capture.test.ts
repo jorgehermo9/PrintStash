@@ -1,0 +1,309 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  MAKERWORLD_METADATA_ADAPTER_VERSION,
+  MAKERWORLD_METADATA_FIXTURE_VERSION,
+  MAKERWORLD_MAX_RESPONSE_BYTES,
+  downloadMakerWorldCandidate,
+  isAllowedMakerWorldDownloadUrl,
+  makerWorldCaptureFromMetadata,
+  parseMakerWorldMetadataResponse,
+  requestMakerWorldLinksInMainWorld,
+  requestMakerWorldMetadataInMainWorld,
+  readBoundedMakerWorldResponse,
+  selectMakerWorldCandidates,
+  validateMakerWorldMetadataDto,
+  validateMakerWorldResolvedLinks,
+} from "../makerworld-capture.ts";
+
+const MAKERWORLD_DESIGN_SERVICE_V1_FIXTURE = {
+  data: {
+    id: "1234",
+    defaultInstanceId: "instance-default",
+    instances: [
+      { id: "instance-default", name: "cube—高.3mf", fileSize: 12 },
+      { id: "instance-alt", name: "cube-alt.3mf", fileSize: 24 },
+    ],
+  },
+};
+
+function response(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("MakerWorld bounded capture", () => {
+  it("enumerates shaped instances without choosing the default package", () => {
+    const metadata = parseMakerWorldMetadataResponse(MAKERWORLD_DESIGN_SERVICE_V1_FIXTURE, "1234");
+
+    expect(metadata.fixtureVersion).toBe(MAKERWORLD_METADATA_FIXTURE_VERSION);
+    expect(metadata.files.map(({ id }) => id)).toEqual(["instance-default", "instance-alt"]);
+    expect(selectMakerWorldCandidates(metadata.files, [])).toEqual([]);
+    expect(selectMakerWorldCandidates(metadata.files, ["instance-alt"])).toEqual([
+      metadata.files[1],
+    ]);
+    expect(JSON.stringify(metadata)).not.toContain("downloadUrl");
+  });
+
+  it("fails closed for changed, oversized, deep, duplicate, and invalid-size fixtures", () => {
+    expect(() => parseMakerWorldMetadataResponse({ data: {} }, "1234")).toThrow();
+    expect(() =>
+      parseMakerWorldMetadataResponse(
+        {
+          data: {
+            id: "1234",
+            instances: Array.from({ length: 65 }, (_, index) => ({
+              id: `instance-${index}`,
+              name: `${index}.3mf`,
+            })),
+          },
+        },
+        "1234",
+      ),
+    ).toThrow();
+    const deep: Record<string, unknown> = {};
+    let cursor = deep;
+    for (let index = 0; index < 20; index += 1) {
+      cursor.child = {};
+      cursor = cursor.child as Record<string, unknown>;
+    }
+    expect(() => parseMakerWorldMetadataResponse(deep, "1234")).toThrow();
+    expect(() =>
+      parseMakerWorldMetadataResponse(
+        {
+          data: {
+            id: "1234",
+            instances: [
+              { id: "same", name: "a.3mf" },
+              { id: "same", name: "b.3mf" },
+            ],
+          },
+        },
+        "1234",
+      ),
+    ).toThrow();
+    expect(() =>
+      parseMakerWorldMetadataResponse(
+        {
+          data: {
+            id: "1234",
+            instances: [{ id: "large", name: "a.3mf", fileSize: 2 ** 40 }],
+          },
+        },
+        "1234",
+      ),
+    ).toThrow();
+  });
+
+  it("revalidates the versioned DTO and exact selected link identity", () => {
+    const dto = {
+      fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+      sourceItemId: "1234",
+      source: { title: "Cube" },
+      files: [{ id: "instance-1", filename: "cube.3mf", fileType: "other" as const }],
+    };
+    expect(validateMakerWorldMetadataDto(dto, "1234")).toEqual(dto);
+    const selected = dto.files;
+    const links = [{ id: "instance-1", url: "https://makerworld.bblmw.com/cube.3mf?sig=x" }];
+    expect(validateMakerWorldResolvedLinks(selected, links)).toEqual(links);
+    expect(() => validateMakerWorldResolvedLinks(selected, [])).toThrow();
+    expect(() =>
+      validateMakerWorldResolvedLinks(selected, [...links, { id: "extra", url: links[0].url }]),
+    ).toThrow();
+    expect(() =>
+      validateMakerWorldResolvedLinks(selected, [
+        { id: "instance-1", url: "https://evil.example/cube.3mf" },
+      ]),
+    ).toThrow();
+    expect(isAllowedMakerWorldDownloadUrl("http://makerworld.bblmw.com/file")).toBe(false);
+    expect(isAllowedMakerWorldDownloadUrl("https://makerworld.bblmw.com/file")).toBe(true);
+    expect(isAllowedMakerWorldDownloadUrl("https://evil.makerworld.com/file")).toBe(false);
+  });
+
+  it("builds only normalized source metadata and keeps the adapter version explicit", () => {
+    const capture = makerWorldCaptureFromMetadata(
+      {
+        fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+        sourceItemId: "1234",
+        source: { title: "Cube", creatorName: "Maker" },
+        files: [{ id: "instance-1", filename: "cube—高.3mf", fileType: "other" }],
+      },
+      "https://makerworld.com/en/models/1234-cube",
+      "Cube",
+    );
+    expect(capture.source.adapter_version).toBe(MAKERWORLD_METADATA_ADAPTER_VERSION);
+    expect(capture.candidates[0]?.filename).toBe("cube—高.3mf");
+    expect(JSON.stringify(capture)).not.toContain("downloadUrl");
+  });
+});
+
+describe("MakerWorld MAIN-world seams", () => {
+  it("returns a normalized fixture without exposing the provider payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response({
+          data: {
+            ...MAKERWORLD_DESIGN_SERVICE_V1_FIXTURE.data,
+            defaultInstanceId: "instance-default",
+            instances: [{ id: "instance-default", name: "cube.3mf", fileSize: 4 }],
+          },
+        }),
+      ),
+    );
+    const isolated = new Function(
+      `return (${requestMakerWorldMetadataInMainWorld.toString()})`,
+    )() as typeof requestMakerWorldMetadataInMainWorld;
+    const result = await isolated({
+      endpoint: "https://makerworld.com/api/v1/design-service/design/1234",
+      sourceItemId: "1234",
+      fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+      maxResponseBytes: 512 * 1024,
+    });
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('"instances"');
+    expect(JSON.stringify(result)).not.toContain('"defaultInstanceId"');
+  });
+
+  it("rejects an actual streamed metadata body above the response limit", async () => {
+    const chunk = new Uint8Array(MAKERWORLD_MAX_RESPONSE_BYTES);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(chunk);
+              controller.enqueue(new Uint8Array([0]));
+              controller.close();
+            },
+          }),
+        ),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    const isolated = new Function(
+      `return (${requestMakerWorldMetadataInMainWorld.toString()})`,
+    )() as typeof requestMakerWorldMetadataInMainWorld;
+    await expect(
+      isolated({
+        endpoint: "https://makerworld.com/api/v1/design-service/design/1234",
+        sourceItemId: "1234",
+        fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+        maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "response_too_large" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves only selected links and rejects an unsafe final URL", async () => {
+    const fetchImpl = vi.fn(async () =>
+      response({ url: "https://evil.example/cube.3mf?signature=secret" }),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    const isolated = new Function(
+      `return (${requestMakerWorldLinksInMainWorld.toString()})`,
+    )() as typeof requestMakerWorldLinksInMainWorld;
+    const result = await isolated({
+      endpoint: "https://makerworld.com/api/v1/design-service/instance",
+      selectedIds: ["instance-1"],
+      maxResponseBytes: 512 * 1024,
+    });
+    expect(result).toMatchObject({ ok: false, code: "contract_changed" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves an exact selected subset using the known data.url response shape", async () => {
+    const requested: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      const id = url.includes("instance-alt") ? "instance-alt" : "instance-default";
+      return response({
+        data: { url: `https://makerworld.bblmw.com/${id}.3mf?signature=ephemeral` },
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    const isolated = new Function(
+      `return (${requestMakerWorldLinksInMainWorld.toString()})`,
+    )() as typeof requestMakerWorldLinksInMainWorld;
+    const result = await isolated({
+      endpoint: "https://makerworld.com/api/v1/design-service/instance",
+      selectedIds: ["instance-alt", "instance-default"],
+      maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      links: [
+        { id: "instance-alt", url: expect.stringContaining("signature=ephemeral") },
+        { id: "instance-default", url: expect.stringContaining("signature=ephemeral") },
+      ],
+    });
+    expect(requested).toEqual([
+      "https://makerworld.com/api/v1/design-service/instance/instance-alt/f3mf?type=download&fileType=3mfstl",
+      "https://makerworld.com/api/v1/design-service/instance/instance-default/f3mf?type=download&fileType=3mfstl",
+    ]);
+    expect(JSON.stringify(result)).toContain("signature=ephemeral");
+  });
+
+  it("rejects an unsafe final redirect and accepts a bounded allowlisted stream", async () => {
+    const candidate = {
+      id: "instance-alt",
+      filename: "cube-alt.3mf",
+      fileType: "other" as const,
+      sizeBytes: 4,
+    };
+    const unsafeResponse = new Response("mesh", {
+      headers: { "Content-Length": "4" },
+    });
+    Object.defineProperty(unsafeResponse, "url", {
+      configurable: true,
+      value: "https://evil.example/cube-alt.3mf",
+    });
+    await expect(
+      downloadMakerWorldCandidate({
+        candidate,
+        link: "https://makerworld.bblmw.com/cube-alt.3mf?signature=ephemeral",
+        fetchImpl: vi.fn(async () => unsafeResponse),
+      }),
+    ).rejects.toThrow(/unsafe host/);
+
+    const allowedResponse = new Response("mesh", {
+      headers: { "Content-Length": "4", "Content-Type": "model/3mf" },
+    });
+    Object.defineProperty(allowedResponse, "url", {
+      configurable: true,
+      value: "https://makerworld.bblmw.com/cube-alt.3mf",
+    });
+    const granted: string[] = [];
+    const downloaded = await downloadMakerWorldCandidate({
+      candidate,
+      link: "https://makerworld.bblmw.com/cube-alt.3mf?signature=ephemeral",
+      fetchImpl: vi.fn(async () => allowedResponse),
+      ensureOriginPermission: async (origin) => {
+        granted.push(origin);
+      },
+    });
+    expect(downloaded.file.size).toBe(4);
+    expect(granted).toEqual(["https://makerworld.bblmw.com/*"]);
+  });
+
+  it("caps streamed package bytes and detects changed declared sizes", async () => {
+    const changed = new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "Content-Length": "4" },
+    });
+    await expect(readBoundedMakerWorldResponse(changed, 4)).rejects.toThrow(/size changed/);
+    const oversized = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(512 * 1024 * 1024 + 1));
+          controller.close();
+        },
+      }),
+    );
+    await expect(readBoundedMakerWorldResponse(oversized)).rejects.toThrow(/too large/);
+  });
+});

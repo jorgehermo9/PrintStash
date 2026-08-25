@@ -471,6 +471,178 @@ describe("popup browser adapters", () => {
     expect(element("#status").textContent).toContain("sent to Pending Imports");
   });
 
+  it("enumerates MakerWorld packages, requires explicit subset confirmation, and uses fresh links plus durable slots", async () => {
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    fakeBrowser.tabs.query = vi.fn().mockResolvedValue([
+      {
+        id: 42,
+        title: "Calibration cube",
+        url: "https://makerworld.com/en/models/1234-calibration-cube",
+      },
+    ]);
+    fakeBrowser.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([{ result: null }])
+      .mockResolvedValueOnce([{ result: { pageTitle: "Calibration cube", jsonLd: [] } }])
+      .mockResolvedValueOnce([
+        {
+          result: {
+            ok: true,
+            metadata: {
+              fixtureVersion: "makerworld-design-service-v1",
+              sourceItemId: "1234",
+              source: { title: "Calibration cube", creatorName: "Maker" },
+              files: [
+                {
+                  id: "instance-default",
+                  filename: "cube—高.3mf",
+                  fileType: "other",
+                  sizeBytes: 4,
+                },
+                { id: "instance-alt", filename: "cube-alt.3mf", fileType: "other", sizeBytes: 4 },
+              ],
+            },
+          },
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          result: {
+            ok: true,
+            links: [
+              {
+                id: "instance-alt",
+                url: "https://makerworld.bblmw.com/files/cube-alt.3mf?signature=signed-secret",
+              },
+            ],
+          },
+        },
+      ]);
+    const fetchImpl = vi.fn(async (url: string, options: RequestInit = {}) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      if (url.startsWith("https://makerworld.bblmw.com/")) {
+        return new Response("mesh", {
+          status: 200,
+          headers: { "Content-Type": "model/3mf" },
+        });
+      }
+      if (url.endsWith("/capture-upload-slots")) {
+        const body = JSON.parse(stringBody(options));
+        return response(
+          {
+            item: { id: 72 },
+            slots: [
+              {
+                id: "slot-makerworld",
+                role: "file",
+                source_file_id: "instance-alt",
+                filename: "cube-alt.3mf",
+                media_type: "model/3mf",
+                size_bytes: 4,
+                sha256: body.files[0].sha256,
+              },
+            ],
+          },
+          201,
+        );
+      }
+      if (url.endsWith("/capture-upload-slots/slot-makerworld"))
+        return new Response(null, { status: 204 });
+      if (url.endsWith("/capture-upload-finalize")) return response({ id: 72, state: "review" });
+      throw new Error(`Unexpected MakerWorld request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await import("../popup.ts");
+    await settle();
+    button("#capture").click();
+    for (let attempt = 0; attempt < 5; attempt += 1) await settle();
+
+    expect(element("#candidate-panel").hidden).toBe(false);
+    const candidates = document.querySelectorAll<HTMLInputElement>("#candidate-list input");
+    expect(candidates).toHaveLength(2);
+    expect([...candidates].every((input) => !input.checked)).toBe(true);
+    candidates[1]?.click();
+    button("#capture").click();
+    for (let attempt = 0; attempt < 12; attempt += 1) await settle();
+
+    const executeScript = vi.mocked(fakeBrowser.scripting.executeScript);
+    const linkRequest = executeScript.mock.calls.find(([details]) => {
+      const args = details.args;
+      return (
+        Array.isArray(args) && args[0] && typeof args[0] === "object" && "selectedIds" in args[0]
+      );
+    });
+    expect(linkRequest?.[0].args?.[0]).toMatchObject({ selectedIds: ["instance-alt"] });
+    expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/api/v1/inbox"))).toBe(false);
+    expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/browser-upload"))).toBe(false);
+    const createCall = fetchImpl.mock.calls.find(([url]) => url.endsWith("/capture-upload-slots"));
+    if (!createCall?.[1]) throw new Error("Missing MakerWorld durable slot request");
+    const createBody = stringBody(createCall[1]);
+    expect(JSON.parse(createBody)).toMatchObject({
+      capture_source: { provider: "makerworld", source_item_id: "1234" },
+      files: [{ id: "instance-alt", filename: "cube-alt.3mf", size_bytes: 4 }],
+    });
+    expect(createBody).not.toContain("signed-secret");
+    expect(JSON.stringify(await fakeBrowser.storage.local.get())).not.toContain("signed-secret");
+    expect(element("#status").textContent).toContain("MakerWorld packages sent to Pending Imports");
+  });
+
+  it("routes MakerWorld auth failure straight to the local-file picker without retry", async () => {
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    fakeBrowser.tabs.query = vi.fn().mockResolvedValue([
+      {
+        id: 42,
+        title: "Calibration cube",
+        url: "https://makerworld.com/en/models/1234-calibration-cube",
+      },
+    ]);
+    fakeBrowser.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([{ result: null }])
+      .mockResolvedValueOnce([{ result: { pageTitle: "Calibration cube", jsonLd: [] } }])
+      .mockResolvedValueOnce([{ result: { ok: false, code: "auth_required" } }]);
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      throw new Error(`Unexpected MakerWorld capture retry: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await import("../popup.ts");
+    await settle();
+    button("#capture").click();
+    for (let attempt = 0; attempt < 6; attempt += 1) await settle();
+
+    expect(element("#manual-file-panel").hidden).toBe(false);
+    expect(element("#status").textContent).toContain("Sign in to MakerWorld");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/api/v1/inbox"))).toBe(false);
+    expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/browser-upload"))).toBe(false);
+    expect(
+      vi
+        .mocked(fakeBrowser.scripting.executeScript)
+        .mock.calls.some(
+          ([details]) =>
+            Array.isArray(details.args) &&
+            details.args[0] &&
+            typeof details.args[0] === "object" &&
+            "selectedIds" in details.args[0],
+        ),
+    ).toBe(false);
+  });
+
   it("stops on a changed Printables file contract and directs manual attachment without retry", async () => {
     await fakeBrowser.storage.local.set({
       vault: "https://prints.example.com",
@@ -670,101 +842,5 @@ describe("popup browser adapters", () => {
       "https://prints.example.com/api/v1/inbox/62/capture-upload-finalize",
     ]);
     expect(element("#status").textContent).toContain("sent to Pending Imports");
-  });
-
-  it("threads the bounded MakerWorld source into the browser-upload form", async () => {
-    fakeBrowser.tabs.query = vi.fn().mockResolvedValue([
-      {
-        id: 42,
-        title: "Cube",
-        url: "https://makerworld.com/en/models/77-calibration-cube",
-      },
-    ]);
-    fakeBrowser.scripting.executeScript = vi.fn().mockImplementation(async ({ args = [] }) => {
-      const [url] = args;
-      if (typeof url === "string" && url.endsWith("/design/77")) {
-        return [
-          {
-            result: {
-              ok: true,
-              status: 200,
-              body: JSON.stringify({ data: { defaultInstanceId: "12" } }),
-            },
-          },
-        ];
-      }
-      if (typeof url === "string" && url.includes("/instance/12/")) {
-        return [
-          {
-            result: {
-              ok: true,
-              status: 200,
-              body: JSON.stringify({
-                url: "https://makerworld.bblmw.com/cube.3mf?signature=signed-secret",
-              }),
-            },
-          },
-        ];
-      }
-      return [
-        {
-          result: {
-            pageTitle: "Cube",
-            jsonLd: [
-              JSON.stringify({
-                name: "Cube",
-                description: "Safe metadata <script>not forwarded()</script>",
-                contentUrl: "https://makerworld.bblmw.com/cube.3mf?signature=signed-secret",
-              }),
-            ],
-          },
-        },
-      ];
-    });
-    await fakeBrowser.storage.local.set({
-      vault: "https://prints.example.com",
-      username: "owner",
-      apiKey: "psk_vault_secret",
-    });
-    const fetchImpl = vi.fn(async (url: string, _options: RequestInit = {}) => {
-      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
-      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
-      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
-      if (url.startsWith("https://makerworld.bblmw.com/"))
-        return new Response(new Blob(["3mf"]), { status: 200 });
-      return response({ id: 23, state: "review" }, 201);
-    });
-    vi.stubGlobal("fetch", fetchImpl);
-
-    await import("../popup.ts");
-    await settle();
-    button("#capture").click();
-    for (let attempt = 0; attempt < 8; attempt += 1) await settle();
-
-    const upload = fetchImpl.mock.calls.find(([url]) =>
-      url.endsWith("/api/v1/inbox/browser-upload"),
-    );
-    expect(upload).toBeDefined();
-    if (upload === undefined) throw new Error("Missing browser upload request");
-    expect(upload[0]).toBe("https://prints.example.com/api/v1/inbox/browser-upload");
-    const uploadOptions = upload[1];
-    if (uploadOptions === undefined) throw new Error("Missing browser upload options");
-    const uploadBody = uploadOptions.body;
-    if (!(uploadBody instanceof FormData)) throw new TypeError("Expected upload FormData");
-    const captureSource = uploadBody.get("capture_source");
-    if (typeof captureSource !== "string") throw new TypeError("Expected capture_source text");
-    const source = JSON.parse(captureSource);
-    expect(source).toMatchObject({
-      provider: "makerworld",
-      canonical_url: "https://makerworld.com/en/models/77-calibration-cube",
-      source_item_id: "77",
-      fields: {
-        title: { value: "Cube", origin: "confirmed" },
-        description: { value: "Safe metadata", origin: "confirmed" },
-      },
-    });
-    expect(JSON.stringify(source)).not.toContain("signed-secret");
-    expect(JSON.stringify(source)).not.toContain("not forwarded");
-    expect(JSON.stringify(source)).not.toContain("psk_vault_secret");
   });
 });

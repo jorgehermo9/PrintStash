@@ -5,13 +5,13 @@ export type BrowserCaptureRoute = "candidate_confirmation" | "manual_file" | "le
 /**
  * Choose the popup transport for a normalized browser capture.
  *
- * Printables is file-backed even when the adapter has no safe candidate. Keep
+ * Printables and MakerWorld are file-backed even when the adapter has no safe candidate. Keep
  * that source draft client-side and require a local file instead of allowing
  * it to fall through to the metadata-only inbox endpoint.
  */
 export function browserCaptureRoute(capture: BrowserCaptureMessage | null): BrowserCaptureRoute {
   if (!capture) return "legacy";
-  if (capture.source.provider === "printables") {
+  if (capture.source.provider === "printables" || capture.source.provider === "makerworld") {
     return capture.state === "ready" && capture.candidates.length > 0
       ? "candidate_confirmation"
       : "manual_file";

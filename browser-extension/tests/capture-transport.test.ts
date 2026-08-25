@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { captureRichFiles } from "../capture-transport.ts";
+import {
+  CAPTURE_MAX_FILE_SIZE_BYTES,
+  CAPTURE_MAX_TOTAL_SIZE_BYTES,
+  captureRichFiles,
+} from "../capture-transport.ts";
 
 describe("capture upload-slot transport", () => {
   it("rejects duplicate or unsafe source file IDs before network calls", async () => {
@@ -32,6 +36,55 @@ describe("capture upload-slot transport", () => {
       ).rejects.toThrow("Capture file IDs");
       expect(fetchImpl).not.toHaveBeenCalled();
     }
+  });
+
+  it("rejects oversized individual and aggregate payloads before creating slots", async () => {
+    const source = {
+      provider: "makerworld" as const,
+      canonical_url: "https://makerworld.com/en/models/9-cube",
+      source_item_id: "9",
+      source_revision: null,
+      adapter_version: "makerworld-design-service-v1",
+      tags: [],
+      fields: {},
+    };
+    const oversized = new Blob(["x"]);
+    Object.defineProperty(oversized, "size", { value: CAPTURE_MAX_FILE_SIZE_BYTES + 1 });
+    const fetchImpl = vi.fn();
+    await expect(
+      captureRichFiles({
+        fetchImpl,
+        vault: "https://prints.example.com",
+        authorization: "credential",
+        sourceUrl: source.canonical_url,
+        captureSource: source,
+        files: [{ id: "large", file: oversized, filename: "large.3mf", mediaType: "model/3mf" }],
+      }),
+    ).rejects.toThrow("supported size limit");
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const first = new Blob(["a"]);
+    const second = new Blob(["b"]);
+    const third = new Blob(["c"]);
+    Object.defineProperty(first, "size", { value: CAPTURE_MAX_FILE_SIZE_BYTES });
+    Object.defineProperty(second, "size", { value: CAPTURE_MAX_FILE_SIZE_BYTES });
+    Object.defineProperty(third, "size", { value: 1 });
+    await expect(
+      captureRichFiles({
+        fetchImpl,
+        vault: "https://prints.example.com",
+        authorization: "credential",
+        sourceUrl: source.canonical_url,
+        captureSource: source,
+        files: [
+          { id: "first", file: first, filename: "first.3mf", mediaType: "model/3mf" },
+          { id: "second", file: second, filename: "second.3mf", mediaType: "model/3mf" },
+          { id: "third", file: third, filename: "third.3mf", mediaType: "model/3mf" },
+        ],
+      }),
+    ).rejects.toThrow("aggregate size limit");
+    expect(CAPTURE_MAX_TOTAL_SIZE_BYTES).toBe(CAPTURE_MAX_FILE_SIZE_BYTES * 2);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("creates slots, uploads each selected browser file, and finalizes before returning an importable item", async () => {
     const fetchImpl = vi
