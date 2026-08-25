@@ -354,6 +354,8 @@ def _require_target(session: Session, user: User, collection_id: int | None) -> 
 def create(session: Session, user: User, payload: InboxItemCreate) -> InboxItem:
     if user.id is None:
         raise ValueError("not_authenticated")
+    if payload.capture_source is not None:
+        raise importer.ImportError_("user_file_required")
     source_url = sanitize_source_url(payload.url)
     source = _capture_source_draft(payload.capture_source, source_url)
     importer.validate_public_url(source_url)

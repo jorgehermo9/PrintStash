@@ -370,7 +370,9 @@ export function buildBrowserCaptureMessage({
     objects.some((object) => Object.hasOwn(object, "distribution")) &&
     candidates.length === 0;
   const manualFileRequired =
-    providerCode === "thingiverse" || providerCode === "cults" || printablesDistributionChanged;
+    providerCode === "thingiverse" ||
+    providerCode === "cults" ||
+    (providerCode === "printables" && candidates.length === 0);
 
   return {
     schema_version: 2,
@@ -384,7 +386,9 @@ export function buildBrowserCaptureMessage({
               ? "Choose a downloaded Thingiverse file to attach it to this metadata draft."
               : providerCode === "cults"
                 ? "Choose a downloaded Cults file to attach it to this metadata draft."
-                : "Printables file capture is unavailable. Download the selected file and attach it in Pending Imports.",
+                : printablesDistributionChanged
+                  ? "Printables file capture is unavailable. Download the selected file and attach it in Pending Imports."
+                  : "Choose a downloaded Printables file to attach it to this metadata draft.",
           manual_file: {
             mapping: "user_selected_file",
             source_item_id: sourceItemId(provider, canonical),

@@ -150,7 +150,8 @@ describe("browser-visible provider capture adapters", () => {
       jsonLd: [printablesJsonLd],
     });
 
-    expect(capture.state).toBe("ready");
+    expect(capture.state).toBe("manual_file_required");
+    expect(capture.message).toContain("Choose a downloaded Printables file");
     expect(capture.source).toEqual({
       provider: "printables",
       canonical_url: "https://www.printables.com/model/123-octopus",

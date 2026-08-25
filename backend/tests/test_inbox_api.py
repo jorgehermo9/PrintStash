@@ -835,6 +835,33 @@ def test_capture_is_durable_and_owner_scoped(
     assert client.get(f"/api/v1/inbox/{body['id']}", headers=other).status_code == 200
 
 
+@pytest.mark.parametrize(
+    "source_kind",
+    [pytest.param("browser", id="explicit-browser"), pytest.param(None, id="default")],
+)
+def test_rich_metadata_capture_requires_user_file_before_persistence(
+    client: TestClient, db_session: Session, source_kind: str | None
+) -> None:
+    headers = _headers(db_session, "rich-browser-metadata", admin=True)
+    payload = {
+        "url": "https://makerworld.com/en/models/1234-widget",
+        "capture_source": _capture_source(),
+    }
+    if source_kind is not None:
+        payload["source_kind"] = source_kind
+
+    response = client.post(
+        "/api/v1/inbox",
+        headers=headers,
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "user_file_required"
+    assert db_session.exec(select(InboxItem)).all() == []
+    assert db_session.exec(select(CaptureUploadSlot)).all() == []
+
+
 def test_capture_rejects_url_credentials_at_boundary(
     client: TestClient, db_session: Session
 ) -> None:

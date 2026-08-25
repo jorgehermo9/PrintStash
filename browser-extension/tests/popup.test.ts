@@ -128,24 +128,53 @@ describe("popup browser adapters", () => {
     });
   });
 
-  it("sends bounded visible Printables metadata to the capture adapter, never raw scripts or credentials", async () => {
+  it("falls back to a local Printables file without metadata-only capture", async () => {
     await fakeBrowser.storage.local.set({
       vault: "https://prints.example.com",
       username: "owner",
       apiKey: "psk_vault_secret",
     });
-    const fetchImpl = vi.fn(async (url, _options = {}) => {
+    const fetchImpl = vi.fn(async (url, options: RequestInit = {}) => {
       if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
       if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
       if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
-      return response({ id: 22, state: "captured" }, 202);
+      if (url.endsWith("/capture-upload-slots")) {
+        const body = JSON.parse(stringBody(options));
+        return response(
+          {
+            item: { id: 22 },
+            slots: [
+              {
+                id: "slot-printables-manual",
+                role: "file",
+                source_file_id: "3161:benchy.3mf",
+                filename: "benchy.3mf",
+                media_type: "model/3mf",
+                size_bytes: 4,
+                sha256: body.files[0].sha256,
+              },
+            ],
+          },
+          201,
+        );
+      }
+      if (url.endsWith("/capture-upload-slots/slot-printables-manual"))
+        return new Response(null, { status: 204 });
+      if (url.endsWith("/capture-upload-finalize")) return response({ id: 22, state: "review" });
+      throw new Error(`Unexpected metadata-only capture: ${url}`);
     });
     vi.stubGlobal("fetch", fetchImpl);
     fakeBrowser.scripting.executeScript = vi.fn().mockResolvedValue([
       {
         result: {
           pageTitle: "3DBenchy",
-          jsonLd: [JSON.stringify({ name: "3DBenchy", image: "data:image/png;base64,secret" })],
+          jsonLd: [
+            JSON.stringify({
+              name: "3DBenchy",
+              image: "data:image/png;base64,secret",
+              contentUrl: "https://media.printables.com/files/benchy.3mf?signature=signed-secret",
+            }),
+          ],
         },
       },
     ]);
@@ -153,30 +182,54 @@ describe("popup browser adapters", () => {
     await import("../popup.ts");
     await settle();
     button("#capture").click();
-    for (let attempt = 0; attempt < 8; attempt += 1) await settle();
+    for (let attempt = 0; attempt < 4; attempt += 1) await settle();
 
-    const [, , , capture] = fetchImpl.mock.calls;
-    expect(capture[0]).toBe("https://prints.example.com/api/v1/inbox");
-    expect(capture[1].credentials).toBeUndefined();
-    expect(capture[1].headers.Cookie).toBeUndefined();
-    expect(capture[1].headers.Authorization).toBe("Bearer vault-jwt");
-    expect(JSON.parse(capture[1].body)).toEqual({
-      url: "https://www.printables.com/model/3161-3d-benchy/files",
-      title: "3DBenchy",
-      source_kind: "browser",
+    expect(element("#manual-file-panel").hidden).toBe(false);
+    expect(element("#status").textContent).toContain("Choose a downloaded Printables file");
+    expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/api/v1/inbox"))).toBe(false);
+
+    const input = requiredElement("#manual-file", HTMLInputElement);
+    const file = new File(["mesh"], "benchy.3mf", { type: "model/3mf" });
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: { 0: file, length: 1, item: (index: number) => (index === 0 ? file : null) },
+    });
+    button("#capture").click();
+    for (let attempt = 0; attempt < 10; attempt += 1) await settle();
+
+    const createCall = fetchImpl.mock.calls.find(([url]) => url.endsWith("/capture-upload-slots"));
+    if (createCall === undefined || createCall[1] === undefined)
+      throw new Error("Missing durable slot creation request");
+    const createBody = stringBody(createCall[1]);
+    expect(JSON.parse(createBody)).toMatchObject({
       capture_source: {
         provider: "printables",
         canonical_url: "https://www.printables.com/model/3161-3d-benchy/files",
         source_item_id: "3161",
-        source_revision: null,
-        adapter_version: "browser-visible-v1",
-        tags: [],
         fields: { title: { value: "3DBenchy", origin: "confirmed" } },
       },
+      files: [
+        {
+          id: "3161:benchy.3mf",
+          filename: "benchy.3mf",
+          size_bytes: 4,
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      ],
     });
-    expect(capture[1].body).not.toContain("psk_vault_secret");
-    expect(capture[1].body).not.toContain("vault-jwt");
-    expect(capture[1].body).not.toContain("base64");
+    expect(createBody).not.toContain("psk_vault_secret");
+    expect(createBody).not.toContain("vault-jwt");
+    expect(createBody).not.toContain("base64");
+    expect(createBody).not.toContain("signed-secret");
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "https://prints.example.com/api/v1/health",
+      "https://prints.example.com/api/v1/auth/login",
+      "https://prints.example.com/api/v1/auth/me",
+      "https://prints.example.com/api/v1/inbox/capture-upload-slots",
+      "https://prints.example.com/api/v1/inbox/capture-upload-slots/slot-printables-manual",
+      "https://prints.example.com/api/v1/inbox/22/capture-upload-finalize",
+    ]);
+    expect(element("#status").textContent).toContain("sent to Pending Imports");
   });
 
   it("bounds JSON-LD scripts before returning page metadata to the popup", async () => {
