@@ -90,6 +90,23 @@ const messages = {
     "inbox.deleteDescription":
       "This removes the item from Pending Imports and deletes its staged files. Imported Models stay in your vault.",
     "inbox.deleteConfirm": "Delete import",
+    "inbox.deleteSuccess": "Pending import deleted",
+    "inbox.deleteCompletedTitle": "Remove completed import?",
+    "inbox.deleteCompletedDescription":
+      "This removes the completed job from Pending Imports. Imported Models stay in your vault.",
+    "inbox.queue": "Queue",
+    "inbox.queueTitle": "Import queue",
+    "inbox.queueDescription": "Captures waiting for review or import.",
+    "inbox.completedDescription": "Finished jobs. Imported Models remain in your vault.",
+    "inbox.emptyQueueTitle": "No imports in the queue",
+    "inbox.emptyQueueDescription": "Capture a model URL to prepare a reviewable import.",
+    "inbox.emptyCompletedTitle": "No completed imports",
+    "inbox.emptyCompletedDescription": "Finished jobs appear here until you clear them.",
+    "inbox.clearCompleted": "Clear completed",
+    "inbox.clearCompletedTitle": "Clear completed imports?",
+    "inbox.clearCompletedDescription":
+      "This removes {count} completed jobs from Pending Imports. Imported Models stay in your vault.",
+    "inbox.clearCompletedSuccess": "Completed imports cleared",
     "source.title": "Source",
     "source.provider": "Provider",
     "source.url": "Source URL",
@@ -317,6 +334,26 @@ const messages = {
     "inbox.deleteDescription":
       "Esto elimina el elemento de Importaciones pendientes y borra sus archivos preparados. Los modelos importados permanecen en tu bóveda.",
     "inbox.deleteConfirm": "Eliminar importación",
+    "inbox.deleteSuccess": "Importación pendiente eliminada",
+    "inbox.deleteCompletedTitle": "¿Quitar la importación completada?",
+    "inbox.deleteCompletedDescription":
+      "Esto elimina el trabajo completado de Importaciones pendientes. Los modelos importados permanecen en tu bóveda.",
+    "inbox.queue": "Cola",
+    "inbox.queueTitle": "Cola de importación",
+    "inbox.queueDescription": "Capturas pendientes de revisión o importación.",
+    "inbox.completedDescription":
+      "Trabajos finalizados. Los modelos importados permanecen en tu bóveda.",
+    "inbox.emptyQueueTitle": "No hay importaciones en la cola",
+    "inbox.emptyQueueDescription":
+      "Captura la URL de un modelo para preparar una importación revisable.",
+    "inbox.emptyCompletedTitle": "No hay importaciones completadas",
+    "inbox.emptyCompletedDescription":
+      "Los trabajos finalizados aparecerán aquí hasta que los borres.",
+    "inbox.clearCompleted": "Borrar completadas",
+    "inbox.clearCompletedTitle": "¿Borrar las importaciones completadas?",
+    "inbox.clearCompletedDescription":
+      "Esto elimina {count} trabajos completados de Importaciones pendientes. Los modelos importados permanecen en tu bóveda.",
+    "inbox.clearCompletedSuccess": "Importaciones completadas borradas",
     "source.title": "Fuente",
     "source.provider": "Proveedor",
     "source.url": "URL de la fuente",

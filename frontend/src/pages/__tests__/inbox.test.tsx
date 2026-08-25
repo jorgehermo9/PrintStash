@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,7 +10,14 @@ import InboxPage, { type InboxPageDeps } from "@/pages/inbox";
 
 const listPendingImports = vi.fn<InboxPageDeps["listPendingImports"]>();
 const retryPendingImport = vi.fn<InboxPageDeps["retryPendingImport"]>();
-const deps: InboxPageDeps = { listPendingImports, retryPendingImport };
+const dismissPendingImport = vi.fn<InboxPageDeps["dismissPendingImport"]>();
+const batchPendingImports = vi.fn<InboxPageDeps["batchPendingImports"]>();
+const deps: InboxPageDeps = {
+  listPendingImports,
+  retryPendingImport,
+  dismissPendingImport,
+  batchPendingImports,
+};
 
 const pendingImport: InboxItem = {
   id: 1,
@@ -36,6 +44,7 @@ const pendingImport: InboxItem = {
 
 describe("InboxPage localization", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     localStorage.setItem("printstash.locale", "es");
     vi.mocked(listPendingImports).mockResolvedValue([pendingImport]);
   });
@@ -52,7 +61,7 @@ describe("InboxPage localization", () => {
     expect(
       await screen.findByRole("heading", { name: "Importaciones pendientes" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Necesita revisión")).toHaveLength(2);
+    expect(screen.getByText("Necesita revisión")).toBeInTheDocument();
     expect(screen.getByText("printables.com")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Revisar" })).toHaveAttribute("href", "/inbox/1");
   });
@@ -119,12 +128,68 @@ describe("InboxPage localization", () => {
       </I18nProvider>,
     );
 
-    const queue = await screen.findByRole("list", { name: "Needs review" });
+    const queue = await screen.findByRole("list", { name: "Import queue" });
     expect(queue).toHaveTextContent("Clean model");
     expect(queue).toHaveTextContent("Printables");
     expect(queue).toHaveTextContent("Files: 2");
     expect(
       screen.queryByText("Clean model by Maker | Download free STL model | Printables.com"),
     ).not.toBeInTheDocument();
+  });
+
+  it("deletes a pending import from the queue after confirmation", async () => {
+    localStorage.setItem("printstash.locale", "en");
+    vi.mocked(dismissPendingImport).mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <InboxPage deps={deps} />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Delete import" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete pending import?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete import" }));
+
+    expect(dismissPendingImport).toHaveBeenCalledWith(1);
+    expect(await screen.findByText("No imports in the queue")).toBeInTheDocument();
+  });
+
+  it("clears completed jobs without deleting imported models", async () => {
+    localStorage.setItem("printstash.locale", "en");
+    const completedImport: InboxItem = {
+      ...pendingImport,
+      id: 3,
+      state: "completed",
+      resulting_model_id: 12,
+      completed_at: "2026-08-25T00:00:00Z",
+      completion: "complete",
+    };
+    vi.mocked(listPendingImports).mockResolvedValue([completedImport]);
+    vi.mocked(batchPendingImports).mockResolvedValue([]);
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <InboxPage deps={deps} />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    await user.click(await screen.findByRole("tab", { name: /Completed/ }));
+    await user.click(screen.getByRole("button", { name: "Clear completed" }));
+    const dialog = screen.getByRole("dialog", { name: "Clear completed imports?" });
+    expect(dialog).toHaveTextContent("Imported Models stay in your vault");
+    await user.click(within(dialog).getByRole("button", { name: "Clear completed" }));
+
+    expect(batchPendingImports).toHaveBeenCalledWith({
+      item_ids: [3],
+      action: "dismiss",
+    });
+    expect(await screen.findByText("No completed imports")).toBeInTheDocument();
   });
 });

@@ -202,6 +202,7 @@ const state = {
   thumbnailRebuildQueued: false,
   apiKeySequence: 0,
   inboxCaptured: false,
+  inboxImported: false,
   sourceOverride: false,
   sourceCover: true,
   browserDeviceRevoked: false,
@@ -213,6 +214,7 @@ export function resetMockApiState(): void {
   state.thumbnailRebuildQueued = false;
   state.apiKeySequence = 0;
   state.inboxCaptured = false;
+  state.inboxImported = false;
   inboxCollectionId = null;
   state.sourceOverride = false;
   state.sourceCover = true;
@@ -649,16 +651,29 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     if (req.method === "POST") {
       drainRequest(req, () => {
         state.inboxCaptured = true;
+        state.inboxImported = false;
         sendJson(res, inboxItem(), 201);
       });
       return;
     }
-    sendJson(res, state.inboxCaptured ? [inboxItem()] : []);
+    sendJson(
+      res,
+      state.inboxCaptured ? [state.inboxImported ? importedInboxItem() : inboxItem()] : [],
+    );
+    return;
+  }
+  if (url.pathname === "/api/v1/inbox/batch" && req.method === "POST") {
+    drainRequest(req, () => {
+      state.inboxCaptured = false;
+      state.inboxImported = false;
+      sendJson(res, []);
+    });
     return;
   }
   if (url.pathname === "/api/v1/inbox/41") {
     if (req.method === "DELETE") {
       state.inboxCaptured = false;
+      state.inboxImported = false;
       inboxCollectionId = null;
       res.writeHead(204, { "access-control-allow-origin": "*" });
       res.end();
@@ -670,7 +685,11 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     }
     sendJson(
       res,
-      state.inboxCaptured ? inboxItem() : { detail: "not_found" },
+      state.inboxCaptured
+        ? state.inboxImported
+          ? importedInboxItem()
+          : inboxItem()
+        : { detail: "not_found" },
       state.inboxCaptured ? 200 : 404,
     );
     return;
@@ -680,7 +699,10 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
       drainRequest(req, () => sendJson(res, { detail: "collection_required" }, 409));
       return;
     }
-    drainRequest(req, () => sendJson(res, importedInboxItem()));
+    drainRequest(req, () => {
+      state.inboxImported = true;
+      sendJson(res, importedInboxItem());
+    });
     return;
   }
   if (url.pathname === "/api/v1/inbox/41/retry" && req.method === "POST") {
