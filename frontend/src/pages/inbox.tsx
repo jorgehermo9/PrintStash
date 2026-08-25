@@ -144,7 +144,7 @@ function ImportList({
                     </Link>
                   </Button>
                 )}
-                {item.state !== "importing" && (
+                {item.state !== "importing" && item.state !== "resolving" && (
                   <Button
                     type="button"
                     size="icon-sm"
@@ -211,10 +211,10 @@ function stateIcon(item: InboxItem): LucideIcon {
 }
 
 function stateIconClass(item: InboxItem): string {
-  if (item.state === "completed") return "h-4.5 w-4.5 text-success";
-  if (item.state === "failed") return "h-4.5 w-4.5 text-destructive";
-  if (item.state === "review") return "h-4.5 w-4.5 text-primary";
-  return "h-4.5 w-4.5 text-muted-foreground";
+  if (item.state === "completed") return "h-4 w-4 text-success";
+  if (item.state === "failed") return "h-4 w-4 text-destructive";
+  if (item.state === "review") return "h-4 w-4 text-primary";
+  return "h-4 w-4 text-muted-foreground";
 }
 
 function statusLabel(item: InboxItem, t: ReturnType<typeof useI18n>["t"]): string {
@@ -289,6 +289,7 @@ export default function InboxPage({ deps = inboxPageDeps }: { deps?: InboxPageDe
       toast.success(t("inbox.deleteSuccess"));
     } catch (error) {
       toast.error(error);
+      if (items.some((item) => ACTIVE.has(item.state))) poller.start();
     } finally {
       setDeletingId(null);
     }
@@ -309,6 +310,7 @@ export default function InboxPage({ deps = inboxPageDeps }: { deps?: InboxPageDe
       toast.success(t("inbox.clearCompletedSuccess"));
     } catch (error) {
       toast.error(error);
+      if (items.some((item) => ACTIVE.has(item.state))) poller.start();
     } finally {
       setClearingCompleted(false);
     }

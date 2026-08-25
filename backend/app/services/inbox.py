@@ -21,6 +21,7 @@ from printstash_core.imports import (
 )
 from printstash_core.imports.contracts import MAX_MANIFEST_BYTES
 from pydantic import TypeAdapter
+from sqlalchemy import update as sql_update
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -1105,21 +1106,75 @@ def _finish_resolve(
     with get_session_factory().scoped_session() as session:
         row = session.get(InboxItem, item_id)
         if row is None:
+            _discard_resolve_staging(session, item_id, managed)
+            session.commit()
             return
-        row.manifest_json = json.dumps(manifest, separators=(",", ":"))
+
         title = manifest.get("title")
         source = manifest.get("source")
         if isinstance(source, dict):
             fields = source.get("fields")
             if isinstance(fields, dict) and isinstance(fields.get("title"), dict):
                 title = fields["title"].get("value")
-        row.display_title = row.display_title or title
+
+        values: dict[str, Any] = {
+            "manifest_json": json.dumps(manifest, separators=(",", ":")),
+            "display_title": row.display_title or title,
+            "state": InboxItemState.REVIEW,
+            "updated_at": utcnow(),
+        }
         if manifest.get("kind") == "archive" and managed is not None:
-            row.staging_key = str(managed)
-        row.state = InboxItemState.REVIEW
-        row.updated_at = utcnow()
-        session.add(row)
+            values["staging_key"] = str(managed)
+
+        # Resolution runs outside the request transaction. The state predicate
+        # prevents a stale resolver from resurrecting an item dismissed while
+        # its network work was in flight.
+        result = session.exec(
+            sql_update(InboxItem)
+            .where(
+                InboxItem.id == item_id,
+                InboxItem.state == InboxItemState.RESOLVING,
+            )
+            .values(**values)
+        )
+        if result.rowcount != 1:  # type: ignore[attr-defined]
+            session.rollback()
+            _discard_resolve_staging(session, item_id, managed)
         session.commit()
+
+
+def _discard_resolve_staging(
+    session: Session, item_id: int, managed: Path | None
+) -> None:
+    """Release bytes produced by a resolver that lost its state race.
+
+    A resolver normally owns no lease until review publication. If a caller
+    supplied a lease for the exact managed path, use the lease's identity-aware
+    cleanup instead of unlinking blindly; otherwise remove only the managed
+    scratch file beneath the configured incoming root.
+    """
+    if managed is None:
+        return
+    lease = session.exec(
+        select(StagingLease).where(
+            StagingLease.inbox_item_id == item_id,
+            StagingLease.path == str(managed),
+        )
+    ).first()
+    if lease is not None:
+        try:
+            if not staging_leases.dismiss_review_lease(session, inbox_item_id=item_id):
+                return
+        except staging_leases.StagingLeaseError:
+            # A concurrent ownership transfer keeps the lease as the durable
+            # record of the bytes; never delete an object without its proof.
+            return
+    else:
+        unlink_managed_file(managed, settings.incoming_dir)
+    try:
+        managed.parent.rmdir()
+    except OSError:
+        pass
 
 
 def _fail_item(item_id: int, exc: Exception, fallback: str) -> None:
@@ -1832,7 +1887,7 @@ def retry(session: Session, row: InboxItem) -> InboxItem:
 
 
 def dismiss(session: Session, row: InboxItem) -> None:
-    if row.state == InboxItemState.IMPORTING:
+    if row.state in {InboxItemState.RESOLVING, InboxItemState.IMPORTING}:
         raise HTTPException(status_code=409, detail="pending_import_busy")
     if row.source_kind == InboxSourceKind.BROWSER and row.id is not None:
         has_capture_slots = session.exec(

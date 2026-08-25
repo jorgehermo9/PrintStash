@@ -442,6 +442,70 @@ async def test_resolve_ignores_item_in_wrong_state(db_session: Session) -> None:
         assert fresh.state == InboxItemState.REVIEW
 
 
+def test_dismiss_rejects_item_while_resolving(db_session: Session) -> None:
+    owner = _make_user(db_session, "dismiss-resolving")
+    managed = settings.incoming_dir / "inbox" / "dismiss-resolving" / "source.zip"
+    managed.parent.mkdir(parents=True, exist_ok=True)
+    managed.write_bytes(b"resolver-owned")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.RESOLVING,
+        staging_key=str(managed),
+    )
+
+    with pytest.raises(HTTPException, match="pending_import_busy"):
+        inbox.dismiss(db_session, row)
+
+    db_session.rollback()
+    fresh = db_session.get(InboxItem, row.id)
+    assert fresh is not None
+    assert fresh.state == InboxItemState.RESOLVING
+    assert fresh.staging_key == str(managed)
+    assert managed.exists()
+    managed.unlink()
+    managed.parent.rmdir()
+
+
+def test_resolve_completion_does_not_resurrect_dismissed_item_or_leak_staging(
+    db_session: Session,
+) -> None:
+    owner = _make_user(db_session, "resolve-dismiss-race")
+    managed = settings.incoming_dir / "inbox" / "resolve-dismiss-race" / "source.zip"
+    managed.parent.mkdir(parents=True, exist_ok=True)
+    managed.write_bytes(b"resolver-owned")
+    row = _make_item(db_session, owner, state=InboxItemState.DISMISSED)
+    staging_leases.create_review_lease(
+        db_session,
+        inbox_item_id=row.id,
+        owner_user_id=owner.id,
+        path=managed,
+        size_bytes=managed.stat().st_size,
+        sha256=hashlib.sha256(managed.read_bytes()).hexdigest(),
+    )
+    db_session.commit()
+
+    inbox._finish_resolve(
+        row.id,
+        {"kind": "archive", "title": "must-not-publish"},
+        managed,
+    )
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, row.id)
+        assert fresh is not None
+        assert fresh.state == InboxItemState.DISMISSED
+        assert fresh.manifest_json == "{}"
+        assert fresh.staging_key is None
+        assert (
+            session.exec(
+                select(StagingLease).where(StagingLease.inbox_item_id == row.id)
+            ).first()
+            is None
+        )
+    assert not managed.exists()
+
+
 @pytest.mark.asyncio
 async def test_resolve_marks_failed_when_source_url_missing(
     db_session: Session,

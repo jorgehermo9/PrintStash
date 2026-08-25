@@ -1,8 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { InboxItem } from "@/types";
 import { I18nProvider } from "@/lib/i18n";
@@ -43,6 +43,10 @@ const pendingImport: InboxItem = {
 };
 
 describe("InboxPage localization", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.setItem("printstash.locale", "es");
@@ -137,6 +141,22 @@ describe("InboxPage localization", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("does not offer delete while an import is resolving", async () => {
+    localStorage.setItem("printstash.locale", "en");
+    vi.mocked(listPendingImports).mockResolvedValue([{ ...pendingImport, state: "resolving" }]);
+
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <InboxPage deps={deps} />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Resolving")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete import" })).not.toBeInTheDocument();
+  });
+
   it("deletes a pending import from the queue after confirmation", async () => {
     localStorage.setItem("printstash.locale", "en");
     vi.mocked(dismissPendingImport).mockResolvedValue(undefined);
@@ -191,5 +211,85 @@ describe("InboxPage localization", () => {
       action: "dismiss",
     });
     expect(await screen.findByText("No completed imports")).toBeInTheDocument();
+  });
+
+  it("restarts polling when deleting fails while another import is active", async () => {
+    vi.useFakeTimers();
+    localStorage.setItem("printstash.locale", "en");
+    const activeImport: InboxItem = { ...pendingImport, id: 4, state: "captured" };
+    vi.mocked(listPendingImports).mockResolvedValue([activeImport]);
+    vi.mocked(dismissPendingImport).mockRejectedValue(new Error("offline"));
+
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <InboxPage deps={deps} />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete import" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete pending import?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete import" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(dismissPendingImport).toHaveBeenCalledWith(4);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+    expect(listPendingImports).toHaveBeenCalledTimes(2);
+  });
+
+  it("restarts polling when clearing completed imports fails while work is active", async () => {
+    vi.useFakeTimers();
+    localStorage.setItem("printstash.locale", "en");
+    const completedImport: InboxItem = {
+      ...pendingImport,
+      id: 3,
+      state: "completed",
+      resulting_model_id: 12,
+      completed_at: "2026-08-25T00:00:00Z",
+      completion: "complete",
+    };
+    const activeImport: InboxItem = { ...pendingImport, id: 4, state: "captured" };
+    vi.mocked(listPendingImports).mockResolvedValue([completedImport, activeImport]);
+    vi.mocked(batchPendingImports).mockRejectedValue(new Error("offline"));
+
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <InboxPage deps={deps} />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: /Completed/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear completed" }));
+    const dialog = screen.getByRole("dialog", { name: "Clear completed imports?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear completed" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(batchPendingImports).toHaveBeenCalledWith({
+      item_ids: [3],
+      action: "dismiss",
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+    expect(listPendingImports).toHaveBeenCalledTimes(2);
   });
 });
