@@ -139,7 +139,7 @@ function SourceField({
   };
   return (
     <div
-      className={`grid gap-2 px-3 py-3 sm:grid-cols-[minmax(8rem,0.32fr)_minmax(0,1fr)_auto] sm:items-start ${last ? "" : "border-b border-surface-container-high"}`}
+      className={`grid gap-2 px-3 py-3 @xl/source:grid-cols-[minmax(8rem,0.32fr)_minmax(0,1fr)] @xl/source:items-start ${last ? "" : "border-b border-surface-container-high"}`}
     >
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
@@ -176,8 +176,8 @@ function SourceField({
           </div>
         </div>
       ) : (
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="min-w-0 whitespace-pre-wrap text-sm text-muted-foreground">
+        <div className="flex min-w-0 flex-col items-start gap-3 @lg/source:flex-row @lg/source:justify-between">
+          <div className="w-full min-w-0 break-words whitespace-pre-wrap text-sm text-muted-foreground">
             {safeLink ? (
               <a
                 href={safeLink}
@@ -196,7 +196,7 @@ function SourceField({
             )}
           </div>
           {canEdit && (
-            <div className="flex shrink-0 flex-wrap justify-end gap-1">
+            <div className="flex shrink-0 flex-wrap gap-1 @lg/source:justify-end">
               {(field.field_name === "title" || field.field_name === "description") && (
                 <Button size="xs" variant="outline" onClick={applyToModel}>
                   {field.field_name === "title"
@@ -212,7 +212,7 @@ function SourceField({
         </div>
       )}
       {field.field_name === "license_text" && (
-        <p className="col-span-full mt-1 text-xs text-muted-foreground sm:col-start-2">
+        <p className="col-span-full mt-1 text-xs text-muted-foreground @xl/source:col-start-2">
           {i18n?.t("source.licenseDisclaimer") ??
             "PrintStash preserves published license text and does not grant, interpret, or expand rights."}
         </p>
@@ -237,7 +237,7 @@ function SourceTags({ tags, last = false }: { tags: string[]; last?: boolean }) 
   if (tags.length === 0) return null;
   return (
     <div
-      className={`flex flex-col gap-2 px-3 py-3 sm:grid sm:grid-cols-[minmax(8rem,0.32fr)_minmax(0,1fr)] sm:items-start ${last ? "" : "border-b border-surface-container-high"}`}
+      className={`flex flex-col gap-2 px-3 py-3 @xl/source:grid @xl/source:grid-cols-[minmax(8rem,0.32fr)_minmax(0,1fr)] @xl/source:items-start ${last ? "" : "border-b border-surface-container-high"}`}
       aria-label={i18n?.t("source.tags") ?? "Source tags"}
     >
       <span className="font-mono text-2xs uppercase tracking-wider text-on-surface-variant">
@@ -381,7 +381,7 @@ function SourceCover({
         {t("source.cover")}
       </h2>
       <div className="overflow-hidden rounded border border-outline-variant bg-surface">
-        <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 px-3 py-2.5 @lg/source:flex-row @lg/source:items-center @lg/source:justify-between">
           <p className="text-sm text-on-surface-variant" aria-live="polite" role="status">
             {busy === "upload"
               ? t("source.coverUpload")
@@ -477,12 +477,12 @@ function SourceIdentityRow({
 }) {
   return (
     <div
-      className={`flex flex-col gap-1 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between ${last ? "" : "border-b border-surface-container-high"}`}
+      className={`flex flex-col gap-1 px-3 py-2.5 @lg/source:flex-row @lg/source:items-center @lg/source:justify-between ${last ? "" : "border-b border-surface-container-high"}`}
     >
-      <dt className="font-mono text-xs uppercase tracking-wider text-on-surface-variant">
+      <dt className="shrink-0 font-mono text-xs uppercase tracking-wider text-on-surface-variant">
         {label}
       </dt>
-      <dd className="min-w-0 text-sm text-on-surface sm:text-right">{children}</dd>
+      <dd className="min-w-0 text-sm text-on-surface @lg/source:text-right">{children}</dd>
     </div>
   );
 }
@@ -525,7 +525,7 @@ export function SourceTab({
       />
     );
   return (
-    <div className="space-y-8">
+    <div className="@container/source space-y-8">
       {data.sources.map((source) => {
         const canonicalUrl = safeHttpUrl(source.canonical_url);
         const fieldCount = source.fields.length + (source.tags?.length ? 1 : 0);
@@ -543,7 +543,7 @@ export function SourceTab({
                 data-testid="source-identity-panel"
               >
                 <SourceIdentityRow label={t("source.provider", "Provider")}>
-                  <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                  <span className="inline-flex flex-wrap items-center justify-start gap-2 @lg/source:justify-end">
                     <span className="capitalize">{source.provider}</span>
                     <Badge variant="secondary">{t("source.capturedStatus", "Captured")}</Badge>
                   </span>
@@ -554,9 +554,9 @@ export function SourceTab({
                       href={canonicalUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex max-w-full items-center justify-end gap-1 break-all text-primary hover:underline"
+                      className="flex min-w-0 max-w-full items-start gap-1 text-left text-primary hover:underline @lg/source:justify-end @lg/source:text-right"
                     >
-                      {canonicalUrl}
+                      <span className="min-w-0 break-words">{canonicalUrl}</span>
                       <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                     </a>
                   ) : (

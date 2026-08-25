@@ -147,6 +147,41 @@ test("Source tab displays and replaces a private representative cover", async ({
   await expect(page.getByRole("img", { name: /private representative cover/i })).toBeVisible();
 });
 
+test("Source tab keeps metadata readable at the minimum details-panel width", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("ps-model-detail-sidebar-width", "400");
+  });
+  await page.goto("/models/1");
+  await page.getByRole("tab", { name: "Source" }).click();
+
+  const sidebar = page.getByTestId("model-detail-sidebar");
+  const sourceUrlLabel = page.getByText("Source URL", { exact: true });
+  const sourceUrl = page.getByRole("link", {
+    name: "https://www.printables.com/model/41-capture-bracket",
+  });
+  const description = page.getByText(
+    "New balloon-powered speedboat with an inflation adapter and twin nozzles for straight, long-lasting fun.",
+    { exact: true },
+  );
+  const useDescription = page.getByRole("button", { name: "Use source description" });
+
+  await expect(sidebar).toBeVisible();
+  await expect(description).toBeVisible();
+  const [sidebarBox, sourceUrlLabelBox, sourceUrlBox, descriptionBox, useDescriptionBox] =
+    await Promise.all([
+      sidebar.boundingBox(),
+      sourceUrlLabel.boundingBox(),
+      sourceUrl.boundingBox(),
+      description.boundingBox(),
+      useDescription.boundingBox(),
+    ]);
+
+  expect(sidebarBox?.width).toBeCloseTo(400, 0);
+  expect(sourceUrlBox!.y).toBeGreaterThan(sourceUrlLabelBox!.y + sourceUrlLabelBox!.height);
+  expect(descriptionBox!.width).toBeGreaterThan(240);
+  expect(useDescriptionBox!.y).toBeGreaterThan(descriptionBox!.y + descriptionBox!.height);
+});
+
 test("model detail uses focused send dialog and compact actions", async ({ page }) => {
   await page.goto("/models/1");
 

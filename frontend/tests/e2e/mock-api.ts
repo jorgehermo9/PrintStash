@@ -316,6 +316,19 @@ function provenance() {
         captures: [],
         fields: [
           {
+            field_name: "description",
+            captured_value:
+              "New balloon-powered speedboat with an inflation adapter and twin nozzles for straight, long-lasting fun.",
+            captured_origin: "confirmed",
+            user_value: null,
+            user_override_set: false,
+            effective_value:
+              "New balloon-powered speedboat with an inflation adapter and twin nozzles for straight, long-lasting fun.",
+            effective_origin: "confirmed",
+            captured_at: now,
+            user_updated_at: null,
+          },
+          {
             field_name: "creator_name",
             captured_value: "Fixture maker",
             captured_origin: "confirmed",
