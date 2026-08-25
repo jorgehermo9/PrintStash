@@ -70,6 +70,88 @@ def test_pairing_claim_is_single_use_and_credential_is_hashed(
     )
 
 
+def test_revoked_device_can_be_repaired_with_the_same_name(
+    client: TestClient, db_session: Session
+) -> None:
+    headers = _headers(db_session, "re-pair-user")
+    db_session.rollback()
+    first_code = client.post("/api/v1/browser-pairings", headers=headers).json()["code"]
+    first = client.post(
+        "/api/v1/browser-pairings/claim",
+        json={"code": first_code, "name": "Default browser"},
+    )
+    assert first.status_code == 200
+    old_credential = first.json()["credential"]
+    old_device = first.json()["device"]
+
+    assert (
+        client.delete(
+            f"/api/v1/browser-pairings/{old_device['id']}", headers=headers
+        ).status_code
+        == 204
+    )
+    second_code = client.post("/api/v1/browser-pairings", headers=headers).json()[
+        "code"
+    ]
+    second = client.post(
+        "/api/v1/browser-pairings/claim",
+        json={"code": second_code, "name": "Default browser"},
+    )
+
+    assert second.status_code == 200
+    new_credential = second.json()["credential"]
+    assert new_credential != old_credential
+    assert second.json()["device"]["id"] == old_device["id"]
+    assert second.json()["device"]["revoked_at"] is None
+
+    with pytest.raises(HTTPException) as exc_info:
+        require_browser_import_user(old_credential, db_session)
+    assert exc_info.value.status_code == 401
+    assert (
+        require_browser_import_user(new_credential, db_session).username
+        == "re-pair-user"
+    )
+
+
+def test_active_duplicate_name_rejects_without_spending_code(
+    client: TestClient, db_session: Session
+) -> None:
+    headers = _headers(db_session, "active-duplicate-user")
+    db_session.rollback()
+    first_code = client.post("/api/v1/browser-pairings", headers=headers).json()["code"]
+    assert (
+        client.post(
+            "/api/v1/browser-pairings/claim",
+            json={"code": first_code, "name": "Default browser"},
+        ).status_code
+        == 200
+    )
+    second_code = client.post("/api/v1/browser-pairings", headers=headers).json()[
+        "code"
+    ]
+    conflict = client.post(
+        "/api/v1/browser-pairings/claim",
+        json={"code": second_code, "name": "Default browser"},
+    )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == "browser_device_name_in_use"
+    second_row = db_session.exec(
+        select(BrowserPairingCode).where(
+            BrowserPairingCode.code_hash
+            == hashlib.sha256(second_code.encode()).hexdigest()
+        )
+    ).one()
+    assert second_row.used_at is None
+    assert (
+        client.post(
+            "/api/v1/browser-pairings/claim",
+            json={"code": second_code, "name": "Different browser"},
+        ).status_code
+        == 200
+    )
+
+
 def test_pairing_code_ttl_is_five_minutes(
     client: TestClient, db_session: Session
 ) -> None:
@@ -345,6 +427,86 @@ def test_concurrent_distinct_pairing_codes_never_exceed_device_cap(tmp_path) -> 
             )
         ).all()
         assert len(active) == 10
+    engine.dispose()
+
+
+def test_concurrent_distinct_pairing_codes_same_name_have_one_stable_conflict(
+    tmp_path,
+) -> None:
+    """Per-user serialization makes a same-name race deterministic and safe."""
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'pairing-same-name-race.sqlite'}",
+        connect_args={"check_same_thread": False, "timeout": 5},
+    )
+    event.listen(engine, "connect", _set_sqlite_pragmas)
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as seed:
+        user = User(
+            username="pair-same-name-race-user",
+            hashed_password=hash_password("Password123"),
+        )
+        seed.add(user)
+        seed.commit()
+        seed.refresh(user)
+        assert user.id is not None
+        user_id = user.id
+        first_code, _ = provider_service.create_pairing_code(seed, user_id)
+        second_code, _ = provider_service.create_pairing_code(seed, user_id)
+        seed.commit()
+
+    start = threading.Barrier(3)
+    outcomes: dict[str, str] = {}
+    failures: list[BaseException] = []
+
+    def exchange(code: str) -> None:
+        try:
+            with Session(engine) as session:
+                start.wait(timeout=5)
+                try:
+                    claimed = provider_service.claim_pairing_code(
+                        session, code, "Same browser"
+                    )
+                except provider_service.BrowserDeviceNameInUseError:
+                    session.rollback()
+                    outcomes[code] = "name_in_use"
+                else:
+                    assert claimed is not None
+                    session.commit()
+                    outcomes[code] = "success"
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            failures.append(exc)
+
+    threads = [
+        threading.Thread(target=exchange, args=(first_code,)),
+        threading.Thread(target=exchange, args=(second_code,)),
+    ]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not failures
+    assert sorted(outcomes.values()) == ["name_in_use", "success"]
+    rejected_code = next(
+        code for code, result in outcomes.items() if result == "name_in_use"
+    )
+    with Session(engine) as session:
+        active = session.exec(
+            select(BrowserDevice).where(
+                BrowserDevice.user_id == user_id,
+                BrowserDevice.name == "Same browser",
+                BrowserDevice.revoked_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).all()
+        assert len(active) == 1
+        assert (
+            provider_service.claim_pairing_code(
+                session, rejected_code, "Different browser"
+            )
+            is not None
+        )
+        session.commit()
     engine.dispose()
 
 

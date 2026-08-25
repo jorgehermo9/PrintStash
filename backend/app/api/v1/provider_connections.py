@@ -165,7 +165,16 @@ def create_pairing(
 def claim_pairing(
     body: BrowserPairingClaim, session: Session = Depends(get_session)
 ) -> BrowserPairingClaimRead:
-    claimed = service.claim_pairing_code(session, body.code, body.name)
+    try:
+        claimed = service.claim_pairing_code(session, body.code, body.name)
+    except service.BrowserDeviceNameInUseError as exc:
+        # The per-user lock is intentionally held through the name check. Roll
+        # back its no-op write before returning so the untouched code remains
+        # available for a retry with a different name.
+        session.rollback()
+        raise HTTPException(
+            status_code=409, detail="browser_device_name_in_use"
+        ) from exc
     if claimed is None:
         # A live code rejected at the device cap spends an attempt. Commit the
         # service-owned conditional increment; unknown, expired, replayed, and

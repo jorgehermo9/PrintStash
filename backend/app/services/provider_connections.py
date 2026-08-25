@@ -44,6 +44,10 @@ _TOKEN_REFRESH_SKEW = timedelta(seconds=60)
 _MMFResult = TypeVar("_MMFResult")
 
 
+class BrowserDeviceNameInUseError(Exception):
+    """A live browser device already owns the requested user-scoped name."""
+
+
 class MyMiniFactoryClient(Protocol):
     async def exchange_code(
         self, credentials: MyMiniFactoryCredentials, *, code: str, redirect_uri: str
@@ -553,6 +557,15 @@ def claim_pairing_code(
         or row.attempts >= _PAIRING_MAX_ATTEMPTS
     ):
         return None
+    existing = session.exec(
+        select(BrowserDevice).where(
+            BrowserDevice.user_id == row.user_id,
+            BrowserDevice.name == name,
+            BrowserDevice.revoked_at.is_(None),  # type: ignore[union-attr]
+        )
+    ).first()
+    if existing is not None:
+        raise BrowserDeviceNameInUseError
     active = session.exec(
         select(BrowserDevice).where(
             BrowserDevice.user_id == row.user_id,
@@ -598,9 +611,21 @@ def claim_pairing_code(
     session.flush()
     session.expire(row, ["used_at"])
     credential = secrets.token_urlsafe(48)
-    device = BrowserDevice(
-        user_id=row.user_id, name=name, credential_hash=_hash(credential)
-    )
-    session.add(device)
+    device = session.exec(
+        select(BrowserDevice).where(
+            BrowserDevice.user_id == row.user_id,
+            BrowserDevice.name == name,
+        )
+    ).first()
+    if device is None:
+        device = BrowserDevice(
+            user_id=row.user_id, name=name, credential_hash=_hash(credential)
+        )
+        session.add(device)
+    else:
+        # Reuse the revoked row so the global user/name constraint remains
+        # valid while rotating the credential that was previously revoked.
+        device.credential_hash = _hash(credential)
+        device.revoked_at = None
     session.flush()
     return credential, device

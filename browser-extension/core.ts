@@ -279,6 +279,17 @@ async function responseDetail(response: Response, fallback: string): Promise<str
   return fallback;
 }
 
+async function browserPairingClaimError(response: Response): Promise<string> {
+  const body = await response.json().catch(() => null);
+  if (response.status === 400) {
+    return "That pairing code is invalid or expired. Create a new one in PrintStash.";
+  }
+  if (response.status === 409 && body?.detail === "browser_device_name_in_use") {
+    return "A browser with this name is already paired. Revoke it in PrintStash or choose a different device name.";
+  }
+  return "PrintStash could not complete pairing. Try again.";
+}
+
 function requireCredentials(username: unknown, apiKey: unknown) {
   if (!String(username ?? "").trim() || !String(apiKey ?? "").trim()) {
     throw new Error("Username and named API key are required.");
@@ -486,9 +497,7 @@ export async function claimBrowserPairing({
     }),
   });
   if (!claimed.ok) {
-    // Pairing codes are intentionally opaque: do not disclose whether one was
-    // used, expired, or never existed.
-    throw new Error("That pairing code is invalid or expired. Create a new one in PrintStash.");
+    throw new Error(await browserPairingClaimError(claimed));
   }
   const payload = await claimed.json().catch(() => null);
   if (!payload || typeof payload.credential !== "string" || !payload.credential) {

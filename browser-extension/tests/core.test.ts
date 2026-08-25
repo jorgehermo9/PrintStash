@@ -67,6 +67,77 @@ test("claims a pairing code and retains only the returned browser credential", a
   assert.equal(stringBody(claimCall.options).includes("pairing-secret"), true);
 });
 
+test("keeps invalid pairing responses opaque", async () => {
+  await assert.rejects(
+    claimBrowserPairing({
+      fetchImpl: async (url) =>
+        requestUrl(url).endsWith("/health")
+          ? Response.json({ status: "ok", name: "PrintStash" })
+          : Response.json(
+              { detail: "invalid_or_expired_pairing_code", debug: "pairing-secret" },
+              { status: 400 },
+            ),
+      vault: "https://prints.example.com",
+      code: "pairing-secret",
+    }),
+    (error: Error) => {
+      assert.equal(
+        error.message,
+        "That pairing code is invalid or expired. Create a new one in PrintStash.",
+      );
+      assert.equal(error.message.includes("pairing-secret"), false);
+      return true;
+    },
+  );
+});
+
+test("explains how to resolve a duplicate browser device name", async () => {
+  await assert.rejects(
+    claimBrowserPairing({
+      fetchImpl: async (url) =>
+        requestUrl(url).endsWith("/health")
+          ? Response.json({ status: "ok", name: "PrintStash" })
+          : Response.json(
+              { detail: "browser_device_name_in_use", secret: "pairing-secret" },
+              { status: 409 },
+            ),
+      vault: "https://prints.example.com",
+      code: "pairing-secret",
+      name: "Browser extension",
+    }),
+    (error: Error) => {
+      assert.equal(
+        error.message,
+        "A browser with this name is already paired. Revoke it in PrintStash or choose a different device name.",
+      );
+      assert.equal(error.message.includes("pairing-secret"), false);
+      return true;
+    },
+  );
+});
+
+test("does not expose unexpected pairing response bodies", async () => {
+  await assert.rejects(
+    claimBrowserPairing({
+      fetchImpl: async (url) =>
+        requestUrl(url).endsWith("/health")
+          ? Response.json({ status: "ok", name: "PrintStash" })
+          : Response.json(
+              { detail: "database exploded", secret: "pairing-secret" },
+              { status: 503 },
+            ),
+      vault: "https://prints.example.com",
+      code: "pairing-secret",
+    }),
+    (error: Error) => {
+      assert.equal(error.message, "PrintStash could not complete pairing. Try again.");
+      assert.equal(error.message.includes("database exploded"), false);
+      assert.equal(error.message.includes("pairing-secret"), false);
+      return true;
+    },
+  );
+});
+
 test("uses a paired browser credential for capture without legacy login fields", async () => {
   const calls: Array<{ url: string; options: RequestInit }> = [];
   await captureModelPage({
