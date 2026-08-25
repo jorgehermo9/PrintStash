@@ -396,6 +396,17 @@ class BambuClient:
             retryable=retryable,
         )
 
+    @staticmethod
+    def _is_ftps_authentication_response(
+        response: str, *, allow_auth_keyword: bool = True
+    ) -> bool:
+        """Recognize FTP authentication replies from transport errors."""
+
+        normalized = response.lower().strip()
+        return normalized.startswith("530") or (
+            allow_auth_keyword and "auth" in normalized
+        )
+
     @classmethod
     def _classify_ftps_exception(cls, exc: BaseException) -> ProviderError:
         if isinstance(exc, ProviderError):
@@ -414,7 +425,7 @@ class BambuClient:
             retryable = True
         elif isinstance(exc, (error_perm, error_reply, error_temp)):
             response = str(exc).lower()
-            if response.startswith("530") or "auth" in response:
+            if cls._is_ftps_authentication_response(response):
                 code = "bambu_ftps_authentication_failed"
             elif response.startswith("552"):
                 code = "bambu_ftps_too_large"
@@ -430,6 +441,12 @@ class BambuClient:
                 # leave the one-shot retry reserved for explicit transport
                 # outcomes only.
                 code = "bambu_ftps_server_rejected"
+        elif isinstance(exc, OSError) and cls._is_ftps_authentication_response(
+            str(exc), allow_auth_keyword=False
+        ):
+            # Some FTPS implementations (including the integration fake) wrap
+            # a 530 login reply in PermissionError instead of ftplib.error_perm.
+            code = "bambu_ftps_authentication_failed"
         elif isinstance(exc, (ConnectionError, socket.gaierror)) or (
             isinstance(exc, OSError)
             and getattr(exc, "errno", None)

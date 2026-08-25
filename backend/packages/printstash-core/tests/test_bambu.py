@@ -127,6 +127,15 @@ def test_ftps_retries_one_transport_reset_but_not_authentication(
     assert failure.value.code == "provider_transport_error"
     assert failure.value.action_code == "bambu_ftps_authentication_failed"
     assert len([call for call in auth.calls if call[0] == "connect"]) == 1
+    wrapped_auth = BambuClient._classify_ftps_exception(
+        PermissionError("  530 Login incorrect  ")
+    )
+    assert wrapped_auth.code == "provider_transport_error"
+    assert wrapped_auth.action_code == "bambu_ftps_authentication_failed"
+    local_auth_path = BambuClient._classify_ftps_exception(
+        PermissionError(13, "Permission denied", "/srv/auth/cache.gcode")
+    )
+    assert local_auth_path.action_code == "bambu_ftps_local_error"
     assert BambuClient._classify_ftps_exception(ConnectionResetError()).retryable is True
 
 

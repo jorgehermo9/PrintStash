@@ -245,5 +245,6 @@ def test_upload_with_wrong_access_code_raises_transport_error(tmp_path) -> None:
         with pytest.raises(ProviderError) as exc_info:
             await provider.upload(local, "demo.gcode")
         assert exc_info.value.code == "provider_transport_error"
+        assert exc_info.value.action_code == "bambu_ftps_authentication_failed"
 
     asyncio.run(_run())
