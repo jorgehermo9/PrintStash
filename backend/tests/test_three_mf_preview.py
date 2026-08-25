@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import os
+import struct
 import zipfile
 import zlib
 from pathlib import Path
@@ -24,6 +27,14 @@ def _archive(path: Path, entries: dict[str, bytes]) -> Path:
         for name, content in entries.items():
             archive.writestr(name, content)
     return path
+
+
+def _archive_bytes(entries: dict[str, bytes]) -> bytes:
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    return stream.getvalue()
 
 
 def test_requested_plate_is_selected_strictly(tmp_path: Path) -> None:
@@ -96,6 +107,320 @@ def test_malformed_zip_has_stable_code(tmp_path: Path) -> None:
     with pytest.raises(EmbeddedGcodeError) as failure:
         extract_embedded_gcode(path)
 
+    assert failure.value.code == "embedded_gcode_malformed"
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_uncompressed_bytes": 0},
+        {"max_compression_ratio": 0},
+        {"max_archive_bytes": 0},
+        {"max_entries": 0},
+        {"max_central_directory_bytes": 0},
+    ],
+)
+def test_non_positive_preview_limits_are_rejected(
+    tmp_path: Path, limits: dict[str, int]
+) -> None:
+    path = _archive(
+        tmp_path / "invalid-limits.3mf", {"Metadata/plate_1.gcode": b"G28\n"}
+    )
+
+    with pytest.raises(ValueError, match="embedded_gcode_limits_invalid"):
+        extract_embedded_gcode(path, **limits)
+
+
+def test_negative_plate_index_is_not_a_valid_member_request(tmp_path: Path) -> None:
+    path = _archive(
+        tmp_path / "negative-plate.3mf", {"Metadata/plate_1.gcode": b"G28\n"}
+    )
+
+    with pytest.raises(EmbeddedGcodeError) as failure:
+        extract_embedded_gcode(path, plate_index=-1)
+
+    assert failure.value.code == "embedded_gcode_not_found"
+
+
+def test_archive_cap_and_missing_archive_keep_stable_errors(tmp_path: Path) -> None:
+    path = _archive(tmp_path / "too-large.3mf", {"Metadata/plate_1.gcode": b"G28\n"})
+    with pytest.raises(EmbeddedGcodeError) as oversized:
+        extract_embedded_gcode(path, max_archive_bytes=1)
+    assert oversized.value.code == "embedded_gcode_archive_too_large"
+
+    with pytest.raises(FileNotFoundError):
+        extract_embedded_gcode(tmp_path / "missing.3mf")
+
+
+def test_zip_footer_without_eocd_defers_to_zipfile(tmp_path: Path) -> None:
+    from app.services import three_mf_preview
+
+    path = tmp_path / "no-footer.3mf"
+    path.write_bytes(b"x" * three_mf_preview._ZIP_EOCD_BYTES)
+
+    # The footer scanner is deliberately conservative: an unrecognised tail
+    # is left for ZipFile to classify as malformed.
+    assert (
+        three_mf_preview._zip_footer_limits(
+            path,
+            path.stat().st_size,
+            max_entries=10,
+            max_central_directory_bytes=1024,
+        )
+        is None
+    )
+
+
+def test_zip64_footer_metadata_is_read_before_zipfile(tmp_path: Path) -> None:
+    from app.services import three_mf_preview
+
+    record = bytearray(56)
+    record[:4] = three_mf_preview._ZIP64_EOCD
+    struct.pack_into("<Q", record, 32, 1)
+    struct.pack_into("<Q", record, 40, 1)
+    struct.pack_into("<Q", record, 48, 100)
+    zip64_offset = 20
+    locator = struct.pack(
+        "<4sLQL", three_mf_preview._ZIP64_EOCD_LOCATOR, 0, zip64_offset, 1
+    )
+    classic = struct.pack(
+        "<4s4H2LH",
+        three_mf_preview._ZIP_EOCD,
+        0,
+        0,
+        0xFFFF,
+        0xFFFF,
+        0xFFFFFFFF,
+        0xFFFFFFFF,
+        0,
+    )
+    path = tmp_path / "zip64-footer.3mf"
+    path.write_bytes(b"x" * zip64_offset + bytes(record) + locator + classic)
+
+    assert (
+        three_mf_preview._zip_footer_limits(
+            path,
+            path.stat().st_size,
+            max_entries=2,
+            max_central_directory_bytes=2,
+        )
+        is None
+    )
+
+
+def test_central_directory_runtime_size_is_checked_after_footer_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services import three_mf_preview
+
+    path = _archive(
+        tmp_path / "central-runtime.3mf", {"Metadata/plate_1.gcode": b"G28\n"}
+    )
+    monkeypatch.setattr(
+        three_mf_preview, "_zip_footer_limits", lambda *args, **kwargs: None
+    )
+
+    real_zip_file = zipfile.ZipFile
+
+    class SizedZipFile(real_zip_file):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.size_cd = 2
+
+    monkeypatch.setattr(three_mf_preview.zipfile, "ZipFile", SizedZipFile)
+
+    with pytest.raises(EmbeddedGcodeError) as failure:
+        extract_embedded_gcode(path, max_central_directory_bytes=1)
+    assert failure.value.code == "embedded_gcode_central_directory_too_large"
+
+
+def test_runtime_entry_count_is_checked_after_footer_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services import three_mf_preview
+
+    path = _archive(
+        tmp_path / "entry-runtime.3mf",
+        {"Metadata/extra.txt": b"x", "Metadata/plate_1.gcode": b"G28\n"},
+    )
+    monkeypatch.setattr(
+        three_mf_preview, "_zip_footer_limits", lambda *args, **kwargs: None
+    )
+
+    with pytest.raises(EmbeddedGcodeError) as failure:
+        extract_embedded_gcode(path, max_entries=1)
+    assert failure.value.code == "embedded_gcode_too_many_entries"
+
+
+def test_extract_normalizes_unexpected_footer_errors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import three_mf_preview
+
+    path = _archive(tmp_path / "footer-error.3mf", {"Metadata/plate_1.gcode": b"G28\n"})
+    monkeypatch.setattr(
+        three_mf_preview,
+        "_zip_footer_limits",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad footer")),
+    )
+
+    with pytest.raises(EmbeddedGcodeError, match="embedded_gcode_malformed"):
+        extract_embedded_gcode(path)
+
+
+def test_safe_member_name_rejects_all_noncanonical_variants() -> None:
+    from app.services import three_mf_preview
+
+    for name in (
+        "",
+        "a\\b",
+        "/absolute",
+        "Metadata/./plate_1.gcode",
+        "Metadata//plate_1.gcode",
+        "Metadata/../plate_1.gcode",
+        "Metadata/plate_1.gcode\x00",
+        "Metadata/plate_e\u0301.gcode",
+    ):
+        assert three_mf_preview._safe_member_name(name) is False
+
+
+def test_remote_archive_success_closes_stream_and_removes_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_bytes = _archive_bytes({"Metadata/plate_1.gcode": b"G28\n"})
+    closed = False
+    temporary = tmp_path / "remote-preview.3mf"
+
+    def fake_mkstemp(*_args, **_kwargs):
+        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        return fd, str(temporary)
+
+    from app.services import three_mf_preview
+
+    monkeypatch.setattr(three_mf_preview.tempfile, "mkstemp", fake_mkstemp)
+
+    class ChunkStream:
+        def __init__(self):
+            self._chunks = iter((archive_bytes[:3], archive_bytes[3:]))
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._chunks)
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    class RemoteBackend:
+        def stat_size(self, _key: str) -> int:
+            return len(archive_bytes)
+
+        def direct_path(self, _key: str) -> None:
+            return None
+
+        def stream_chunks(self, _key: str, chunk_size: int):
+            del chunk_size
+            return ChunkStream()
+
+    result = read_embedded_gcode(RemoteBackend(), "remote.3mf")  # type: ignore[arg-type]
+    assert result.content == b"G28\n"
+    assert closed is True
+    assert temporary.exists() is False
+
+
+def test_read_remote_missing_blob_preserves_file_not_found() -> None:
+    class MissingBackend:
+        def stat_size(self, _key: str) -> int:
+            raise FileNotFoundError("gone")
+
+    with pytest.raises(FileNotFoundError):
+        read_embedded_gcode(MissingBackend(), "missing.3mf")  # type: ignore[arg-type]
+
+
+def test_remote_archive_error_closes_stream_and_removes_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_bytes = _archive_bytes({"Metadata/plate_1.gcode": b"G28\n"})
+    temporary = tmp_path / "remote-error.3mf"
+    closed = False
+
+    def fake_mkstemp(*_args, **_kwargs):
+        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        return fd, str(temporary)
+
+    from app.services import three_mf_preview
+
+    monkeypatch.setattr(three_mf_preview.tempfile, "mkstemp", fake_mkstemp)
+
+    class FailingStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if not hasattr(self, "yielded"):
+                self.yielded = True
+                return archive_bytes[:3]
+            raise OSError("remote read failed")
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    class RemoteBackend:
+        def stat_size(self, _key: str) -> int:
+            return len(archive_bytes)
+
+        def direct_path(self, _key: str) -> None:
+            return None
+
+        def stream_chunks(self, _key: str, chunk_size: int):
+            del chunk_size
+            return FailingStream()
+
+    with pytest.raises(EmbeddedGcodeError, match="embedded_gcode_malformed"):
+        read_embedded_gcode(RemoteBackend(), "remote.3mf")  # type: ignore[arg-type]
+    assert closed is True
+    assert temporary.exists() is False
+
+
+def test_member_read_that_exceeds_cap_is_rejected_during_streaming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _archive(tmp_path / "stream-cap.3mf", {"Metadata/plate_1.gcode": b"G28\n"})
+    original_open = zipfile.ZipFile.open
+
+    class OversizedSource:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _size: int) -> bytes:
+            return b"x" * 5
+
+    def fake_open(_archive, *_args, **_kwargs):
+        return OversizedSource()
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", fake_open)
+    with pytest.raises(EmbeddedGcodeError) as failure:
+        extract_embedded_gcode(path, max_uncompressed_bytes=4)
+    assert failure.value.code == "embedded_gcode_too_large"
+    monkeypatch.setattr(zipfile.ZipFile, "open", original_open)
+
+
+def test_remote_backend_errors_are_normalized_and_cleaned_up() -> None:
+    class BrokenBackend:
+        def stat_size(self, _key: str) -> int:
+            raise OSError("remote unavailable")
+
+        def direct_path(self, _key: str) -> None:
+            return None
+
+    with pytest.raises(EmbeddedGcodeError) as failure:
+        read_embedded_gcode(BrokenBackend(), "remote.3mf")  # type: ignore[arg-type]
     assert failure.value.code == "embedded_gcode_malformed"
 
 

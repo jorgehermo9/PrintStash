@@ -548,6 +548,229 @@ def test_stl_fallback_skips_nonfinite_facets(tmp_path: Path) -> None:
     assert result.sampled_triangles == 1
 
 
+def test_stl_fallback_binary_helpers_bound_reads_and_reject_truncation(
+    tmp_path: Path,
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "helpers.stl"
+    _write_renderable_binary_stl(path, 2)
+
+    assert stl_fallback._binary_stl_info(path) == (2, path.stat().st_size)
+    assert stl_fallback._is_binary_stl(path)
+    records = list(stl_fallback._iter_binary_triangles(path, max_triangles=1))
+    assert len(records) == 1
+    assert len(records[0]) == 9
+
+    short_header = tmp_path / "short-header.stl"
+    short_header.write_bytes(b"short")
+    assert stl_fallback._binary_stl_info(short_header) is None
+    assert list(stl_fallback._iter_binary_triangles(short_header)) == []
+
+    truncated = tmp_path / "truncated.stl"
+    truncated.write_bytes(b"x" * 80 + struct.pack("<I", 1) + b"x")
+    assert list(stl_fallback._iter_binary_triangles(truncated)) == []
+    assert stl_fallback._read_binary_samples(truncated, 1) is None
+
+
+def test_stl_fallback_binary_helpers_fail_closed_on_io_errors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "io-error.stl"
+    _write_renderable_binary_stl(path, 1)
+    original_open = Path.open
+
+    def fail_open(_path: Path, *args, **kwargs):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    assert stl_fallback._binary_stl_info(path) is None
+    assert list(stl_fallback._iter_binary_triangles(path)) == []
+    assert stl_fallback._read_binary_samples(path, 1) is None
+    monkeypatch.setattr(Path, "open", original_open)
+
+    def fail_stat(_path: Path):
+        raise OSError("missing")
+
+    monkeypatch.setattr(Path, "stat", fail_stat)
+    assert stl_fallback._read_samples(path, 1) is None
+
+
+def test_stl_fallback_binary_sampler_handles_short_records_and_io_failures(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "sampler-short-record.stl"
+    _write_renderable_binary_stl(path, 1)
+    info = (1, path.stat().st_size)
+    short = tmp_path / "sampler-truncated-record.stl"
+    short.write_bytes(b"x" * 84 + b"x")
+    assert stl_fallback._read_binary_samples(short, 1, info=(1, 85)) is None
+
+    def fail_open(_path: Path, *args, **kwargs):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    assert stl_fallback._read_binary_samples(path, 1, info=info) is None
+
+
+def test_stl_fallback_ascii_iterator_recovers_after_bad_and_oversized_lines(
+    tmp_path: Path,
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "ascii-iterator.stl"
+    valid = b"vertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n"
+    path.write_bytes(
+        b"solid iterator\n"
+        + b"vertex not-a-number 0 0\n"
+        + b"vertex nan 0 0\n"
+        + b"comment "
+        + b"x" * (stl_fallback._MAX_ASCII_LINE_BYTES + 10)
+        + b"\n"
+        + valid
+        + b"endsolid iterator\n"
+    )
+
+    records = list(stl_fallback._iter_ascii_triangles(path))
+    assert records == [(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0)]
+    assert list(stl_fallback._iter_ascii_triangles(path, max_triangles=0)) == []
+    assert list(stl_fallback._iter_ascii_triangles(path, max_lines=0)) == []
+
+
+def test_stl_fallback_ascii_helpers_fail_closed_on_io_errors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "ascii-io-error.stl"
+    path.write_text("solid empty\n", encoding="ascii")
+
+    def fail_open(_path: Path, *args, **kwargs):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    assert list(stl_fallback._iter_ascii_triangles(path)) == []
+    assert stl_fallback._read_ascii_samples(path, 1) is None
+
+
+def test_stl_fallback_ascii_samples_mark_invalid_source_and_truncation(
+    tmp_path: Path,
+) -> None:
+    from app.services import stl_fallback
+
+    path = tmp_path / "ascii-invalid-source.stl"
+    path.write_text(
+        "solid invalid\nvertex broken 0 0\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n",
+        encoding="ascii",
+    )
+    sampled = stl_fallback._read_ascii_samples(path, 4)
+    assert sampled is not None
+    assert sampled.parsed_triangles == 1
+    assert sampled.complete is False
+
+    empty = tmp_path / "ascii-empty.stl"
+    empty.write_text("solid empty\nvertex nan 0 0\n", encoding="ascii")
+    assert stl_fallback._read_ascii_samples(empty, 1) is None
+
+
+def test_stl_fallback_dispatches_binary_and_ascii_iterators(tmp_path: Path) -> None:
+    from app.services import stl_fallback
+
+    binary = tmp_path / "dispatch.stl"
+    _write_renderable_binary_stl(binary, 1)
+    ascii_path = tmp_path / "dispatch-ascii.stl"
+    ascii_path.write_text(
+        "solid dispatch\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendsolid dispatch\n",
+        encoding="ascii",
+    )
+    assert len(list(stl_fallback._iter_stl_triangles(binary))) == 1
+    assert len(list(stl_fallback._iter_stl_triangles(ascii_path))) == 1
+    assert stl_fallback._read_binary_samples(binary, 0) is None
+
+
+def test_stl_fallback_render_rejects_bad_dimensions_and_numeric_states(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from array import array
+
+    from app.services import mesh_render, stl_fallback
+
+    path = tmp_path / "render-defensive.stl"
+    _write_renderable_binary_stl(path, 1)
+    assert stl_fallback.render_stl_thumbnail(path, width=0) is None
+    assert (
+        stl_fallback.render_stl_thumbnail(
+            path, height=stl_fallback._MAX_RENDER_DIMENSION + 1
+        )
+        is None
+    )
+
+    sampled = stl_fallback._SampledSTL(
+        coordinates=array("f", [float("nan")] * 9),
+        triangle_count=1,
+        sampled_triangles=1,
+        bounds_min=(0.0, 0.0, 0.0),
+        bounds_max=(1.0, 1.0, 1.0),
+        scanned_bytes=1,
+        parsed_triangles=1,
+        complete=True,
+    )
+    monkeypatch.setattr(stl_fallback, "_read_samples", lambda *_args: sampled)
+    assert stl_fallback.render_stl_thumbnail(path) is None
+
+    sampled.coordinates = array("f", [0.0] * 9)
+    sampled.bounds_min = (1e308, 1e308, 1e308)
+    sampled.bounds_max = (1e308, 1e308, 1e308)
+    assert stl_fallback.render_stl_thumbnail(path) is None
+
+    sampled.bounds_min = (0.0, 0.0, 0.0)
+    sampled.bounds_max = (1.0, 1.0, 1.0)
+    monkeypatch.setattr(
+        mesh_render,
+        "_select_view_rotation",
+        lambda *_args: (_ for _ in ()).throw(ValueError("rotation")),
+    )
+    assert stl_fallback.render_stl_thumbnail(path) is None
+
+    sampled.bounds_min = (-1e308, -1e308, -1e308)
+    sampled.bounds_max = (1e308, 1e308, 1e308)
+    monkeypatch.setattr(mesh_render, "_select_view_rotation", lambda *_args: np.eye(3))
+    assert stl_fallback.render_stl_thumbnail(path) is None
+
+    sampled.bounds_min = (0.0, 0.0, 0.0)
+    sampled.bounds_max = (1.0, 1.0, 1.0)
+    monkeypatch.setattr(
+        mesh_render,
+        "_select_view_rotation",
+        lambda *_args: np.full((3, 3), np.nan),
+    )
+    assert stl_fallback.render_stl_thumbnail(path) is None
+
+
+def test_stl_fallback_returns_none_when_optional_render_dependencies_are_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import builtins
+
+    from app.services import stl_fallback
+
+    path = tmp_path / "missing-dependency.stl"
+    _write_renderable_binary_stl(path, 1)
+    original_import = builtins.__import__
+
+    def missing_numpy(name, *args, **kwargs):
+        if name == "numpy":
+            raise ImportError("numpy unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing_numpy)
+    assert stl_fallback.render_stl_thumbnail(path) is None
+
+
 def test_over_cap_3mf_still_gets_embedded_preview(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
     png = mesh_processing._PNG_MAGIC + b"preview-bytes"
