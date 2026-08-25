@@ -320,3 +320,80 @@ def test_fe17_uses_batch_naming_convention_for_unnamed_sqlite_job_unique(
         _MIGRATION._staging_background_job_unique_name(bind)
         == "uq_staging_leases_background_job_id"
     )
+
+
+def test_sqlite_head_allows_multiple_staging_leases_for_one_import_job(
+    tmp_path: Path,
+) -> None:
+    """Repair a stamped database that retained the legacy unique job index."""
+    url = f"sqlite:///{tmp_path / 'multifile-capture-leases.sqlite'}"
+    config = _config(url)
+
+    command.upgrade(config, "fe17c8d1a0f2")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DROP INDEX ix_staging_leases_background_job_id"))
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX ix_staging_leases_background_job_id "
+                    "ON staging_leases (background_job_id)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(url)
+    try:
+        background_job_indexes = [
+            index
+            for index in inspect(engine).get_indexes("staging_leases")
+            if index["column_names"] == ["background_job_id"]
+        ]
+        assert background_job_indexes == [
+            {
+                "name": "ix_staging_leases_background_job_id",
+                "column_names": ["background_job_id"],
+                "unique": 0,
+                "dialect_options": {},
+            }
+        ]
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO background_jobs "
+                    "(id, visible, kind, state, status_json, replay_safe, attempts, "
+                    "created_at, updated_at) VALUES "
+                    "('multifile-job', 1, 'pending_import', 'pending', '{}', 1, 0, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            for lease_id in ("lease-a", "lease-b"):
+                connection.execute(
+                    text(
+                        "INSERT INTO staging_leases "
+                        "(id, path, background_job_id, capture_upload_slot_origin_id, "
+                        "size_bytes, sha256, expires_at, created_at) VALUES "
+                        "(:lease_id, :path, 'multifile-job', :origin_id, 1, :sha, "
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                    ),
+                    {
+                        "lease_id": lease_id,
+                        "path": f"capture-slot:{lease_id}",
+                        "origin_id": f"slot-{lease_id}",
+                        "sha": "e" * 64,
+                    },
+                )
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM staging_leases "
+                        "WHERE background_job_id = 'multifile-job'"
+                    )
+                ).scalar_one()
+                == 2
+            )
+    finally:
+        engine.dispose()
