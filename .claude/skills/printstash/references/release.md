@@ -28,8 +28,9 @@ sweep). This file is the ordered checklist that ties it together.
       `## X.Y.Z`, restore an empty `## Unreleased`, and verify the entry matches
       the condensed in-app changelog (format in
       [conventions.md](conventions.md)).
-- [ ] Backend: `cd backend && uv run pytest tests -v && uv run ruff check app/ tests/`
-- [ ] Frontend: `cd frontend && pnpm lint && pnpm exec tsc --noEmit && pnpm build`
+- [ ] Backend: `cd backend && ./scripts/test.sh full -q && uv run ruff check app/ tests/ && uv run pyright`
+- [ ] Frontend: `cd frontend && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build`
+- [ ] Browser extension, when changed: `cd browser-extension && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build`; add affected-browser and e2e runs per [capture.md](capture.md).
 - [ ] Upgrade check: previous-release DB → `uv run alembic upgrade head` →
       app boots (self-hosters upgrade from old releases; CI has a
       migration-upgrade job, but run it locally for schema-heavy releases).

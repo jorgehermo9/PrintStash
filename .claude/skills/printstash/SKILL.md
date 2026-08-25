@@ -1,6 +1,6 @@
 ---
 name: printstash
-description: Project skill for working on PrintStash — task routing, workflow, conventions, release procedure, provider architecture, and roadmap position. Invoke at the start of ANY PrintStash task (CLAUDE.md requires it), then read only the reference file for the task at hand — releases, migrations, providers, UI, or planning.
+description: Work on PrintStash implementation, testing, releases, providers, capture, UI, or roadmap decisions. Invoke at the start of every PrintStash task, then follow the routing table to load only the references the task needs.
 ---
 
 # PrintStash
@@ -14,8 +14,8 @@ Redis/queues/cloud. `AGENTS.md` (layout, commands, hard rules) is binding.
 <!-- Update this block when a release ships. -->
 Latest shipped: v0.12.1 (container startup compatibility for legacy or
 operator-supplied uv commands), merged to `main` and tagged. Next: gather
-upgrade and hardware feedback, then scope the next release from
-`docs/roadmap.md`.
+upgrade and hardware feedback. `CHANGELOG.md` `Unreleased` is the canonical
+summary of work not yet shipped; a branch name or roadmap entry is not a release.
 
 Private plans live in `reports/`. They are local-only: never commit, publish,
 or quote them. Older long-range plans may not exist in every checkout; when
@@ -25,14 +25,18 @@ and changelog instead of reconstructing their contents.
 
 ## Before changing anything
 
-1. Read the canonical doc for the domain you're touching (binding language):
+1. Inspect the current branch and `git status`. Preserve user and concurrent
+   edits. If the requested change is already in progress, continue in its
+   existing branch and ownership boundary; create a branch only for a genuinely
+   new standalone change.
+2. Read the canonical doc for the domain you're touching (binding language):
    - Library / trash / storage code → `CONTEXT.md`
    - Any UI work → `DESIGN.md` (tokens, motion scale, `components/ui/` primitives)
-2. Trace the real flow in code before editing — e.g. artifact writes go through
+3. Trace the real flow in code before editing — e.g. artifact writes go through
    `services/ingestion.persist_artifact`, Model→response mapping through
    `services/model_views`, live/trashed queries through `app.db.scopes`.
    Single-owner seams like these are the norm; don't re-implement one.
-3. Feature claims: check `docs/provider-support.md` (stable/beta levels),
+4. Feature claims: check `docs/provider-support.md` (stable/beta levels),
    `docs/known-limitations.md`, and `docs/roadmap.md` before stating something
    is supported. Roadmap ≠ shipped.
 
@@ -44,37 +48,40 @@ and changelog instead of reconstructing their contents.
 | Cut / publish a release, version bump | [references/release.md](references/release.md) |
 | Backend, DB migration, testing, config | [references/backend.md](references/backend.md) |
 | Frontend / UI change | [references/frontend.md](references/frontend.md) |
+| Pending Imports, URL capture, provenance, provider connections, or browser extension | [references/capture.md](references/capture.md) plus backend/frontend reference(s) for the layers changed |
 | Printer providers (new or changed) | [references/providers.md](references/providers.md) |
-| Implement a backend-audit finding on `0.11.4` | `reports/17-backend-audit-0.11.4-implementation-plan.md` for **Implementar ahora**; `reports/18-backend-audit-planned-findings-0.11.4.md` for **Planificar** (read shared constraints, dependency graph, finding card, and gate) |
-| Continue the `0.11.4` large-library pass | `reports/16-large-library-performance-implementation-plan.md` (read only the relevant card and shared constraints) |
-| "What's next" / roadmap planning after `0.11.4` | `reports/14-implementation-plan-to-1.0.0.md` when present (read only the needed section); otherwise `docs/roadmap.md` + `CHANGELOG.md` |
+| Implement work from a named private plan | The named file in `reports/`; read only its shared constraints and the relevant work card |
+| "What's next" / roadmap planning | `reports/14-implementation-plan-to-1.0.0.md` when present (needed section only), otherwise `docs/roadmap.md` + `CHANGELOG.md` |
 
 ## Workflow for any change
 
-1. Branch from an up-to-date `main` for one change. Name the branch for its
-   purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `docs/<slug>`, etc.);
-   version numbers belong to release tags, not feature branches.
-2. Implement the minimal change at the owning seam; data-integrity/security
-   fixes get tests first.
-3. Validate: `cd backend && uv run pytest tests -v && uv run ruff check app/ tests/`;
-   frontend `pnpm lint && pnpm typecheck` (+ `pnpm test` if logic changed).
-   Report results honestly — never say tests passed without running them.
-   Backend validation also includes `uv run pyright`; PostgreSQL-affecting
-   changes run `PRINTSTASH_TEST_POSTGRES_URL=... uv run pytest tests/postgres -v`
-   against a real supported server.
-4. Update docs the change invalidates (changelog entry, `docs/provider-support.md`,
-   `docs/known-limitations.md`, docs — now in the `printstash-landing` repo,
-   not this one) — see the routing table.
-5. Normally use one PR per bug/feature, conventional commit messages, and the
-   repo git identity. The existing `0.11.4` consolidated PR is the explicit
-   exception: keep its audit fixes traceable and respect plans 17 and 18; do
-   not split them onto another branch unless the user reverses that release
-   direction.
-6. Merge each completed PR to `main` independently. After every planned change
-   for a release is merged and `main` is green, follow
-   [references/release.md](references/release.md): prepare the version metadata,
-   tag the exact release commit on `main`, and publish. Never collect feature
-   work on a version-number branch.
+1. For a new standalone change, branch from an up-to-date `main` and name the
+   branch for its purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`,
+   `docs/<slug>`, etc.). In an existing task branch or shared worktree, stay on
+   that branch and keep to the assigned files.
+2. Implement at the owning seam. Data-integrity/security fixes get a red test
+   first. Every new feature gets focused unit/integration coverage and one e2e
+   test for its headline capability.
+3. Run focused checks while iterating, then the applicable gate:
+   - Backend: `cd backend && ./scripts/test.sh fast -q`; before handoff of a
+     backend change, `./scripts/test.sh full -q`,
+     `uv run ruff check app/ tests/`, and `uv run pyright` when feasible.
+   - Frontend: `cd frontend && pnpm format:check && pnpm lint && pnpm typecheck`;
+     add `pnpm test` for logic and the applicable Playwright suite for a
+     headline UI flow.
+   - Browser extension: use [references/capture.md](references/capture.md).
+   PostgreSQL-affecting changes also run the supported-server contract suite.
+   Report only checks actually run and preserve failure output.
+4. Update the changelog and repository docs the change invalidates. Public site
+   docs that live in `printstash-landing` are a separate repository change;
+   identify it without editing another repository unless that scope was assigned.
+5. When the task includes commit or PR preparation, use one PR per bug/feature,
+   conventional commits, and the repository's configured git identity. Do not
+   reuse a historical release branch as precedent for combining unrelated work.
+6. When explicitly asked to cut a release, first confirm that each completed PR
+   is independently merged to `main` and CI is green, then follow
+   [references/release.md](references/release.md). Never collect feature work on
+   a version-number branch.
 
 ## Common mistakes to avoid
 
@@ -87,5 +94,7 @@ and changelog instead of reconstructing their contents.
 - Writing `deleted_at.is_(None)` by hand instead of `scopes.live()`.
 - Secrets, printer access codes, or real API keys in code, fixtures, tests,
   logs, or issue text.
+- Treating a dirty/shared worktree as disposable, overwriting concurrent edits,
+  or silently widening an assigned file set.
 - Committing gitignored material (`reports/`, `docs/internal/`) or generated
   files; bumping versions outside a release commit.
