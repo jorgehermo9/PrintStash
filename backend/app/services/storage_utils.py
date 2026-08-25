@@ -15,7 +15,12 @@ from dataclasses import dataclass, field
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.db.models import Collection, Document, File
+from app.db.models import (
+    SENTINEL_FILE_HASH,
+    Collection,
+    Document,
+    File,
+)
 from app.services.storage_backend import get_backend
 
 _COLLECTION_IMAGE_RE = re.compile(r"/collections/(\d+)/images/([^\s)\]?#]+)")
@@ -59,6 +64,13 @@ def ownership_snapshot(
     files = list(session.exec(select(File)).all())
     for row in files:
         if row.id is None:
+            continue
+        # External print jobs use a database-only placeholder whose path is
+        # /dev/null. It is not a vault blob and must never enter backup,
+        # restore, or audit ownership sets. Match the reserved hash as well as
+        # the path so a real missing vault artifact is still surfaced by
+        # backup.stat_size() rather than silently omitted.
+        if row.path == "/dev/null" and row.sha256 == SENTINEL_FILE_HASH:
             continue
         blob = OwnedBlob(
             key=row.path,

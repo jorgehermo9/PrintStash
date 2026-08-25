@@ -124,6 +124,7 @@ def test_ftps_retries_one_transport_reset_but_not_authentication(
     auth_client = make_client(ftps_client_factory=lambda: auth)
     with pytest.raises(ProviderError) as failure:
         auth_client._upload_via_ftps(source, "cube.gcode")
+    assert failure.value.code == "provider_transport_error"
     assert failure.value.action_code == "bambu_ftps_authentication_failed"
     assert len([call for call in auth.calls if call[0] == "connect"]) == 1
     assert BambuClient._classify_ftps_exception(ConnectionResetError()).retryable is True

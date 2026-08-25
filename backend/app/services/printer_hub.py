@@ -791,6 +791,10 @@ class PrinterHub:
     ) -> tuple[int, str] | None:
         with self._session_factory.session() as session:
             job = None
+            printer = session.get(Printer, printer_id)
+            bambu_printer = (
+                printer is not None and printer.provider == PrinterProvider.BAMBU_LAN
+            )
             provider_job_id = next(
                 (
                     text
@@ -817,11 +821,21 @@ class PrinterHub:
                     and cached_job.dedupe_absorbed_at is None
                     and cached_job.finished_at is None
                     and (
-                        _bambu_identity_matches(
-                            incoming_identity, _bambu_identity(cached_job)
+                        (
+                            not incoming_identity
+                            and cached_job.remote_filename == filename
+                            and (not bambu_printer or cached_job.source == "vault")
                         )
-                        or _bambu_project_task_transition(
-                            incoming_identity, cached_job, filename, ms_state
+                        or (
+                            incoming_identity
+                            and (
+                                _bambu_identity_matches(
+                                    incoming_identity, _bambu_identity(cached_job)
+                                )
+                                or _bambu_project_task_transition(
+                                    incoming_identity, cached_job, filename, ms_state
+                                )
+                            )
                         )
                     )
                 ):
@@ -847,6 +861,47 @@ class PrinterHub:
                     for candidate in rows:
                         if _bambu_project_task_transition(
                             incoming_identity, candidate, filename, ms_state
+                        ):
+                            job = candidate
+                            break
+                # Provider-neutral reports (Moonraker, OctoPrint, PrusaLink,
+                # and manual vault dispatch) do not carry a typed Bambu
+                # identity. Reconcile them to the active row for the same
+                # filename so a vault job is updated instead of creating an
+                # external sentinel row. A filename is never allowed to
+                # override a non-empty Bambu identity above.
+                if job is None and not incoming_identity:
+                    for candidate in rows:
+                        if (
+                            candidate.remote_filename == filename
+                            and candidate.finished_at is None
+                            and candidate.dedupe_absorbed_at is None
+                            and (not bambu_printer or candidate.source == "vault")
+                        ):
+                            job = candidate
+                            break
+                # A repeated provider-neutral terminal report arrives after
+                # the active row has already been finished. Select the latest
+                # matching history row so the terminal guard below makes the
+                # update idempotent. Printing/paused reports intentionally do
+                # not use this path and create a fresh reprint row.
+                if (
+                    job is None
+                    and not incoming_identity
+                    and ms_state
+                    in (
+                        "complete",
+                        "cancelled",
+                        "error",
+                        "failed",
+                    )
+                ):
+                    for candidate in rows:
+                        if (
+                            candidate.remote_filename == filename
+                            and candidate.finished_at is not None
+                            and candidate.dedupe_absorbed_at is None
+                            and (not bambu_printer or candidate.source == "vault")
                         ):
                             job = candidate
                             break

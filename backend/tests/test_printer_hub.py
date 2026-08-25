@@ -718,6 +718,44 @@ class TestPrinterHubSyncActiveJob:
         assert job.state == PrintJobState.PRINTING
         assert job.progress == pytest.approx(0.45)
 
+    def test_identityless_report_reuses_active_vault_job_by_filename(
+        self, hub, db_session
+    ):
+        """Provider-neutral status must not create a duplicate external row."""
+        pid, job = self._setup_job(db_session)
+
+        def _sync() -> None:
+            hub._sync_active_job_db(
+                pid,
+                "printing",
+                "sync.gcode",
+                0.45,
+                {"state": "printing", "filename": "sync.gcode"},
+            )
+            hub._sync_active_job_db(
+                pid,
+                "complete",
+                "sync.gcode",
+                1.0,
+                {"state": "complete", "filename": "sync.gcode"},
+            )
+
+        _sync()
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob).where(
+                    PrintJob.printer_id == pid,
+                    PrintJob.remote_filename == "sync.gcode",
+                )
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].id == job.id
+            assert rows[0].source == "vault"
+            assert rows[0].state == PrintJobState.COMPLETED
+            assert rows[0].progress == pytest.approx(1.0)
+            assert rows[0].finished_at is not None
+
     def test_sync_complete_sets_finished_at(self, hub, db_session):
         pid, job = self._setup_job(db_session)
 
@@ -922,12 +960,55 @@ class TestPrinterHubSyncActiveJob:
             assert rows[1].external_task_id == "task-stable"
             assert rows[1].external_project_id == "project-new"
 
-    def test_concurrent_bambu_initial_callbacks_create_one_job(
-        self, hub, threaded_hub_db
+    def test_identityless_bambu_report_does_not_merge_typed_external_job(
+        self, hub, db_session
     ):
+        printer = Printer(
+            name="Bambu identity guard",
+            provider=PrinterProvider.BAMBU_LAN,
+            bambu_host="192.0.2.11",
+            bambu_serial="TEST-SERIAL-IDENTITY",
+            bambu_access_code="test-code",
+        )
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        assert printer.id is not None
+
+        hub._sync_active_job_db(
+            printer.id,
+            "printing",
+            "identity.gcode",
+            0.1,
+            {
+                "state": "printing",
+                "filename": "identity.gcode",
+                "external_task_id": "task-identity",
+            },
+        )
+        hub._sync_active_job_db(
+            printer.id,
+            "printing",
+            "identity.gcode",
+            0.2,
+            {"state": "printing", "filename": "identity.gcode"},
+        )
+
+        with get_session_factory().session() as session:
+            rows = session.exec(
+                select(PrintJob)
+                .where(PrintJob.printer_id == printer.id)
+                .order_by(PrintJob.id)
+            ).all()
+            assert len(rows) == 2
+            assert rows[0].external_task_id == "task-identity"
+            assert rows[1].external_task_id is None
+
+    def test_concurrent_bambu_initial_callbacks_create_one_job(self, threaded_hub_db):
         from app.db.session import get_session_factory, override_session_factory
 
         factory = get_session_factory()
+        hub = PrinterHub(InProcessBus(), session_factory=factory)
         with get_session_factory().session() as session:
             session.add(
                 Printer(
@@ -1053,16 +1134,14 @@ class TestPrinterHubSyncActiveJob:
         from app.db.models import PrintJob, PrintJobState
         from app.db.session import get_session_factory
 
-        async def _tick(state, progress, stats):
-            await hub._sync_active_job(7, state, "repeat.gcode", progress, stats)
+        def _tick(state, progress, stats):
+            hub._sync_active_job_db(7, state, "repeat.gcode", progress, stats)
 
         # First external print: start -> complete.
-        asyncio.run(_tick("printing", 0.5, {"state": "printing"}))
-        asyncio.run(
-            _tick("complete", 1.0, {"state": "complete", "total_duration": 100})
-        )
+        _tick("printing", 0.5, {"state": "printing"})
+        _tick("complete", 1.0, {"state": "complete", "total_duration": 100})
         # Second external print of the same file begins.
-        asyncio.run(_tick("printing", 0.1, {"state": "printing"}))
+        _tick("printing", 0.1, {"state": "printing"})
 
         with get_session_factory().session() as session:
             jobs = session.exec(
@@ -1112,12 +1191,12 @@ class TestPrinterHubSyncActiveJob:
         from app.db.models import PrintJob
         from app.db.session import get_session_factory
 
-        async def _tick(state, stats):
-            await hub._sync_active_job(8, state, "once.gcode", 1.0, stats)
+        def _tick(state, stats):
+            hub._sync_active_job_db(8, state, "once.gcode", 1.0, stats)
 
-        asyncio.run(_tick("printing", {"state": "printing"}))
-        asyncio.run(_tick("complete", {"state": "complete", "total_duration": 50}))
-        asyncio.run(_tick("complete", {"state": "complete", "total_duration": 50}))
+        _tick("printing", {"state": "printing"})
+        _tick("complete", {"state": "complete", "total_duration": 50})
+        _tick("complete", {"state": "complete", "total_duration": 50})
 
         with get_session_factory().session() as session:
             jobs = session.exec(

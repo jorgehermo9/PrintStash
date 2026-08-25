@@ -1246,9 +1246,7 @@ class PrintJob(SQLModel, table=True):
     # as the legacy short detail for existing clients; these fields separate a
     # machine-readable code from an operator-facing message.
     artifact_capture_error_code: Optional[str] = Field(default=None, max_length=128)
-    artifact_capture_error_message: Optional[str] = Field(
-        default=None, max_length=1024
-    )
+    artifact_capture_error_message: Optional[str] = Field(default=None, max_length=1024)
 
     # Rows absorbed by the Bambu identity repair remain for audit/rollback and
     # are excluded by the live() scope. The survivor is intentionally the

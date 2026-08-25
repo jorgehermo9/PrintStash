@@ -384,7 +384,14 @@ class BambuClient:
         # value is persisted and exposed by the application as ``action_code``.
         return ProviderError(
             detail,
-            code="provider_error",
+            # FTPS login failures are transport/authentication failures at the
+            # provider seam. Keep the coarse compatibility code expected by
+            # the API while retaining the precise actionable reason below.
+            code=(
+                "provider_transport_error"
+                if action_code == "bambu_ftps_authentication_failed"
+                else "provider_error"
+            ),
             action_code=action_code,
             retryable=retryable,
         )

@@ -601,6 +601,10 @@ def _rasterise_triangles(
     while start < n_faces:
         consumed_before = int(cum_areas[start - 1]) if start else 0
         partial_tile = False
+        # Keep ``end`` definitely assigned for the partial-tile branch too;
+        # the loop's final cursor update and the non-partial count slice both
+        # intentionally use it only when a full face chunk was selected.
+        end = start + 1
         if budget is None:
             # The normal mesh renderer treats the cap as a temporary allocation
             # target, so a single large face is still rendered in full.
@@ -627,9 +631,7 @@ def _rasterise_triangles(
             if int(areas[start]) > available:
                 partial_tile = True
                 tile_width = min(int(bbox_w[start]), available)
-                tile_height = min(
-                    int(bbox_h[start]), max(1, available // tile_width)
-                )
+                tile_height = min(int(bbox_h[start]), max(1, available // tile_width))
                 candidate_count = tile_width * tile_height
                 source_faces = np.array([start], dtype=np.int64)
                 candidate_x0 = np.array(
