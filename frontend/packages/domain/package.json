@@ -9,7 +9,8 @@
     "./currency": "./src/currency.ts",
     "./format": "./src/format.ts",
     "./last-collection": "./src/last-collection.ts",
-    "./metadata-preferences": "./src/metadata-preferences.ts"
+    "./metadata-preferences": "./src/metadata-preferences.ts",
+    "./provenance": "./src/provenance.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

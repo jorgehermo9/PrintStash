@@ -1,59 +1,90 @@
 # PrintStash Model Importer
 
-This Manifest V3 Chrome extension recognizes MakerWorld, Printables, and
+This Manifest V3 Chrome and Firefox extension recognizes MakerWorld, Printables, and
 Thingiverse model pages, Printables collections, and direct model/archive file
 URLs, then sends them to the Pending Imports inbox of a self-hosted PrintStash
 instance.
 
 ## Install
 
-1. In PrintStash, create a named API key in **Settings → API keys**.
-2. Open `chrome://extensions`, enable **Developer mode**, choose **Load
-   unpacked**, and select this `browser-extension/` directory.
+1. In PrintStash, create a browser pairing code in **Settings → Imports**.
+2. Build it with `pnpm install && pnpm build`. In Chrome, open
+   `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
+   and select `browser-extension/.output/chrome-mv3`. For Firefox, run
+   `pnpm zip:firefox` and load the local XPI temporarily from
+   `about:debugging`.
 3. Open a supported source: an individual MakerWorld model (while signed in),
    a Printables model or collection, a Thingiverse model, or a direct model or
-   archive file URL. Click the extension, enter the PrintStash URL, username,
-   and named API key, then choose **Connect**.
+   archive file URL. Click the extension, enter the PrintStash URL and pairing
+   code, then choose **Pair browser**.
 4. Confirm that the popup shows **Connected** with the expected vault hostname
    and username, then choose **Send to Pending Imports**.
 5. Review the detected files in **Pending Imports** before completing the
    import.
 
-For faster setup, open **Settings → Users & Access** in PrintStash and choose
-**Set up extension** in the API keys card. Then open the extension on that same
-tab. The one-time setup package expires after five minutes and is removed from
-the page as soon as the extension reads it. Chrome still asks for explicit
-approval before granting a new vault host permission.
+For faster setup, open **Settings → Imports** in PrintStash and choose **Create
+pairing code** in the Paired browsers card. Then enter that code in the
+extension. The one-time code expires after five minutes and locks after five
+failed exchange attempts. Chrome still asks for explicit approval before
+granting a new vault host permission.
 
 Local vaults may be entered as `localhost:8000`, `127.0.0.1:3000`, or a private
 LAN address without a scheme; the extension selects HTTP automatically. Its
 manifest grants network access only to loopback addresses up front, while LAN
 and remote Vaults continue to request a per-host permission when connected.
 
-The extension verifies the public PrintStash health endpoint before sending
-credentials, exchanges the named API key for a short-lived token, and confirms
-the authenticated profile. Invalid settings are not saved. On later opens it
-rechecks the saved connection and enables importing only when both the vault
-connection and current source page are valid. **Manage → Disconnect** removes
-the stored API key and the vault host permission from the browser.
+The extension verifies the public PrintStash health endpoint before pairing.
+The one-time code is exchanged for an opaque browser-only credential; the code
+is never retained, and PrintStash stores only its hash. Local extension storage
+contains only the vault URL and that device credential—not a username, API key,
+or access token. Revoking the browser in PrintStash stops future imports.
+**Manage → Disconnect** removes the device credential and vault host permission
+from the browser. Existing username/API-key setups continue to work as a legacy
+migration path, but new setups should use pairing.
 
 For MakerWorld, the extension asks the already-authenticated page for the
 selected model's signed package URL, downloads that package in the browser,
-and uploads the bytes to PrintStash. MakerWorld cookies and credentials never
-leave the browser and are not stored by PrintStash. MakerWorld collections are
-not supported; capture their model pages individually. Printables, Thingiverse,
-and direct file captures send only the active URL and title for server-side
-resolution with PrintStash's SSRF protections. Direct URLs may point to `.zip`,
+and uploads the bytes to PrintStash. That upload can also include a bounded,
+allowlisted source record (canonical URL, provider identity, and safe visible
+metadata such as title, description, creator, and license). It never includes
+raw HTML or JSON-LD, cookies, session headers, or signed download URLs.
+MakerWorld cookies and credentials never leave the browser and are not stored
+by PrintStash. MakerWorld collections are not supported; capture their model
+pages individually. Printables and direct file captures use server-side
+resolution with PrintStash's SSRF protections. Thingiverse remains a
+user-assisted flow: the extension creates a bounded metadata draft for a
+later user-selected file and never automatically downloads a package or ZIP.
+Direct URLs may point to `.zip`,
 `.3mf`, `.stl`, `.obj`, `.step`, `.stp`, `.gcode`, `.g`, `.gco`, or `.bgcode`
 files.
 
-The helper does not persist access tokens. Vault URL, username, and named API
-key remain in local extension storage and are not synced through the browser
-account. The popup links directly to **Settings → Access** on the configured
-vault when a new named API key is needed.
+The helper does not persist access tokens. The popup links directly to the
+Imports settings on the configured vault to create a pairing code.
 
-Run the extension's pure unit tests with:
+Capture transfers are user-initiated and go only to the Vault URL you configure.
+
+Run the WXT/Vitest adapter, storage, messaging, and popup fixtures with:
 
 ```bash
-node --test browser-extension/tests/*.test.mjs
+cd browser-extension && pnpm test && pnpm build && pnpm build:firefox
 ```
+
+`pnpm test` builds clean Chrome, Firefox, and Edge MV3 targets before running
+the manifest and behavior fixtures. WXT 0.21.4 accepts the Edge target without
+an additional production dependency, so the Edge build is part of that gate.
+
+`pnpm test:e2e` is deliberately a small installed-browser smoke test. It never
+downloads a browser: point it at an already-installed Chrome or Firefox binary
+and a running local WebDriver service through the `PRINTSTASH_EXTENSION_*`
+environment variables documented in `wdio.conf.ts`. Firefox also needs the
+locally built XPI and that profile's resolved `moz-extension://…/popup.html`
+URL, because Firefox assigns the origin UUID at installation time.
+
+The capture boundary has a separate CI-only Vitest harness:
+`pnpm test:real-backend-capture`. CI provisions a throwaway local backend,
+creates a fresh owner and browser pairing, and runs the production adapter and
+transport through slot creation, raw PUT, and finalize. The harness requires
+`PRINTSTASH_EXTENSION_CAPTURE_BASE_URL` and
+`PRINTSTASH_EXTENSION_CAPTURE_SETUP_TOKEN`; missing provisioning fails the
+test. The loaded-browser WDIO job remains a separate popup/manifest smoke
+test and does not need Playwright browser downloads.

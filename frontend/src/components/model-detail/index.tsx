@@ -63,6 +63,7 @@ import { RevisionsTab } from "./revisions-tab";
 import { SendToButtons } from "./send-to-buttons";
 import { ShareDialog } from "./share-dialog";
 import { SettingsTab } from "./settings-tab";
+import { SourceTab } from "./source-tab";
 import { useRevisionUpdater } from "./use-revision-updater";
 import { ViewerToolbar } from "./viewer-toolbar";
 import { Localized } from "@/components/ui/localized";
@@ -863,6 +864,8 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                   preferences={metadataPreferences}
                 />
               )}
+
+              {activeTab === "source" && <SourceTab modelId={model.id} canEdit={canEditModel} />}
 
               {activeTab === "revisions" && (
                 <RevisionsTab

@@ -13,10 +13,11 @@ import {
 } from "@/lib/format";
 import { MetadataPreferences } from "@/lib/metadata-preferences";
 
-export type TabKey = "overview" | "settings" | "revisions" | "files" | "history";
+export type TabKey = "overview" | "source" | "settings" | "revisions" | "files" | "history";
 
 export const TABS: { key: TabKey; label: string }[] = [
   { key: "overview", label: "Overview" },
+  { key: "source", label: "Source" },
   { key: "settings", label: "Settings" },
   { key: "revisions", label: "Revisions" },
   { key: "files", label: "Files" },

@@ -157,4 +157,35 @@ export type {
   VaultAuditRun,
   BackupVerification,
 } from "./maintenance";
-export type { InboxItem, InboxItemState } from "./inbox";
+export type {
+  InboxItem,
+  InboxItemCompletion,
+  InboxItemResult,
+  InboxItemResultState,
+  InboxItemState,
+  InboxManifestFile,
+  InboxCapturedField,
+  InboxCapturedFieldName,
+  InboxManifest,
+  InboxManifestV1,
+  InboxManifestV2,
+} from "./inbox";
+export type {
+  ModelProvenancePatch,
+  ModelProvenanceRead,
+  ModelSourceCoverRead,
+  ProvenanceCaptureSummaryRead,
+  ProvenanceFieldName,
+  ProvenanceFieldRead,
+  ProvenanceOrigin,
+  ProvenanceSourceRead,
+} from "./provenance";
+export type {
+  BrowserDevicePatch,
+  BrowserDeviceRead,
+  BrowserPairingCreateRead,
+  CaptureProvider,
+  CultsConnectRequest,
+  OAuthAuthorizeRead,
+  ProviderConnectionRead,
+} from "./provider-connections";

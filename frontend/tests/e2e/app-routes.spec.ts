@@ -83,6 +83,22 @@ test("model detail route renders data and hydrates printer integrations", async 
   expect(problems).toEqual([]);
 });
 
+test("Source tab displays and replaces a private representative cover", async ({ page }) => {
+  await page.goto("/models/1");
+  await page.getByRole("tab", { name: "Source" }).click();
+
+  await expect(page.getByRole("img", { name: /private representative cover/i })).toBeVisible();
+  await page.getByLabel("Replace cover").setInputFiles({
+    name: "replacement.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("replacement"),
+  });
+  const dialog = page.getByRole("dialog", { name: "Replace private cover?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Replace cover" }).click();
+  await expect(page.getByRole("img", { name: /private representative cover/i })).toBeVisible();
+});
+
 test("model detail uses focused send dialog and compact actions", async ({ page }) => {
   await page.goto("/models/1");
 
@@ -265,6 +281,15 @@ test("settings prepares a one-time browser extension setup", async ({ page }) =>
   expect(setup).toContain('"apiKey":"psk_browser_setup_secret"');
 });
 
+test("settings creates a temporary browser pairing code", async ({ page }) => {
+  await page.goto("/settings?section=imports");
+
+  await expect(page.getByRole("heading", { name: "Provider connections" })).toBeVisible();
+  await page.getByRole("button", { name: "Create pairing code" }).click();
+  await expect(page.getByText("PAIR-1234")).toBeVisible();
+  await expect(page.getByText(/Expires at/)).toBeVisible();
+});
+
 test("preview settings persist quality choices and queue image recreation", async ({ page }) => {
   await page.goto("/settings?section=previews");
 
@@ -423,6 +448,51 @@ test("gallery upload queues a task and tracks it to completion", async ({ page }
   await expect(page.getByText("Upload Cube")).toBeVisible();
   await expect(page.getByText("completed", { exact: true })).toBeVisible();
   await expect(page.getByText("running", { exact: true })).toHaveCount(0);
+
+  expect(problems).toEqual([]);
+});
+
+test("URL capture is reviewable, reports a partial result, and restores a source override", async ({
+  page,
+}) => {
+  const problems = await collectPageProblems(page);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Upload", exact: true }).click();
+  await page.getByRole("button", { name: "From URL" }).click();
+  await page
+    .getByPlaceholder("Model page, collection, or direct .stl/.zip link")
+    .fill("https://www.printables.com/model/41-capture-bracket");
+  await page.getByRole("button", { name: "Review URL" }).click();
+
+  await expect(page).toHaveURL(/\/inbox\/41$/);
+  await expect(page.getByRole("heading", { name: "Capture bracket" })).toBeVisible();
+  const files = page.getByRole("group", { name: "Files to import" });
+  await expect(files.getByRole("checkbox", { name: "Select capture-bracket.stl" })).toBeChecked();
+  await files.getByRole("checkbox", { name: "Select capture-bracket.3mf" }).press("Space");
+  await expect(page.getByRole("button", { name: "Import selected" })).toBeEnabled();
+  await page.getByRole("button", { name: "Import selected" }).click();
+  await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+  await expect(page.getByText("capture-bracket.3mf")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry failed files" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Open model" }).click();
+  await page.getByRole("tab", { name: "Source" }).click();
+  await expect(page.getByText("Fixture maker")).toBeVisible();
+  await expect(page.getByText("CC BY 4.0")).toBeVisible();
+  await expect(page.getByText("Print with supports.")).toBeVisible();
+  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.getByLabel("Creator override").fill("Corrected maker");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Corrected maker")).toBeVisible();
+  await expect(page.getByText("Edited")).toBeVisible();
+  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.getByRole("button", { name: "Restore captured value" }).click();
+  const dialog = page.getByRole("dialog", { name: "Restore captured value?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Restore" }).click();
+  await expect(page.getByText("Fixture maker")).toBeVisible();
+  await expect(page.getByText("Source").last()).toBeVisible();
 
   expect(problems).toEqual([]);
 });

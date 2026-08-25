@@ -1,36 +1,65 @@
 const SOURCE_RULES = [
   {
     source: "Printables",
-    host: (hostname) => hostname === "printables.com" || hostname === "www.printables.com",
+    host: (hostname: string) => hostname === "printables.com" || hostname === "www.printables.com",
     path: /^\/(?:[^/]+\/)?(?:model|collections)\/\d+(?:[-/]|$)/,
   },
   {
     source: "MakerWorld",
-    host: (hostname) => hostname === "makerworld.com" || hostname.endsWith(".makerworld.com"),
+    host: (hostname: string) =>
+      hostname === "makerworld.com" || hostname.endsWith(".makerworld.com"),
     path: /^\/(?:[^/]+\/)?models\/\d+(?:[-/]|$)/,
   },
   {
     source: "Thingiverse",
-    host: (hostname) => hostname === "thingiverse.com" || hostname === "www.thingiverse.com",
+    host: (hostname: string) =>
+      hostname === "thingiverse.com" || hostname === "www.thingiverse.com",
     path: /^\/(?:thing:\d+|things\/\d+)(?:[-/]|$)/,
+  },
+  {
+    source: "Cults",
+    host: (hostname: string) => hostname === "cults3d.com" || hostname === "www.cults3d.com",
+    path: /^\/(?:[a-z]{2}\/)?3d-model\/[^/]+\/[^/]+(?:[-/]|$)/i,
   },
 ];
 
 const DIRECT_FILE_PATH = /\.(?:zip|3mf|stl|obj|step|stp|gcode|g|gco|bgcode)$/i;
 
+const CAPTURE_SOURCE_FIELD_LIMITS = {
+  title: 512,
+  description: 64 * 1024,
+  instructions: 128 * 1024,
+  creator_name: 512,
+  creator_id: 255,
+  creator_url: 2048,
+  license_code: 255,
+  license_url: 2048,
+  license_text: 64 * 1024,
+  attribution_text: 64 * 1024,
+  published_at: 64,
+  updated_at: 64,
+};
+
+import type { CaptureSourceDraft } from "./capture-adapter.ts";
+
+const CAPTURE_SOURCE_PROVIDERS = new Set(["printables", "makerworld", "thingiverse", "cults"]);
+
 export const BROWSER_EXTENSION_SETUP_STORAGE_KEY = "printstash.browser-extension-setup:v1";
 
 const BROWSER_EXTENSION_SETUP_MAX_AGE_MS = 10 * 60 * 1000;
 
-function hostnameFromUnqualifiedVault(value) {
+function hostnameFromUnqualifiedVault(value: string) {
   const authority = value.split(/[/?#]/, 1)[0];
   if (authority.startsWith("[")) return authority.slice(1, authority.indexOf("]"));
   return authority.replace(/:\d+$/, "");
 }
 
-function isPrivateIpv4(hostname) {
+function isPrivateIpv4(hostname: string) {
   const octets = hostname.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+  if (
+    octets.length !== 4 ||
+    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+  ) {
     return false;
   }
   return (
@@ -42,7 +71,7 @@ function isPrivateIpv4(hostname) {
   );
 }
 
-function isLocalHostname(value) {
+function isLocalHostname(value: unknown) {
   const hostname = String(value ?? "")
     .trim()
     .replace(/^\[|\]$/g, "")
@@ -64,7 +93,7 @@ function isLocalHostname(value) {
   return !hostname.includes(".");
 }
 
-export function isLocalVault(value) {
+export function isLocalVault(value: string) {
   try {
     return isLocalHostname(new URL(value).hostname);
   } catch {
@@ -72,7 +101,7 @@ export function isLocalVault(value) {
   }
 }
 
-export function normalizeVault(value) {
+export function normalizeVault(value: unknown): string {
   let raw = String(value ?? "").trim();
   if (!raw) throw new Error("Vault URL is required.");
   if (!/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
@@ -85,7 +114,7 @@ export function normalizeVault(value) {
   } catch {
     throw new Error("Vault URL is invalid.");
   }
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
+  if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error("Vault URL must use HTTP or HTTPS.");
   }
   if (parsed.username || parsed.password) {
@@ -97,7 +126,11 @@ export function normalizeVault(value) {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function parseBrowserExtensionSetup(value, activePageUrl, now = Date.now()) {
+export function parseBrowserExtensionSetup(
+  value: unknown,
+  activePageUrl: string,
+  now = Date.now(),
+) {
   if (typeof value !== "string" || !value) return null;
   let payload;
   try {
@@ -133,21 +166,106 @@ export function parseBrowserExtensionSetup(value, activePageUrl, now = Date.now(
   }
 }
 
-export function classifyModelPage(value) {
+export function classifyModelPage(value: string) {
   let parsed;
   try {
     parsed = new URL(value);
   } catch {
     return null;
   }
-  if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+  if (!["http:", "https:"].includes(parsed.protocol)) return null;
   const hostname = parsed.hostname.toLowerCase();
-  const rule = SOURCE_RULES.find((candidate) => candidate.host(hostname) && candidate.path.test(parsed.pathname));
+  const rule = SOURCE_RULES.find(
+    (candidate) => candidate.host(hostname) && candidate.path.test(parsed.pathname),
+  );
   if (rule) return rule.source;
   return DIRECT_FILE_PATH.test(parsed.pathname) ? "Direct file" : null;
 }
 
-async function responseDetail(response, fallback) {
+export function captureUrlForVault(value: string): string {
+  const parsed = new URL(value);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function boundedCaptureString(value: unknown, name: string, maximum: number): string {
+  if (typeof value !== "string" || !value || value.length > maximum) {
+    throw new Error(`Capture source ${name} is invalid.`);
+  }
+  // oxlint-disable no-control-regex -- reject untrusted control bytes before forwarding captures.
+  if (
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value) ||
+    /<\s*\/?\s*[a-z][^>]*>/i.test(value)
+  ) {
+    throw new Error(`Capture source ${name} is invalid.`);
+  }
+  // oxlint-enable no-control-regex
+  return value;
+}
+
+function boundedCaptureTags(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error("Capture source tags are invalid.");
+  }
+  const normalized = value.map((tag) => boundedCaptureString(tag, "tag", 255).toLocaleLowerCase());
+  if (new Set(normalized).size !== normalized.length)
+    throw new Error("Capture source tags are invalid.");
+  return normalized;
+}
+
+function validatedCaptureSource(value: CaptureSourceDraft | undefined, expectedProvider: string) {
+  if (value == null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Capture source is invalid.");
+  }
+  const source = value;
+  if (!CAPTURE_SOURCE_PROVIDERS.has(source.provider) || source.provider !== expectedProvider) {
+    throw new Error("Capture source provider is invalid.");
+  }
+  if (typeof source.canonical_url !== "string") throw new Error("Capture source URL is invalid.");
+  const canonicalUrl = captureUrlForVault(source.canonical_url);
+  boundedCaptureString(canonicalUrl, "canonical URL", 2048);
+  if (source.source_item_id !== null && source.source_item_id !== undefined) {
+    boundedCaptureString(source.source_item_id, "item ID", 255);
+  }
+  if (source.source_revision !== null && source.source_revision !== undefined) {
+    boundedCaptureString(source.source_revision, "revision", 256);
+  }
+  const adapterVersion = boundedCaptureString(source.adapter_version, "adapter version", 64);
+  const tags = source.tags === undefined ? [] : boundedCaptureTags(source.tags);
+  if (!source.fields || typeof source.fields !== "object" || Array.isArray(source.fields)) {
+    throw new Error("Capture source fields are invalid.");
+  }
+  const fields: CaptureSourceDraft["fields"] = {};
+  for (const [name, field] of Object.entries(source.fields)) {
+    const maximum = (CAPTURE_SOURCE_FIELD_LIMITS as Record<string, number>)[name];
+    if (!maximum || !field || typeof field !== "object" || Array.isArray(field)) {
+      throw new Error("Capture source fields are invalid.");
+    }
+    const fieldValue = field as { value: unknown; origin: unknown };
+    if (fieldValue.origin !== "confirmed" && fieldValue.origin !== "inferred") {
+      throw new Error("Capture source field origin is invalid.");
+    }
+    fields[name] = {
+      value: boundedCaptureString(fieldValue.value, name, maximum),
+      origin: fieldValue.origin,
+    };
+  }
+  return {
+    provider: source.provider,
+    canonical_url: canonicalUrl,
+    source_item_id: source.source_item_id ?? null,
+    source_revision: source.source_revision ?? null,
+    adapter_version: adapterVersion,
+    tags,
+    fields,
+  };
+}
+
+async function responseDetail(response: Response, fallback: string): Promise<string> {
   const body = await response.json().catch(() => ({}));
   if (typeof body.detail === "string") {
     const messages = {
@@ -156,18 +274,23 @@ async function responseDetail(response, fallback) {
       insufficient_scope: "This PrintStash user does not have import permission.",
       provide_password_or_api_key: "Enter a username and named API key.",
     };
-    return messages[body.detail] || body.detail;
+    return messages[body.detail as keyof typeof messages] || body.detail;
   }
   return fallback;
 }
 
-function requireCredentials(username, apiKey) {
+function requireCredentials(username: unknown, apiKey: unknown) {
   if (!String(username ?? "").trim() || !String(apiKey ?? "").trim()) {
     throw new Error("Username and named API key are required.");
   }
 }
 
-async function fetchVault(fetchImpl, base, path, options = {}) {
+async function fetchVault(
+  fetchImpl: typeof fetch,
+  base: string,
+  path: string,
+  options: RequestInit = {},
+) {
   const local = isLocalVault(base);
   try {
     return await fetchImpl(`${base}${path}`, options);
@@ -180,7 +303,7 @@ async function fetchVault(fetchImpl, base, path, options = {}) {
   }
 }
 
-function findValue(payload, keys) {
+function findValue(payload: unknown, keys: string[]): unknown {
   const queue = [payload];
   while (queue.length) {
     const value = queue.shift();
@@ -190,8 +313,9 @@ function findValue(payload, keys) {
     }
     if (!value || typeof value !== "object") continue;
     for (const key of keys) {
-      if (value[key] !== undefined && value[key] !== null && value[key] !== "") {
-        return value[key];
+      const record = value as Record<string, unknown>;
+      if (record[key] !== undefined && record[key] !== null && record[key] !== "") {
+        return record[key];
       }
     }
     queue.push(...Object.values(value));
@@ -199,7 +323,7 @@ function findValue(payload, keys) {
   return null;
 }
 
-function makerWorldInstanceId(payload) {
+function makerWorldInstanceId(payload: unknown): unknown {
   const explicit = findValue(payload, ["defaultInstanceId", "instanceId"]);
   if (explicit) return explicit;
   const queue = [payload];
@@ -210,8 +334,11 @@ function makerWorldInstanceId(payload) {
       continue;
     }
     if (!value || typeof value !== "object") continue;
-    if (Array.isArray(value.instances)) {
-      const instance = value.instances.find((item) => item && typeof item === "object" && item.id);
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.instances)) {
+      const instance = record.instances.find(
+        (item) => item && typeof item === "object" && "id" in item,
+      ) as Record<string, unknown> | undefined;
       if (instance) return instance.id;
     }
     queue.push(...Object.values(value));
@@ -219,7 +346,7 @@ function makerWorldInstanceId(payload) {
   return null;
 }
 
-function firstDownloadUrl(payload) {
+function firstDownloadUrl(payload: unknown): string | null {
   const queue = [payload];
   let fallback = null;
   while (queue.length) {
@@ -230,7 +357,7 @@ function firstDownloadUrl(payload) {
     }
     if (!value || typeof value !== "object") continue;
     for (const key of ["downloadUrl", "download_url", "url", "link"]) {
-      const candidate = value[key];
+      const candidate = (value as Record<string, unknown>)[key];
       if (typeof candidate !== "string" || !candidate.startsWith("https://")) continue;
       fallback ??= candidate;
       if (/\.(?:3mf|zip|stl|obj|step|stp)(?:[?#]|$)|\/download(?:[/?#]|$)/i.test(candidate)) {
@@ -242,7 +369,7 @@ function firstDownloadUrl(payload) {
   return fallback;
 }
 
-function filenameFromUrl(value, fallback) {
+function filenameFromUrl(value: string, fallback: string): string {
   try {
     const name = decodeURIComponent(new URL(value).pathname.split("/").pop() || "");
     if (name && /\.[a-z0-9]{1,8}$/i.test(name)) return name;
@@ -252,7 +379,7 @@ function filenameFromUrl(value, fallback) {
   return fallback;
 }
 
-function contentDispositionFilename(value) {
+function contentDispositionFilename(value: string | null): string | null {
   if (!value) return null;
   const encoded = value.match(/filename\*=UTF-8''([^;]+)/i);
   if (encoded) {
@@ -266,7 +393,13 @@ function contentDispositionFilename(value) {
   return plain?.[1]?.trim() || null;
 }
 
-export async function makerWorldDownload({ pageUrl, requestPageJson }) {
+export async function makerWorldDownload({
+  pageUrl,
+  requestPageJson,
+}: {
+  pageUrl: string;
+  requestPageJson?: (url: string) => Promise<Record<string, unknown> | unknown[]>;
+}) {
   if (typeof requestPageJson !== "function") {
     throw new Error("MakerWorld must be opened in the active browser tab.");
   }
@@ -286,7 +419,17 @@ export async function makerWorldDownload({ pageUrl, requestPageJson }) {
   return { url, filename: filenameFromUrl(url, `${designId}.3mf`) };
 }
 
-async function vaultLogin({ fetchImpl, base, username, apiKey }) {
+async function vaultLogin({
+  fetchImpl,
+  base,
+  username,
+  apiKey,
+}: {
+  fetchImpl: typeof fetch;
+  base: string;
+  username?: string;
+  apiKey?: string;
+}) {
   const login = await fetchVault(fetchImpl, base, "/api/v1/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -307,15 +450,7 @@ async function vaultLogin({ fetchImpl, base, username, apiKey }) {
   return loginBody.access_token;
 }
 
-export async function verifyVaultConnection({
-  fetchImpl = fetch,
-  vault,
-  username,
-  apiKey,
-}) {
-  const base = normalizeVault(vault);
-  requireCredentials(username, apiKey);
-
+async function verifyVaultHealth({ fetchImpl, base }: { fetchImpl: typeof fetch; base: string }) {
   const health = await fetchVault(fetchImpl, base, "/api/v1/health", {
     headers: { Accept: "application/json" },
     credentials: "omit",
@@ -325,6 +460,70 @@ export async function verifyVaultConnection({
   if (!health.ok || healthBody?.status !== "ok" || healthBody?.name !== "PrintStash") {
     throw new Error("That URL is not a PrintStash server.");
   }
+}
+
+export async function claimBrowserPairing({
+  fetchImpl = fetch,
+  vault,
+  code,
+  name,
+}: {
+  fetchImpl?: typeof fetch;
+  vault: string;
+  code: string;
+  name?: string;
+}) {
+  const base = normalizeVault(vault);
+  if (!String(code ?? "").trim()) throw new Error("Enter the pairing code from PrintStash.");
+  await verifyVaultHealth({ fetchImpl, base });
+  const claimed = await fetchVault(fetchImpl, base, "/api/v1/browser-pairings/claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "omit",
+    body: JSON.stringify({
+      code: String(code).trim(),
+      name: String(name || "Browser").trim() || "Browser",
+    }),
+  });
+  if (!claimed.ok) {
+    // Pairing codes are intentionally opaque: do not disclose whether one was
+    // used, expired, or never existed.
+    throw new Error("That pairing code is invalid or expired. Create a new one in PrintStash.");
+  }
+  const payload = await claimed.json().catch(() => null);
+  if (!payload || typeof payload.credential !== "string" || !payload.credential) {
+    throw new Error("PrintStash did not return a browser credential.");
+  }
+  return { base, deviceCredential: payload.credential, device: payload.device || null };
+}
+
+export async function verifyBrowserDevice({
+  fetchImpl = fetch,
+  vault,
+}: {
+  fetchImpl?: typeof fetch;
+  vault: string;
+}) {
+  const base = normalizeVault(vault);
+  await verifyVaultHealth({ fetchImpl, base });
+  return { base };
+}
+
+export async function verifyVaultConnection({
+  fetchImpl = fetch,
+  vault,
+  username,
+  apiKey,
+}: {
+  fetchImpl?: typeof fetch;
+  vault: string;
+  username: string;
+  apiKey: string;
+}) {
+  const base = normalizeVault(vault);
+  requireCredentials(username, apiKey);
+
+  await verifyVaultHealth({ fetchImpl, base });
 
   const accessToken = await vaultLogin({ fetchImpl, base, username, apiKey });
   const profile = await fetchVault(fetchImpl, base, "/api/v1/auth/me", {
@@ -336,7 +535,9 @@ export async function verifyVaultConnection({
     cache: "no-store",
   });
   if (!profile.ok) {
-    throw new Error(await responseDetail(profile, `PrintStash profile check returned ${profile.status}.`));
+    throw new Error(
+      await responseDetail(profile, `PrintStash profile check returned ${profile.status}.`),
+    );
   }
   const user = await profile.json().catch(() => null);
   if (!user || typeof user.username !== "string" || typeof user.is_superuser !== "boolean") {
@@ -350,21 +551,46 @@ export async function captureModelPage({
   vault,
   username,
   apiKey,
+  deviceCredential,
   accessToken,
   pageUrl,
   title,
   requestPageJson,
   ensureOriginPermission = async () => {},
+  captureSource,
+}: {
+  fetchImpl?: typeof fetch;
+  vault: string;
+  username?: string;
+  apiKey?: string;
+  deviceCredential?: string;
+  accessToken?: string;
+  pageUrl: string;
+  title?: string;
+  requestPageJson?: (url: string) => Promise<Record<string, unknown> | unknown[]>;
+  ensureOriginPermission?: (origin: string) => Promise<void>;
+  captureSource?: CaptureSourceDraft;
 }) {
   const base = normalizeVault(vault);
   const source = classifyModelPage(pageUrl);
   if (!source) throw new Error("Open a supported model page or direct model file first.");
-  requireCredentials(username, apiKey);
+  const hasDeviceCredential = typeof deviceCredential === "string" && deviceCredential.length > 0;
+  if (!hasDeviceCredential) requireCredentials(username, apiKey);
+  const sourceUrl = captureUrlForVault(pageUrl);
 
-  const token = accessToken || await vaultLogin({ fetchImpl, base, username, apiKey });
+  const token =
+    accessToken || deviceCredential || (await vaultLogin({ fetchImpl, base, username, apiKey }));
 
   if (source === "MakerWorld") {
-    const resolved = await makerWorldDownload({ pageUrl, requestPageJson });
+    const validatedSource = validatedCaptureSource(captureSource, "makerworld");
+    let resolved;
+    try {
+      resolved = await makerWorldDownload({ pageUrl, requestPageJson });
+    } catch (error) {
+      throw new Error(
+        `MakerWorld package capture is unavailable. Download the model normally, then select the file in PrintStash. ${error instanceof Error ? error.message : "Unknown adapter error."}`,
+      );
+    }
     const permission = `${new URL(resolved.url).origin}/*`;
     await ensureOriginPermission(permission);
     const download = await fetchImpl(resolved.url, { credentials: "omit" });
@@ -375,8 +601,9 @@ export async function captureModelPage({
     const headerName = contentDispositionFilename(download.headers.get("Content-Disposition"));
     const filename = headerName || resolved.filename;
     const form = new FormData();
-    form.append("source_url", pageUrl);
+    form.append("source_url", sourceUrl);
     if (String(title ?? "").trim()) form.append("title", String(title).trim());
+    if (validatedSource) form.append("capture_source", JSON.stringify(validatedSource));
     form.append("file", blob, filename);
     const uploaded = await fetchVault(fetchImpl, base, "/api/v1/inbox/browser-upload", {
       method: "POST",
@@ -396,9 +623,12 @@ export async function captureModelPage({
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      url: pageUrl,
+      url: sourceUrl,
       title: String(title ?? "").trim() || null,
       source_kind: "browser",
+      ...(captureSource
+        ? { capture_source: validatedCaptureSource(captureSource, source.toLocaleLowerCase()) }
+        : {}),
     }),
   });
   if (!captured.ok) {

@@ -37,6 +37,7 @@ const ProfilesPage = lazyImport(() => import("@/pages/profiles"));
 const StatisticsPage = lazyImport(() => import("@/pages/statistics"));
 const SettingsPage = lazyImport(() => import("@/pages/settings"));
 const InboxPage = lazyImport(() => import("@/pages/inbox"));
+const InboxDetailPage = lazyImport(() => import("@/pages/inbox-detail"));
 const PrintersRoute = lazyImport(() => import("@/pages/printers"));
 const PrinterDetailRoute = lazyImport(() => import("@/pages/printer-detail"));
 const SharePage = lazyImport(() => import("@/pages/share"));
@@ -133,6 +134,14 @@ export const router = createBrowserRouter([
         element: (
           <RouteChunk>
             <InboxPage />
+          </RouteChunk>
+        ),
+      },
+      {
+        path: "inbox/:id",
+        element: (
+          <RouteChunk>
+            <InboxDetailPage />
           </RouteChunk>
         ),
       },

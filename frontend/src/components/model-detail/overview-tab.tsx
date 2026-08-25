@@ -6,6 +6,7 @@ import { CollectionRead, FileRead, FileRevisionUpdate, ModelRead, TagRead } from
 
 import { DropdownMenu } from "@/components/ui/dropdown-menu";
 import { useComboboxNav } from "@/lib/use-combobox-nav";
+import { safeHttpUrl } from "./source-url";
 
 import { RecommendedPrintCard } from "./recommended-print-card";
 import { Localized } from "@/components/ui/localized";
@@ -57,6 +58,7 @@ export function OverviewTab({
   onMark: (file: FileRead, patch: FileRevisionUpdate) => void;
   onAddRevision: () => void;
 }) {
+  const sourceUrl = model.source_url ? safeHttpUrl(model.source_url) : null;
   const tagShown = editor.filteredTags.slice(0, 6);
   const tagItems = [...tagShown, ...(editor.canCreate ? [editor.tagInput.trim()] : [])];
   const tagNav = useComboboxNav(editor.tagInput ? tagItems.length : 0, {
@@ -89,6 +91,15 @@ export function OverviewTab({
           onMark={onMark}
           onAddRevision={onAddRevision}
         />
+
+        {!editing && model.description && (
+          <section aria-labelledby="model-description-heading" className="space-y-1">
+            <h2 id="model-description-heading" className="text-sm font-medium">
+              Description
+            </h2>
+            <p className="whitespace-pre-wrap text-sm text-muted-foreground">{model.description}</p>
+          </section>
+        )}
 
         {editing ? (
           <div className="space-y-4">
@@ -279,9 +290,9 @@ export function OverviewTab({
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {model.source_url && (
+            {sourceUrl && (
               <a
-                href={model.source_url}
+                href={sourceUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1.5 bg-surface-container text-on-surface px-3 py-1 rounded font-mono text-xs uppercase tracking-wider hover:text-primary transition-colors"
