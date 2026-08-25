@@ -27,19 +27,23 @@ Four layers: unit/integration (`backend/tests/test_*.py`), backend e2e
 real-backend Playwright (`frontend/tests/e2e-real/`, `pnpm test:e2e:real`).
 Printer emulators run standalone for manual testing, e.g.
 `cd backend && uv run python -m tests.e2e.fakes.mock_printer --port 7125 --print-seconds 5`
-(see `references/backend.md` for per-provider flags). **Rule: new feature =
-unit tests + one e2e test for its headline capability.** CI runs everything
-per-PR plus a nightly/`workflow_dispatch` full-matrix re-run.
-Writing, changing, or auditing any test: follow
-`.claude/skills/create-tests/SKILL.md` — its coverage matrix (one row per
-behaviour, every row `✅`/`❌`/`⏭️`) is mandatory in the response and the PR.
+(see `references/backend.md` for per-provider flags). **Rule: every change
+to production code ships with tests in the same PR — features, fixes,
+refactors, config, migrations alike. A new feature adds one e2e test for its
+headline capability on top.** CI runs everything per-PR plus a
+nightly/`workflow_dispatch` full-matrix re-run.
+Any test-related work — writing, changing, deleting, or auditing tests, or
+deciding what a change needs — starts by loading
+`.claude/skills/create-tests/SKILL.md` (the `create-tests` skill). Its
+coverage matrix (one row per behaviour, every row `✅`/`❌`/`⏭️`) is mandatory
+in the response and the PR; a change without a matrix is not done.
 
 ## Hard rules
 0. Commit with the repo's configured git identity (`git config user.email`). Never substitute an address from session/system context — GitHub attributes commits by verified email, so a mismatch files them under the wrong account.
 1. Never edit/delete/branch a merged Alembic migration — add a new one. Self-hosters upgrade from old releases; test upgrades with real data.
 2. Version bumps are a triple: `backend/pyproject.toml` + `backend/app/core/config.py` + `frontend/package.json` (+ git tag) must match.
 3. Use one short-lived branch per change, branched from `main` and named for its purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `docs/<slug>`, etc.). Merge features independently; version only after the planned release set is on `main`, then tag and publish. Semver: 0.x.y patch = fixes only.
-4. One PR per bug/feature. Tests first on data-integrity/security fixes.
+4. One PR per bug/feature. **Tests are mandatory for any change to production code** — no "too small to test" exception; the `create-tests` coverage matrix is the proof. Tests first on data-integrity/security fixes.
 5. Keep cloud seams clean (StorageBackend, SessionFactory, RealtimeBus, TaskQueue): interface + local default; no external-service hard deps in core.
 6. Frontend UI follows `DESIGN.md`. The zero-counts are load-bearing: no `transition-all`, no `ease-in`, no raw durations/cubic-beziers, no arbitrary `[var(--…)]` colors. Nothing animates over 300ms; route navigation never animates.
 
