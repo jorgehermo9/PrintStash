@@ -23,6 +23,7 @@ import {
   type BrowserExtensionApi,
   type BrowserProviderAdapter,
 } from "./browser-provider-adapter.ts";
+import { browserCaptureRoute } from "./capture-routing.ts";
 
 declare const chrome: unknown;
 function requiredElement<T extends Element>(selector: string, constructor: { new (): T }): T {
@@ -458,7 +459,7 @@ function isRichProvider(source: Source): source is Exclude<Source, "Direct file"
     source === "Cults"
   );
 }
-async function readVisibleCapture() {
+async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
   if (!activePage?.id || !activePage.url || !isRichProvider(activeSource)) return null;
   const tabId = activePage.id;
   const pageUrl = activePage.url;
@@ -502,16 +503,30 @@ async function readVisibleCapture() {
   });
   const visible = results[0]?.result as VisibleCaptureResult | undefined;
   if (!visible || !Array.isArray(visible.jsonLd)) return null;
-  if (provider === "Printables" && visible.challengeDetected) {
-    throw new Error(
-      "user_file_required: Printables blocked browser capture. Attach the file manually in Pending Imports.",
-    );
-  }
-  return buildBrowserCaptureMessage({
+  const capture = buildBrowserCaptureMessage({
     provider,
     pageUrl,
     pageTitle: visible.pageTitle || activePage.title,
     jsonLd: visible.jsonLd,
+  });
+  if (provider === "Printables" && visible.challengeDetected) {
+    return {
+      ...capture,
+      state: "manual_file_required",
+      message:
+        "user_file_required: Printables blocked browser capture. Choose a downloaded file to attach it to this metadata draft.",
+      manual_file: { mapping: "user_selected_file", source_item_id: capture.source.source_item_id },
+    };
+  }
+  return capture;
+}
+
+function fallbackVisibleCapture() {
+  if (!activePage?.url || activeSource !== "Printables") return null;
+  return buildBrowserCaptureMessage({
+    provider: activeSource,
+    pageUrl: activePage.url,
+    pageTitle: activePage.title,
   });
 }
 
@@ -690,13 +705,19 @@ captureButton.addEventListener("click", async () => {
       showStatus("Selected Printables files sent to Pending Imports.", "success");
       return;
     }
-    const visibleCapture = await readVisibleCapture();
-    if (visibleCapture?.state === "manual_file_required") {
+    const visibleCapture = (await readVisibleCapture()) ?? fallbackVisibleCapture();
+    const captureRoute = browserCaptureRoute(visibleCapture);
+    if (captureRoute === "manual_file") {
+      if (!visibleCapture) throw new Error("The active tab has no normalized capture source.");
       renderManualFileSelection(visibleCapture);
-      showStatus(visibleCapture.message);
+      showStatus(
+        visibleCapture.message ||
+          "Choose a downloaded model file to attach it to this metadata draft.",
+      );
       return;
     }
-    if (activeSource === "Printables" && visibleCapture && visibleCapture.candidates.length > 0) {
+    if (captureRoute === "candidate_confirmation") {
+      if (!visibleCapture) throw new Error("The active tab has no normalized capture source.");
       renderCandidateSelection(visibleCapture);
       showStatus("Review the selected Printables files, then confirm the upload.");
       return;

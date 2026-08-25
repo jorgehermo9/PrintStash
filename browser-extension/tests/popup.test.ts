@@ -232,6 +232,35 @@ describe("popup browser adapters", () => {
     expect(element("#status").textContent).toContain("sent to Pending Imports");
   });
 
+  it("fails closed to a local Printables file when capture acquisition is unusable", async () => {
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      if (url.endsWith("/inbox")) return response({ detail: "user_file_required" }, 400);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    fakeBrowser.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([{ result: null }])
+      .mockResolvedValueOnce([{ result: { pageTitle: "3DBenchy", jsonLd: "not-an-array" } }]);
+
+    await import("../popup.ts");
+    await settle();
+    button("#capture").click();
+    for (let attempt = 0; attempt < 4; attempt += 1) await settle();
+
+    expect(element("#manual-file-panel").hidden).toBe(false);
+    expect(element("#status").textContent).toContain("Choose a downloaded Printables file");
+    expect(fetchImpl.mock.calls.some(([url]) => url.endsWith("/api/v1/inbox"))).toBe(false);
+  });
+
   it("bounds JSON-LD scripts before returning page metadata to the popup", async () => {
     await fakeBrowser.storage.local.set({
       vault: "https://prints.example.com",

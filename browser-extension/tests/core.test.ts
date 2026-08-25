@@ -12,6 +12,7 @@ import {
   parseBrowserExtensionSetup,
   verifyVaultConnection,
 } from "../core.ts";
+import { buildBrowserCaptureMessage } from "../capture-adapter.ts";
 
 function requestUrl(input: URL | RequestInfo): string {
   if (typeof input === "string") return input;
@@ -152,6 +153,44 @@ test("uses a paired browser credential for capture without legacy login fields",
   });
   assert.equal(calls.length, 1);
   assert.equal(headerValue(itemAt(calls, 0).options, "Authorization"), "Bearer device-secret");
+});
+
+test("rejects rich Printables capture before contacting the legacy inbox endpoint", async () => {
+  const calls: Array<{ url: string; options: RequestInit }> = [];
+  const captureSource = buildBrowserCaptureMessage({
+    provider: "Printables",
+    pageUrl: "https://www.printables.com/model/3161-3d-benchy/files?source-cookie=secret",
+    pageTitle: "3DBenchy",
+  }).source;
+
+  await assert.rejects(
+    captureModelPage({
+      fetchImpl: async (url, options = {}) => {
+        calls.push({ url: requestUrl(url), options });
+        return Response.json({ id: 1, state: "captured" }, { status: 202 });
+      },
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_secret",
+      accessToken: "vault-jwt",
+      pageUrl: "https://www.printables.com/model/3161-3d-benchy/files",
+      captureSource,
+    }),
+    (error: Error) => {
+      assert.match(error.message, /user_file_required/);
+      assert.match(error.message, /local file/i);
+      assert.equal(error.message.includes("psk_secret"), false);
+      assert.equal(error.message.includes("vault-jwt"), false);
+      assert.equal(error.message.includes("source-cookie"), false);
+      return true;
+    },
+  );
+
+  assert.equal(
+    calls.some(({ url }) => url.endsWith("/api/v1/inbox")),
+    false,
+  );
+  assert.equal(calls.length, 0);
 });
 
 test("recognizes supported provider pages and direct model downloads", () => {

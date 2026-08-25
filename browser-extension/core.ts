@@ -583,6 +583,11 @@ export async function captureModelPage({
   const base = normalizeVault(vault);
   const source = classifyModelPage(pageUrl);
   if (!source) throw new Error("Open a supported model page or direct model file first.");
+  if (source === "Printables" && captureSource !== undefined) {
+    throw new Error(
+      "user_file_required: Printables captures require a selected local file. Choose a downloaded Printables file before sending it to Pending Imports.",
+    );
+  }
   const hasDeviceCredential = typeof deviceCredential === "string" && deviceCredential.length > 0;
   if (!hasDeviceCredential) requireCredentials(username, apiKey);
   const sourceUrl = captureUrlForVault(pageUrl);
