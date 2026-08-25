@@ -32,7 +32,7 @@ export const PRINTABLES_LINK_MUTATION = `
 mutation ($printId: ID!, $source: DownloadSourceEnum!, $fileType: DownloadFileTypeEnum, $id: ID, $files: [DownloadFileInput!]) {
   getDownloadLink(printId: $printId, source: $source, fileType: $fileType, id: $id, files: $files) {
     ok
-    output { link files { id fileId link } }
+    output { link files { id link } }
   }
 }`;
 

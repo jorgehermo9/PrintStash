@@ -145,6 +145,7 @@ describe("Printables metadata contract", () => {
   });
 
   it("sends the exact confirmation mutation variables without auth material", async () => {
+    expect(PRINTABLES_LINK_MUTATION).not.toContain("fileId");
     const fetchImpl = vi.fn(async (_input: URL | RequestInfo, _init?: RequestInit) =>
       response({
         data: {
