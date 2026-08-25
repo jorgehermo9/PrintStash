@@ -691,6 +691,14 @@ def _cleanup_capture_slots(session: Session, row: InboxItem) -> bool:
         # later failure, rather than using a SQLite SAVEPOINT (whose release
         # can commit an otherwise rollbackable implicit transaction).
         for slot in slots:
+            lease = session.exec(
+                select(StagingLease).where(
+                    (StagingLease.capture_upload_slot_id == slot.id)
+                    | (StagingLease.capture_upload_slot_origin_id == slot.id)
+                )
+            ).first()
+            if lease is None:
+                raise ValueError("capture upload slot lease missing")
             if slot.state != CaptureUploadSlotState.UPLOADED:
                 # A crash can leave bytes published while both receipt columns
                 # are still empty. Reconcile before considering the slot safe
@@ -708,7 +716,11 @@ def _cleanup_capture_slots(session: Session, row: InboxItem) -> bool:
             # A pending request can die after writing the deterministic spool
             # but before publication. Release that exact inode before its
             # lease/slot rows are removed; replacements remain untouched.
-            if not staging_leases.remove_capture_slot_staging(session, slot_id=slot.id):
+            # The lease may already belong to the background job, in which
+            # case capture_upload_slot_id is intentionally NULL and the
+            # origin column is the only durable slot identity left. Passing
+            # the exact row avoids looking it up through the pre-import owner.
+            if not staging_leases.remove_capture_slot_staging(session, lease=lease):
                 raise ValueError("capture upload staging cleanup failed")
             receipt = _receipt_from_json(slot.receipt_json)
             if slot.state != CaptureUploadSlotState.UPLOADED:
@@ -1910,7 +1922,55 @@ def reconcile_interrupted_items() -> int:
         # Preserve every durable terminalization step: per-file results,
         # optional source cover, capture receipt cleanup, and rollback rules.
         _finish_import(item_id, job_id, get_session_factory())
+    _recover_completed_capture_cleanups()
     return len(rows)
+
+
+def _recover_completed_capture_cleanups() -> int:
+    """Finish only the durable cleanup for completed browser captures.
+
+    A process can commit the imported Model and result rows before the final
+    capture-slot cleanup transaction succeeds.  Those items must not be sent
+    through ingestion again: the imported result is already authoritative.
+    Each item gets its own transaction so an unproven cleanup rolls back all
+    lease/intent mutations and leaves the warning visible for a later retry.
+    """
+    with get_session_factory().scoped_session() as session:
+        item_ids = session.exec(
+            select(InboxItem.id).where(
+                InboxItem.state == InboxItemState.COMPLETED,
+                InboxItem.retryable.is_(True),
+                InboxItem.error_code == "capture_upload_cleanup_pending",
+            )
+        ).all()
+
+    recovered = 0
+    for item_id in item_ids:
+        if item_id is None:
+            continue
+        with get_session_factory().scoped_session() as session:
+            row = session.get(InboxItem, item_id)
+            if (
+                row is None
+                or row.state != InboxItemState.COMPLETED
+                or not row.retryable
+                or row.error_code != "capture_upload_cleanup_pending"
+            ):
+                continue
+            if not _cleanup_capture_slots(session, row):
+                session.rollback()
+                continue
+            row.error_code = None
+            row.retryable = False
+            row.updated_at = utcnow()
+            session.add(row)
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+                continue
+            recovered += 1
+    return recovered
 
 
 def _reconcile_storage_publications(session: Session, backend: StorageBackend) -> int:
