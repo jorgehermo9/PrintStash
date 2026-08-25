@@ -4,6 +4,7 @@ import {
   CAPTURE_MAX_FILE_SIZE_BYTES,
   CAPTURE_MAX_TOTAL_SIZE_BYTES,
   captureRichFiles,
+  type CaptureStageRunner,
 } from "../capture-transport.ts";
 
 describe("capture upload-slot transport", () => {
@@ -229,5 +230,59 @@ describe("capture upload-slot transport", () => {
     ]);
     expect(fetchImpl.mock.calls[1]?.[0]).toContain("slot-b");
     expect(fetchImpl.mock.calls[2]?.[0]).toContain("slot-a");
+  });
+
+  it("aborts slot creation on timeout without progressing to upload or finalize", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
+        const signal = init?.signal;
+        if (!signal) throw new Error("missing abort signal");
+        return new Promise<Response>((_resolve, reject) => {
+          if (signal.aborted) {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("The operation was aborted.", "AbortError")),
+            { once: true },
+          );
+        });
+      },
+    );
+    const runStage: CaptureStageRunner = async (_stage, operation) => {
+      const controller = new AbortController();
+      const pending = operation(controller.signal);
+      setTimeout(() => controller.abort(), 0);
+      return pending;
+    };
+    await expect(
+      captureRichFiles({
+        fetchImpl,
+        vault: "https://prints.example.com",
+        authorization: "device-secret",
+        sourceUrl: "https://www.printables.com/model/44-calibration-cube",
+        captureSource: {
+          provider: "printables",
+          canonical_url: "https://www.printables.com/model/44-calibration-cube",
+          source_item_id: "44",
+          source_revision: null,
+          adapter_version: "browser-visible-v1",
+          tags: [],
+          fields: {},
+        },
+        files: [
+          {
+            id: "44:cube.3mf",
+            file: new Blob(["mesh"]),
+            filename: "cube.3mf",
+            mediaType: "model/3mf",
+          },
+        ],
+        runStage,
+      }),
+    ).rejects.toThrow("aborted");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 });

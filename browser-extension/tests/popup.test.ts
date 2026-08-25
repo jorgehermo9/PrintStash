@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeBrowser } from "@webext-core/fake-browser";
 
 const popupHtml = await readFile("entrypoints/popup/index.html", "utf8");
@@ -42,6 +42,10 @@ async function settle() {
 }
 
 describe("popup browser adapters", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     vi.resetModules();
     fakeBrowser.reset();
@@ -64,9 +68,160 @@ describe("popup browser adapters", () => {
 
   it("shows the loaded capture protocol marker", () => {
     expect(element("#runtime-marker").textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Capture protocol v2 · browser boundary 3",
+      "Capture protocol v2 · diagnostics 4",
     );
     expect(element("#runtime-marker").hidden).toBe(false);
+  });
+
+  it("reports a safe code and falls back when Printables permission checking times out", async () => {
+    vi.stubGlobal("__PRINTSTASH_CAPTURE_TIMEOUT_MS__", 5);
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    fakeBrowser.permissions.contains = vi.fn(({ origins }: { origins: string[] }) =>
+      origins[0] === "https://api.printables.com/*"
+        ? new Promise<boolean>(() => {})
+        : Promise.resolve(true),
+    );
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      throw new Error("unexpected provider request");
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    fakeBrowser.scripting.executeScript = vi.fn().mockResolvedValue([{ result: null }]);
+
+    await import("../popup.ts");
+    await settle();
+    vi.mocked(fakeBrowser.scripting.executeScript).mockClear();
+    fetchImpl.mockClear();
+    button("#capture").click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(element("#manual-file-panel").hidden).toBe(false);
+    expect(element("#status").textContent).toContain("capture_permission_contains_timeout");
+    expect(fetchImpl.mock.calls.some(([url]) => url.includes("api.printables.com"))).toBe(false);
+    expect(fakeBrowser.scripting.executeScript).not.toHaveBeenCalled();
+  });
+
+  it("reports a safe code when visible capture execution rejects or times out", async () => {
+    vi.stubGlobal("__PRINTSTASH_CAPTURE_TIMEOUT_MS__", 5);
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      throw new Error("unexpected provider request");
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    fakeBrowser.scripting.executeScript = vi.fn().mockResolvedValue([{ result: null }]);
+    await import("../popup.ts");
+    await settle();
+    vi.mocked(fakeBrowser.scripting.executeScript).mockClear();
+    fakeBrowser.scripting.executeScript = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("provider payload https://api.printables.com/graphql/ Bearer secret-token"),
+      );
+    button("#capture").click();
+    await settle();
+
+    expect(element("#status").textContent).toContain("capture_visible_capture_failed");
+    expect(element("#status").textContent).not.toContain("secret-token");
+  });
+
+  it("reports a safe timeout code when visible capture execution hangs", async () => {
+    vi.stubGlobal("__PRINTSTASH_CAPTURE_TIMEOUT_MS__", 5);
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      throw new Error("unexpected provider request");
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    fakeBrowser.scripting.executeScript = vi.fn().mockResolvedValue([{ result: null }]);
+    await import("../popup.ts");
+    await settle();
+    vi.mocked(fakeBrowser.scripting.executeScript).mockClear();
+    vi.mocked(fakeBrowser.scripting.executeScript).mockImplementation(
+      () => new Promise<never>(() => {}),
+    );
+    button("#capture").click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(element("#status").textContent).toContain("capture_visible_capture_timeout");
+  });
+
+  it("reports provider-specific metadata stage codes without exposing provider payloads", async () => {
+    vi.stubGlobal("__PRINTSTASH_CAPTURE_TIMEOUT_MS__", 5);
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    const printablesFetch = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      if (url === "https://api.printables.com/graphql/")
+        return response({ error: "provider secret" }, 400);
+      throw new Error("unexpected request");
+    });
+    vi.stubGlobal("fetch", printablesFetch);
+    fakeBrowser.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([{ result: null }])
+      .mockResolvedValueOnce([{ result: { pageTitle: "3DBenchy", jsonLd: [] } }]);
+    await import("../popup.ts");
+    await settle();
+    button("#capture").click();
+    await settle();
+
+    expect(element("#status").textContent).toContain("printables_metadata_http");
+    expect(element("#status").textContent).not.toContain("provider secret");
+  });
+
+  it("reports MakerWorld metadata stage failures with a stable code", async () => {
+    vi.stubGlobal("__PRINTSTASH_CAPTURE_TIMEOUT_MS__", 5);
+    await fakeBrowser.storage.local.set({
+      vault: "https://prints.example.com",
+      username: "owner",
+      apiKey: "psk_vault_secret",
+    });
+    fakeBrowser.tabs.query = vi
+      .fn()
+      .mockResolvedValue([
+        { id: 42, title: "Calibration cube", url: "https://makerworld.com/en/models/1234-cube" },
+      ]);
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) return response({ status: "ok", name: "PrintStash" });
+      if (url.endsWith("/login")) return response({ access_token: "vault-jwt" });
+      if (url.endsWith("/me")) return response({ username: "owner", is_superuser: false });
+      throw new Error("unexpected MakerWorld metadata request");
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    fakeBrowser.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValueOnce([{ result: null }])
+      .mockResolvedValueOnce([{ result: { pageTitle: "Calibration cube", jsonLd: [] } }])
+      .mockResolvedValueOnce([{ result: { ok: false, code: "request_failed" } }]);
+    await import("../popup.ts");
+    await settle();
+    button("#capture").click();
+    await settle();
+    expect(element("#status").textContent).toContain("makerworld_metadata_http");
   });
 
   it("fetches Printables metadata from the extension context with narrow permission and no MAIN metadata seam", async () => {
@@ -799,6 +954,7 @@ describe("popup browser adapters", () => {
       true,
     );
     expect(element("#status").textContent).toContain("sent to Pending Imports");
+    expect(element("#status").textContent).not.toContain("code:");
   });
 
   it("enumerates MakerWorld packages, requires explicit subset confirmation, and uses fresh links plus durable slots", async () => {
@@ -947,6 +1103,7 @@ describe("popup browser adapters", () => {
     expect(createBody).not.toContain("signed-secret");
     expect(JSON.stringify(await fakeBrowser.storage.local.get())).not.toContain("signed-secret");
     expect(element("#status").textContent).toContain("MakerWorld packages sent to Pending Imports");
+    expect(element("#status").textContent).not.toContain("code:");
   });
 
   it("routes MakerWorld auth failure straight to the local-file picker without retry", async () => {

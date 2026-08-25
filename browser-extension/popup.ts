@@ -33,7 +33,12 @@ import {
   type PrintablesFailureCode,
   type PrintablesSelectedFile,
 } from "./printables-capture.ts";
-import { captureRichFiles, type BrowserCaptureFile } from "./capture-transport.ts";
+import {
+  captureRichFiles,
+  type BrowserCaptureFile,
+  type CaptureStageRunner,
+  type CaptureUploadStage,
+} from "./capture-transport.ts";
 import {
   MAKERWORLD_MAX_RESPONSE_BYTES,
   MAKERWORLD_METADATA_FIXTURE_VERSION,
@@ -120,6 +125,144 @@ let importBusy = false;
 let pendingPrintablesCapture: BrowserCaptureMessage | null = null;
 let pendingMakerWorldCapture: BrowserCaptureMessage | null = null;
 let pendingManualCapture: BrowserCaptureMessage | null = null;
+
+declare global {
+  var __PRINTSTASH_CAPTURE_TIMEOUT_MS__: number | undefined;
+}
+
+type DiagnosticCode =
+  | "capture_permission_contains_timeout"
+  | "capture_permission_request_timeout"
+  | "capture_permission_denied"
+  | "capture_visible_capture_failed"
+  | "capture_visible_capture_timeout"
+  | "printables_metadata_http"
+  | "printables_metadata_timeout"
+  | "makerworld_metadata_http"
+  | "makerworld_metadata_timeout"
+  | "capture_candidate_render_failed"
+  | "printables_links_http"
+  | "printables_links_timeout"
+  | "makerworld_links_failed"
+  | "makerworld_links_timeout"
+  | "capture_download_failed"
+  | "capture_download_timeout"
+  | "capture_vault_slot_create_failed"
+  | "capture_vault_slot_create_timeout"
+  | "capture_vault_slot_upload_failed"
+  | "capture_vault_slot_upload_timeout"
+  | "capture_vault_finalize_failed"
+  | "capture_vault_finalize_timeout"
+  | "capture_failed";
+
+type DiagnosticProvider = "Printables" | "MakerWorld";
+type DiagnosticFallbackCode = PrintablesFailureCode | MakerWorldFailureCode;
+
+class CaptureDiagnosticError extends Error {
+  constructor(
+    readonly diagnosticCode: DiagnosticCode,
+    readonly safeMessage: string,
+    readonly provider?: DiagnosticProvider,
+    readonly fallbackCode?: DiagnosticFallbackCode,
+    readonly fallbackJsonLd?: string[],
+  ) {
+    super(safeMessage);
+    this.name = "CaptureDiagnosticError";
+  }
+}
+
+const DEFAULT_CAPTURE_TIMEOUT_MS = 10_000;
+
+function captureTimeoutMs() {
+  const configured = globalThis.__PRINTSTASH_CAPTURE_TIMEOUT_MS__;
+  return typeof configured === "number" && Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_CAPTURE_TIMEOUT_MS;
+}
+
+async function runCaptureStage<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutCode: DiagnosticCode,
+  failureCode: DiagnosticCode,
+  safeMessage: string,
+  provider?: DiagnosticProvider,
+  fallbackCode?: DiagnosticFallbackCode,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const operationResult = Promise.resolve().then(() => operation(controller.signal));
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new CaptureDiagnosticError(timeoutCode, safeMessage, provider, fallbackCode));
+      }, captureTimeoutMs());
+      operationResult.then(resolve, reject);
+    });
+  } catch (error) {
+    if (error instanceof CaptureDiagnosticError) throw error;
+    throw new CaptureDiagnosticError(failureCode, safeMessage, provider, fallbackCode);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function runCaptureSyncStage<T>(
+  operation: () => T,
+  diagnosticCode: DiagnosticCode,
+  safeMessage: string,
+): T {
+  try {
+    return operation();
+  } catch {
+    throw new CaptureDiagnosticError(diagnosticCode, safeMessage);
+  }
+}
+
+function diagnosticStatus(error: unknown, fallbackMessage = "Capture could not be completed.") {
+  if (error instanceof CaptureDiagnosticError) {
+    return `${error.safeMessage} · code: ${error.diagnosticCode}`;
+  }
+  return `${fallbackMessage} · code: capture_failed`;
+}
+
+function safeCaptureMessage(error: unknown) {
+  const message = messageFrom(error);
+  if (message.startsWith("user_file_required:")) return message;
+  if (message.startsWith("Choose a downloaded") || message.startsWith("Select at least one")) {
+    return message;
+  }
+  if (
+    message.includes("while creating upload slots") ||
+    message.includes("while uploading") ||
+    message.includes("while finalizing the capture") ||
+    message.includes("capture upload")
+  ) {
+    return "PrintStash could not finish the selected file upload. Try again from Pending Imports.";
+  }
+  return "Capture could not be completed.";
+}
+
+const runVaultStage: CaptureStageRunner = (stage: CaptureUploadStage, operation) => {
+  const timeoutCode: DiagnosticCode =
+    stage === "slot_create"
+      ? "capture_vault_slot_create_timeout"
+      : stage === "slot_upload"
+        ? "capture_vault_slot_upload_timeout"
+        : "capture_vault_finalize_timeout";
+  const failureCode: DiagnosticCode =
+    stage === "slot_create"
+      ? "capture_vault_slot_create_failed"
+      : stage === "slot_upload"
+        ? "capture_vault_slot_upload_failed"
+        : "capture_vault_finalize_failed";
+  return runCaptureStage(
+    operation,
+    timeoutCode,
+    failureCode,
+    "PrintStash could not finish the selected file upload. Try again from Pending Imports.",
+  );
+};
 
 function messageFrom(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
@@ -442,12 +585,29 @@ async function ensureOriginPermission(origin: string) {
 
 async function ensureMetadataPermission(origin: string, provider: "Printables" | "MakerWorld") {
   const origins = [origin];
-  const alreadyGranted = await browser.permissions.contains({ origins }).catch(() => false);
+  const alreadyGranted = await runCaptureStage(
+    () => browser.permissions.contains({ origins }),
+    "capture_permission_contains_timeout",
+    "capture_permission_contains_timeout",
+    `Permission check for ${provider} metadata timed out. Choose a downloaded ${provider} file to attach it in Pending Imports.`,
+    provider,
+    "cors_failure",
+  );
   if (alreadyGranted) return;
-  const granted = await browser.permissions.request({ origins });
+  const granted = await runCaptureStage(
+    () => browser.permissions.request({ origins }),
+    "capture_permission_request_timeout",
+    "capture_permission_request_timeout",
+    `Permission request for ${provider} metadata timed out. Choose a downloaded ${provider} file to attach it in Pending Imports.`,
+    provider,
+    "cors_failure",
+  );
   if (!granted) {
-    throw new Error(
+    throw new CaptureDiagnosticError(
+      "capture_permission_denied",
       `user_file_required: Permission to read public ${provider} metadata was not granted. Choose a downloaded ${provider} file to attach it in Pending Imports.`,
+      provider,
+      "cors_failure",
     );
   }
 }
@@ -455,12 +615,15 @@ async function ensureMetadataPermission(origin: string, provider: "Printables" |
 async function downloadPrintablesCandidate(
   candidate: BrowserCaptureMessage["candidates"][number],
   link: string,
+  signal?: AbortSignal,
 ): Promise<BrowserCaptureFile> {
   const origin = `${new URL(link).origin}/*`;
   await ensureOriginPermission(origin);
+  if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
   const response = await fetch(link, {
     credentials: "omit",
     cache: "no-store",
+    signal,
   });
   if (!response.ok) {
     throw new Error(
@@ -479,7 +642,7 @@ async function downloadPrintablesCandidate(
       );
     }
   }
-  const file = await readBoundedPrintablesResponse(response, candidate.sizeBytes);
+  const file = await readBoundedPrintablesResponse(response, candidate.sizeBytes, signal);
   return {
     id: candidate.id,
     file,
@@ -510,17 +673,33 @@ async function resolvePrintablesLinks(
       "user_file_required: The Printables tab is unavailable. Attach a downloaded file in Pending Imports.",
     );
   }
-  const result = await requestPrintablesLinksInExtensionContext({
-    endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
-    query: PRINTABLES_LINK_MUTATION,
-    sourceItemId: capture.source.source_item_id,
-    selected,
-    maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
-  });
-  if (!result?.ok || !result.links) {
-    throw new Error(printablesFailureMessage(result?.code));
-  }
-  return result.links;
+  const sourceItemId = capture.source.source_item_id;
+  return runCaptureStage(
+    async (signal) => {
+      const result = await requestPrintablesLinksInExtensionContext({
+        endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
+        query: PRINTABLES_LINK_MUTATION,
+        sourceItemId,
+        selected,
+        maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
+        signal,
+      });
+      if (!result?.ok || !result.links) {
+        throw new CaptureDiagnosticError(
+          "printables_links_http",
+          printablesFailureMessage(result?.code),
+          "Printables",
+          result?.code,
+        );
+      }
+      return result.links;
+    },
+    "printables_links_timeout",
+    "printables_links_http",
+    "Printables could not resolve the selected files. Choose a downloaded Printables file to attach it in Pending Imports.",
+    "Printables",
+    "request_failed",
+  );
 }
 
 async function resolveMakerWorldLinks(
@@ -531,29 +710,39 @@ async function resolveMakerWorldLinks(
     throw new Error(makerWorldFailureMessage("contract_changed"));
   }
   const origin = new URL(activePage.url).origin;
-  const results = await browser.scripting.executeScript({
-    target: { tabId: activePage.id },
-    world: "MAIN",
-    func: requestMakerWorldLinksInMainWorld,
-    args: [
-      {
-        endpoint: `${origin}/api/v1/design-service/instance`,
-        selectedIds: selected.map((candidate) => candidate.id),
-        maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
-      },
-    ],
-  });
-  const result = results[0]?.result as
-    | { ok: boolean; links?: Array<{ id: string; url: string }>; code?: MakerWorldFailureCode }
-    | undefined;
-  if (!result?.ok || !result.links) throw new Error(makerWorldFailureMessage(result?.code));
-  const selectedFiles: MakerWorldPackageFile[] = selected.map((candidate) => ({
-    id: candidate.id,
-    filename: candidate.filename,
-    fileType: "other",
-    ...(candidate.sizeBytes === undefined ? {} : { sizeBytes: candidate.sizeBytes }),
-  }));
-  return validateMakerWorldResolvedLinks(selectedFiles, result.links);
+  const tabId = activePage.id;
+  return runCaptureStage(
+    async () => {
+      const results = await browser.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: requestMakerWorldLinksInMainWorld,
+        args: [
+          {
+            endpoint: `${origin}/api/v1/design-service/instance`,
+            selectedIds: selected.map((candidate) => candidate.id),
+            maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+          },
+        ],
+      });
+      const result = results[0]?.result as
+        | { ok: boolean; links?: Array<{ id: string; url: string }>; code?: MakerWorldFailureCode }
+        | undefined;
+      if (!result?.ok || !result.links) throw new Error(makerWorldFailureMessage(result?.code));
+      const selectedFiles: MakerWorldPackageFile[] = selected.map((candidate) => ({
+        id: candidate.id,
+        filename: candidate.filename,
+        fileType: "other",
+        ...(candidate.sizeBytes === undefined ? {} : { sizeBytes: candidate.sizeBytes }),
+      }));
+      return validateMakerWorldResolvedLinks(selectedFiles, result.links);
+    },
+    "makerworld_links_timeout",
+    "makerworld_links_failed",
+    "MakerWorld could not resolve the selected package. Download it normally, then attach it in Pending Imports.",
+    "MakerWorld",
+    "request_failed",
+  );
 }
 
 function isRichProvider(source: Source): source is Exclude<Source, "Direct file" | null> {
@@ -568,45 +757,52 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
   if (!activePage?.id || !activePage.url || !isRichProvider(activeSource)) return null;
   const tabId = activePage.id;
   const pageUrl = activePage.url;
+  const pageTitle = activePage.title;
   const provider = activeSource;
   try {
-    const results = await browser.scripting.executeScript({
-      target: { tabId },
-      world: "MAIN",
-      func: (limits: { maxScripts: number; maxScriptBytes: number; maxTotalBytes: number }) => {
-        const pageTitle = document.title;
-        const challengeDetected =
-          /captcha|verify you are human|access denied/i.test(document.title) ||
-          Boolean(document.querySelector('iframe[src*="challenge"], [class*="captcha"]'));
-        const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
-        const safeResult = () => ({ pageTitle, challengeDetected, jsonLd: [] });
-        if (scripts.length > limits.maxScripts) return safeResult();
+    const results = await runCaptureStage(
+      () =>
+        browser.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          func: (limits: { maxScripts: number; maxScriptBytes: number; maxTotalBytes: number }) => {
+            const pageTitle = document.title;
+            const challengeDetected =
+              /captcha|verify you are human|access denied/i.test(document.title) ||
+              Boolean(document.querySelector('iframe[src*="challenge"], [class*="captcha"]'));
+            const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
+            const safeResult = () => ({ pageTitle, challengeDetected, jsonLd: [] });
+            if (scripts.length > limits.maxScripts) return safeResult();
 
-        const encoder = new TextEncoder();
-        const jsonLd: string[] = [];
-        let totalBytes = 0;
-        for (const script of scripts) {
-          const text = script.textContent || "";
-          const scriptBytes = encoder.encode(text).byteLength;
-          if (
-            scriptBytes > limits.maxScriptBytes ||
-            totalBytes + scriptBytes > limits.maxTotalBytes
-          ) {
-            return safeResult();
-          }
-          totalBytes += scriptBytes;
-          jsonLd.push(text);
-        }
-        return { pageTitle, challengeDetected, jsonLd };
-      },
-      args: [
-        {
-          maxScripts: JSON_LD_MAX_SCRIPTS,
-          maxScriptBytes: JSON_LD_MAX_SCRIPT_BYTES,
-          maxTotalBytes: JSON_LD_MAX_TOTAL_BYTES,
-        },
-      ],
-    });
+            const encoder = new TextEncoder();
+            const jsonLd: string[] = [];
+            let totalBytes = 0;
+            for (const script of scripts) {
+              const text = script.textContent || "";
+              const scriptBytes = encoder.encode(text).byteLength;
+              if (
+                scriptBytes > limits.maxScriptBytes ||
+                totalBytes + scriptBytes > limits.maxTotalBytes
+              ) {
+                return safeResult();
+              }
+              totalBytes += scriptBytes;
+              jsonLd.push(text);
+            }
+            return { pageTitle, challengeDetected, jsonLd };
+          },
+          args: [
+            {
+              maxScripts: JSON_LD_MAX_SCRIPTS,
+              maxScriptBytes: JSON_LD_MAX_SCRIPT_BYTES,
+              maxTotalBytes: JSON_LD_MAX_TOTAL_BYTES,
+            },
+          ],
+        }),
+      "capture_visible_capture_timeout",
+      "capture_visible_capture_failed",
+      "The active page could not be read. Choose a downloaded file to attach it in Pending Imports.",
+    );
     const visible = results[0]?.result as VisibleCaptureResult | undefined;
     if (!visible || !Array.isArray(visible.jsonLd)) return fallbackVisibleCapture();
     const capture = buildBrowserCaptureMessage({
@@ -620,33 +816,52 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
       const sourceItemId = capture.source.source_item_id;
       if (!sourceItemId) return fallbackVisibleCapture("contract_changed", visible.jsonLd);
       const pageOrigin = new URL(pageUrl).origin;
-      const metadataResults = await browser.scripting.executeScript({
-        target: { tabId },
-        world: "MAIN",
-        func: requestMakerWorldMetadataInMainWorld,
-        args: [
-          {
-            endpoint: `${pageOrigin}/api/v1/design-service/design/${encodeURIComponent(sourceItemId)}`,
-            sourceItemId,
-            fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
-            maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
-          },
-        ],
-      });
-      const metadataResult = metadataResults[0]?.result as MakerWorldMetadataPageResult | undefined;
-      if (!metadataResult?.ok || !metadataResult.metadata) {
-        return fallbackVisibleCapture(metadataResult?.code, visible.jsonLd);
-      }
-      try {
-        const metadata = validateMakerWorldMetadataDto(metadataResult.metadata, sourceItemId);
-        return makerWorldCaptureFromMetadata(
-          metadata,
-          pageUrl,
-          visible.pageTitle || activePage.title,
-        );
-      } catch {
-        return fallbackVisibleCapture("contract_changed", visible.jsonLd);
-      }
+      return runCaptureStage(
+        async () => {
+          const metadataResults = await browser.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            func: requestMakerWorldMetadataInMainWorld,
+            args: [
+              {
+                endpoint: `${pageOrigin}/api/v1/design-service/design/${encodeURIComponent(sourceItemId)}`,
+                sourceItemId,
+                fixtureVersion: MAKERWORLD_METADATA_FIXTURE_VERSION,
+                maxResponseBytes: MAKERWORLD_MAX_RESPONSE_BYTES,
+              },
+            ],
+          });
+          const metadataResult = metadataResults[0]?.result as
+            | MakerWorldMetadataPageResult
+            | undefined;
+          if (!metadataResult?.ok || !metadataResult.metadata) {
+            throw new CaptureDiagnosticError(
+              "makerworld_metadata_http",
+              makerWorldFailureMessage(metadataResult?.code),
+              "MakerWorld",
+              metadataResult?.code,
+              visible.jsonLd,
+            );
+          }
+          try {
+            const metadata = validateMakerWorldMetadataDto(metadataResult.metadata, sourceItemId);
+            return makerWorldCaptureFromMetadata(metadata, pageUrl, visible.pageTitle || pageTitle);
+          } catch {
+            throw new CaptureDiagnosticError(
+              "makerworld_metadata_http",
+              makerWorldFailureMessage("contract_changed"),
+              "MakerWorld",
+              "contract_changed",
+              visible.jsonLd,
+            );
+          }
+        },
+        "makerworld_metadata_timeout",
+        "makerworld_metadata_http",
+        "MakerWorld metadata could not be read. Download the package normally, then attach it in Pending Imports.",
+        "MakerWorld",
+        "request_failed",
+      );
     }
     if (provider !== "Printables") return capture;
     if (visible.challengeDetected) {
@@ -662,22 +877,43 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
     }
     const sourceItemId = capture.source.source_item_id;
     if (!sourceItemId) return fallbackVisibleCapture("contract_changed");
-    const metadataResult = await requestPrintablesMetadataInExtensionContext({
-      endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
-      query: PRINTABLES_METADATA_QUERY,
-      sourceItemId,
-      fixtureVersion: PRINTABLES_METADATA_FIXTURE_VERSION,
-      maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
-    });
-    if (!metadataResult?.ok || !metadataResult.metadata) {
-      return fallbackVisibleCapture(metadataResult?.code, visible.jsonLd);
-    }
-    let metadata;
-    try {
-      metadata = validatePrintablesMetadataDto(metadataResult.metadata, sourceItemId);
-    } catch {
-      return fallbackVisibleCapture("contract_changed", visible.jsonLd);
-    }
+    const metadata = await runCaptureStage(
+      async (signal) => {
+        const metadataResult = await requestPrintablesMetadataInExtensionContext({
+          endpoint: PRINTABLES_GRAPHQL_ENDPOINT,
+          query: PRINTABLES_METADATA_QUERY,
+          sourceItemId,
+          fixtureVersion: PRINTABLES_METADATA_FIXTURE_VERSION,
+          maxResponseBytes: PRINTABLES_MAX_RESPONSE_BYTES,
+          signal,
+        });
+        if (!metadataResult?.ok || !metadataResult.metadata) {
+          throw new CaptureDiagnosticError(
+            "printables_metadata_http",
+            printablesFailureMessage(metadataResult?.code),
+            "Printables",
+            metadataResult?.code,
+            visible.jsonLd,
+          );
+        }
+        try {
+          return validatePrintablesMetadataDto(metadataResult.metadata, sourceItemId);
+        } catch {
+          throw new CaptureDiagnosticError(
+            "printables_metadata_http",
+            printablesFailureMessage("contract_changed"),
+            "Printables",
+            "contract_changed",
+            visible.jsonLd,
+          );
+        }
+      },
+      "printables_metadata_timeout",
+      "printables_metadata_http",
+      "Printables metadata could not be read. Choose a downloaded Printables file to attach it in Pending Imports.",
+      "Printables",
+      "request_failed",
+    );
     const enriched = buildBrowserCaptureMessage({
       provider,
       pageUrl,
@@ -706,7 +942,8 @@ async function readVisibleCapture(): Promise<BrowserCaptureMessage | null> {
             manual_file: { mapping: "user_selected_file", source_item_id: sourceItemId },
           }),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof CaptureDiagnosticError) throw error;
     return fallbackVisibleCapture("request_failed");
   }
 }
@@ -869,9 +1106,9 @@ captureButton.addEventListener("click", async () => {
       const fallback = fallbackVisibleCapture("cors_failure");
       if (fallback) {
         renderManualFileSelection(fallback);
-        showStatus(messageFrom(error), "error");
+        showStatus(diagnosticStatus(error), "error");
       } else {
-        showStatus(messageFrom(error), "error");
+        showStatus(diagnosticStatus(error), "error");
       }
       return;
     }
@@ -893,6 +1130,7 @@ captureButton.addEventListener("click", async () => {
         title: activePage?.title,
         captureSource: pendingManualCapture.source,
         files: [file],
+        runStage: runVaultStage,
       });
       const inboxUrl = `${normalizeVault(connectedConfig.vault)}/inbox`;
       clearManualFileSelection();
@@ -913,11 +1151,20 @@ captureButton.addEventListener("click", async () => {
       const links = await resolvePrintablesLinks(pendingPrintablesCapture, selected);
       const linksById = new Map(links.map((link) => [link.id, link.url]));
       const files = await Promise.all(
-        selected.map((candidate) => {
-          const link = linksById.get(candidate.id);
-          if (!link) throw new Error("Printables link mapping changed.");
-          return downloadPrintablesCandidate(candidate, link);
-        }),
+        selected.map((candidate) =>
+          runCaptureStage(
+            async (signal) => {
+              const link = linksById.get(candidate.id);
+              if (!link) throw new Error("Printables link mapping changed.");
+              return downloadPrintablesCandidate(candidate, link, signal);
+            },
+            "capture_download_timeout",
+            "capture_download_failed",
+            "The selected Printables file could not be downloaded. Attach it manually in Pending Imports.",
+            "Printables",
+            "request_failed",
+          ),
+        ),
       );
       await captureRichFiles({
         vault: connectedConfig.vault,
@@ -926,6 +1173,7 @@ captureButton.addEventListener("click", async () => {
         title: activePage?.title,
         captureSource: pendingPrintablesCapture.source,
         files,
+        runStage: runVaultStage,
       });
       const inboxUrl = `${normalizeVault(connectedConfig.vault)}/inbox`;
       clearCandidateSelection();
@@ -950,17 +1198,26 @@ captureButton.addEventListener("click", async () => {
       for (const candidate of selected) {
         const link = linksById.get(candidate.id);
         if (!link) throw new Error("MakerWorld link mapping changed.");
-        const file = await downloadMakerWorldCandidate({
-          candidate: {
-            id: candidate.id,
-            filename: candidate.filename,
-            fileType: "other",
-            ...(candidate.sizeBytes === undefined ? {} : { sizeBytes: candidate.sizeBytes }),
-          },
-          link,
-          totalBefore: totalBytes,
-          ensureOriginPermission,
-        });
+        const file = await runCaptureStage(
+          (signal) =>
+            downloadMakerWorldCandidate({
+              candidate: {
+                id: candidate.id,
+                filename: candidate.filename,
+                fileType: "other",
+                ...(candidate.sizeBytes === undefined ? {} : { sizeBytes: candidate.sizeBytes }),
+              },
+              link,
+              totalBefore: totalBytes,
+              ensureOriginPermission,
+              signal,
+            }),
+          "capture_download_timeout",
+          "capture_download_failed",
+          "The selected MakerWorld package could not be downloaded. Attach it manually in Pending Imports.",
+          "MakerWorld",
+          "request_failed",
+        );
         totalBytes += file.file.size;
         files.push(file);
       }
@@ -971,6 +1228,7 @@ captureButton.addEventListener("click", async () => {
         title: activePage?.title,
         captureSource: pendingMakerWorldCapture.source,
         files,
+        runStage: runVaultStage,
       });
       const inboxUrl = `${normalizeVault(connectedConfig.vault)}/inbox`;
       clearCandidateSelection();
@@ -992,7 +1250,11 @@ captureButton.addEventListener("click", async () => {
     }
     if (captureRoute === "candidate_confirmation") {
       if (!visibleCapture) throw new Error("The active tab has no normalized capture source.");
-      renderCandidateSelection(visibleCapture);
+      runCaptureSyncStage(
+        () => renderCandidateSelection(visibleCapture),
+        "capture_candidate_render_failed",
+        "The provider files could not be shown. Choose a downloaded file to attach it in Pending Imports.",
+      );
       showStatus(
         visibleCapture.source.provider === "makerworld"
           ? "Select MakerWorld packages, then confirm the upload."
@@ -1013,6 +1275,15 @@ captureButton.addEventListener("click", async () => {
     inboxButton.dataset.url = result.inboxUrl;
     showStatus(`Model from ${result.source} sent to Pending Imports.`, "success");
   } catch (error) {
+    if (error instanceof CaptureDiagnosticError) {
+      const fallback =
+        pendingPrintablesCapture ||
+        pendingMakerWorldCapture ||
+        (error.provider ? fallbackVisibleCapture(error.fallbackCode, error.fallbackJsonLd) : null);
+      if (fallback) renderManualFileSelection(fallback);
+      showStatus(diagnosticStatus(error), "error");
+      return;
+    }
     const message = messageFrom(error);
     if (
       (pendingPrintablesCapture || pendingMakerWorldCapture) &&
@@ -1025,7 +1296,7 @@ captureButton.addEventListener("click", async () => {
       renderManualFileSelection(capture);
       showStatus(
         message.startsWith("user_file_required")
-          ? message
+          ? safeCaptureMessage(error)
           : capture.source.provider === "makerworld"
             ? makerWorldFailureMessage("contract_changed")
             : printablesFailureMessage("contract_changed"),
@@ -1044,10 +1315,10 @@ captureButton.addEventListener("click", async () => {
       editingConnection = false;
       connectionPanel.hidden = false;
       cancelButton.hidden = true;
-      renderConnection("error", { detail: message });
+      renderConnection("error", { detail: "Reconnect PrintStash to continue importing." });
       showStatus();
     } else {
-      showStatus(message, "error");
+      showStatus(`${safeCaptureMessage(error)} · code: capture_failed`, "error");
     }
   } finally {
     importBusy = false;

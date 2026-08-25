@@ -27,7 +27,9 @@ export const JSON_LD_MAX_QUEUE = 2_048;
 export async function readBoundedMetadataResponse(
   response: Response,
   maximumBytes: number,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
   const contentLengthHeader = response.headers.get("Content-Length");
   if (contentLengthHeader !== null) {
     const contentLength = Number(contentLengthHeader);
@@ -40,8 +42,16 @@ export async function readBoundedMetadataResponse(
   const decoder = new TextDecoder();
   let total = 0;
   let body = "";
+  const abortReader = () => {
+    void reader.cancel();
+  };
+  signal?.addEventListener("abort", abortReader, { once: true });
   try {
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel();
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
       const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
@@ -53,6 +63,7 @@ export async function readBoundedMetadataResponse(
     }
     return body + decoder.decode();
   } finally {
+    signal?.removeEventListener("abort", abortReader);
     reader.releaseLock();
   }
 }

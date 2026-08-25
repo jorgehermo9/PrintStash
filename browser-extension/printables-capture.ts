@@ -109,7 +109,9 @@ export interface PrintablesLinksPageResult {
 export async function readBoundedPrintablesResponse(
   response: Response,
   expectedSize?: number,
+  signal?: AbortSignal,
 ): Promise<Blob> {
+  if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
   if (
     expectedSize !== undefined &&
     (!Number.isSafeInteger(expectedSize) ||
@@ -142,8 +144,16 @@ export async function readBoundedPrintablesResponse(
   const reader = response.body.getReader();
   const chunks: ArrayBuffer[] = [];
   let total = 0;
+  const abortReader = () => {
+    void reader.cancel();
+  };
+  signal?.addEventListener("abort", abortReader, { once: true });
   try {
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel();
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
       const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
@@ -161,6 +171,7 @@ export async function readBoundedPrintablesResponse(
       chunks.push(copy);
     }
   } finally {
+    signal?.removeEventListener("abort", abortReader);
     reader.releaseLock();
   }
   if (expectedSize !== undefined && total !== expectedSize) {
@@ -384,6 +395,7 @@ export async function requestPrintablesMetadataInExtensionContext({
   sourceItemId,
   fixtureVersion,
   maxResponseBytes,
+  signal,
 }: {
   fetchImpl?: typeof fetch;
   endpoint: string;
@@ -391,6 +403,7 @@ export async function requestPrintablesMetadataInExtensionContext({
   sourceItemId: string;
   fixtureVersion: string;
   maxResponseBytes: number;
+  signal?: AbortSignal;
 }): Promise<PrintablesMetadataPageResult> {
   if (fixtureVersion !== PRINTABLES_METADATA_FIXTURE_VERSION) {
     return { ok: false, code: "contract_changed" };
@@ -401,6 +414,7 @@ export async function requestPrintablesMetadataInExtensionContext({
       method: "POST",
       credentials: "omit",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
+      signal,
       body: JSON.stringify({ query, variables: { id: sourceItemId } }),
     });
   } catch {
@@ -412,7 +426,7 @@ export async function requestPrintablesMetadataInExtensionContext({
   if (!response.ok) return { ok: false, code: "request_failed" };
   let body: string;
   try {
-    body = await readBoundedMetadataResponse(response, maxResponseBytes);
+    body = await readBoundedMetadataResponse(response, maxResponseBytes, signal);
   } catch (error) {
     if (error instanceof Error && error.message === "response too large") {
       return { ok: false, code: "response_too_large" };
@@ -620,6 +634,7 @@ export async function requestPrintablesLinksInExtensionContext({
   sourceItemId,
   selected,
   maxResponseBytes,
+  signal,
 }: {
   fetchImpl?: typeof fetch;
   endpoint: string;
@@ -627,6 +642,7 @@ export async function requestPrintablesLinksInExtensionContext({
   sourceItemId: string;
   selected: readonly PrintablesSelectedFile[];
   maxResponseBytes: number;
+  signal?: AbortSignal;
 }): Promise<PrintablesLinksPageResult> {
   if (!selected.length) return { ok: false, code: "contract_changed" };
   let response: Response;
@@ -635,6 +651,7 @@ export async function requestPrintablesLinksInExtensionContext({
       method: "POST",
       credentials: "omit",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
+      signal,
       body: JSON.stringify({
         query,
         variables: {
@@ -653,7 +670,7 @@ export async function requestPrintablesLinksInExtensionContext({
   if (!response.ok) return { ok: false, code: "request_failed" };
   let body: string;
   try {
-    body = await readBoundedMetadataResponse(response, maxResponseBytes);
+    body = await readBoundedMetadataResponse(response, maxResponseBytes, signal);
   } catch (error) {
     if (error instanceof Error && error.message === "response too large") {
       return { ok: false, code: "response_too_large" };

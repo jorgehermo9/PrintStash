@@ -316,12 +316,14 @@ export async function requestMakerWorldMetadataInExtensionContext({
   sourceItemId,
   fixtureVersion,
   maxResponseBytes,
+  signal,
 }: {
   fetchImpl?: typeof fetch;
   endpoint: string;
   sourceItemId: string;
   fixtureVersion: string;
   maxResponseBytes: number;
+  signal?: AbortSignal;
 }): Promise<MakerWorldMetadataPageResult> {
   if (fixtureVersion !== MAKERWORLD_METADATA_FIXTURE_VERSION) {
     return { ok: false, code: "contract_changed" };
@@ -331,6 +333,7 @@ export async function requestMakerWorldMetadataInExtensionContext({
     response = await fetchImpl(endpoint, {
       credentials: "omit",
       headers: { Accept: "application/json" },
+      signal,
     });
   } catch {
     return { ok: false, code: "cors_failure" };
@@ -341,7 +344,7 @@ export async function requestMakerWorldMetadataInExtensionContext({
   if (!response.ok) return { ok: false, code: "request_failed" };
   let body: string;
   try {
-    body = await readBoundedMetadataResponse(response, maxResponseBytes);
+    body = await readBoundedMetadataResponse(response, maxResponseBytes, signal);
   } catch (error) {
     if (error instanceof Error && error.message === "response too large") {
       return { ok: false, code: "response_too_large" };
@@ -458,7 +461,9 @@ export async function readBoundedMakerWorldResponse(
   response: Response,
   expectedSize?: number,
   totalBefore = 0,
+  signal?: AbortSignal,
 ): Promise<Blob> {
+  if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
   if (
     expectedSize !== undefined &&
     (!Number.isSafeInteger(expectedSize) ||
@@ -490,8 +495,16 @@ export async function readBoundedMakerWorldResponse(
   const reader = response.body.getReader();
   const chunks: ArrayBuffer[] = [];
   let total = 0;
+  const abortReader = () => {
+    void reader.cancel();
+  };
+  signal?.addEventListener("abort", abortReader, { once: true });
   try {
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel();
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
       const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
@@ -510,6 +523,7 @@ export async function readBoundedMakerWorldResponse(
       chunks.push(copy);
     }
   } finally {
+    signal?.removeEventListener("abort", abortReader);
     reader.releaseLock();
   }
   if (expectedSize !== undefined && total !== expectedSize) {
@@ -535,12 +549,14 @@ export async function downloadMakerWorldCandidate({
   link,
   totalBefore = 0,
   ensureOriginPermission = async () => {},
+  signal,
 }: {
   fetchImpl?: typeof fetch;
   candidate: MakerWorldPackageFile;
   link: string;
   totalBefore?: number;
   ensureOriginPermission?: (origin: string) => Promise<void>;
+  signal?: AbortSignal;
 }): Promise<BrowserCaptureFile> {
   if (!safeMakerWorldDownloadUrl(link)) {
     throw new Error(
@@ -548,7 +564,12 @@ export async function downloadMakerWorldCandidate({
     );
   }
   await ensureOriginPermission(`${new URL(link).origin}/*`);
-  const response = await fetchImpl(link, { credentials: "omit", cache: "no-store" });
+  if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+  const response = await fetchImpl(link, {
+    credentials: "omit",
+    cache: "no-store",
+    signal,
+  });
   if (!response.ok) {
     throw new Error(
       "user_file_required: MakerWorld could not provide the selected package. Download it normally, then attach it in Pending Imports.",
@@ -559,7 +580,12 @@ export async function downloadMakerWorldCandidate({
       "user_file_required: MakerWorld redirected the selected package to an unsafe host. Attach it manually in Pending Imports.",
     );
   }
-  const file = await readBoundedMakerWorldResponse(response, candidate.sizeBytes, totalBefore);
+  const file = await readBoundedMakerWorldResponse(
+    response,
+    candidate.sizeBytes,
+    totalBefore,
+    signal,
+  );
   return {
     id: candidate.id,
     file,

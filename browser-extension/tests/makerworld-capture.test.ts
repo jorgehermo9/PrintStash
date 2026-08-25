@@ -519,6 +519,43 @@ describe("MakerWorld MAIN-world seams", () => {
     expect(granted).toEqual(["https://makerworld.bblmw.com/*"]);
   });
 
+  it("aborts a provider download on timeout before bytes arrive", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(
+      async (_input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
+        const signal = init?.signal;
+        if (!signal) throw new Error("missing abort signal");
+        return new Promise<Response>((_resolve, reject) => {
+          if (signal.aborted) {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("The operation was aborted.", "AbortError")),
+            { once: true },
+          );
+        });
+      },
+    );
+    const pending = downloadMakerWorldCandidate({
+      candidate: {
+        id: "instance-alt",
+        filename: "cube-alt.3mf",
+        fileType: "other",
+        sizeBytes: 4,
+      },
+      link: "https://makerworld.bblmw.com/cube-alt.3mf?signature=ephemeral",
+      fetchImpl,
+      signal: controller.signal,
+      ensureOriginPermission: async () => {},
+    });
+    setTimeout(() => controller.abort(), 0);
+    await expect(pending).rejects.toThrow("aborted");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
+
   it("caps streamed package bytes and detects changed declared sizes", async () => {
     const changed = new Response(new Uint8Array([1, 2, 3]), {
       headers: { "Content-Length": "4" },

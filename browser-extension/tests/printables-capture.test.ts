@@ -6,6 +6,7 @@ import {
   PRINTABLES_METADATA_QUERY,
   parsePrintablesMetadataResponse,
   readBoundedPrintablesResponse,
+  requestPrintablesLinksInExtensionContext,
   requestPrintablesMetadataInExtensionContext,
   requestPrintablesLinksInMainWorld,
   requestPrintablesMetadataInMainWorld,
@@ -120,6 +121,65 @@ describe("Printables metadata contract", () => {
     expect(PRINTABLES_METADATA_QUERY.replace(/\s+/g, " ").trim()).toBe(
       "query ($id: ID!) { print(id: $id) { id name license { name } stls { id name fileSize } gcodes { id name fileSize } slas { id name fileSize } otherFiles { id name fileSize } } }",
     );
+  });
+
+  it("sends the verified ModelFiles GraphQL envelope", async () => {
+    const fetchImpl = vi.fn(async (_input: URL | RequestInfo, _init?: RequestInit) =>
+      response(metadataPayload()),
+    );
+    await expect(
+      requestPrintablesMetadataInExtensionContext({
+        fetchImpl,
+        endpoint: "https://api.printables.com/graphql/",
+        query: PRINTABLES_METADATA_QUERY,
+        sourceItemId,
+        fixtureVersion: PRINTABLES_METADATA_FIXTURE_VERSION,
+        maxResponseBytes: 512 * 1024,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const request = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(request).toEqual({
+      query: PRINTABLES_METADATA_QUERY,
+      variables: { id: sourceItemId },
+    });
+  });
+
+  it("sends the exact confirmation mutation variables without auth material", async () => {
+    const fetchImpl = vi.fn(async (_input: URL | RequestInfo, _init?: RequestInit) =>
+      response({
+        data: {
+          getDownloadLink: {
+            ok: true,
+            output: {
+              files: selected.map((file) => ({
+                id: file.id,
+                link: `https://media.printables.com/${file.id}?signature=secret`,
+              })),
+            },
+          },
+        },
+      }),
+    );
+    await expect(
+      requestPrintablesLinksInExtensionContext({
+        fetchImpl,
+        endpoint: "https://api.printables.com/graphql/",
+        query: PRINTABLES_LINK_MUTATION,
+        sourceItemId,
+        selected,
+        maxResponseBytes: 512 * 1024,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const request = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(request).toEqual({
+      query: PRINTABLES_LINK_MUTATION,
+      variables: {
+        printId: sourceItemId,
+        source: "model_detail",
+        files: selectedGroups(selected),
+      },
+    });
+    expect(JSON.stringify(fetchImpl.mock.calls[0]?.[1])).not.toContain("secret");
   });
 
   it("maps the verified license name while leaving creator metadata to page JSON-LD", () => {

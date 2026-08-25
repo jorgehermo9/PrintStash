@@ -41,6 +41,12 @@ interface PreparedCaptureFile {
   role: "file" | "cover";
 }
 
+export type CaptureUploadStage = "slot_create" | "slot_upload" | "slot_finalize";
+export type CaptureStageRunner = <T>(
+  stage: CaptureUploadStage,
+  operation: (signal: AbortSignal) => Promise<T>,
+) => Promise<T>;
+
 async function sha256Hex(file: Blob): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -98,6 +104,7 @@ export async function captureRichFiles({
   captureSource,
   files,
   cover,
+  runStage,
 }: {
   fetchImpl?: typeof fetch;
   vault: string;
@@ -107,6 +114,7 @@ export async function captureRichFiles({
   captureSource: CaptureSourceDraft;
   files: BrowserCaptureFile[];
   cover?: BrowserCaptureFile;
+  runStage?: CaptureStageRunner;
 }): Promise<unknown> {
   const base = vault.replace(/\/$/, "");
   if (files.length === 0 || files.length > CAPTURE_MAX_FILES) {
@@ -134,51 +142,63 @@ export async function captureRichFiles({
     }
   }
   const uploads = preparedCover ? [...preparedFiles, preparedCover] : preparedFiles;
-  const created = await fetchImpl(`${base}/api/v1/inbox/capture-upload-slots`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${authorization}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      source_url: sourceUrl,
-      title: title || null,
-      capture_source: captureSource,
-      files: preparedFiles.map(({ declaration }) => declaration),
-      ...(preparedCover ? { cover: preparedCover.declaration } : {}),
-    }),
-  });
-  if (!created.ok)
-    throw new Error(`PrintStash returned ${created.status} while creating upload slots.`);
-  const payload = (await created.json()) as CaptureSlotResponse;
+  const createSlot = async (signal?: AbortSignal) => {
+    const created = await fetchImpl(`${base}/api/v1/inbox/capture-upload-slots`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authorization}`, "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        source_url: sourceUrl,
+        title: title || null,
+        capture_source: captureSource,
+        files: preparedFiles.map(({ declaration }) => declaration),
+        ...(preparedCover ? { cover: preparedCover.declaration } : {}),
+      }),
+    });
+    if (!created.ok)
+      throw new Error(`PrintStash returned ${created.status} while creating upload slots.`);
+    return (await created.json()) as CaptureSlotResponse;
+  };
+  const payload = await (runStage ? runStage("slot_create", createSlot) : createSlot());
   if (!payload?.item || !Array.isArray(payload.slots) || payload.slots.length !== uploads.length) {
     throw new Error("PrintStash returned invalid capture upload slots.");
   }
 
   for (const upload of uploads) {
     const slot = matchingSlot(payload.slots, upload);
-    const uploaded = await fetchImpl(
-      `${base}/api/v1/inbox/capture-upload-slots/${encodeURIComponent(slot.id)}`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${authorization}`,
-          "Content-Type": upload.declaration.media_type,
+    const uploadSlot = async (signal?: AbortSignal) => {
+      const uploaded = await fetchImpl(
+        `${base}/api/v1/inbox/capture-upload-slots/${encodeURIComponent(slot.id)}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${authorization}`,
+            "Content-Type": upload.declaration.media_type,
+          },
+          signal,
+          body: upload.file,
         },
-        body: upload.file,
-      },
-    );
-    if (!uploaded.ok)
-      throw new Error(
-        `PrintStash returned ${uploaded.status} while uploading ${upload.declaration.filename}.`,
       );
+      if (!uploaded.ok)
+        throw new Error(
+          `PrintStash returned ${uploaded.status} while uploading ${upload.declaration.filename}.`,
+        );
+    };
+    await (runStage ? runStage("slot_upload", uploadSlot) : uploadSlot());
   }
 
-  const finalized = await fetchImpl(
-    `${base}/api/v1/inbox/${payload.item.id}/capture-upload-finalize`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${authorization}` },
-    },
-  );
-  if (!finalized.ok)
-    throw new Error(`PrintStash returned ${finalized.status} while finalizing the capture.`);
-  return finalized.json();
+  const finalize = async (signal?: AbortSignal) => {
+    const finalized = await fetchImpl(
+      `${base}/api/v1/inbox/${payload.item.id}/capture-upload-finalize`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authorization}` },
+        signal,
+      },
+    );
+    if (!finalized.ok)
+      throw new Error(`PrintStash returned ${finalized.status} while finalizing the capture.`);
+    return finalized.json();
+  };
+  return runStage ? runStage("slot_finalize", finalize) : finalize();
 }
