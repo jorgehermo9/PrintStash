@@ -629,15 +629,25 @@ def test_worker_invocation_avoids_thread_unsafe_preexec_hook(
     assert "preexec_fn" not in kwargs
     assert kwargs["shell"] is False
     assert kwargs["start_new_session"] is True
+    command = calls["command"]
+    assert isinstance(command, list)
+    expected_parent_index = command.index("--expected-parent-pid")
+    assert command[expected_parent_index + 1] == str(stl_streaming.os.getpid())
 
 
 @pytest.mark.parametrize(
-    ("ppids", "prctl_result"),
-    [((4242, 4343), 0), ((4242, 1), 0), ((4242, 4242), -1)],
+    ("ppids", "expected_parent_pid", "prctl_result"),
+    [
+        ((4343, 4343), 4242, 0),
+        ((4242, 4343), 4242, 0),
+        ((4242, 1), 4242, 0),
+        ((4242, 4242), 4242, -1),
+    ],
 )
 def test_worker_rejects_pdeathsig_install_race_or_failure(
     monkeypatch: pytest.MonkeyPatch,
     ppids: tuple[int, int],
+    expected_parent_pid: int,
     prctl_result: int,
 ) -> None:
     import ctypes
@@ -662,6 +672,68 @@ def test_worker_rejects_pdeathsig_install_race_or_failure(
         stl_preview_worker._apply_worker_limits(
             address_space=512 * 1024 * 1024,
             cpu_seconds=5,
+            expected_parent_pid=expected_parent_pid,
         )
 
+    if ppids[0] == expected_parent_pid:
+        assert observed == [(1, signal.SIGKILL, 0, 0, 0)]
+    else:
+        assert observed == []
+
+
+def test_worker_accepts_legitimate_pid_one_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Container PID 1 is valid when it is the verified launching parent."""
+    import ctypes
+    import resource
+
+    from app.services import stl_preview_worker
+
+    observed: list[tuple[object, ...]] = []
+
+    class FakeLibc:
+        def prctl(self, *args: object) -> int:
+            observed.append(args)
+            return 0
+
+    ppid_values = iter((1, 1))
+    monkeypatch.setattr(stl_preview_worker.sys, "platform", "linux")
+    monkeypatch.setattr(stl_preview_worker.os, "getppid", lambda: next(ppid_values))
+    monkeypatch.setattr(resource, "setrlimit", lambda *_args: None)
+    monkeypatch.setattr(ctypes, "CDLL", lambda _name: FakeLibc())
+
+    stl_preview_worker._apply_worker_limits(
+        address_space=512 * 1024 * 1024,
+        cpu_seconds=5,
+        expected_parent_pid=1,
+    )
+
     assert observed == [(1, signal.SIGKILL, 0, 0, 0)]
+
+
+def test_worker_rejects_invalid_expected_parent_pid_before_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+    import resource
+
+    from app.services import stl_preview_worker
+
+    calls: list[str] = []
+    monkeypatch.setattr(stl_preview_worker.os, "getppid", lambda: 1)
+    monkeypatch.setattr(
+        resource,
+        "setrlimit",
+        lambda *_args: calls.append("setrlimit"),
+    )
+    monkeypatch.setattr(ctypes, "CDLL", lambda _name: calls.append("CDLL"))
+
+    with pytest.raises(stl_preview_worker._InvalidSTL, match="invalid"):
+        stl_preview_worker._apply_worker_limits(
+            address_space=512 * 1024 * 1024,
+            cpu_seconds=5,
+            expected_parent_pid=0,
+        )
+
+    assert calls == []

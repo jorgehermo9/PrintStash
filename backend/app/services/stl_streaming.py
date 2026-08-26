@@ -54,7 +54,7 @@ class STLStreamingLimits:
     max_rss_bytes: int = _DEFAULT_WORKER_RSS_BYTES
     address_space_bytes: int = _DEFAULT_WORKER_ADDRESS_SPACE_BYTES
 
-    def as_worker_args(self) -> list[str]:
+    def as_worker_args(self, *, expected_parent_pid: int) -> list[str]:
         cpu_seconds = max(int(self.hard_timeout_seconds) + 2, 5)
         return [
             "--max-triangles",
@@ -75,6 +75,8 @@ class STLStreamingLimits:
             str(self.address_space_bytes),
             "--cpu-seconds",
             str(cpu_seconds),
+            "--expected-parent-pid",
+            str(expected_parent_pid),
         ]
 
 
@@ -308,7 +310,7 @@ def render_stl_preview_isolated(
             str(manifest),
             str(int(width)),
             str(int(height)),
-            *worker_limits.as_worker_args(),
+            *worker_limits.as_worker_args(expected_parent_pid=os.getpid()),
         ]
         env = os.environ.copy()
         env.update(

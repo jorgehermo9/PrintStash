@@ -45,12 +45,16 @@ class _BudgetExceeded(_InvalidSTL):
     pass
 
 
-def _apply_worker_limits(address_space: int, cpu_seconds: int) -> None:
+def _apply_worker_limits(
+    address_space: int, cpu_seconds: int, *, expected_parent_pid: int
+) -> None:
     """Apply limits before importing NumPy/Pillow and protect parent death."""
 
+    if expected_parent_pid < 1:
+        raise _InvalidSTL("invalid expected parent pid")
     original_ppid = os.getppid()
-    if sys.platform.startswith("linux") and original_ppid == 1:
-        raise _InvalidSTL("parent exited before worker initialization")
+    if original_ppid != expected_parent_pid:
+        raise _InvalidSTL("parent does not match expected launcher")
     try:
         import resource
 
@@ -74,7 +78,7 @@ def _apply_worker_limits(address_space: int, cpu_seconds: int) -> None:
         ) as exc:  # pragma: no cover - platform dependent
             raise _InvalidSTL("could not install parent-death signal") from exc
         current_ppid = os.getppid()
-        if current_ppid == 1 or current_ppid != original_ppid:
+        if current_ppid != expected_parent_pid or current_ppid != original_ppid:
             raise _InvalidSTL("parent changed during worker initialization")
 
 
@@ -662,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", type=float, required=True)
     parser.add_argument("--address-space-bytes", type=int, required=True)
     parser.add_argument("--cpu-seconds", type=int, required=True)
+    parser.add_argument("--expected-parent-pid", type=int, required=True)
     args = parser.parse_args(argv)
     if not (
         1 <= args.width <= _MAX_RENDER_DIMENSION
@@ -690,10 +695,15 @@ def main(argv: list[str] | None = None) -> int:
         or args.address_space_bytes <= 0
         or args.address_space_bytes > _MAX_ADDRESS_SPACE_BYTES
         or args.cpu_seconds <= 0
+        or args.expected_parent_pid < 1
     ):
         return 2
     try:
-        _apply_worker_limits(args.address_space_bytes, args.cpu_seconds)
+        _apply_worker_limits(
+            args.address_space_bytes,
+            args.cpu_seconds,
+            expected_parent_pid=args.expected_parent_pid,
+        )
     except _InvalidSTL:
         return 3
     limits = _Limits(
