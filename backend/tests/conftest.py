@@ -64,31 +64,37 @@ from app.db.session import (  # noqa: E402
 )
 from app.services.printer_hub import PrinterHub  # noqa: E402
 
+_TIER_MARKERS = {"contract": "contract", "e2e": "e2e"}
+_RESOURCE_DIRS = {"postgres": "postgres"}
+_RESOURCE_ENV = {
+    "postgres": "PRINTSTASH_TEST_POSTGRES_URL",
+    "s3": "PRINTSTASH_TEST_S3_ENDPOINT",
+}
+
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Classify boundary tests so local development can select a useful tier.
+    """Mark the tiers that have their own lane, and skip what has no resource.
 
-    E2E modules already declare their marker explicitly.  Integration modules
-    follow stable path/name conventions because they exercise a real server,
-    external storage/database, or full-size fixture rather than an in-process
-    contract fake.  The default pytest invocation still collects every test.
+    The tier of a test is the directory it lives in, so the marker is derived from the
+    path — never from the filename. ``unit`` and ``integration`` get no marker at all:
+    the ``fast`` lane selects them by path, which is exact, whereas a name-shaped
+    heuristic (``*_integration.py``, ``"migration" in name``) silently mis-tiered any
+    file that did not happen to match.
+
+    ``postgres`` and ``s3`` are *resource* markers, not tiers: they gate a subset inside
+    a tier and skip themselves when the resource is absent, so a contributor with
+    neither still runs the whole suite green.
     """
     for item in items:
-        path = Path(str(item.path))
-        name = path.name
-        if "e2e" in path.parts:
-            item.add_marker(pytest.mark.e2e)
-        elif (
-            "postgres" in path.parts
-            or "migration" in name
-            or name.startswith("test_real_")
-            or name.endswith("_integration.py")
-            or name.endswith("_real.py")
-            or name.endswith("_realfiles.py")
-            or name == "test_db_session.py"
-            or name == "test_storage_s3.py"
-        ):
-            item.add_marker(pytest.mark.integration)
+        parts = Path(str(item.path)).parts
+        for directory, marker in {**_TIER_MARKERS, **_RESOURCE_DIRS}.items():
+            if directory in parts:
+                item.add_marker(getattr(pytest.mark, marker))
+        for marker, env_var in _RESOURCE_ENV.items():
+            if marker in item.keywords and not os.environ.get(env_var):
+                item.add_marker(
+                    pytest.mark.skip(reason=f"{env_var} is not set; {marker} skipped")
+                )
 
 
 # The dev shell exports a short VAULT_JWT_SECRET (e.g. "dev-jwt-secret", 14 bytes),
@@ -115,8 +121,8 @@ event.listen(_test_engine, "connect", _set_sqlite_pragmas)
 
 _test_factory = SQLiteSessionFactory(_test_engine)
 
-# A handful of e2e tests (test_prusalink_integration.py, test_octoprint_
-# integration.py, test_mock_printer_integration.py) run the *real*
+# A handful of contract tests (contract/services/test_prusalink.py,
+# test_octoprint.py, test_printer_hub.py) run the *real*
 # PrinterHub polling loop against a real mock HTTP server: it does its DB
 # writes via asyncio.to_thread worker threads, genuinely concurrently with
 # the test's own main-thread session reads. StaticPool hands every session
@@ -159,69 +165,32 @@ _init_test_db(_test_engine)
 _init_test_db(_threaded_engine)
 
 
-_TRUNCATE_TABLES_ORDER = [
-    "storage_delete_intents",
-    "staging_leases",
-    "capture_upload_slots",
-    "owned_storage_objects",
-    "inbox_item_results",
-    "artifact_provenance_links",
-    "model_source_covers",
-    "model_provenance_fields",
-    "provenance_captures",
-    "vault_audit_findings",
-    "vault_audit_runs",
-    "inbox_items",
-    "background_jobs",
-    "model_stars",
-    "saved_views",
-    "notification_deliveries",
-    "notification_channels",
-    "printer_files",
-    "printer_permissions",
-    "printer_maintenance_logs",
-    "printer_maintenance_windows",
-    "print_jobs",
-    "print_batches",
-    "printer_material_slots",
-    "printer_tools",
-    "printers",
-    "printer_profiles",
-    "filament_profiles",
-    "share_links",
-    "artifact_material_requirements",
-    "files",
-    "model_provenance_sources",
-    "model_tags",
-    "tags",
-    "metadata",
-    "models",
-    "external_libraries",
-    "documents",
-    "collection_permissions",
-    "collections",
-    "api_keys",
-    "browser_devices",
-    "browser_pairing_codes",
-    "provider_oauth_states",
-    "provider_connections",
-    "refresh_tokens",
-    "users",
-    "system_config",
-]
+def _all_table_names() -> list[str]:
+    """Every mapped table, so a new model cannot silently escape the wipe.
+
+    This used to be a hand-maintained list. ``audit_logs`` was missing from it, and
+    because ``AuditLog.user_id`` is a plain (non-cascading) FK, audit rows survived the
+    wipe and pinned recycled user ids: the next test that hard-deleted a user got
+    ``sqlite3.IntegrityError: FOREIGN KEY constraint failed``, from a row it never
+    created. Deriving the list from the metadata makes that class of leak impossible.
+    """
+    import app.db.models  # noqa: F401 — registers every table on SQLModel.metadata
+
+    # Not ``sorted_tables``: FK enforcement is off for the wipe so order is irrelevant,
+    # and sorting warns about the deliberate files<->models cycle on every call.
+    return list(SQLModel.metadata.tables)
 
 
 def _truncate_all(engine: Engine = _test_engine) -> None:
     """Truncate all tables between tests.
 
-    FK enforcement is off for the wipe: this is a teardown, not a delete path,
-    and the listed order doesn't satisfy every constraint (metadata references
-    files, which go first). Leaving it on made the DELETEs fail silently and
-    leak rows into the next test.
+    FK enforcement is off for the wipe: this is a teardown, not a delete path, and no
+    single order satisfies every constraint. Leaving it on made the DELETEs fail
+    silently and leak rows into the next test.
     """
     with engine.begin() as conn:
         conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        for table in _TRUNCATE_TABLES_ORDER:
+        for table in _all_table_names():
             try:
                 conn.exec_driver_sql(f"DELETE FROM {table}")
             except Exception:

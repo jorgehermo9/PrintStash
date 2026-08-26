@@ -1,5 +1,5 @@
 # Standalone SeaweedFS instance for the S3 storage-backend integration tests
-# (backend/tests/test_storage_s3.py). Not part of the app stack — start it,
+# (backend/tests/contract/services/test_storage_backend.py). Not part of the app stack — start it,
 # point PRINTSTASH_TEST_S3_ENDPOINT at it, run the tests, tear it down:
 #
 #   docker compose -f docker-compose.test.yml up -d

@@ -6,16 +6,11 @@ The policy (matrix, tiers, file anatomy, parametrization rules) is in
 
 ## Layout
 
-> **Migration status.** This is the target layout. The flat
-> `tests/test_<topic>.py` files and the filename-based `integration` marker
-> are legacy and are being moved wholesale (layout, `conftest.py` markers,
-> `scripts/test.sh` lanes, CI paths) in one mechanical PR. Until it lands,
-> put new tests at their target path anyway — every path below is collected
-> by `pytest tests`.
-
 ```
 backend/tests/
   conftest.py            shared fixtures: engine, app, client, auth, isolation; marker-by-directory
+  paths.py               FIXTURES_DIR / TESTDATA_DIR / ALEMBIC_INI / REPO_ROOT — never `parents[2]`
+  _guards.py             the tier guards the unit/ and integration/ conftests install
   unit/                  pure logic · no db_session/client · mirrors app/
     conftest.py          guard: taking db_session/client or opening a socket fails
     core/test_<module>.py          ↔ app/core/<module>.py
@@ -49,6 +44,12 @@ backend/tests/
   everything. CI runs `full` with the coverage gate.
 - Every directory is a package (`__init__.py`) so same-basename files in
   different tiers coexist.
+- **Never compute a path from `__file__`.** `Path(__file__).resolve().parents[2]`
+  hard-codes how deep the file sits, so it breaks the day the file moves — for a
+  reason unrelated to what it asserts. Import the anchor instead:
+  `from tests.paths import FIXTURES_DIR, TESTDATA_DIR, ALEMBIC_INI, REPO_ROOT`
+  (`printstash-core` has its own `tests/paths.py`; reach it relatively,
+  `from ..paths import FIXTURES_DIR`).
 - A production module with more behaviour than one ~600-line file can hold
   becomes a folder named after it (`integration/api/v1/printers/test_create.py`,
   `test_rbac.py`, `test_control.py`), split by endpoint/method group. The

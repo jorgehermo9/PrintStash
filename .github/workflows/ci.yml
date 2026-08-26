@@ -60,6 +60,16 @@ jobs:
       - name: Test autonomous package
         run: .venv/bin/pytest tests -q
 
+      # The backend gate measures `app/` only, so printstash_core had no floor at all
+      # and drifted to ~82%. This floor is set just under the measured baseline: it
+      # stops the drift now, and ratchets up as the P2 coverage work lands.
+      - name: Coverage floor for the autonomous package
+        if: matrix.python == '3.11' && matrix.resolution == 'highest'
+        run: |
+          .venv/bin/pip install pytest-cov
+          .venv/bin/pytest tests -q \
+            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=80
+
       - name: Lint autonomous package
         run: .venv/bin/ruff check src tests
 
@@ -176,7 +186,7 @@ jobs:
         run: uv sync --extra dev --extra async-db --frozen
 
       - name: Test optional SQLite async contracts
-        run: uv run pytest tests/test_db_session.py -v -k "async or capability"
+        run: uv run pytest tests/integration/db/test_session.py -v -k "async or capability"
 
   postgres:
     name: PostgreSQL contracts
@@ -218,7 +228,7 @@ jobs:
       - name: Test PostgreSQL migrations and critical contracts
         env:
           PRINTSTASH_TEST_POSTGRES_URL: postgresql://printstash:printstash@localhost:5432/printstash
-        run: uv run pytest tests/postgres -v
+        run: uv run pytest tests/integration/postgres -v
 
   storage-s3:
     name: Storage backend (S3/SeaweedFS)
@@ -261,7 +271,10 @@ jobs:
       - name: Test S3 storage backend + backup destination against real SeaweedFS
         env:
           PRINTSTASH_TEST_S3_ENDPOINT: http://localhost:9100
-        run: uv run pytest tests/test_storage_s3.py tests/test_backup_restore.py -v
+        run: |
+          uv run pytest -v \
+            tests/contract/services/test_storage_backend.py \
+            tests/integration/services/test_backup.py
 
   security:
     name: Security scan

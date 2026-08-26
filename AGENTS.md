@@ -55,12 +55,18 @@ the coordinator does not take over code implementation.
 - Full stack: `docker compose -f docker-compose.light.yml up` (prebuilt image — src edits need vite dev server).
 
 ## Testing
-Four layers: unit/integration (`backend/tests/test_*.py`), backend e2e
-(`backend/tests/e2e/`, real app + contract fakes under `e2e/fakes/`, part of
-`./scripts/test.sh full`), mock-API Playwright (`frontend/tests/e2e/`, `pnpm test:e2e`),
-real-backend Playwright (`frontend/tests/e2e-real/`, `pnpm test:e2e:real`).
+**The directory a test lives in is its tier**, and `backend/tests/` mirrors `app/`:
+`unit/` (pure logic, no DB and no socket — both enforced by a guard), `integration/`
+(the default: real SQLite, real routers, egress stood in for), `contract/` (our clients
+against contract-enforcing fakes over a real loopback socket), `e2e/` (the whole app
+over ASGITransport), plus `fakes/`, `fixtures/` and `repo/` (repo-level invariants).
+So `app/services/trash.py` ↔ `tests/integration/services/test_trash.py`, and "is this
+module tested?" is one `ls`. Lanes: `./scripts/test.sh fast|contract|e2e|full`
+(`--help` explains each). Then mock-API Playwright (`frontend/tests/e2e/`,
+`pnpm test:e2e`) and real-backend Playwright (`frontend/tests/e2e-real/`,
+`pnpm test:e2e:real`).
 Printer emulators run standalone for manual testing, e.g.
-`cd backend && uv run python -m tests.e2e.fakes.mock_printer --port 7125 --print-seconds 5`
+`cd backend && uv run python -m tests.fakes.mock_printer --port 7125 --print-seconds 5`
 (see `references/backend.md` for per-provider flags). **Rule: every change
 to production code ships with tests in the same PR — features, fixes,
 refactors, config, migrations alike. A new feature adds one e2e test for its

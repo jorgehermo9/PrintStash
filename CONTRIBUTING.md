@@ -78,18 +78,24 @@ Compare the `PRINTSTASH_PERF` JSON emitted by the two browser timing commands.
 Do not enable React Compiler by default based on build time alone: first triage
 its unsupported diagnostics and require a repeatable interaction-time win.
 
-The backend suite is split into explicit development lanes. All parallel lanes
-use isolated worker databases/storage and xdist work stealing:
+The backend suite is split into lanes, and a lane is a directory: the tier a test
+lives in *is* its tier. All parallel lanes use isolated worker databases/storage
+and xdist work stealing:
 
 ```bash
 cd backend
-./scripts/test.sh fast -q         # usual loop; no service/schema boundaries, real files, or E2E
+./scripts/test.sh --help          # the lane table, with what each one covers
+./scripts/test.sh fast -q         # usual loop: tests/unit + tests/integration, minus `slow`
 ./scripts/test.sh affected -q     # dependency-based selection; first run seeds its cache
-./scripts/test.sh integration -q  # real servers, stores, databases, and large fixtures
-./scripts/test.sh e2e -q          # real app against contract-enforcing fakes
+./scripts/test.sh contract -q     # our clients against fakes over a real loopback socket
+./scripts/test.sh e2e -q          # the whole app over ASGITransport against the fakes
 ./scripts/test.sh full -q         # complete pre-merge gate
 ./scripts/test.sh serial -q       # diagnostic reference only
 ```
+
+Subsets that need a real service skip themselves unless you configure one:
+`PRINTSTASH_TEST_POSTGRES_URL` for the `postgres` cases,
+`PRINTSTASH_TEST_S3_ENDPOINT` for the `s3` ones.
 
 `affected` stores only local dependency metadata in the ignored `.testmondata`
 file. Treat it as a tight edit/test loop, not a substitute for `full`. Generic

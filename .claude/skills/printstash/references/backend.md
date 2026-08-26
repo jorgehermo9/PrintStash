@@ -52,7 +52,7 @@ Files in `backend/alembic/versions/`, named `<rev>_snake_description.py`
       (e.g. `e8d1c5b3a7f2_backfill_recommended_gcode.py`,
       `b2d8f6a1c94e_repair_orphan_fk_rows.py`).
 - [ ] Test the upgrade path with real data: previous-release DB →
-      `alembic upgrade head` → app boots (`tests/test_migrations.py` +
+      `alembic upgrade head` → app boots (`tests/integration/db/migrations/` +
       CI migration-upgrade job cover the basics).
 
 ## Testing expectations
@@ -70,12 +70,20 @@ Files in `backend/alembic/versions/`, named `<rev>_snake_description.py`
 
 ### Test layers
 
-Four layers, each with its own home:
+The directory is the tier, and `backend/tests/` mirrors `app/`. Full conventions
+live in the `create-tests` skill; the homes are:
 
-- **Unit / integration** — `backend/tests/test_<concern>.py`. Per-concern
-  files; provider integration packs are `tests/test_<provider>_integration.py`.
+- **Unit** — `backend/tests/unit/<app path>/test_<module>.py`. Pure logic. A
+  conftest guard fails any test here that asks for `db_session`/`client` or opens
+  a socket.
+- **Integration** (the default) — `backend/tests/integration/<app path>/`. Real
+  SQLite with the production pragmas, real routers, real storage; only egress is
+  stood in for, and a socket guard enforces that.
+- **Contract** — `backend/tests/contract/<app path>/`. Our clients against
+  contract-enforcing fakes over a real loopback socket. Faults come from the
+  fake's own flags, never from patching.
 - **Backend e2e** — `backend/tests/e2e/`. Boots the real app and drives full
-  flows against contract-enforcing fakes under `tests/e2e/fakes/` (printer
+  flows against contract-enforcing fakes under `tests/fakes/` (printer
   emulators, `mock_oidc_provider.py`). Part of `pytest tests` since it's a
   subdirectory; no separate command. Fakes share a wall-clock `print_sim.py`
   so no real hardware or background tasks are needed.
@@ -91,9 +99,9 @@ each file's docstring for its exact flags — they differ per provider):
 
 ```bash
 cd backend
-uv run python -m tests.e2e.fakes.mock_printer   --port 7125 --print-seconds 5   # Moonraker + Spoolman
-uv run python -m tests.e2e.fakes.mock_prusalink --port 8080 --auth-mode api_key --api-key secret
-uv run python -m tests.e2e.fakes.mock_octoprint --port 5000 --print-seconds 5
+uv run python -m tests.fakes.mock_printer   --port 7125 --print-seconds 5   # Moonraker + Spoolman
+uv run python -m tests.fakes.mock_prusalink --port 8080 --auth-mode api_key --api-key secret
+uv run python -m tests.fakes.mock_octoprint --port 5000 --print-seconds 5
 ```
 
 Bambu's MQTT/FTPS protocol fakes run in-process and verify credentials, TLS,

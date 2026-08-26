@@ -75,11 +75,12 @@ pnpm test:e2e:real
 
 ## Optional database and storage contracts
 
-- Run `tests/postgres` with `PRINTSTASH_TEST_POSTGRES_URL` against PostgreSQL
-  16 through Psycopg 3.
+- Run `tests/integration/postgres` with `PRINTSTASH_TEST_POSTGRES_URL` against
+  PostgreSQL 16 through Psycopg 3.
 - Run the async database contract once without extras (explicit capability
   error) and once with `--extra async-db` for SQLite async.
-- Run `tests/test_storage_s3.py` against the pinned SeaweedFS service.
+- Run `tests/contract/services/test_storage_backend.py` with
+  `PRINTSTASH_TEST_S3_ENDPOINT` against the pinned SeaweedFS service.
 - Run `./scripts/test_minio_migration.sh`; it verifies normal, Unicode, and
   multipart objects twice with downloaded-content comparison.
 
