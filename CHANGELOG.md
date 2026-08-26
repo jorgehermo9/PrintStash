@@ -27,6 +27,13 @@
 
 ### Changed
 
+- **Dense STL previews preserve surface coverage.** Oversized binary and ASCII
+  meshes now use an isolated, bounded two-pass streaming renderer before the
+  deterministic sampled fallback, keeping previews coherent without loading the
+  full mesh into API memory ([#67](https://github.com/xiao-villamor/PrintStash/issues/67)).
+- **Embedded 3MF previews take precedence.** Valid slicer-provided PNG previews
+  bypass mesh regeneration, while invalid or oversized candidates are skipped
+  safely in favour of the next bounded candidate.
 - **Frontend toolchain moved to oxc.** ESLint and `typescript-eslint` are
   replaced by [oxlint](https://oxc.rs), formatting is now enforced by
   [oxfmt](https://oxc.rs) (the frontend was previously unformatted), and

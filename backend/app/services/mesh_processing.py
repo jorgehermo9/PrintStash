@@ -6,7 +6,8 @@ trimesh object directly.
 
 The software thumbnail rasteriser lives in `mesh_render` and is re-exposed
 here as `render_thumbnail` for backwards compatibility. Ingestion uses
-`analyze_mesh`, which loads the mesh once for both geometry and thumbnail.
+`analyze_mesh`, which loads the mesh once for both geometry and thumbnail when
+safe; oversized STL files use the isolated streaming renderer instead.
 """
 
 from __future__ import annotations
@@ -22,18 +23,21 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 import zipfile
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import mesh_render, stl_fallback
+from app.services import mesh_render, stl_fallback, stl_streaming
 
 logger = get_logger(__name__)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _MAX_3MF_THUMBNAIL_BYTES = 32 * 1024 * 1024
+_MAX_3MF_THUMBNAIL_CANDIDATES = 64
+_MAX_3MF_THUMBNAIL_AGGREGATE_BYTES = 64 * 1024 * 1024
 
 
 class FallbackThumbnail(bytes):
@@ -506,45 +510,100 @@ def _geometry_from_mesh(mesh) -> Dict[str, Optional[float]]:
     return out
 
 
-def extract_embedded_3mf_thumbnail(path: Path) -> Optional[bytes]:
+def extract_embedded_3mf_thumbnail(
+    path: Path, *, validate_image: bool = False
+) -> Optional[bytes]:
     """Return the largest PNG preview embedded in a 3MF archive, or None.
 
     3MF files are ZIP archives; slicers store a rendered plate preview next to
     the mesh. Using it skips the software rasteriser entirely and matches what
-    the user saw in the slicer.
+    the user saw in the slicer. ``validate_image`` additionally decodes the
+    candidate with Pillow before it is selected for the early thumbnail path;
+    the default remains permissive for callers that only need a bounded raw
+    archive read, while persistence still validates through ``thumbnail.to_webp``.
     """
     if path.suffix.lower() != ".3mf":
         return None
     try:
         with zipfile.ZipFile(path) as zf:
-            candidates = [
-                info
-                for info in zf.infolist()
-                if info.filename.lower().lstrip("/").startswith(_3MF_THUMBNAIL_DIRS)
-                and info.filename.lower().endswith(".png")
-                and info.file_size > 0
-            ]
+            candidates = []
+            for info in zf.infolist():
+                if not (
+                    info.filename.lower().lstrip("/").startswith(_3MF_THUMBNAIL_DIRS)
+                    and info.filename.lower().endswith(".png")
+                    and info.file_size > 0
+                ):
+                    continue
+                candidates.append(info)
+                if len(candidates) > _MAX_3MF_THUMBNAIL_CANDIDATES:
+                    logger.warning(
+                        "mesh_processing: embedded 3MF thumbnail candidate limit exceeded",
+                        extra={"count": len(candidates)},
+                    )
+                    return None
             if not candidates:
                 return None
-            best = max(candidates, key=lambda info: info.file_size)
-            if best.file_size > _MAX_3MF_THUMBNAIL_BYTES:
-                logger.warning(
-                    "mesh_processing: embedded 3MF thumbnail exceeds limit",
-                    extra={"entry": best.filename, "size": best.file_size},
-                )
-                return None
-            with zf.open(best) as source:
-                data = source.read(_MAX_3MF_THUMBNAIL_BYTES + 1)
-            if len(data) > _MAX_3MF_THUMBNAIL_BYTES:
-                return None
-            if data.startswith(_PNG_MAGIC):
+            candidates.sort(key=lambda info: info.file_size, reverse=True)
+            aggregate_bytes = 0
+            for candidate in candidates:
+                if candidate.file_size > _MAX_3MF_THUMBNAIL_BYTES:
+                    logger.warning(
+                        "mesh_processing: embedded 3MF thumbnail exceeds limit",
+                        extra={
+                            "entry": candidate.filename,
+                            "size": candidate.file_size,
+                        },
+                    )
+                    continue
+                remaining = _MAX_3MF_THUMBNAIL_AGGREGATE_BYTES - aggregate_bytes
+                if candidate.file_size > remaining:
+                    logger.warning(
+                        "mesh_processing: embedded 3MF thumbnail aggregate limit reached",
+                        extra={"entry": candidate.filename},
+                    )
+                    continue
+                try:
+                    with zf.open(candidate) as source:
+                        data = source.read(candidate.file_size + 1)
+                except (OSError, RuntimeError, zipfile.BadZipFile):
+                    logger.warning(
+                        "mesh_processing: embedded 3MF thumbnail candidate is unreadable",
+                        extra={"entry": candidate.filename},
+                    )
+                    continue
+                aggregate_bytes += len(data)
+                if len(data) != candidate.file_size or not data.startswith(_PNG_MAGIC):
+                    continue
                 if len(data) >= 24 and data[12:16] == b"IHDR":
-                    png_width, png_height = struct.unpack(">II", data[16:24])
+                    try:
+                        png_width, png_height = struct.unpack(">II", data[16:24])
+                    except struct.error:
+                        continue
                     if png_width * png_height > 25_000_000:
-                        return None
+                        continue
+                elif validate_image:
+                    continue
+                if validate_image:
+                    try:
+                        from PIL import Image
+
+                        with warnings.catch_warnings():
+                            warnings.simplefilter(
+                                "error", Image.DecompressionBombWarning
+                            )
+                            with Image.open(io.BytesIO(data)) as preview:
+                                if preview.format != "PNG":
+                                    continue
+                                preview.load()
+                    except Exception:  # noqa: BLE001 - hostile image input
+                        logger.warning(
+                            "mesh_processing: embedded 3MF thumbnail is invalid",
+                            extra={"entry": candidate.filename},
+                        )
+                        continue
                 logger.info(
                     "mesh_processing: using embedded 3MF thumbnail %s (%d bytes)",
-                    best.filename,
+                    candidate.filename,
                     len(data),
                 )
                 return data
@@ -582,24 +641,28 @@ def analyze_mesh(
     # Too dense to load safely — skip it rather than risk an OOM kill (#24).
     # The file is still indexed; a large 3MF still gets its embedded preview below.
     over_cap = _exceeds_cap(path)
-
     # One concurrency gate around the whole load+render so a bulk upload's
     # background tasks don't collectively OOM the box (#29). The body is cheap
     # when the mesh is skipped (over cap), so holding the gate then is harmless.
     with _render_semaphore():
+        embedded_preview = (
+            extract_embedded_3mf_thumbnail(path, validate_image=True)
+            if path.suffix.lower() == ".3mf"
+            and (not over_cap or settings.use_embedded_3mf_preview_for_large_files)
+            else None
+        )
         mesh = None if over_cap else _load_mesh(path)
 
         _report("extracting_geometry")
         geometry = _geometry_from_mesh(mesh)
 
         _report("rendering_thumbnail")
-        # Render in-house first so every model card shares one look — same
-        # blue-grey shading, same centred framing, same transparent background.
-        # Slicer-embedded previews (orange G-code plate renders, off-centre 3MF
-        # plate shots) are visually inconsistent, so they're only a fallback for
-        # when the software rasteriser can't render the geometry.
-        thumb: Optional[bytes] = None
-        if mesh is not None and len(mesh.faces) > cap:
+        # Prefer a valid slicer-provided preview. It avoids a second raster pass
+        # (and preserves the user's plate image) while the bounded mesh load can
+        # still provide geometry metadata. STL has no standard embedded preview,
+        # so it continues through the in-house renderer/fallback below.
+        thumb: Optional[bytes] = embedded_preview
+        if thumb is None and mesh is not None and len(mesh.faces) > cap:
             # Backstop: the estimate missed (unknown format / bad header) but the
             # loaded mesh is over budget — keep the cheap geometry, skip the render.
             logger.warning(
@@ -608,10 +671,17 @@ def analyze_mesh(
                 len(mesh.faces),
                 cap,
             )
-        elif mesh is not None:
-            thumb = mesh_render.render_mesh_thumbnail(
-                mesh, path.name, width=width, height=height
-            )
+        elif thumb is None and mesh is not None:
+            try:
+                thumb = mesh_render.render_mesh_thumbnail(
+                    mesh, path.name, width=width, height=height
+                )
+            except Exception:  # noqa: BLE001 - stream/fallback must still run
+                logger.exception(
+                    "mesh_processing: normal thumbnail render failed for %s",
+                    path.name,
+                )
+                thumb = None
         if thumb is None and (
             not over_cap or settings.use_embedded_3mf_preview_for_large_files
         ):
@@ -619,7 +689,44 @@ def analyze_mesh(
             # before loading because it's too large, this preview is the only
             # source — and for a large 3MF it lets us avoid trimesh's costly XML
             # parse entirely — so that path is gated on the large-3MF flag.
-            thumb = extract_embedded_3mf_thumbnail(path)
+            thumb = extract_embedded_3mf_thumbnail(path, validate_image=True)
+        # Streaming is the oversized path. If a tiny/unknown file cannot be
+        # loaded, retain the existing sampled fallback (including its explicit
+        # incomplete metadata semantics); a failed small-file load is not a
+        # reason to pay for a second full source pass.
+        if (
+            thumb is None
+            and path.suffix.lower() == ".stl"
+            and (over_cap or mesh is not None)
+        ):
+            # Geometry has already been copied into plain metadata. Release a
+            # loaded mesh before starting the isolated worker so a failed normal
+            # render cannot make the API hold the full mesh and the worker's
+            # bounded buffers at the same time.
+            if mesh is not None:
+                del mesh
+                mesh = None
+                _reclaim_memory()
+            streamed = stl_streaming.render_stl_preview_isolated(
+                path, width=width, height=height
+            )
+            if streamed is not None:
+                thumb = FallbackThumbnail(streamed.png, complete=True)
+                if geometry["triangle_count"] is None:
+                    geometry.update(
+                        {
+                            "bbox_x_mm": round(
+                                streamed.bounds_max[0] - streamed.bounds_min[0], 2
+                            ),
+                            "bbox_y_mm": round(
+                                streamed.bounds_max[1] - streamed.bounds_min[1], 2
+                            ),
+                            "bbox_z_mm": round(
+                                streamed.bounds_max[2] - streamed.bounds_min[2], 2
+                            ),
+                            "triangle_count": streamed.triangle_count,
+                        }
+                    )
         if thumb is None and path.suffix.lower() == ".stl":
             fallback = stl_fallback.render_stl_thumbnail(
                 path, width=width, height=height
@@ -676,23 +783,46 @@ def render_thumbnail(
     cap = settings.mesh_max_render_triangles
     over_cap = _exceeds_cap(path)
     with _render_semaphore():
+        embedded_preview = (
+            extract_embedded_3mf_thumbnail(path, validate_image=True)
+            if path.suffix.lower() == ".3mf"
+            and (not over_cap or settings.use_embedded_3mf_preview_for_large_files)
+            else None
+        )
+        if embedded_preview is not None:
+            return embedded_preview
         mesh = None if over_cap else _load_mesh(path)
         try:
-            # Prefer the in-house render for a consistent look across all cards;
-            # fall back to the slicer-embedded preview only when rendering fails
-            # or is skipped. The over-cap embedded fallback is gated on the
-            # large-3MF flag (consistent with analyze_mesh).
+            # A valid embedded 3MF preview is the canonical source for this
+            # thumbnail. This check occurs after the cap decision but before any
+            # mesh rasterization, so large archives never pay the render cost.
             if mesh is not None and len(mesh.faces) <= cap:
-                thumb = mesh_render.render_mesh_thumbnail(
-                    mesh, path.name, width=width, height=height
-                )
+                try:
+                    thumb = mesh_render.render_mesh_thumbnail(
+                        mesh, path.name, width=width, height=height
+                    )
+                except Exception:  # noqa: BLE001 - stream/fallback must still run
+                    logger.exception(
+                        "mesh_processing: normal thumbnail render failed for %s",
+                        path.name,
+                    )
+                    thumb = None
                 if thumb is not None:
                     return thumb
             if not over_cap or settings.use_embedded_3mf_preview_for_large_files:
-                embedded = extract_embedded_3mf_thumbnail(path)
+                embedded = extract_embedded_3mf_thumbnail(path, validate_image=True)
                 if embedded is not None:
                     return embedded
-            if path.suffix.lower() == ".stl":
+            if path.suffix.lower() == ".stl" and (over_cap or mesh is not None):
+                if mesh is not None:
+                    del mesh
+                    mesh = None
+                    _reclaim_memory()
+                streamed = stl_streaming.render_stl_preview_isolated(
+                    path, width=width, height=height
+                )
+                if streamed is not None:
+                    return FallbackThumbnail(streamed.png, complete=True)
                 fallback = stl_fallback.render_stl_thumbnail(
                     path, width=width, height=height
                 )

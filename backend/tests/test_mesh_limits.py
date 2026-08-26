@@ -147,6 +147,162 @@ def _write_annular_binary_stl(path: Path, segments: int = 96) -> None:
             )
 
 
+def _write_microfaceted_surface_stl(
+    path: Path, columns: int = 420, rows: int = 420
+) -> int:
+    """Write a connected, densely tessellated non-planar surface.
+
+    The surface is intentionally much wider than an individual facet at
+    thumbnail scale.  This is a small public stand-in for large microfaceted
+    solids: a bounded facet sample contains real geometry, but the true
+    projected area of each sampled facet is too small to hit a pixel reliably.
+    """
+    record = struct.Struct("<12fH")
+    triangles = 2 * columns * rows
+
+    def surface_z(x: float, y: float) -> float:
+        return 4.0 * math.sin(x / 17.0) * math.cos(y / 19.0)
+
+    with path.open("wb") as fh:
+        fh.write(b"microfaceted-regression".ljust(80, b"\x00"))
+        fh.write(struct.pack("<I", triangles))
+        for row in range(rows):
+            y0 = float(row)
+            y1 = float(row + 1)
+            for column in range(columns):
+                x0 = float(column)
+                x1 = float(column + 1)
+                z00 = surface_z(x0, y0)
+                z10 = surface_z(x1, y0)
+                z11 = surface_z(x1, y1)
+                z01 = surface_z(x0, y1)
+                fh.write(
+                    record.pack(
+                        0.0,
+                        0.0,
+                        1.0,
+                        x0,
+                        y0,
+                        z00,
+                        x1,
+                        y0,
+                        z10,
+                        x1,
+                        y1,
+                        z11,
+                        0,
+                    )
+                )
+                fh.write(
+                    record.pack(
+                        0.0,
+                        0.0,
+                        1.0,
+                        x0,
+                        y0,
+                        z00,
+                        x1,
+                        y1,
+                        z11,
+                        x0,
+                        y1,
+                        z01,
+                        0,
+                    )
+                )
+    return triangles
+
+
+def _write_microfaceted_annular_stl(
+    path: Path, segments: int = 512, radial_steps: int = 8
+) -> int:
+    """Write a densely tessellated annulus with a real center hole."""
+    record = struct.Struct("<12fH")
+    outer, inner = 10.0, 4.0
+    top, bottom = 0.5, -0.5
+    triangles: list[tuple[tuple[float, float, float], ...]] = []
+
+    def point(radius: float, index: int, z: float) -> tuple[float, float, float]:
+        angle = 2.0 * math.pi * index / segments
+        return (radius * math.cos(angle), radius * math.sin(angle), z)
+
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        for step in range(radial_steps):
+            outer0 = outer - (outer - inner) * step / radial_steps
+            outer1 = outer - (outer - inner) * (step + 1) / radial_steps
+            ot0, ot1 = point(outer0, index, top), point(outer0, next_index, top)
+            it0, it1 = point(outer1, index, top), point(outer1, next_index, top)
+            ob0, ob1 = point(outer0, index, bottom), point(outer0, next_index, bottom)
+            ib0, ib1 = point(outer1, index, bottom), point(outer1, next_index, bottom)
+            triangles.extend(
+                [
+                    (ot0, ot1, it1),
+                    (ot0, it1, it0),
+                    (ob0, ib1, ob1),
+                    (ob0, ib0, ib1),
+                ]
+            )
+        ot0, ot1 = point(outer, index, top), point(outer, next_index, top)
+        ob0, ob1 = point(outer, index, bottom), point(outer, next_index, bottom)
+        it0, it1 = point(inner, index, top), point(inner, next_index, top)
+        ib0, ib1 = point(inner, index, bottom), point(inner, next_index, bottom)
+        triangles.extend(
+            [
+                (ot0, ob1, ot1),
+                (ot0, ob0, ob1),
+                (it0, it1, ib1),
+                (it0, ib1, ib0),
+            ]
+        )
+
+    with path.open("wb") as fh:
+        fh.write(b"microfaceted-annulus".ljust(80, b"\x00"))
+        fh.write(struct.pack("<I", len(triangles)))
+        for first, second, third in triangles:
+            fh.write(record.pack(0.0, 0.0, 1.0, *first, *second, *third, 0))
+    return len(triangles)
+
+
+def _largest_component_fraction(mask: np.ndarray) -> float:
+    visible = int(mask.sum())
+    if visible == 0:
+        return 0.0
+    visited = np.zeros(mask.shape, dtype=bool)
+    largest = 0
+    height, width = mask.shape
+    for y, x in zip(*np.where(mask), strict=True):
+        if visited[y, x]:
+            continue
+        visited[y, x] = True
+        stack = [(int(y), int(x))]
+        size = 0
+        while stack:
+            current_y, current_x = stack.pop()
+            size += 1
+            for delta_y in (-1, 0, 1):
+                for delta_x in (-1, 0, 1):
+                    next_y, next_x = current_y + delta_y, current_x + delta_x
+                    if (
+                        0 <= next_y < height
+                        and 0 <= next_x < width
+                        and mask[next_y, next_x]
+                        and not visited[next_y, next_x]
+                    ):
+                        visited[next_y, next_x] = True
+                        stack.append((next_y, next_x))
+        largest = max(largest, size)
+    return largest / visible
+
+
+def _valid_preview_png(color: tuple[int, int, int] = (16, 192, 224)) -> bytes:
+    from PIL import Image
+
+    output = io.BytesIO()
+    Image.new("RGB", (32, 24), color).save(output, format="PNG")
+    return output.getvalue()
+
+
 def _fake_mesh(num_faces: int):
     return SimpleNamespace(
         vertices=np.zeros((3, 3), dtype=np.float64),
@@ -269,6 +425,32 @@ def test_stl_fallback_dense_fixture_has_a_coherent_silhouette(
     assert float(shaded.std()) > 10.0  # lighting still provides useful contrast
 
 
+def test_stl_fallback_microfacets_keep_connected_surface_coverage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Sub-pixel sampled facets must still produce a connected preview."""
+    from PIL import Image
+
+    from app.services import stl_fallback
+
+    monkeypatch.setattr(stl_fallback, "_MAX_SAMPLED_TRIANGLES", 10_000)
+    path = tmp_path / "issue-67-connected-microfacets.stl"
+    triangle_count = _write_microfaceted_surface_stl(path)
+    result = stl_fallback.render_stl_thumbnail(path, width=96, height=72)
+
+    assert result is not None
+    assert result.triangle_count == triangle_count
+    assert result.sampled_triangles == stl_fallback._MAX_SAMPLED_TRIANGLES
+    pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
+    visible = pixels[:, :, 3] > 20
+    ys, xs = np.where(visible)
+    assert visible.mean() >= 0.08
+    assert np.ptp(xs) + 1 > pixels.shape[1] * 0.5
+    assert np.ptp(ys) + 1 > pixels.shape[0] * 0.5
+    bbox_area = (np.ptp(xs) + 1) * (np.ptp(ys) + 1)
+    assert float(visible.sum() / bbox_area) >= 0.65
+
+
 def test_stl_fallback_work_budget_is_observable(tmp_path: Path, monkeypatch) -> None:
     from app.services import mesh_render, stl_fallback
 
@@ -293,20 +475,22 @@ def test_stl_fallback_work_budget_is_observable(tmp_path: Path, monkeypatch) -> 
     assert result.sampled_triangles == 32
     assert result.parsed_triangles == 32
     assert result.scanned_bytes <= 84 + (32 * 50)
-    assert calls and sum(calls) <= 32
+    # Incomplete samples retain all source triangles and add one centroid-splat
+    # triangle per source facet. Both paths stay bounded by the sample cap.
+    assert calls and 32 <= sum(calls) <= 2 * 32
 
 
 def test_stl_fallback_global_candidate_budget_for_large_facets(tmp_path: Path) -> None:
     from app.services import stl_fallback
 
     path = tmp_path / "large-projected.stl"
-    _write_large_projected_binary_stl(path, 100_000)
+    _write_large_projected_binary_stl(path, 100_001)
 
     result = stl_fallback.render_stl_thumbnail(path, width=64, height=48)
 
     assert result is not None
     assert result.sampled_triangles == 100_000
-    assert result.raster_candidates <= stl_fallback._MAX_COVERAGE_CANDIDATES
+    assert result.raster_candidates == stl_fallback._MAX_COVERAGE_CANDIDATES
 
 
 def test_stl_fallback_rasterises_real_area_and_preserves_hole(tmp_path: Path) -> None:
@@ -343,6 +527,30 @@ def test_incomplete_annular_sample_still_preserves_hole(
     assert result.complete is False
     pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
     assert pixels[pixels.shape[0] // 2, pixels.shape[1] // 2, 3] < 32
+
+
+def test_dense_microfaceted_annulus_keeps_hole_and_connected_coverage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from PIL import Image
+
+    from app.services import stl_fallback
+
+    monkeypatch.setattr(stl_fallback, "_MAX_SAMPLED_TRIANGLES", 768)
+    path = tmp_path / "dense-microfaceted-annulus.stl"
+    triangle_count = _write_microfaceted_annular_stl(path)
+    result = stl_fallback.render_stl_thumbnail(path, width=160, height=120)
+
+    assert result is not None
+    assert result.triangle_count == triangle_count
+    assert result.sampled_triangles == 768
+    assert result.raster_candidates <= stl_fallback._MAX_COVERAGE_CANDIDATES
+    pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
+    alpha = pixels[:, :, 3]
+    assert alpha[alpha.shape[0] // 2, alpha.shape[1] // 2] < 32
+    visible = alpha > 20
+    assert visible.mean() >= 0.08
+    assert _largest_component_fraction(visible) >= 0.70
 
 
 def test_ascii_fallback_discards_hostile_line_and_recovers(
@@ -773,7 +981,7 @@ def test_stl_fallback_returns_none_when_optional_render_dependencies_are_missing
 
 def test_over_cap_3mf_still_gets_embedded_preview(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
-    png = mesh_processing._PNG_MAGIC + b"preview-bytes"
+    png = _valid_preview_png()
     p = tmp_path / "dense.3mf"
     with zipfile.ZipFile(p, "w") as zf:
         zf.writestr(
@@ -791,6 +999,27 @@ def test_over_cap_3mf_still_gets_embedded_preview(tmp_path: Path, monkeypatch) -
 
     assert geometry["triangle_count"] is None  # mesh skipped
     assert thumb == png  # but the cheap embedded preview is still used
+
+
+def test_valid_embedded_3mf_preview_precedes_mesh_render(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A valid slicer preview is preferred even when mesh loading is safe."""
+    png = _valid_preview_png((220, 40, 120))
+    p = tmp_path / "preview-first.3mf"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr("3D/3dmodel.model", b"<mesh/>")
+        zf.writestr("Metadata/thumbnail.png", png)
+
+    monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: _fake_mesh(10))
+    monkeypatch.setattr(
+        mesh_processing.mesh_render,
+        "render_mesh_thumbnail",
+        lambda *args, **kwargs: b"RENDERED-MESH",
+    )
+
+    _geometry, thumb = mesh_processing.analyze_mesh(p)
+    assert thumb == png
 
 
 def test_post_load_backstop_skips_render_when_estimate_missed(
@@ -995,7 +1224,7 @@ def test_oversize_3mf_still_gets_embedded_preview(tmp_path: Path, monkeypatch) -
     # embedded slicer preview (read straight from the zip) still stands in.
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 100_000_000)
     monkeypatch.setitem(_overlay, "mesh_max_load_mb", 1)
-    png = mesh_processing._PNG_MAGIC + b"preview"
+    png = _valid_preview_png()
     p = tmp_path / "big.3mf"
     with zipfile.ZipFile(p, "w", zipfile.ZIP_STORED) as zf:
         zf.writestr("3D/3dmodel.model", b"<triangle/>" * 200_000)  # ~2 MB stored
@@ -1180,7 +1409,7 @@ def test_render_thumbnail_respects_cap_and_falls_back_to_embedded(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
-    png = mesh_processing._PNG_MAGIC + b"plate"
+    png = _valid_preview_png()
     p = tmp_path / "dense.3mf"
     with zipfile.ZipFile(p, "w") as zf:
         zf.writestr("3D/3dmodel.model", b"<triangle/>" * 100_000)  # over cap
@@ -1329,7 +1558,7 @@ def test_render_semaphore_caps_concurrent_renders(tmp_path: Path, monkeypatch) -
 
 
 def _over_cap_3mf_with_preview(tmp_path: Path) -> tuple[Path, bytes]:
-    png = mesh_processing._PNG_MAGIC + b"slicer-plate"
+    png = _valid_preview_png((240, 128, 32))
     p = tmp_path / "big.3mf"
     with zipfile.ZipFile(p, "w") as zf:
         zf.writestr("3D/3dmodel.model", b"<triangle/>" * 100_000)  # ~157k tris
@@ -1778,7 +2007,7 @@ def test_render_thumbnail_real_mesh_renders_png(tmp_path: Path) -> None:
 def test_render_thumbnail_falls_back_to_embedded_when_render_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
-    png = mesh_processing._PNG_MAGIC + b"embedded"
+    png = _valid_preview_png((32, 160, 240))
     p = tmp_path / "model.3mf"
     with zipfile.ZipFile(p, "w") as zf:
         zf.writestr("3D/3dmodel.model", b"<mesh/>")

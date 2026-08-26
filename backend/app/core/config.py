@@ -204,6 +204,11 @@ class Settings(BaseSettings):
     # the detected cgroup/host limit, just like other mesh work.
     mesh_step_timeout_seconds: int = Field(default=90, gt=0)
 
+    # Oversized STL previews run in a disposable, streaming worker. The worker
+    # deadline is intentionally capped by the service so an operator override
+    # cannot leave an ingestion thread waiting indefinitely.
+    mesh_stream_timeout_seconds: int = Field(default=45, gt=0, le=45)
+
     # Optional static bearer token guarding the Prometheus /metrics endpoint.
     # Empty = open on the trusted internal network (see docs/known-limitations).
     metrics_token: str = ""

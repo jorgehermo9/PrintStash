@@ -52,6 +52,11 @@ _MAX_ASCII_LINES = 1_000_000
 _FLOAT32_MAX = 3.4028234663852886e38
 _MAX_RENDER_DIMENSION = 2048
 _MAX_COVERAGE_CANDIDATES = 2_000_000
+# Keep the footprint deliberately small: a sparse bounded sample of a
+# microfaceted surface needs coverage, but must not turn the fallback into a
+# silhouette mask that erases meaningful holes.
+_MIN_SPLAT_RADIUS = 0.65
+_MAX_SPLAT_RADIUS = 1.0
 
 
 def _binary_stl_info(path: Path) -> tuple[int, int] | None:
@@ -424,6 +429,24 @@ def render_stl_thumbnail(
 
     coarse_scale_x = coverage_width / width
     coarse_scale_y = coverage_height / height
+    # A sparse sample of a very large mesh leaves gaps between its facet
+    # centroids.  Use the projected sample density to choose a conservative
+    # footprint for sub-pixel facets.  The hard upper bound makes the worst
+    # case one 4x4 raster candidate box per sampled triangle (1.6m at the 100k
+    # sample cap; raster boxes are inclusive), leaving budget for true source
+    # triangles under the shared 2m candidate limit.
+    projected_model_area = max(
+        extent_x * extent_y * scale * scale * coarse_scale_x * coarse_scale_y,
+        1.0,
+    )
+    sample_spacing = math.sqrt(projected_model_area / max(sampled.sampled_triangles, 1))
+    splat_radius = min(
+        _MAX_SPLAT_RADIUS,
+        max(_MIN_SPLAT_RADIUS, 0.7 * sample_spacing),
+    )
+    sparse_sample = (
+        sampled.triangle_count > sampled.sampled_triangles or not sampled.complete
+    )
 
     def accumulate_chunk(chunk) -> None:
         view = (chunk - center) @ rotation.T
@@ -447,6 +470,36 @@ def render_stl_thumbnail(
         coarse_screen[:, :, 1] *= coarse_scale_y
         normals = raw_normal[ids] / normal_length[ids, None]
         normals = np.where(normals[:, 2:3] >= 0, normals, -normals)
+
+        # The ordinary rasteriser intentionally tests the true triangle area.
+        # For a dense model whose bounded sample contains microfacets that are
+        # much smaller than a pixel, that turns a connected surface into a
+        # point cloud.  Augment every retained source facet with a tiny
+        # screen-space triangle centred on it when the sample is incomplete.
+        # The source triangles stay in the input, preserving long/slender
+        # facets and their true z-buffer coverage.  Centroids are rendered
+        # first so the shared budget reserves bounded coverage work before a
+        # large projected facet can consume it.
+        if sparse_sample:
+            centers = coarse_screen.mean(axis=1)
+            radius = np.asarray(splat_radius, dtype=coarse_screen.dtype)
+            top = centers.copy()
+            top[:, 1] -= radius
+            bottom_right = centers.copy()
+            bottom_right[:, 0] += radius
+            bottom_right[:, 1] += radius
+            bottom_left = centers.copy()
+            bottom_left[:, 0] -= radius
+            bottom_left[:, 1] += radius
+            # A single triangle gives every retained facet a symmetric enough
+            # centroid footprint while halving raster candidates versus a
+            # square made from two triangles. The radius is capped so each
+            # candidate box stays at most 4x4 pixels, leaving the shared budget
+            # for source facets as well.
+            splat_triangles = np.stack((top, bottom_right, bottom_left), axis=1)
+            coarse_screen = np.concatenate((splat_triangles, coarse_screen), axis=0)
+            normals = np.concatenate((normals, normals), axis=0)
+
         _rasterise_triangles(
             coarse_image,
             coarse_zbuffer,

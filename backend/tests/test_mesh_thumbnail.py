@@ -105,3 +105,29 @@ def test_rejects_thumbnail_declared_over_limit_without_reading_member(
         assert extract_embedded_3mf_thumbnail(p) is None
     finally:
         monkeypatch.setattr(zipfile.ZipFile, "read", original_read)
+
+
+def test_valid_embedded_preview_survives_larger_invalid_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PIL import Image
+
+    valid_buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), (12, 120, 220)).save(valid_buffer, format="PNG")
+    valid = valid_buffer.getvalue()
+    larger_invalid = _PNG_MAGIC + b"x" * 700
+    oversized = b"x" * 2_000
+    monkeypatch.setattr("app.services.mesh_processing._MAX_3MF_THUMBNAIL_BYTES", 1_000)
+    monkeypatch.setattr(
+        "app.services.mesh_processing._MAX_3MF_THUMBNAIL_AGGREGATE_BYTES", 1_100
+    )
+    path = _make_3mf(
+        tmp_path,
+        {
+            "Metadata/larger-invalid.png": larger_invalid,
+            "Metadata/oversized.png": oversized,
+            "Metadata/valid.png": valid,
+        },
+    )
+
+    assert extract_embedded_3mf_thumbnail(path, validate_image=True) == valid

@@ -77,6 +77,8 @@ manufacturing platform.
   mesh input cap still applies first and is format-blind. Operators can adjust
   the deadline with `VAULT_MESH_STEP_TIMEOUT_SECONDS`; memory continues to use
   `VAULT_MESH_MEMORY_BUDGET_FRACTION` rather than a STEP-only byte guess.
+- Oversized STL previews run in a bounded streaming worker with a 45 s deadline;
+  operators can adjust it with `VAULT_MESH_STREAM_TIMEOUT_SECONDS` (up to 45 s).
 - The lite image intentionally omits browser-assisted imports and STEP/STP
   tessellation. It still includes NumPy, Pillow, and Trimesh, so STL/OBJ/3MF
   thumbnail generation does not depend on Chromium, OpenGL, or Cascadio.
