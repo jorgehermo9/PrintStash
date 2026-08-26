@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlmodel import Session
 
 from app.core.config import _overlay
-from app.services import runtime_config
 
 
 def test_unhandled_errors_return_stable_json(app: FastAPI) -> None:
@@ -100,23 +98,8 @@ def test_default_cors_rejects_unconfigured_origin(client: TestClient) -> None:
 # also several behaviours in one test; they are split there.
 
 
-def test_configured_setup_status_redacts_internal_storage_details(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    config = runtime_config.get_config(db_session)
-    config.data_dir = "/secret/vault/files"
-    config.s3_bucket = "private-bucket"
-    config.s3_endpoint_url = "http://internal-s3:9000"
-    db_session.add(config)
-    db_session.commit()
-    runtime_config.mark_configured(db_session)
-
-    response = client.get("/api/v1/setup/status")
-
-    assert response.status_code == 200
-    assert response.json() == {"configured": True, "user_count": 0}
+# `test_configured_setup_status_redacts_internal_storage_details` moved to
+# tests/integration/api/v1/test_setup.py, the mirror of the router it defends.
 
 
 def test_write_payloads_reject_unknown_fields(
