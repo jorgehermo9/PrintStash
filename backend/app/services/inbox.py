@@ -232,6 +232,7 @@ def list_visible(
     session: Session, user: User, *, include_completed: bool = True
 ) -> list[InboxItemRead]:
     stmt = select(InboxItem)
+    stmt = stmt.where(InboxItem.state != InboxItemState.DISMISSED)
     if not user.is_superuser:
         stmt = stmt.where(InboxItem.owner_user_id == user.id)
     if not include_completed:
@@ -1895,11 +1896,12 @@ def dismiss(session: Session, row: InboxItem) -> None:
                 CaptureUploadSlot.inbox_item_id == row.id
             )
         ).first()
-        released = (
-            _cleanup_capture_slots(session, row)
-            if has_capture_slots is not None
-            else _dismiss_browser_lease(session, row)
-        )
+        if has_capture_slots is not None:
+            released = _cleanup_capture_slots(session, row)
+        elif row.state == InboxItemState.COMPLETED:
+            released = _dismiss_completed_browser_staging(session, row)
+        else:
+            released = _dismiss_browser_lease(session, row)
         if not released:
             raise HTTPException(status_code=409, detail="staging_cleanup_failed")
         row.staging_key = None
@@ -1916,6 +1918,26 @@ def dismiss(session: Session, row: InboxItem) -> None:
     row.updated_at = utcnow()
     session.add(row)
     session.commit()
+
+
+def _dismiss_completed_browser_staging(session: Session, row: InboxItem) -> bool:
+    """Dismiss terminal browser staging after import cleanup already ran.
+
+    V2 capture completion removes its slot and lease rows before leaving the
+    terminal inbox reference to the job for polling/history. In that case
+    there is no lease left to return. Legacy browser uploads still retain a
+    job-owned review lease and use the normal exact-identity cleanup path.
+    """
+    if row.background_job_id is None:
+        return True
+    has_job_lease = session.exec(
+        select(StagingLease.id).where(
+            StagingLease.background_job_id == row.background_job_id
+        )
+    ).first()
+    if has_job_lease is None:
+        return True
+    return _dismiss_browser_lease(session, row)
 
 
 def _dismiss_browser_lease(session: Session, row: InboxItem) -> bool:

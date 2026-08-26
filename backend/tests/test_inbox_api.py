@@ -24,6 +24,8 @@ from app.db.models import (
     CaptureUploadSlot,
     CaptureUploadSlotState,
     Collection,
+    File,
+    FileType,
     InboxItem,
     InboxItemResult,
     InboxItemResultState,
@@ -1333,6 +1335,68 @@ def test_dismiss_item_returns_204(client: TestClient, db_session: Session) -> No
     db_session.expire_all()
     refreshed = db_session.get(InboxItem, row.id)
     assert refreshed.state == InboxItemState.DISMISSED
+
+
+def test_dismiss_completed_capture_after_terminal_cleanup_preserves_model(
+    client: TestClient, db_session: Session
+) -> None:
+    """A completed capture has no review lease left to return before dismissing."""
+    owner = _user(db_session, "dismiss-completed-owner")
+    model = Model(
+        name="Imported widget",
+        slug="imported-widget",
+        hash="d" * 64,
+        source_url="https://makerworld.com/en/models/1234-widget",
+    )
+    db_session.add(model)
+    db_session.commit()
+    db_session.refresh(model)
+    artifact = File(
+        model_id=model.id,
+        path="imported/widget.stl",
+        original_filename="widget.stl",
+        file_type=FileType.STL,
+        version=1,
+        size_bytes=4,
+        sha256="e" * 64,
+    )
+    db_session.add(artifact)
+    db_session.commit()
+    db_session.refresh(artifact)
+    job = BackgroundJob(
+        id="completed-dismiss-job",
+        owner_user_id=owner.id,
+        state="completed",
+        status_json='{"state":"completed"}',
+        finished_at=utcnow(),
+    )
+    db_session.add(job)
+    db_session.commit()
+    row = _make_item(
+        db_session,
+        owner,
+        source_kind="BROWSER",
+        state=InboxItemState.COMPLETED,
+        background_job_id=job.id,
+        resulting_model_id=model.id,
+    )
+    headers = {
+        "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
+    }
+
+    response = client.delete(f"/api/v1/inbox/{row.id}", headers=headers)
+
+    assert response.status_code == 204, response.text
+    db_session.expire_all()
+    refreshed = db_session.get(InboxItem, row.id)
+    assert refreshed is not None
+    assert refreshed.state == InboxItemState.DISMISSED
+    assert refreshed.background_job_id is None
+    assert db_session.get(Model, model.id) is not None
+    assert db_session.get(File, artifact.id) is not None
+    listed = client.get("/api/v1/inbox", headers=headers)
+    assert listed.status_code == 200, listed.text
+    assert row.id not in {item["id"] for item in listed.json()}
 
 
 def test_batch_actions_cover_every_branch(

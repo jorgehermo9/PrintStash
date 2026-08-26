@@ -13,13 +13,18 @@ import io
 import math
 import struct
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
 import pytest
 from PIL import Image
+from sqlmodel import select
 
 from app.core.config import _overlay
+from app.core.time import utcnow
+from app.db.models import BackgroundJob, InboxItem, InboxItemState, User
+from app.services.jobs import registry
 from app.services.setup_token import current_setup_token
 
 pytestmark = pytest.mark.e2e
@@ -237,6 +242,25 @@ async def test_over_cap_mesh_upload_has_a_visible_thumbnail(
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
     stl = _microfaceted_stl()
     headers = await _setup_and_login(api, tmp_path)
+    owner = e2e_db.exec(select(User).where(User.username == "owner")).one()
+    expired_job = BackgroundJob(
+        id="issue-67-expired-inbox-job",
+        owner_user_id=owner.id,
+        state="completed",
+        status_json='{"state":"completed"}',
+        finished_at=utcnow() - timedelta(hours=2),
+    )
+    e2e_db.add(expired_job)
+    e2e_db.flush()
+    e2e_db.add(
+        InboxItem(
+            owner_user_id=owner.id,
+            state=InboxItemState.COMPLETED,
+            background_job_id=expired_job.id,
+        )
+    )
+    e2e_db.commit()
+    monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
 
     uploaded = await api.post(
         "/api/v1/ingest/model",

@@ -15,11 +15,11 @@ from datetime import timedelta
 from time import monotonic
 from typing import Any, Dict, Optional
 
-from sqlalchemy import delete, func, or_
+from sqlalchemy import delete, exists, func, or_
 from sqlmodel import Session, select
 
 from app.core.time import utcnow
-from app.db.models import BackgroundJob
+from app.db.models import BackgroundJob, StagingLease
 from app.db.session import get_session_factory
 from app.schemas.ingest import (
     ImportCompletion,
@@ -221,6 +221,7 @@ class JobRegistry:
                 delete(BackgroundJob).where(
                     BackgroundJob.finished_at.is_not(None),  # type: ignore[union-attr]
                     BackgroundJob.finished_at < cutoff,
+                    ~exists().where(StagingLease.background_job_id == BackgroundJob.id),
                 )
             )
             session.commit()

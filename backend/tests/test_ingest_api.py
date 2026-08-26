@@ -12,12 +12,15 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.core.time import utcnow
 from app.db.models import (
+    BackgroundJob,
     Collection,
     CollectionPermission,
     CollectionRole,
     FilamentProfile,
     File,
     FileType,
+    InboxItem,
+    InboxItemState,
     Metadata,
     Model,
     PrinterProfile,
@@ -25,6 +28,7 @@ from app.db.models import (
 )
 from app.services import ingestion as ingestion_service
 from app.services.auth import create_access_token, hash_password
+from app.services.jobs import registry
 from app.services.storage_backend import get_backend
 from app.services.storage_ownership import record_creation
 
@@ -477,6 +481,45 @@ def test_issue_67_over_cap_stl_persists_authenticated_webp_fallback(
     assert thumbnail.content.startswith(WEBP_MAGIC)
 
 
+def test_issue_67_upload_survives_pruning_completed_inbox_job(
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    """A stale terminal inbox link must not turn the next upload into a 500."""
+    _configure_storage(tmp_path)
+    owner = db_session.exec(select(User).where(User.username == "test-writer")).one()
+    old_job = BackgroundJob(
+        id="expired-inbox-job",
+        owner_user_id=owner.id,
+        state="completed",
+        status_json='{"state":"completed"}',
+        finished_at=utcnow() - timedelta(hours=2),
+    )
+    db_session.add(old_job)
+    db_session.flush()
+    db_session.add(
+        InboxItem(
+            owner_user_id=owner.id,
+            state=InboxItemState.COMPLETED,
+            background_job_id=old_job.id,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
+
+    response = client.post(
+        "/api/v1/ingest/model",
+        headers=auth_headers,
+        files={"file": ("issue-67.stl", _cube_stl(), "application/sla")},
+        data={"model_name": "Issue 67 Upload"},
+    )
+
+    assert response.status_code == 202, response.text
+
+
 def test_reuploading_deleted_model_restores_it(
     tmp_path: Path,
     client: TestClient,
@@ -682,9 +725,7 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
     file_id = payload["file_id"]
     model_id = payload["model_id"]
     replacement_buffer = io.BytesIO()
-    Image.new("RGB", (12, 10), (220, 30, 20)).save(
-        replacement_buffer, format="PNG"
-    )
+    Image.new("RGB", (12, 10), (220, 30, 20)).save(replacement_buffer, format="PNG")
     replacement = replacement_buffer.getvalue()
 
     monkeypatch.setattr(

@@ -104,6 +104,11 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
 
     inbox_columns = {col["name"]: col for col in inspector.get_columns("inbox_items")}
     assert "completion" in inbox_columns
+    inbox_fks = {
+        fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+        for fk in inspector.get_foreign_keys("inbox_items")
+    }
+    assert inbox_fks["background_job_id"] == "SET NULL"
     provenance_source_indexes = {
         index["name"]: index
         for index in inspector.get_indexes("model_provenance_sources")
@@ -189,6 +194,76 @@ def test_bambu_identity_migration_absorbs_duplicate_pair_without_delete(
         assert {
             column["name"] for column in inspect(engine).get_columns("print_jobs")
         } >= {"dedupe_absorbed_at", "dedupe_survivor_id"}
+    finally:
+        engine.dispose()
+
+
+def test_inbox_job_set_null_migration_preserves_completed_history(
+    tmp_path: Path,
+) -> None:
+    """Upgrade changes only the FK action and keeps terminal inbox rows."""
+    url = f"sqlite:///{tmp_path / 'inbox-job-fk.sqlite'}"
+    cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "f9a7c3e5b1d2")
+
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(username, hashed_password, is_superuser, is_active, "
+                    "created_at, updated_at) VALUES "
+                    "('history-owner', 'hash', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            owner_id = connection.execute(
+                text("SELECT id FROM users WHERE username = 'history-owner'")
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO background_jobs "
+                    "(id, visible, kind, state, status_json, replay_safe, "
+                    "created_at, updated_at, finished_at) VALUES "
+                    "('history-job', 1, 'pending_import', 'completed', '{}', 1, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO inbox_items "
+                    "(owner_user_id, source_kind, state, manifest_json, "
+                    "requested_tags_json, background_job_id, retryable, "
+                    "attempt_count, created_at, updated_at) VALUES "
+                    "(:owner_id, 'BROWSER', 'COMPLETED', '{}', '[]', "
+                    "'history-job', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {"owner_id": owner_id},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(url)
+    try:
+        inbox_fks = {
+            fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+            for fk in inspect(engine).get_foreign_keys("inbox_items")
+        }
+        assert inbox_fks["background_job_id"] == "SET NULL"
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.execute(
+                text("DELETE FROM background_jobs WHERE id = 'history-job'")
+            )
+            assert connection.execute(
+                text(
+                    "SELECT state, background_job_id FROM inbox_items "
+                    "WHERE owner_user_id = :owner_id"
+                ),
+                {"owner_id": owner_id},
+            ).one() == ("COMPLETED", None)
     finally:
         engine.dispose()
 

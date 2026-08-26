@@ -3,9 +3,16 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from sqlmodel import Session, select
 
 from app.core.time import utcnow
-from app.db.models import BackgroundJob
+from app.db.models import (
+    BackgroundJob,
+    InboxItem,
+    InboxItemState,
+    StagingLease,
+    User,
+)
 from app.db.session import get_session_factory
 from app.services import jobs as jobs_module
 from app.services.jobs import JobRegistry, reconcile_interrupted_jobs
@@ -72,6 +79,100 @@ def test_finished_jobs_pruned_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert registry.get(old_id) is None
     assert registry.get(fresh_id) is not None
+
+
+def test_finished_job_pruning_keeps_completed_inbox_reference_valid(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A terminal capture may retain its job link after staging cleanup."""
+    monotonic_now = 0.0
+    monkeypatch.setattr(jobs_module, "monotonic", lambda: monotonic_now)
+    db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
+    owner = User(username="prune-inbox-owner", hashed_password="hash")
+    db_session.add(owner)
+    db_session.commit()
+    db_session.refresh(owner)
+
+    registry = JobRegistry()
+    old_id = registry.create(owner_user_id=owner.id)
+    registry.update(old_id, state="completed")
+    expired_at = utcnow() - timedelta(hours=2)
+    with get_session_factory().scoped_session() as session:
+        job = session.get(BackgroundJob, old_id)
+        assert job is not None
+        job.finished_at = expired_at
+        session.add(
+            InboxItem(
+                owner_user_id=owner.id,
+                state=InboxItemState.COMPLETED,
+                background_job_id=old_id,
+            )
+        )
+        session.add(job)
+        session.commit()
+
+    monotonic_now = 61.0
+    fresh_id = registry.create(owner_user_id=owner.id)
+
+    assert registry.get(fresh_id) is not None
+
+
+def test_finished_job_pruning_keeps_job_owned_staging_lease_for_retry(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cleanup-pending imports retain terminal jobs while staging is owned."""
+    monotonic_now = 0.0
+    monkeypatch.setattr(jobs_module, "monotonic", lambda: monotonic_now)
+    db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
+    owner = User(username="prune-lease-owner", hashed_password="hash")
+    db_session.add(owner)
+    db_session.commit()
+    db_session.refresh(owner)
+
+    registry = JobRegistry()
+    old_id = registry.create(owner_user_id=owner.id)
+    registry.update(old_id, state="completed")
+    expired_at = utcnow() - timedelta(hours=2)
+    with get_session_factory().scoped_session() as session:
+        job = session.get(BackgroundJob, old_id)
+        assert job is not None
+        job.finished_at = expired_at
+        inbox_item = InboxItem(
+            owner_user_id=owner.id,
+            state=InboxItemState.COMPLETED,
+            background_job_id=old_id,
+            retryable=True,
+            error_code="capture_upload_cleanup_pending",
+        )
+        session.add(inbox_item)
+        session.add(
+            StagingLease(
+                id="cleanup-pending-lease",
+                path="staging/cleanup-pending.stl",
+                owner_user_id=owner.id,
+                background_job_id=old_id,
+                size_bytes=4,
+                sha256="f" * 64,
+                expires_at=utcnow() + timedelta(hours=1),
+            )
+        )
+        session.add(job)
+        session.commit()
+
+    monotonic_now = 61.0
+    fresh_id = registry.create(owner_user_id=owner.id)
+
+    assert registry.get(fresh_id) is not None
+    with get_session_factory().scoped_session() as session:
+        assert session.get(BackgroundJob, old_id) is not None
+        assert (
+            session.exec(
+                select(StagingLease).where(StagingLease.background_job_id == old_id)
+            )
+            .one()
+            .id
+            == "cleanup-pending-lease"
+        )
 
 
 def test_running_jobs_never_pruned() -> None:

@@ -1853,7 +1853,13 @@ class InboxItem(SQLModel, table=True):
         default="[]", sa_column=Column(Text, nullable=False)
     )
     background_job_id: Optional[str] = Field(
-        default=None, foreign_key="background_jobs.id", index=True
+        default=None,
+        sa_column=Column(
+            String(64),
+            ForeignKey("background_jobs.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
     )
     resulting_model_id: Optional[int] = Field(
         default=None, foreign_key="models.id", index=True
