@@ -47,7 +47,9 @@ def _make_user(session: Session, username: str, *, admin: bool = True) -> User:
     return user
 
 
-def _make_run(session: Session, user: User, mode: VaultAuditMode = VaultAuditMode.QUICK) -> VaultAuditRun:
+def _make_run(
+    session: Session, user: User, mode: VaultAuditMode = VaultAuditMode.QUICK
+) -> VaultAuditRun:
     run = VaultAuditRun(requested_by=user.id, mode=mode)
     session.add(run)
     session.commit()
@@ -137,7 +139,9 @@ def test_request_cancel_missing_run_returns_none(db_session: Session) -> None:
     assert vault_audit.request_cancel(db_session, 999999) is None
 
 
-def test_reconcile_interrupted_runs_marks_running_as_failed(db_session: Session) -> None:
+def test_reconcile_interrupted_runs_marks_running_as_failed(
+    db_session: Session,
+) -> None:
     user = _make_user(db_session, "reconcile-owner")
     run = _make_run(db_session, user)
     run.state = VaultAuditRunState.RUNNING
@@ -165,7 +169,12 @@ def test_check_primary_flags_size_and_hash_mismatch(db_session: Session) -> None
     get_backend().write_bytes(b"actual-bytes", "size-mismatch.stl")
     get_backend().write_bytes(b"hash-mismatch-content", "hash-mismatch.stl")
     blobs = [
-        OwnedBlob(key="size-mismatch.stl", resource_type="file", resource_id=1, expected_size=999),
+        OwnedBlob(
+            key="size-mismatch.stl",
+            resource_type="file",
+            resource_id=1,
+            expected_size=999,
+        ),
         OwnedBlob(
             key="hash-mismatch.stl",
             resource_type="file",
@@ -177,9 +186,14 @@ def test_check_primary_flags_size_and_hash_mismatch(db_session: Session) -> None
     completed = vault_audit._check_primary(db_session, run, blobs)
 
     assert completed is True
-    codes = {finding.code for finding in db_session.exec(
-        __import__("sqlmodel").select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
-    ).all()}
+    codes = {
+        finding.code
+        for finding in db_session.exec(
+            __import__("sqlmodel")
+            .select(VaultAuditFinding)
+            .where(VaultAuditFinding.run_id == run.id)
+        ).all()
+    }
     assert "owned_blob_size_mismatch" in codes
     assert "owned_blob_hash_mismatch" in codes
 
@@ -197,13 +211,17 @@ def test_check_primary_unreadable_blob_becomes_finding(
     monkeypatch.setattr(get_backend(), "stat_size", boom)
 
     completed = vault_audit._check_primary(
-        db_session, run, [OwnedBlob(key="unreadable.stl", resource_type="file", resource_id=3)]
+        db_session,
+        run,
+        [OwnedBlob(key="unreadable.stl", resource_type="file", resource_id=3)],
     )
 
     assert completed is True
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "owned_blob_unreadable" for f in findings)
 
 
@@ -215,7 +233,9 @@ def test_check_primary_stops_when_cancelled(db_session: Session) -> None:
     db_session.commit()
 
     completed = vault_audit._check_primary(
-        db_session, run, [OwnedBlob(key="whatever.stl", resource_type="file", resource_id=4)]
+        db_session,
+        run,
+        [OwnedBlob(key="whatever.stl", resource_type="file", resource_id=4)],
     )
 
     assert completed is False
@@ -268,7 +288,9 @@ def test_check_database_flags_model_without_live_artifact(db_session: Session) -
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "model_without_live_artifact" for f in findings)
 
 
@@ -276,13 +298,21 @@ def test_check_database_flags_missing_recommended_revision(db_session: Session) 
     user = _make_user(db_session, "db-owner2")
     run = _make_run(db_session, user)
     missing_rec = _make_model(db_session, "no-rec")
-    _make_file(db_session, missing_rec, file_type=FileType.GCODE, is_recommended=False, path="a.gcode")
+    _make_file(
+        db_session,
+        missing_rec,
+        file_type=FileType.GCODE,
+        is_recommended=False,
+        path="a.gcode",
+    )
 
     vault_audit._check_database(db_session, run)
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "recommended_revision_missing" for f in findings)
 
 
@@ -296,7 +326,9 @@ def test_check_database_flags_metadata_missing(db_session: Session) -> None:
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "metadata_missing" for f in findings)
 
 
@@ -321,7 +353,9 @@ def test_check_database_flags_missing_thumbnail(
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "thumbnail_missing" for f in findings)
 
 
@@ -355,7 +389,9 @@ def test_check_external_flags_unavailable_root(db_session: Session) -> None:
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "external_root_unavailable" for f in findings)
 
 
@@ -364,18 +400,31 @@ def test_check_external_flags_missing_linked_file(db_session: Session) -> None:
     run = _make_run(db_session, user)
     model = _make_model(db_session, "ext-model")
     file_row = _make_file(
-        db_session, model, path="/nowhere/missing.stl", is_external=True, external_library_id=None
+        db_session,
+        model,
+        path="/nowhere/missing.stl",
+        is_external=True,
+        external_library_id=None,
     )
 
     vault_audit._check_external(
         db_session,
         run,
-        [OwnedBlob(key=file_row.path, resource_type="file", resource_id=file_row.id, display_name="missing.stl")],
+        [
+            OwnedBlob(
+                key=file_row.path,
+                resource_type="file",
+                resource_id=file_row.id,
+                display_name="missing.stl",
+            )
+        ],
     )
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     linked = [f for f in findings if f.code == "linked_file_missing"]
     assert len(linked) == 1
     assert linked[0].repair_action is None
@@ -419,10 +468,14 @@ def test_check_external_skips_trashed_linked_file(db_session: Session) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_check_background_jobs_flags_stuck_job_and_pending_import(db_session: Session) -> None:
+def test_check_background_jobs_flags_stuck_job_and_pending_import(
+    db_session: Session,
+) -> None:
     user = _make_user(db_session, "jobs-owner")
     run = _make_run(db_session, user)
-    stuck_job = BackgroundJob(id="stuck-job-1", kind="thumbnail_rebuild", state="running")
+    stuck_job = BackgroundJob(
+        id="stuck-job-1", kind="thumbnail_rebuild", state="running"
+    )
     stuck_job.updated_at = utcnow() - timedelta(hours=2)
     db_session.add(stuck_job)
     stuck_import = InboxItem(
@@ -438,7 +491,9 @@ def test_check_background_jobs_flags_stuck_job_and_pending_import(db_session: Se
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     resource_types = {f.resource_type for f in findings}
     assert "background_job" in resource_types
     assert "pending_import" in resource_types
@@ -462,7 +517,9 @@ def test_execute_run_ignores_non_pending_run(db_session: Session) -> None:
     assert run.state == VaultAuditRunState.COMPLETED
 
 
-def test_execute_run_cancelled_before_primary_check_completes(db_session: Session) -> None:
+def test_execute_run_cancelled_before_primary_check_completes(
+    db_session: Session,
+) -> None:
     user = _make_user(db_session, "exec-owner2")
     run = _make_run(db_session, user)
     model = _make_model(db_session, "cancel-mid")
@@ -511,7 +568,9 @@ def test_execute_run_flags_embedded_and_unowned_blobs(
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     codes = {f.code for f in findings}
     assert "embedded_image_unreferenced" in codes
     assert "unowned_blob_detected" in codes
@@ -530,17 +589,28 @@ def test_execute_run_full_mode_runs_backup_check(
     monkeypatch.setattr(
         backup,
         "list_backups",
-        lambda: [backup.BackupMeta(
-            id="b1", created_at="now", size_bytes=1, storage_backend="local",
-            file_count=1, app_version="0.0.0", path="b1.tar.gz",
-        )],
+        lambda: [
+            backup.BackupMeta(
+                id="b1",
+                created_at="now",
+                size_bytes=1,
+                storage_backend="local",
+                file_count=1,
+                app_version="0.0.0",
+                path="b1.tar.gz",
+            )
+        ],
     )
     monkeypatch.setattr(
         backup,
         "verify_backup",
         lambda _id: backup.BackupVerification(
-            backup_id="b1", valid=False, app_compatible=True, manifest_version="1",
-            checked_members=1, findings=[{"code": "unexpected_code", "member": "a/b.stl"}],
+            backup_id="b1",
+            valid=False,
+            app_compatible=True,
+            manifest_version="1",
+            checked_members=1,
+            findings=[{"code": "unexpected_code", "member": "a/b.stl"}],
         ),
     )
 
@@ -548,7 +618,9 @@ def test_execute_run_full_mode_runs_backup_check(
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     backup_findings = [f for f in findings if f.resource_type == "backup"]
     assert len(backup_findings) == 1
     # Unrecognized issue codes fall back to the generic manifest-invalid code.
@@ -566,8 +638,11 @@ def test_ignore_finding_marks_ignored(db_session: Session) -> None:
     user = _make_user(db_session, "ignore-owner")
     run = _make_run(db_session, user)
     finding = VaultAuditFinding(
-        run_id=run.id, code="metadata_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="file", resource_identifier="x",
+        run_id=run.id,
+        code="metadata_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="file",
+        resource_identifier="x",
     )
     db_session.add(finding)
     db_session.commit()
@@ -588,8 +663,12 @@ def test_repair_finding_already_resolved_is_a_noop(db_session: Session) -> None:
     user = _make_user(db_session, "repair-owner")
     run = _make_run(db_session, user)
     finding = VaultAuditFinding(
-        run_id=run.id, code="metadata_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="file", resource_identifier="x", state=VaultAuditFindingState.RESOLVED,
+        run_id=run.id,
+        code="metadata_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="file",
+        resource_identifier="x",
+        state=VaultAuditFindingState.RESOLVED,
     )
     db_session.add(finding)
     db_session.commit()
@@ -611,15 +690,21 @@ def test_repair_finding_regenerate_thumbnail(
     user = _make_user(db_session, "repair-owner2")
     run = _make_run(db_session, user)
     finding = VaultAuditFinding(
-        run_id=run.id, code="thumbnail_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="model", resource_identifier="x", repair_action="regenerate_thumbnail",
+        run_id=run.id,
+        code="thumbnail_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="model",
+        resource_identifier="x",
+        repair_action="regenerate_thumbnail",
         details_json=json.dumps({"model_id": 1}),
     )
     db_session.add(finding)
     db_session.commit()
     db_session.refresh(finding)
 
-    monkeypatch.setattr(vault_audit.thumbnail_repair, "regenerate_model_thumbnail", lambda _s, _id: True)
+    monkeypatch.setattr(
+        vault_audit.thumbnail_repair, "regenerate_model_thumbnail", lambda _s, _id: True
+    )
 
     result = vault_audit.repair_finding(db_session, finding.id, user.id)
 
@@ -631,11 +716,28 @@ def test_repair_finding_restore_recommended_revision(db_session: Session) -> Non
     user = _make_user(db_session, "repair-owner3")
     run = _make_run(db_session, user)
     model = _make_model(db_session, "repair-rec")
-    older = _make_file(db_session, model, file_type=FileType.GCODE, path="v1.gcode", version=1, is_recommended=False)
-    newer = _make_file(db_session, model, file_type=FileType.GCODE, path="v2.gcode", version=2, is_recommended=False)
+    older = _make_file(
+        db_session,
+        model,
+        file_type=FileType.GCODE,
+        path="v1.gcode",
+        version=1,
+        is_recommended=False,
+    )
+    newer = _make_file(
+        db_session,
+        model,
+        file_type=FileType.GCODE,
+        path="v2.gcode",
+        version=2,
+        is_recommended=False,
+    )
     finding = VaultAuditFinding(
-        run_id=run.id, code="recommended_revision_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="model", resource_identifier=model.name,
+        run_id=run.id,
+        code="recommended_revision_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="model",
+        resource_identifier=model.name,
         repair_action="restore_recommended_revision",
         details_json=json.dumps({"model_id": model.id}),
     )
@@ -660,8 +762,11 @@ def test_repair_finding_restore_recommended_revision_no_files_leaves_unresolved(
     run = _make_run(db_session, user)
     model = _make_model(db_session, "repair-rec-empty")
     finding = VaultAuditFinding(
-        run_id=run.id, code="recommended_revision_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="model", resource_identifier=model.name,
+        run_id=run.id,
+        code="recommended_revision_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="model",
+        resource_identifier=model.name,
         repair_action="restore_recommended_revision",
         details_json=json.dumps({"model_id": model.id}),
     )
@@ -683,8 +788,11 @@ def test_repair_finding_reparse_metadata(
     model = _make_model(db_session, "repair-meta")
     file_row = _make_file(db_session, model)
     finding = VaultAuditFinding(
-        run_id=run.id, code="metadata_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="file", resource_identifier=file_row.original_filename,
+        run_id=run.id,
+        code="metadata_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="file",
+        resource_identifier=file_row.original_filename,
         repair_action="reparse_metadata",
         details_json=json.dumps({"file_id": file_row.id}),
     )
@@ -714,8 +822,11 @@ def test_repair_finding_retry_pending_import(db_session: Session) -> None:
     db_session.commit()
     db_session.refresh(item)
     finding = VaultAuditFinding(
-        run_id=run.id, code="background_job_stuck", severity=VaultAuditSeverity.WARNING,
-        resource_type="pending_import", resource_identifier="x",
+        run_id=run.id,
+        code="background_job_stuck",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="pending_import",
+        resource_identifier="x",
         repair_action="retry_pending_import",
         details_json=json.dumps({"inbox_item_id": item.id}),
     )
@@ -739,8 +850,11 @@ def test_repair_finding_rescan_external_library(
     user = _make_user(db_session, "repair-owner6")
     run = _make_run(db_session, user)
     finding = VaultAuditFinding(
-        run_id=run.id, code="linked_file_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="file", resource_identifier="x",
+        run_id=run.id,
+        code="linked_file_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="file",
+        resource_identifier="x",
         repair_action="rescan_external_library",
         details_json=json.dumps({"library_id": 1}),
     )
@@ -748,7 +862,9 @@ def test_repair_finding_rescan_external_library(
     db_session.commit()
     db_session.refresh(finding)
 
-    monkeypatch.setattr(external_library, "scan_library", lambda _id: {"aborted_unmounted": False})
+    monkeypatch.setattr(
+        external_library, "scan_library", lambda _id: {"aborted_unmounted": False}
+    )
 
     result = vault_audit.repair_finding(db_session, finding.id, user.id)
 
@@ -764,8 +880,11 @@ def test_repair_finding_rescan_external_library_aborted_leaves_unresolved(
     user = _make_user(db_session, "repair-owner7")
     run = _make_run(db_session, user)
     finding = VaultAuditFinding(
-        run_id=run.id, code="linked_file_missing", severity=VaultAuditSeverity.WARNING,
-        resource_type="file", resource_identifier="x",
+        run_id=run.id,
+        code="linked_file_missing",
+        severity=VaultAuditSeverity.WARNING,
+        resource_type="file",
+        resource_identifier="x",
         repair_action="rescan_external_library",
         details_json=json.dumps({"library_id": 1}),
     )
@@ -773,7 +892,9 @@ def test_repair_finding_rescan_external_library_aborted_leaves_unresolved(
     db_session.commit()
     db_session.refresh(finding)
 
-    monkeypatch.setattr(external_library, "scan_library", lambda _id: {"aborted_unmounted": True})
+    monkeypatch.setattr(
+        external_library, "scan_library", lambda _id: {"aborted_unmounted": True}
+    )
 
     result = vault_audit.repair_finding(db_session, finding.id, user.id)
 
@@ -793,8 +914,11 @@ def test_restore_recommended_no_files_returns_false(db_session: Session) -> None
 
 def test_details_malformed_json_returns_empty_dict() -> None:
     finding = VaultAuditFinding(
-        run_id=1, code="x", severity=VaultAuditSeverity.INFO,
-        resource_type="file", resource_identifier="x",
+        run_id=1,
+        code="x",
+        severity=VaultAuditSeverity.INFO,
+        resource_type="file",
+        resource_identifier="x",
         details_json="{not valid json",
     )
     assert vault_audit._details(finding) == {}
@@ -825,7 +949,9 @@ def test_check_database_thumbnail_exists_check_raises_marks_missing(
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "thumbnail_missing" for f in findings)
 
 
@@ -856,7 +982,9 @@ def test_check_database_flags_unreadable_thumbnail(
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "thumbnail_unreadable" for f in findings)
 
 
@@ -873,7 +1001,9 @@ def test_check_external_stat_raises_marks_unavailable(
     model = _make_model(db_session, "ext-stat-boom")
     linked = tmp_path / "linked.stl"
     linked.write_text("x")
-    file_row = _make_file(db_session, model, path=str(linked), is_external=True, external_library_id=None)
+    file_row = _make_file(
+        db_session, model, path=str(linked), is_external=True, external_library_id=None
+    )
 
     from pathlib import Path as _Path
 
@@ -889,12 +1019,21 @@ def test_check_external_stat_raises_marks_unavailable(
     vault_audit._check_external(
         db_session,
         run,
-        [OwnedBlob(key=str(linked), resource_type="file", resource_id=file_row.id, display_name="linked.stl")],
+        [
+            OwnedBlob(
+                key=str(linked),
+                resource_type="file",
+                resource_id=file_row.id,
+                display_name="linked.stl",
+            )
+        ],
     )
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "linked_file_missing" for f in findings)
 
 
@@ -918,10 +1057,17 @@ def test_check_backups_stops_when_cancelled(
     monkeypatch.setattr(
         backup,
         "list_backups",
-        lambda: [backup.BackupMeta(
-            id="b1", created_at="now", size_bytes=1, storage_backend="local",
-            file_count=1, app_version="0.0.0", path="b1.tar.gz",
-        )],
+        lambda: [
+            backup.BackupMeta(
+                id="b1",
+                created_at="now",
+                size_bytes=1,
+                storage_backend="local",
+                file_count=1,
+                app_version="0.0.0",
+                path="b1.tar.gz",
+            )
+        ],
     )
 
     def fake_verify(_id):
@@ -952,7 +1098,9 @@ def test_execute_run_cancelled_between_external_and_database_checks(
     db_session.add(run)
     db_session.commit()
 
-    monkeypatch.setattr(vault_audit, "ownership_snapshot", lambda _session: StorageOwnershipSnapshot())
+    monkeypatch.setattr(
+        vault_audit, "ownership_snapshot", lambda _session: StorageOwnershipSnapshot()
+    )
 
     vault_audit.execute_run(run.id)
 
@@ -966,7 +1114,9 @@ def test_execute_run_returns_when_database_check_cancels(
     user = _make_user(db_session, "exec-owner7")
     run = _make_run(db_session, user)
 
-    monkeypatch.setattr(vault_audit, "ownership_snapshot", lambda _session: StorageOwnershipSnapshot())
+    monkeypatch.setattr(
+        vault_audit, "ownership_snapshot", lambda _session: StorageOwnershipSnapshot()
+    )
 
     def fake_check_database(session, run_arg):
         run_arg.state = VaultAuditRunState.CANCELLED
@@ -988,7 +1138,11 @@ def test_execute_run_flags_missing_embedded_image(
     user = _make_user(db_session, "exec-owner8")
     run = _make_run(db_session, user)
 
-    blob = OwnedBlob(key="vault/collection-images/1/pic.png", resource_type="collection_image", resource_id=1)
+    blob = OwnedBlob(
+        key="vault/collection-images/1/pic.png",
+        resource_type="collection_image",
+        resource_id=1,
+    )
     snapshot = StorageOwnershipSnapshot(embedded=[blob])
     monkeypatch.setattr(vault_audit, "ownership_snapshot", lambda _session: snapshot)
     monkeypatch.setattr(get_backend(), "exists", lambda _key: False)
@@ -997,7 +1151,9 @@ def test_execute_run_flags_missing_embedded_image(
 
     from sqlmodel import select
 
-    findings = db_session.exec(select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)).all()
+    findings = db_session.exec(
+        select(VaultAuditFinding).where(VaultAuditFinding.run_id == run.id)
+    ).all()
     assert any(f.code == "embedded_image_missing" for f in findings)
     db_session.refresh(run)
     assert run.state == VaultAuditRunState.COMPLETED
@@ -1009,7 +1165,9 @@ def test_execute_run_full_mode_returns_when_backup_check_cancels(
     user = _make_user(db_session, "exec-owner9")
     run = _make_run(db_session, user, VaultAuditMode.FULL)
 
-    monkeypatch.setattr(vault_audit, "ownership_snapshot", lambda _session: StorageOwnershipSnapshot())
+    monkeypatch.setattr(
+        vault_audit, "ownership_snapshot", lambda _session: StorageOwnershipSnapshot()
+    )
 
     def fake_check_backups(session, run_arg):
         run_arg.state = VaultAuditRunState.CANCELLED
@@ -1039,10 +1197,14 @@ def test_reparse_metadata_success_writes_metadata_row(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model = _make_model(db_session, "reparse-ok")
-    file_row = _make_file(db_session, model, path="reparse-ok.gcode", file_type=FileType.GCODE)
+    file_row = _make_file(
+        db_session, model, path="reparse-ok.gcode", file_type=FileType.GCODE
+    )
     get_backend().write_bytes(b"G28\n", file_row.path)
 
-    monkeypatch.setattr("app.services.ingestion._gcode_strategy", lambda: _StubStrategy())
+    monkeypatch.setattr(
+        "app.services.ingestion._gcode_strategy", lambda: _StubStrategy()
+    )
 
     result = vault_audit._reparse_metadata(db_session, file_row.id)
 
@@ -1051,14 +1213,21 @@ def test_reparse_metadata_success_writes_metadata_row(
 
     from app.db.models import Metadata
 
-    meta = db_session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).first()
+    meta = db_session.exec(
+        select(Metadata).where(Metadata.file_id == file_row.id)
+    ).first()
     assert meta is not None
     assert meta.material_type == "PLA"
 
 
 def test_reparse_metadata_missing_blob_returns_false(db_session: Session) -> None:
     model = _make_model(db_session, "reparse-missing-blob")
-    file_row = _make_file(db_session, model, path="does-not-exist-in-backend.gcode", file_type=FileType.GCODE)
+    file_row = _make_file(
+        db_session,
+        model,
+        path="does-not-exist-in-backend.gcode",
+        file_type=FileType.GCODE,
+    )
 
     result = vault_audit._reparse_metadata(db_session, file_row.id)
 
@@ -1069,11 +1238,15 @@ def test_reparse_metadata_missing_file_row_returns_false(db_session: Session) ->
     assert vault_audit._reparse_metadata(db_session, 999999) is False
 
 
-def test_reparse_metadata_already_has_metadata_is_a_noop_success(db_session: Session) -> None:
+def test_reparse_metadata_already_has_metadata_is_a_noop_success(
+    db_session: Session,
+) -> None:
     from app.db.models import Metadata
 
     model = _make_model(db_session, "reparse-has-meta")
-    file_row = _make_file(db_session, model, path="reparse-has-meta.gcode", file_type=FileType.GCODE)
+    file_row = _make_file(
+        db_session, model, path="reparse-has-meta.gcode", file_type=FileType.GCODE
+    )
     db_session.add(Metadata(file_id=file_row.id, material_type="PETG"))
     db_session.commit()
 
@@ -1087,7 +1260,9 @@ def test_reparse_metadata_already_has_metadata_is_a_noop_success(db_session: Ses
 # --------------------------------------------------------------------------- #
 
 
-def _patch_exec_injecting_unpersisted_row(monkeypatch, db_session, entity_type, extra_row):
+def _patch_exec_injecting_unpersisted_row(
+    monkeypatch, db_session, entity_type, extra_row
+):
     """Wrap ``session.exec`` so a query for ``entity_type`` also yields
     ``extra_row`` (an in-memory instance with ``id=None`` that was never
     flushed to the DB) alongside the real, persisted rows."""
@@ -1137,17 +1312,25 @@ def test_ownership_snapshot_skips_file_row_with_no_id(
 def test_ownership_snapshot_skips_document_row_with_no_id(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    persisted = Document(name="real-doc", kind=DocumentKind.MARKDOWN, filename="real.md")
+    persisted = Document(
+        name="real-doc", kind=DocumentKind.MARKDOWN, filename="real.md"
+    )
     db_session.add(persisted)
     db_session.commit()
     db_session.refresh(persisted)
-    unpersisted = Document(name="ghost-doc", kind=DocumentKind.MARKDOWN, filename="ghost.md")
+    unpersisted = Document(
+        name="ghost-doc", kind=DocumentKind.MARKDOWN, filename="ghost.md"
+    )
     assert unpersisted.id is None
-    _patch_exec_injecting_unpersisted_row(monkeypatch, db_session, Document, unpersisted)
+    _patch_exec_injecting_unpersisted_row(
+        monkeypatch, db_session, Document, unpersisted
+    )
 
     result = ownership_snapshot(db_session, discover=False)
 
-    primary_names = {blob.display_name for blob in result.primary if blob.resource_type == "document"}
+    primary_names = {
+        blob.display_name for blob in result.primary if blob.resource_type == "document"
+    }
     assert "real.md" in primary_names
     assert "ghost.md" not in primary_names
 
@@ -1204,7 +1387,9 @@ def test_ownership_snapshot_skips_collection_row_with_no_id(
         readme="![pic](/collections/999999/images/never.png)",
     )
     assert unpersisted.id is None
-    _patch_exec_injecting_unpersisted_row(monkeypatch, db_session, Collection, unpersisted)
+    _patch_exec_injecting_unpersisted_row(
+        monkeypatch, db_session, Collection, unpersisted
+    )
 
     result = ownership_snapshot(db_session, discover=False)
 
@@ -1248,14 +1433,155 @@ def test_ownership_snapshot_collection_embedded_image_id_must_match_row(
     assert matching[0].key == get_backend().collection_image_key(owner.id, "mine.png")
 
 
-def test_all_owned_blob_keys_includes_primary_and_external_files(db_session: Session) -> None:
+def test_all_owned_blob_keys_includes_primary_and_external_files(
+    db_session: Session,
+) -> None:
     model = _make_model(db_session, "owned-keys")
     internal = _make_file(db_session, model, path="internal.stl")
     external = _make_file(
-        db_session, model, path="/nas/external.stl", is_external=True, version=2,
+        db_session,
+        model,
+        path="/nas/external.stl",
+        is_external=True,
+        version=2,
     )
 
     keys = all_owned_blob_keys(db_session)
 
     assert internal.path in keys
     assert external.path in keys
+
+
+# --------------------------------------------------------------------------- #
+# Run lifecycle — moved here from the maintenance router's test file, which is
+# the mirror of app/api/v1/maintenance.py, not of this module.
+# --------------------------------------------------------------------------- #
+
+
+class TestCreateRun:
+    def test_starts_a_run_for_the_requesting_user(self, db_session: Session) -> None:
+        user = _make_user(db_session, "auditor")
+
+        run, created = vault_audit.create_run(db_session, user.id, VaultAuditMode.QUICK)
+
+        assert created is True
+        assert run.requested_by == user.id
+
+    def test_joins_the_active_run_instead_of_starting_a_second(
+        self, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, "second-auditor")
+        first, _ = vault_audit.create_run(db_session, user.id, VaultAuditMode.QUICK)
+
+        second, created = vault_audit.create_run(
+            db_session, user.id, VaultAuditMode.FULL
+        )
+
+        # Two concurrent walks over the same storage would fight over the same rows.
+        assert created is False
+        assert second.id == first.id
+
+
+class TestExecuteRun:
+    def test_reports_a_file_whose_blob_is_gone(self, db_session: Session) -> None:
+        user = _make_user(db_session, "blob-auditor")
+        model = _make_model(db_session, "missing-blob")
+        _make_file(db_session, model, path="definitely-missing.stl")
+        run, _ = vault_audit.create_run(db_session, user.id, VaultAuditMode.QUICK)
+
+        vault_audit.execute_run(run.id)
+        db_session.expire_all()
+
+        result = vault_audit.read_run(db_session, db_session.get(VaultAuditRun, run.id))
+        assert result.state == VaultAuditRunState.COMPLETED
+        assert any(item.code == "owned_blob_missing" for item in result.findings)
+
+    def test_identifies_a_finding_without_leaking_its_path(
+        self, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, "path-auditor")
+        model = _make_model(db_session, "leaky")
+        _make_file(db_session, model, path="secret/dir/definitely-missing.stl")
+        run, _ = vault_audit.create_run(db_session, user.id, VaultAuditMode.QUICK)
+
+        vault_audit.execute_run(run.id)
+        db_session.expire_all()
+
+        result = vault_audit.read_run(db_session, db_session.get(VaultAuditRun, run.id))
+        assert all("/" not in item.resource_identifier for item in result.findings)
+
+
+class TestReadRun:
+    def test_counts_the_findings_that_exist_now(self, db_session: Session) -> None:
+        user = _make_user(db_session, "count-auditor")
+        run = VaultAuditRun(
+            requested_by=user.id,
+            mode=VaultAuditMode.QUICK,
+            # Stale totals from an earlier pass: the read must not trust them.
+            critical_count=0,
+            warning_count=99,
+            info_count=7,
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+        db_session.add_all(
+            [
+                VaultAuditFinding(
+                    run_id=run.id,
+                    code="owned_blob_missing",
+                    severity=VaultAuditSeverity.CRITICAL,
+                    resource_type="file",
+                    resource_identifier="one.stl",
+                ),
+                VaultAuditFinding(
+                    run_id=run.id,
+                    code="owned_blob_missing",
+                    severity=VaultAuditSeverity.CRITICAL,
+                    resource_type="file",
+                    resource_identifier="two.stl",
+                ),
+                VaultAuditFinding(
+                    run_id=run.id,
+                    code="metadata_missing",
+                    severity=VaultAuditSeverity.WARNING,
+                    resource_type="file",
+                    resource_identifier="three.gcode",
+                ),
+            ]
+        )
+        db_session.commit()
+
+        result = vault_audit.read_run(db_session, run)
+
+        assert (result.critical_count, result.warning_count, result.info_count) == (
+            2,
+            1,
+            0,
+        )
+
+    def test_counts_the_same_way_without_the_findings(
+        self, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, "summary-auditor")
+        run = VaultAuditRun(
+            requested_by=user.id, mode=VaultAuditMode.QUICK, warning_count=99
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+        db_session.add(
+            VaultAuditFinding(
+                run_id=run.id,
+                code="metadata_missing",
+                severity=VaultAuditSeverity.WARNING,
+                resource_type="file",
+                resource_identifier="one.gcode",
+            )
+        )
+        db_session.commit()
+
+        summary = vault_audit.read_run(db_session, run, findings=False)
+
+        assert summary.warning_count == 1
+        assert summary.findings == []
