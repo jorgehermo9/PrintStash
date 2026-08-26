@@ -413,8 +413,12 @@ def _render(
 
     from app.services.mesh_render import RasterBudget, _rasterise_triangles
 
-    coverage_width = max(64, width // 2)
-    coverage_height = max(48, height // 2)
+    # Keep the raster canvas at the requested output size.  The old half-size
+    # canvas made the stored preview a two-times enlargement of a coarse,
+    # stippled image; these buffers are bounded by the thumbnail dimensions and
+    # are tiny compared with the source mesh.
+    coverage_width = max(1, width)
+    coverage_height = max(1, height)
     (
         center,
         rotation,
@@ -424,21 +428,27 @@ def _render(
         extent_x,
         extent_y,
     ) = _frame(first.bounds_min, first.bounds_max, reservoir)
-    margin = 0.18
+    # The robust bounds already discard only the extreme centroid outliers and
+    # the render bounds below retain a 5% safety expansion.  A 10% frame margin
+    # gives small previews useful scale without clipping normal STL geometry.
+    margin = 0.10
     scale = min(
         coverage_width * (1.0 - 2 * margin) / extent_x,
         coverage_height * (1.0 - 2 * margin) / extent_y,
     )
     image = np.zeros((coverage_height, coverage_width, 3), dtype=np.uint8)
-    zbuffer = np.full((coverage_height, coverage_width), np.inf, dtype=np.float64)
+    zbuffer = np.full((coverage_height, coverage_width), np.inf, dtype=np.float32)
     raster_budget = RasterBudget(limit=limits.max_candidates)
+    # The rasteriser still receives a valid normal callback while it fills the
+    # depth buffer, but face normals are deliberately not used for colour.  A
+    # dense STL often contains millions of tiny, differently-oriented facets;
+    # lighting those normals directly is the source of the visible salt-and-
+    # pepper pattern.  Colour is reconstructed from the final screen-space
+    # depth field below, which is bounded by the thumbnail dimensions.
     base_color = np.asarray([255, 255, 255], dtype=np.float32)
-    light = np.asarray([-0.45, 0.6, 1.0], dtype=np.float32)
-    light /= np.linalg.norm(light)
 
     def shade(normals):
-        diffuse = np.clip(normals @ light, 0.0, 1.0)[:, None]
-        return np.clip(0.32 + diffuse * 0.68, 0.0, 1.0)
+        return np.ones_like(normals, dtype=np.float32)
 
     robust_span = np.maximum(robust_max - robust_min, 1e-6)
     # A triangle with an extreme vertex can otherwise expand to the whole frame
@@ -479,10 +489,12 @@ def _render(
         if not valid_normal.any():
             return
         screen = screen[valid_normal]
-        raw = raw[valid_normal]
-        normals = raw / length[valid_normal, None]
-        normals = np.where(normals[:, 2:3] >= 0.0, normals, -normals)
-        corner_normals = normals[:, None, :].repeat(3, axis=1)
+        # Keep the degeneracy check (it prevents malformed facets from
+        # consuming raster candidates), but use a neutral normal here.  The
+        # depth pass is shaded in screen space after all chunks have resolved
+        # into the z-buffer, so no microfacet normal can leak into the image.
+        corner_normals = np.zeros((int(valid_normal.sum()), 3, 3), dtype=np.float32)
+        corner_normals[:, :, 2] = 1.0
         before = raster_budget.used
         _rasterise_triangles(
             image,
@@ -509,15 +521,107 @@ def _render(
         raise _InvalidSTL("source changed between passes")
     if not np.allclose(first.bounds_max, second.bounds_max, rtol=0, atol=0):
         raise _InvalidSTL("source changed between passes")
-    if not np.isfinite(zbuffer).any() or rendered == 0:
+    finite = np.isfinite(zbuffer)
+    if not finite.any() or rendered == 0:
         raise _InvalidSTL("no visible triangles")
-    alpha = np.where(np.isfinite(zbuffer), 255, 0).astype(np.uint8)
-    rgb = np.asarray(
-        Image.fromarray(image, mode="RGB").resize(
-            (width, height), Image.Resampling.LANCZOS
+
+    # Reconstruct a smooth normal field from neighbouring depth samples.  The
+    # arrays below are all fixed to the thumbnail dimensions (never triangle
+    # count), and invalid neighbours are ignored so a real hole remains
+    # transparent instead of being filled by post-processing.
+    safe_depth = np.where(finite, zbuffer, 0.0)
+    left = np.roll(safe_depth, 1, axis=1)
+    right = np.roll(safe_depth, -1, axis=1)
+    left_ok = np.roll(finite, 1, axis=1)
+    right_ok = np.roll(finite, -1, axis=1)
+    left_ok[:, 0] = False
+    right_ok[:, -1] = False
+    both_x = left_ok & right_ok
+    dz_dx = np.where(
+        both_x,
+        (right - left) * 0.5,
+        np.where(
+            right_ok, right - safe_depth, np.where(left_ok, safe_depth - left, 0.0)
         ),
-        dtype=np.uint8,
     )
+    # Release the horizontal neighbours before allocating the vertical set;
+    # at the maximum supported thumbnail dimension this saves several dozen
+    # megabytes of simultaneously-live fixed-size arrays.
+    del left, right, left_ok, right_ok, both_x
+
+    up = np.roll(safe_depth, 1, axis=0)
+    down = np.roll(safe_depth, -1, axis=0)
+    up_ok = np.roll(finite, 1, axis=0)
+    down_ok = np.roll(finite, -1, axis=0)
+    up_ok[0, :] = False
+    down_ok[-1, :] = False
+    both_y = up_ok & down_ok
+    dz_drow = np.where(
+        both_y,
+        (down - up) * 0.5,
+        np.where(down_ok, down - safe_depth, np.where(up_ok, safe_depth - up, 0.0)),
+    )
+    # One screen pixel is 1/scale model units.  Screen rows grow downwards,
+    # hence the sign on the Y component for the view-space normal.
+    slope_x = np.clip(dz_dx * scale, -8.0, 8.0)
+    slope_y = np.clip(dz_drow * scale, -8.0, 8.0)
+    normals = np.stack((-slope_x, slope_y, np.ones_like(slope_x)), axis=-1)
+    normal_length = np.linalg.norm(normals, axis=2, keepdims=True)
+    normals /= np.maximum(normal_length, 1e-6)
+    del (
+        safe_depth,
+        up,
+        down,
+        up_ok,
+        down_ok,
+        both_y,
+        dz_dx,
+        dz_drow,
+        slope_x,
+        slope_y,
+        normal_length,
+    )
+
+    # A single 3x3 normalized box pass removes residual one-pixel depth noise
+    # without touching transparent pixels.  Accumulate one component at a time
+    # so temporary memory stays O(width*height), independent of triangle count.
+    smoothed = np.zeros_like(normals)
+    support = np.zeros((coverage_height, coverage_width), dtype=np.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            shifted_valid = np.roll(finite, (dy, dx), axis=(0, 1))
+            if dy < 0:
+                shifted_valid[dy:, :] = False
+            elif dy > 0:
+                shifted_valid[:dy, :] = False
+            if dx < 0:
+                shifted_valid[:, dx:] = False
+            elif dx > 0:
+                shifted_valid[:, :dx] = False
+            support += shifted_valid
+            shifted_normals = np.roll(normals, (dy, dx), axis=(0, 1))
+            for component in range(3):
+                smoothed[:, :, component] += np.where(
+                    shifted_valid, shifted_normals[:, :, component], 0.0
+                )
+    normals = smoothed / np.maximum(support[:, :, None], 1.0)
+    normal_length = np.linalg.norm(normals, axis=2, keepdims=True)
+    normals /= np.maximum(normal_length, 1e-6)
+
+    light = np.asarray([-0.45, 0.6, 1.0], dtype=np.float32)
+    light /= np.linalg.norm(light)
+    diffuse = np.clip(normals @ light, 0.0, 1.0)
+    brightness = 0.30 + diffuse * 0.70
+    # A cool blue-grey surface provides contrast against the light card while
+    # retaining enough range for the reconstructed depth shading to read.
+    albedo = np.asarray([104.0, 130.0, 166.0], dtype=np.float32)
+    rim = (1.0 - np.clip(normals[:, :, 2], 0.0, 1.0)) ** 2 * 18.0
+    shaded = np.clip(
+        albedo[None, None, :] * brightness[:, :, None] + rim[:, :, None], 0, 255
+    )
+    image[finite] = shaded[finite].astype(np.uint8)
+    alpha = np.where(finite, 255, 0).astype(np.uint8)
+    rgb = np.asarray(image, dtype=np.uint8)
     alpha = np.asarray(
         Image.fromarray(alpha, mode="L").resize(
             (width, height), Image.Resampling.LANCZOS

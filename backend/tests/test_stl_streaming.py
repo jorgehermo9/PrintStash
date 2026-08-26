@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import signal
 import struct
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -68,6 +71,33 @@ endsolid streaming
     )
 
 
+def _binary_annulus_stl(path: Path, segments: int = 48) -> None:
+    """Write a thin ring so the streaming worker's center stays transparent."""
+    outer, inner = 10.0, 4.0
+    record = struct.Struct("<12fH")
+    triangles: list[bytes] = []
+
+    def point(radius: float, index: int) -> tuple[float, float, float]:
+        angle = 2.0 * math.pi * index / segments
+        return radius * math.cos(angle), radius * math.sin(angle), 0.0
+
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        outer0, outer1 = point(outer, index), point(outer, next_index)
+        inner0, inner1 = point(inner, index), point(inner, next_index)
+        triangles.extend(
+            [
+                record.pack(0.0, 0.0, 1.0, *outer0, *outer1, *inner1, 0),
+                record.pack(0.0, 0.0, 1.0, *outer0, *inner1, *inner0, 0),
+            ]
+        )
+    path.write_bytes(
+        b"streaming-annulus".ljust(80, b"\0")
+        + struct.pack("<I", len(triangles))
+        + b"".join(triangles)
+    )
+
+
 def _limits() -> STLStreamingLimits:
     return STLStreamingLimits(
         max_triangles=1_000,
@@ -120,6 +150,113 @@ def test_binary_streaming_preview_is_complete(tmp_path: Path) -> None:
     with Image.open(io.BytesIO(result.png)) as image:
         assert image.format == "PNG"
         assert image.size == (96, 72)
+
+
+def test_streaming_renderer_rasterizes_at_requested_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 320x240 result must not be rendered on a half-size work canvas."""
+    from app.services import stl_preview_worker
+
+    path = tmp_path / "direct-resolution.stl"
+    _binary_triangle_stl(path)
+    reservoir = stl_preview_worker._FramingReservoir()
+
+    def collect(vertices: object) -> None:
+        import numpy as np
+
+        values = np.asarray(vertices)
+        reservoir.add(values.mean(axis=1))
+
+    limits = stl_preview_worker._Limits(
+        max_triangles=1_000,
+        max_source_bytes=1_000_000,
+        max_candidates=1_000_000,
+        chunk_triangles=128,
+        max_lines=10_000,
+        max_line_bytes=64 * 1024,
+        deadline=time.monotonic() + 5,
+    )
+    first = stl_preview_worker._read_pass(path, limits, collect)
+    observed: list[tuple[tuple[int, ...], tuple[int, ...], int, int]] = []
+
+    def fake_rasterise(
+        image: object,
+        zbuffer: object,
+        _triangles: object,
+        _normals: object,
+        _shade: object,
+        _base_color: object,
+        raster_width: int,
+        raster_height: int,
+        *,
+        budget: Any = None,
+    ) -> int:
+        import numpy as np
+
+        observed.append(
+            (
+                np.asarray(image).shape,
+                np.asarray(zbuffer).shape,
+                raster_width,
+                raster_height,
+            )
+        )
+        np.asarray(image)[0, 0] = 200
+        np.asarray(zbuffer)[0, 0] = 0.0
+        if budget is not None:
+            budget.used += 1
+        return 1
+
+    from app.services import mesh_render
+
+    monkeypatch.setattr(mesh_render, "_rasterise_triangles", fake_rasterise)
+    output = tmp_path / "direct-resolution.png"
+    assert (
+        stl_preview_worker._render(path, output, 320, 240, limits, first, reservoir) > 0
+    )
+    assert observed
+    assert all(
+        image_shape == (240, 320, 3)
+        and zbuffer_shape == (240, 320)
+        and raster_width == 320
+        and raster_height == 240
+        for image_shape, zbuffer_shape, raster_width, raster_height in observed
+    )
+
+
+def test_streaming_preview_is_deterministic_and_keeps_background_transparent(
+    tmp_path: Path,
+) -> None:
+    import numpy as np
+    from PIL import Image
+
+    path = tmp_path / "deterministic.stl"
+    _binary_triangle_stl(path, count=12)
+    first = render_stl_preview_isolated(path, width=160, height=120, limits=_limits())
+    second = render_stl_preview_isolated(path, width=160, height=120, limits=_limits())
+
+    assert first is not None and second is not None
+    assert first.png == second.png
+    pixels = np.asarray(Image.open(io.BytesIO(first.png)).convert("RGBA"))
+    assert pixels[0, 0, 3] == 0
+    assert int((pixels[:, :, 3] > 200).sum()) > 0
+
+
+def test_streaming_preview_preserves_true_annulus_hole(tmp_path: Path) -> None:
+    import numpy as np
+    from PIL import Image
+
+    path = tmp_path / "annulus.stl"
+    _binary_annulus_stl(path)
+    result = render_stl_preview_isolated(path, width=160, height=120, limits=_limits())
+
+    assert result is not None
+    pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
+    alpha = pixels[:, :, 3]
+    center = alpha[alpha.shape[0] // 2, alpha.shape[1] // 2]
+    assert center < 32
+    assert float((alpha > 200).mean()) > 0.10
 
 
 def test_ascii_streaming_preview_is_complete(tmp_path: Path) -> None:
