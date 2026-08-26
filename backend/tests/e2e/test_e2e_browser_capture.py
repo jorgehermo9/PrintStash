@@ -2,16 +2,288 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
+from printstash_core.imports import CaptureManifestV2, ResolvedAsset, StagedAsset
 from sqlmodel import select
 
-from app.db.models import InboxItem, InboxItemState, User
+from app.core.config import settings
+from app.db.models import (
+    ArtifactProvenanceLink,
+    File,
+    InboxItem,
+    InboxItemState,
+    Model,
+    User,
+)
 from app.services import inbox
 from app.services.auth import create_api_key
+from app.services.hashing import sha256_file
 
 pytestmark = pytest.mark.e2e
+
+
+def _captured_manifest() -> CaptureManifestV2:
+    return CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": "https://www.printables.com/model/3161-3d-benchy",
+                "source_item_id": "3161",
+                "source_revision": None,
+                "adapter_version": "fixture-v1",
+                "fields": {"title": {"value": "3D Benchy", "origin": "confirmed"}},
+            },
+            "files": [
+                {"id": "stl-1", "name": "benchy.stl", "file_type": "stl", "size": 12}
+            ],
+            "selected_ids": ["stl-1"],
+        }
+    )
+
+
+def _stage_fixture_asset(tmp_path: Path, manifest: CaptureManifestV2) -> StagedAsset:
+    source = Path(__file__).resolve().parents[1] / "fixtures" / "sample.gcode"
+    staged = settings.incoming_dir / f"{tmp_path.name}-benchy.gcode"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, staged)
+    resolved = ResolvedAsset(
+        manifest=manifest,
+        source_selection_id="stl-1",
+        source_file_id="stl-1",
+        source_filename="benchy.gcode",
+        download_url="https://fixture.invalid/benchy.gcode",
+        source_item_id="3161",
+    )
+    return StagedAsset(resolved, staged, "self", sha256_file(staged))
+
+
+@pytest.mark.asyncio
+async def test_browser_capture_resolves_offline_printables_fixture_to_review(
+    api, superuser_headers, e2e_db, monkeypatch
+) -> None:
+    """The public capture endpoint persists V2 review data without egress."""
+    owner = e2e_db.exec(select(User).where(User.username == "e2e-admin")).one()
+    monkeypatch.setattr(inbox.importer, "validate_public_url", lambda _url: None)
+
+    async def _fixture_capture(_url: str) -> CaptureManifestV2:
+        return _captured_manifest()
+
+    monkeypatch.setattr(
+        inbox.import_resolvers, "resolve_capture_manifest", _fixture_capture
+    )
+    captured = await api.post(
+        "/api/v1/inbox",
+        headers=superuser_headers,
+        json={"url": "https://www.printables.com/model/3161-3d-benchy"},
+    )
+
+    assert captured.status_code == 202, captured.text
+    detail = await api.get(
+        f"/api/v1/inbox/{captured.json()['id']}", headers=superuser_headers
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["state"] == "review"
+    assert detail.json()["manifest"] == _captured_manifest().to_dict()
+    assert e2e_db.exec(select(InboxItem)).one().owner_user_id == owner.id
+
+
+@pytest.mark.asyncio
+async def test_offline_capture_import_recapture_deduplicates_durable_artifact(
+    api, superuser_headers, e2e_db, monkeypatch, tmp_path
+) -> None:
+    """Offline URL capture follows the real Inbox/import/provenance transaction."""
+    manifest = _captured_manifest()
+    manifest = CaptureManifestV2.from_dict(
+        {
+            **manifest.to_dict(),
+            "files": [
+                {"id": "stl-1", "name": "benchy.gcode", "file_type": "gcode", "size": 1}
+            ],
+        }
+    )
+    monkeypatch.setattr(inbox.importer, "validate_public_url", lambda _url: None)
+
+    async def _fixture_capture(_url: str) -> CaptureManifestV2:
+        return manifest
+
+    async def _fixture_resolved(
+        _url: str, _manifest: CaptureManifestV2, _ids: list[str]
+    ):
+        return [_stage_fixture_asset(tmp_path, manifest).resolved]
+
+    async def _fixture_stage(resolved: ResolvedAsset) -> list[StagedAsset]:
+        return [_stage_fixture_asset(tmp_path, resolved.manifest)]
+
+    monkeypatch.setattr(
+        inbox.import_resolvers, "resolve_capture_manifest", _fixture_capture
+    )
+    monkeypatch.setattr(
+        inbox.import_resolvers, "resolve_selected_assets", _fixture_resolved
+    )
+    monkeypatch.setattr(inbox, "_download_resolved_asset", _fixture_stage)
+
+    async def capture_and_import() -> dict:
+        captured = await api.post(
+            "/api/v1/inbox",
+            headers=superuser_headers,
+            json={"url": "https://www.printables.com/model/3161-3d-benchy"},
+        )
+        assert captured.status_code == 202, captured.text
+        item_id = captured.json()["id"]
+        imported = await api.post(
+            f"/api/v1/inbox/{item_id}/import",
+            headers=superuser_headers,
+            json={"selected_ids": ["stl-1"]},
+        )
+        assert imported.status_code == 200, imported.text
+        return (
+            await api.get(f"/api/v1/inbox/{item_id}", headers=superuser_headers)
+        ).json()
+
+    first = await capture_and_import()
+    assert first["state"] == "completed"
+    assert first["results"][0]["state"] == "imported"
+    assert len(e2e_db.exec(select(File)).all()) == 1
+    assert len(e2e_db.exec(select(ArtifactProvenanceLink)).all()) == 1
+    assert len(e2e_db.exec(select(Model)).all()) == 1
+
+    model_id = first["results"][0]["model_id"]
+    source = (
+        await api.get(
+            f"/api/v1/models/{model_id}/provenance", headers=superuser_headers
+        )
+    ).json()["sources"][0]
+    overridden = await api.patch(
+        f"/api/v1/models/{model_id}/provenance/{source['id']}",
+        headers=superuser_headers,
+        json={"overrides": {"title": "My Benchy"}},
+    )
+    assert overridden.status_code == 200, overridden.text
+    title = overridden.json()["sources"][0]["fields"][0]
+    assert title["effective_value"] == "My Benchy"
+    assert title["effective_origin"] == "user"
+
+    second = await capture_and_import()
+    assert second["state"] == "completed"
+    assert second["results"][0]["state"] == "deduplicated"
+    assert len(e2e_db.exec(select(File)).all()) == 1
+    preserved = await api.get(
+        f"/api/v1/models/{model_id}/provenance", headers=superuser_headers
+    )
+    assert preserved.json()["sources"][0]["fields"][0]["effective_value"] == "My Benchy"
+
+
+@pytest.mark.asyncio
+async def test_offline_capture_partial_result_retries_only_failed_selection(
+    api, superuser_headers, e2e_db, monkeypatch, tmp_path
+) -> None:
+    """One child can fail while its sibling remains durable and is not retried."""
+    manifest = CaptureManifestV2.from_dict(
+        {
+            **_captured_manifest().to_dict(),
+            "files": [
+                {"id": "good", "name": "good.gcode", "file_type": "gcode", "size": 1},
+                {"id": "bad", "name": "bad.gcode", "file_type": "gcode", "size": 1},
+            ],
+            "selected_ids": ["good", "bad"],
+        }
+    )
+    monkeypatch.setattr(inbox.importer, "validate_public_url", lambda _url: None)
+    resolution_calls: list[list[str]] = []
+
+    async def _fixture_capture(_url: str) -> CaptureManifestV2:
+        return manifest
+
+    async def _fixture_resolved(
+        _url: str, _manifest: CaptureManifestV2, selected_ids: list[str]
+    ) -> list[ResolvedAsset]:
+        resolution_calls.append(selected_ids)
+        return [
+            ResolvedAsset(
+                manifest=manifest,
+                source_selection_id=file_id,
+                source_file_id=file_id,
+                source_filename=f"{file_id}.gcode",
+                download_url=f"https://fixture.invalid/{file_id}.gcode",
+                source_item_id="3161",
+            )
+            for file_id in selected_ids
+        ]
+
+    async def _fixture_stage(resolved: ResolvedAsset) -> list[StagedAsset]:
+        staged = _stage_fixture_asset(tmp_path, manifest)
+        staged_path = staged.staged_path.with_name(
+            f"{tmp_path.name}-{resolved.source_selection_id}.gcode"
+        )
+        shutil.copyfile(staged.staged_path, staged_path)
+        if resolved.source_selection_id == "bad":
+            staged_path.write_bytes(staged_path.read_bytes() + b"\n; bad fixture\n")
+        return [
+            StagedAsset(
+                resolved=resolved,
+                staged_path=staged_path,
+                result_key="self",
+                blob_sha256=sha256_file(staged_path),
+            )
+        ]
+
+    original_ingest = inbox.importer.ingest_orca_gcode
+    fail_bad = True
+
+    def _one_bad_file(*args, **kwargs) -> None:
+        nonlocal fail_bad
+        if kwargs["original_filename"] == "bad.gcode" and fail_bad:
+            fail_bad = False
+            raise RuntimeError("fixture_child_failure")
+        original_ingest(*args, **kwargs)
+
+    monkeypatch.setattr(
+        inbox.import_resolvers, "resolve_capture_manifest", _fixture_capture
+    )
+    monkeypatch.setattr(
+        inbox.import_resolvers, "resolve_selected_assets", _fixture_resolved
+    )
+    monkeypatch.setattr(inbox, "_download_resolved_asset", _fixture_stage)
+    monkeypatch.setattr(inbox.importer, "ingest_orca_gcode", _one_bad_file)
+
+    captured = await api.post(
+        "/api/v1/inbox",
+        headers=superuser_headers,
+        json={"url": "https://www.printables.com/model/3161-3d-benchy"},
+    )
+    item_id = captured.json()["id"]
+    first = await api.post(
+        f"/api/v1/inbox/{item_id}/import",
+        headers=superuser_headers,
+        json={"selected_ids": ["good", "bad"]},
+    )
+    assert first.status_code == 200, first.text
+    partial = (
+        await api.get(f"/api/v1/inbox/{item_id}", headers=superuser_headers)
+    ).json()
+    assert partial["state"] == "completed"
+    assert partial["completion"] == "partial"
+    assert {result["state"] for result in partial["results"]} == {"imported", "failed"}
+    assert len(e2e_db.exec(select(File)).all()) == 1
+
+    retried = await api.post(
+        f"/api/v1/inbox/{item_id}/retry", headers=superuser_headers
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["manifest"]["selected_ids"] == ["bad"]
+    assert resolution_calls == [["good", "bad"], ["bad"]]
+    completed = (
+        await api.get(f"/api/v1/inbox/{item_id}", headers=superuser_headers)
+    ).json()
+    assert completed["state"] == "completed"
+    assert completed["completion"] == "complete"
+    assert {result["state"] for result in completed["results"]} == {"imported"}
+    assert len(e2e_db.exec(select(File)).all()) == 2
 
 
 @pytest.mark.asyncio

@@ -111,6 +111,12 @@ class StorageBackend(ABC):
     def thumbnail_key(self, file_id: int) -> str: ...
 
     @abstractmethod
+    def source_cover_key(self, provenance_source_id: int) -> str: ...
+
+    @abstractmethod
+    def capture_upload_slot_key(self, slot_id: str) -> str: ...
+
+    @abstractmethod
     def legacy_thumbnail_key(self, file_id: int) -> str:
         """PNG key used before thumbnails moved to WebP. Read/delete only —
         new thumbnails are always written under ``thumbnail_key``."""
@@ -359,6 +365,14 @@ class LocalStorageBackend(StorageBackend):
     def thumbnail_key(self, file_id: int) -> str:
         return str(settings.thumb_dir / f"{file_id}.webp")
 
+    def source_cover_key(self, provenance_source_id: int) -> str:
+        return str(
+            settings.thumb_dir / "source-covers" / f"{provenance_source_id}.webp"
+        )
+
+    def capture_upload_slot_key(self, slot_id: str) -> str:
+        return str(settings.data_dir / "capture-slots" / slot_id)
+
     def legacy_thumbnail_key(self, file_id: int) -> str:
         return str(settings.thumb_dir / f"{file_id}.png")
 
@@ -598,7 +612,10 @@ class LocalStorageBackend(StorageBackend):
             raise StorageCollisionError("legacy_storage_object_unavailable") from exc
         try:
             before = os.fstat(fd)
-            if not stat_module.S_ISREG(before.st_mode) or before.st_size != expected_size:
+            if (
+                not stat_module.S_ISREG(before.st_mode)
+                or before.st_size != expected_size
+            ):
                 raise StorageCollisionError("legacy_storage_content_mismatch")
             digest = hashlib.sha256()
             while chunk := os.read(fd, 1024 * 1024):
@@ -866,6 +883,12 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
     def thumbnail_key(self, file_id: int) -> str:
         return f"{self._prefix()}thumbs/{file_id}.webp"
 
+    def source_cover_key(self, provenance_source_id: int) -> str:
+        return f"{self._prefix()}source-covers/{provenance_source_id}.webp"
+
+    def capture_upload_slot_key(self, slot_id: str) -> str:
+        return f"{self._prefix()}capture-slots/{slot_id}"
+
     def legacy_thumbnail_key(self, file_id: int) -> str:
         return f"{self._prefix()}thumbs/{file_id}.png"
 
@@ -1121,6 +1144,48 @@ class S3StorageBackend(StorageBackend):  # pragma: no cover — needs a real S3-
         if receipt.etag and str(response.get("ETag", "")) != receipt.etag:
             return False
         return True
+
+    def adopt_existing(
+        self, key: str, *, expected_size: int, expected_sha256: str
+    ) -> CreationReceipt:
+        """Recover a pending S3 publication with content and token proof."""
+        import botocore.exceptions
+
+        try:
+            head = self._client.head_object(Bucket=self._bucket, Key=key)
+        except botocore.exceptions.ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code")
+            if code in {"404", "NoSuchKey", "NotFound"}:
+                raise FileNotFoundError(key) from exc
+            raise
+        size = int(head.get("ContentLength", -1))
+        metadata = head.get("Metadata", {})
+        token = metadata.get("printstash-create-token")
+        if size != expected_size or not isinstance(token, str) or not token:
+            raise StorageCollisionError(key)
+        get_kwargs: dict[str, str] = {"Bucket": self._bucket, "Key": key}
+        version_id = head.get("VersionId")
+        if version_id:
+            get_kwargs["VersionId"] = str(version_id)
+        response = self._client.get_object(**get_kwargs)
+        digest = hashlib.sha256(response["Body"].read()).hexdigest()
+        if digest != expected_sha256.lower():
+            raise StorageCollisionError(key)
+        etag = head.get("ETag")
+        if etag and not str(etag).startswith('"'):
+            etag = f'"{etag}"'
+        receipt = CreationReceipt(
+            key=key,
+            size=size,
+            token=token,
+            backend="s3",
+            namespace=f"{self._bucket}/{self._prefix()}",
+            etag=str(etag) if etag else None,
+            version_id=str(version_id) if version_id else None,
+        )
+        if not self.creation_matches(receipt):
+            raise StorageCollisionError(key)
+        return receipt
 
     def verify_destructive_access(self, keys: list[str]) -> None:
         if not keys:

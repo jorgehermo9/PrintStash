@@ -105,6 +105,53 @@ def enqueue_owned_key(
     return False
 
 
+def enqueue_creation_receipt(
+    session: Session,
+    backend: StorageBackend,
+    receipt: CreationReceipt,
+    *,
+    resource_kind: str | None = None,
+    resource_id: int | str | None = None,
+) -> StorageDeleteIntent:
+    """Durably authorize deletion of one exact receipt without touching bytes.
+
+    This is for short-lived objects (such as browser capture slots) that have
+    not entered the long-lived ``OwnedStorageObject`` inventory.  The caller's
+    transaction owns both this intent and its source rows; a rollback leaves
+    the bytes and the source receipt intact.
+    """
+    if not backend.creation_matches(receipt):
+        raise UnsafeStorageDeleteError("storage_object_no_longer_matches_receipt")
+    existing = session.exec(
+        select(StorageDeleteIntent).where(
+            StorageDeleteIntent.backend == receipt.backend,
+            StorageDeleteIntent.namespace == receipt.namespace,
+            StorageDeleteIntent.key == receipt.key,
+            StorageDeleteIntent.token == receipt.token,
+        )
+    ).first()
+    if existing is not None:
+        return existing
+    intent = StorageDeleteIntent(
+        backend=receipt.backend,
+        namespace=receipt.namespace,
+        key=receipt.key,
+        object_kind="capture_upload_slot",
+        token=receipt.token,
+        size_bytes=receipt.size,
+        etag=receipt.etag,
+        version_id=receipt.version_id,
+        device=receipt.device,
+        inode=receipt.inode,
+        ctime_ns=receipt.ctime_ns,
+        resource_kind=resource_kind,
+        resource_id=str(resource_id) if resource_id is not None else None,
+    )
+    session.add(intent)
+    session.flush()
+    return intent
+
+
 def _mark_retry(intent: StorageDeleteIntent, exc: Exception) -> None:
     intent.status = "retry"
     intent.attempts += 1

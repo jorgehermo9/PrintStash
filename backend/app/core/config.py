@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine.url import make_url
 
@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     oidc_display_name: str = "Single sign-on"
     oidc_redirect_uri: str = ""
     oidc_allow_insecure_http: bool = False
+    # MyMiniFactory OAuth application credentials.  Both values are redacted by
+    # Pydantic's SecretStr in settings dumps, exceptions, and repr output.
+    mmf_client_id: SecretStr | None = None
+    mmf_client_secret: SecretStr | None = None
     # Short-lived token embedded in slicer ("Open in slicer") download URLs so an
     # external slicer process can fetch the file without the user's login session.
     slicer_download_token_expire_minutes: int = Field(default=15, gt=0)
@@ -102,6 +106,10 @@ class Settings(BaseSettings):
     staging_max_active_per_user: int = Field(default=4, gt=0)
     staging_max_gb: int = Field(default=4, gt=0)
     staging_min_free_gb: int = Field(default=1, ge=0)
+    # Browser captures remain available for review; once importing begins the
+    # shorter worker lease bounds abandoned staged bytes.
+    staging_review_lease_days: int = Field(default=30, gt=0)
+    staging_import_lease_hours: int = Field(default=24, gt=0)
     fleet_batch_max_quantity: int = Field(default=100, gt=0)
     ingest_worker_count: int = Field(default=2, gt=0)
     media_worker_timeout_seconds: int = Field(default=180, gt=0)
@@ -116,6 +124,14 @@ class Settings(BaseSettings):
     three_mf_preview_max_central_directory_mb: int = Field(default=8, gt=0)
     three_mf_preview_max_ratio: float = Field(default=100.0, gt=0)
     three_mf_preview_max_concurrent: int = Field(default=2, gt=0)
+    # Outbound metadata providers are deliberately capped even when an operator
+    # raises related application limits. These settings only allow tightening
+    # the safe defaults; retry and redirect handling stays in the transport.
+    capture_provider_max_attempts: int = Field(default=3, ge=1, le=3)
+    capture_provider_connect_timeout_seconds: float = Field(default=5, gt=0, le=5)
+    capture_provider_total_timeout_seconds: float = Field(default=30, gt=0, le=30)
+    capture_provider_concurrency: int = Field(default=4, ge=1, le=4)
+    capture_provider_retry_after_max_seconds: float = Field(default=10, ge=0, le=10)
     log_level: str = "INFO"
 
     # Static ceiling on mesh density for geometry extraction + thumbnail
@@ -187,6 +203,11 @@ class Settings(BaseSettings):
     # deadline; its RSS budget is derived from mesh_memory_budget_fraction and
     # the detected cgroup/host limit, just like other mesh work.
     mesh_step_timeout_seconds: int = Field(default=90, gt=0)
+
+    # Oversized STL previews run in a disposable, streaming worker. The worker
+    # deadline is intentionally capped by the service so an operator override
+    # cannot leave an ingestion thread waiting indefinitely.
+    mesh_stream_timeout_seconds: int = Field(default=45, gt=0, le=45)
 
     # Optional static bearer token guarding the Prometheus /metrics endpoint.
     # Empty = open on the trusted internal network (see docs/known-limitations).

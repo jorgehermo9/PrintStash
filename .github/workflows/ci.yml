@@ -434,6 +434,151 @@ jobs:
       - name: Test frontend in browser
         run: pnpm test:e2e
 
+  browser-extension:
+    name: Browser extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: browser-extension
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: browser-extension/pnpm-lock.yaml
+
+      - name: Install extension dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check extension formatting
+        run: pnpm format:check
+
+      - name: Lint extension
+        run: pnpm lint
+
+      - name: Typecheck extension
+        run: pnpm typecheck
+
+      - name: Test extension and build Chrome, Firefox, and Edge
+        run: pnpm test
+
+      - name: Install backend runtime for capture boundary
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python for capture boundary
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies for capture boundary
+        working-directory: backend
+        run: uv sync --extra dev --frozen
+
+      - name: Provision ephemeral backend for extension capture
+        working-directory: backend
+        shell: bash
+        run: |
+          capture_root="$(mktemp -d "${RUNNER_TEMP}/printstash-capture.XXXXXX")"
+          setup_token="$(openssl rand -hex 32)"
+          echo "PRINTSTASH_EXTENSION_CAPTURE_BASE_URL=http://127.0.0.1:8765" >> "$GITHUB_ENV"
+          echo "PRINTSTASH_EXTENSION_CAPTURE_SETUP_TOKEN=$setup_token" >> "$GITHUB_ENV"
+          echo "PRINTSTASH_EXTENSION_CAPTURE_ROOT=$capture_root" >> "$GITHUB_ENV"
+          VAULT_SETUP_TOKEN="$setup_token" \
+          VAULT_DB_URL="sqlite:///${capture_root}/printstash.sqlite" \
+          VAULT_DATA_DIR="$capture_root/files" \
+          VAULT_THUMB_DIR="$capture_root/thumbs" \
+          VAULT_STAGING_DIR="$capture_root/staging" \
+          VAULT_BACKUP_DIR="$capture_root/backups" \
+          VAULT_SECRETS_KEY_FILE="$capture_root/secrets-key" \
+          uv run uvicorn app.main:app --host 127.0.0.1 --port 8765 \
+            >"${RUNNER_TEMP}/printstash-capture-backend.log" 2>&1 &
+          echo $! >"${RUNNER_TEMP}/printstash-capture-backend.pid"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8765/api/v1/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/printstash-capture-backend.log"
+          exit 1
+
+      - name: Run real backend extension capture boundary
+        run: pnpm test:real-backend-capture
+
+      - name: Tear down ephemeral capture backend
+        if: always()
+        shell: bash
+        run: |
+          if test -f "${RUNNER_TEMP}/printstash-capture-backend.pid"; then
+            kill "$(cat "${RUNNER_TEMP}/printstash-capture-backend.pid")" 2>/dev/null || true
+          fi
+          if test -n "${PRINTSTASH_EXTENSION_CAPTURE_ROOT:-}" \
+            && test -d "$PRINTSTASH_EXTENSION_CAPTURE_ROOT" \
+            && [[ "$PRINTSTASH_EXTENSION_CAPTURE_ROOT" == "${RUNNER_TEMP}/printstash-capture."* ]]; then
+            rm -rf "$PRINTSTASH_EXTENSION_CAPTURE_ROOT"
+          fi
+
+      - name: Locate runner Chrome and ChromeDriver
+        id: browser
+        shell: bash
+        run: |
+          chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
+          chromedriver="$(command -v chromedriver || true)"
+          test -n "$chrome" || { echo "No runner-installed Chrome/Chromium found" >&2; exit 1; }
+          test -n "$chromedriver" || { echo "No runner-installed ChromeDriver found" >&2; exit 1; }
+          echo "chrome=$chrome" >> "$GITHUB_OUTPUT"
+          echo "chromedriver=$chromedriver" >> "$GITHUB_OUTPUT"
+
+      - name: Run ChromeDriver
+        shell: bash
+        run: |
+          "${{ steps.browser.outputs.chromedriver }}" --port=4444 --url-base=/ >"${RUNNER_TEMP}/printstash-chromedriver.log" 2>&1 &
+          echo $! >"${RUNNER_TEMP}/printstash-chromedriver.pid"
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4444/status >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/printstash-chromedriver.log"
+          exit 1
+
+      - name: Run loaded Chrome extension smoke
+        env:
+          PRINTSTASH_EXTENSION_BROWSER_BINARY: ${{ steps.browser.outputs.chrome }}
+          PRINTSTASH_EXTENSION_WEBDRIVER_HOST: 127.0.0.1
+          PRINTSTASH_EXTENSION_WEBDRIVER_PORT: "4444"
+          PRINTSTASH_EXTENSION_WEBDRIVER_PATH: /
+          PRINTSTASH_EXTENSION_DIST: ${{ github.workspace }}/browser-extension/.output/chrome-mv3
+        run: pnpm test:e2e
+
+      - name: Stop ChromeDriver
+        if: always()
+        shell: bash
+        run: |
+          if test -f "${RUNNER_TEMP}/printstash-chromedriver.pid"; then
+            kill "$(cat "${RUNNER_TEMP}/printstash-chromedriver.pid")" 2>/dev/null || true
+          fi
+
+      - name: Upload ChromeDriver log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-extension-chromedriver-log
+          path: ${{ runner.temp }}/printstash-chromedriver.log
+
   e2e-real:
     name: Real-backend E2E
     runs-on: ubuntu-latest

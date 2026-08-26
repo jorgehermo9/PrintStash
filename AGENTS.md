@@ -8,6 +8,40 @@ Workflow reference (release procedure, roadmap position, plan pointers):
 `.claude/skills/printstash/SKILL.md` — read it before release or roadmap
 work; that detail lives there, not here, so this file stays small.
 
+## Bounded coordination
+
+For every task that authorizes code changes, use the repository-scoped
+`printstash_coordinator` under `.codex/agents/`. The coordinator delegates code
+to these workers:
+
+- Backend, API, database, migrations, storage, services, providers, and backend
+  tests → `printstash_backend_implementer`.
+- Frontend, shared web-domain packages, UI, browser extension, and their tests →
+  `printstash_web_implementer`.
+
+For a cross-stack change, dispatch both workers with explicit, non-overlapping
+file ownership. Settle the shared contract and its canonical owner before they
+work in parallel; the backend worker owns backend/core contracts and the web
+worker consumes them. The coordinator owns synthesis, conflict avoidance, and
+one final integration gate. It follows a finite loop:
+
+1. Set acceptance checks and ownership before dispatch.
+2. Run one implementation pass with the fewest useful workers.
+3. Run one consolidated review that reports every blocking finding in one batch.
+4. Run at most one correction pass, limited to that batch, then verify once and
+   hand off.
+
+After the correction pass, newly discovered critical security or data-loss risk
+is reported as a blocker; all other findings become follow-up work. A second
+correction or review cycle requires explicit user approval. Do not recursively
+review reviewers, repeat unchanged gates, or widen acceptance criteria mid-run.
+
+All code-building workers use `gpt-5.6-luna` with `xhigh` reasoning and Fast
+service. Workers do not spawn agents. Read-only explanation, planning, release,
+and documentation-only tasks stay with the coordinator. If a named worker
+profile is unavailable, use a generic worker with the same Luna/xhigh settings;
+the coordinator does not take over code implementation.
+
 ## Layout
 - `backend/` FastAPI + SQLModel + Alembic. App code in `backend/app/{api,core,db,services,schemas}`; tests in `backend/tests`.
 - `frontend/` Vite + React + TS.

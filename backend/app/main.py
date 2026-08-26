@@ -5,6 +5,8 @@ import hmac
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
+from enum import Enum
 from functools import partial
 
 from fastapi import FastAPI, Request, Response
@@ -14,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.engine.url import make_url
-from sqlmodel import select
+from sqlmodel import col, select
 from starlette import status
 
 from app.api.v1 import api_router
@@ -56,12 +58,18 @@ from app.services.setup_token import current_setup_token
 from app.services.storage_backend import (
     LocalStorageBackend,
     S3StorageBackend,
+    StorageBackend,
     bind_backend,
 )
 from app.services.task_queue import LocalTaskQueue
 from app.services.trash import gc_soft_deleted
 
 logger = get_logger(__name__)
+
+
+def _metric_enum_value(value: object) -> str:
+    """Render SQL enum values consistently for Prometheus labels."""
+    return str(value.value) if isinstance(value, Enum) else str(value)
 
 
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
@@ -71,11 +79,62 @@ async def _cancel_tasks(*tasks: asyncio.Task) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _close_outbound_clients() -> None:
+    """Close pooled outbound clients while preserving the first close error."""
+
+    from app.services.capture_provider_transport import close_provider_transport
+    from app.services.moonraker import close_http_client
+    from app.services.provider_redaction import redact_exception
+
+    try:
+        await close_http_client()
+    finally:
+        try:
+            await close_provider_transport()
+        except Exception as exc:
+            # A provider pool is best-effort shutdown work.  Do not prevent the
+            # process lock from being released or mask a failure from the
+            # existing shared HTTP client cleanup.
+            logger.error(
+                "failed to close capture provider transport error=%s",
+                redact_exception(exc),
+            )
+
+
 def _safe_db_url(value: str) -> str:
     try:
         return make_url(value).render_as_string(hide_password=True)
     except Exception:
         return "<invalid-db-url>"
+
+
+def _compose_storage_backend() -> StorageBackend:
+    """Bind and recover the configured backend before serving requests."""
+    if settings.storage_backend == "s3":
+        storage_backend: StorageBackend = S3StorageBackend()
+    else:
+        storage_backend = LocalStorageBackend()
+    storage_backend.ensure_setup()
+    bound = bind_backend(storage_backend)
+    from app.services.inbox import reconcile_storage_publications
+
+    recovered = reconcile_storage_publications()
+    if recovered:
+        logger.warning("reconciled %d pending storage publication(s)", recovered)
+    return bound
+
+
+def _prepare_storage_for_startup() -> StorageBackend:
+    """Bind storage and recover its durable publications before Inbox recovery."""
+    backend = _compose_storage_backend()
+    from app.services.inbox import reconcile_interrupted_items
+
+    interrupted_imports = reconcile_interrupted_items()
+    if interrupted_imports:
+        logger.warning(
+            "reconciled %d interrupted pending import(s)", interrupted_imports
+        )
+    return backend
 
 
 @asynccontextmanager
@@ -108,6 +167,9 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "reset %d external library scan(s) stranded by restart", reset_count
             )
+    # Storage must be configured and bound before either publication recovery
+    # or Inbox recovery can inspect durable capture-slot receipts.
+    _backend = _prepare_storage_for_startup()
     from app.services.jobs import reconcile_interrupted_jobs
 
     interrupted_jobs = reconcile_interrupted_jobs()
@@ -118,24 +180,9 @@ async def lifespan(app: FastAPI):
     interrupted_audits = reconcile_interrupted_runs()
     if interrupted_audits:
         logger.warning("reconciled %d interrupted vault audit(s)", interrupted_audits)
-    from app.services.inbox import reconcile_interrupted_items
-
-    interrupted_imports = reconcile_interrupted_items()
-    if interrupted_imports:
-        logger.warning(
-            "reconciled %d interrupted pending import(s)", interrupted_imports
-        )
     stranded_dispatches = reconcile_stranded_dispatches()
     if stranded_dispatches:
         logger.warning("reconciled %d stranded fleet dispatch(es)", stranded_dispatches)
-    # Compose storage explicitly after the runtime overlay is active.  The
-    # compatibility facade is bound only after setup validation succeeds.
-    if settings.storage_backend == "s3":
-        storage_backend = S3StorageBackend()
-    else:
-        storage_backend = LocalStorageBackend()
-    storage_backend.ensure_setup()
-    _backend = bind_backend(storage_backend)
     if not configured:
         logger.warning(
             "vault is unconfigured — open the web UI and enter this setup token: %s",
@@ -186,10 +233,10 @@ async def lifespan(app: FastAPI):
     )
     await watcher.stop_all()
     await hub.stop_all()
-    from app.services.moonraker import close_http_client
-
-    await close_http_client()
-    release_process_lock(process_lock)
+    try:
+        await _close_outbound_clients()
+    finally:
+        release_process_lock(process_lock)
     logger.info("shutting down")
 
 
@@ -217,9 +264,13 @@ async def _gc_loop(*, storage_maintenance_enabled: bool = True) -> None:
             except Exception:
                 logger.exception("notification delivery pruning failed")
             try:
-                from app.services.inbox import prune_history
+                from app.services.inbox import (
+                    prune_expired_browser_leases,
+                    prune_history,
+                )
 
                 await asyncio.to_thread(prune_history)
+                await asyncio.to_thread(prune_expired_browser_leases)
             except Exception:
                 logger.exception("pending import history pruning failed")
             try:
@@ -447,7 +498,10 @@ def _refresh_printer_gauge() -> None:
         return
     printer_status.clear()
     for provider, prn_status in rows:
-        printer_status.labels(provider=provider.value, status=prn_status.value).inc()
+        printer_status.labels(
+            provider=_metric_enum_value(provider),
+            status=_metric_enum_value(prn_status),
+        ).inc()
 
 
 def _refresh_fleet_gauges() -> None:
@@ -459,10 +513,12 @@ def _refresh_fleet_gauges() -> None:
     try:
         with get_session_factory().session() as session:
             rows = session.exec(
-                select(PrintJob.state, func.count(PrintJob.id)).group_by(PrintJob.state)
+                select(col(PrintJob.state), func.count(col(PrintJob.id))).group_by(
+                    col(PrintJob.state)
+                )
             ).all()
             blocked = session.exec(
-                select(func.count(PrintJob.id)).where(
+                select(func.count(col(PrintJob.id))).where(
                     PrintJob.blocked_reason.is_not(None)  # type: ignore[union-attr]
                 )
             ).one()
@@ -471,12 +527,14 @@ def _refresh_fleet_gauges() -> None:
         return
     fleet_jobs.clear()
     for state, count in rows:
-        fleet_jobs.labels(state=state.value).set(count)
+        fleet_jobs.labels(state=_metric_enum_value(state)).set(count)
     fleet_blocked_jobs.set(blocked)
     snapshot = scheduler_snapshot()
     fleet_scheduler_running.set(1 if snapshot["running"] else 0)
     last_tick = snapshot["last_tick_at"]
-    fleet_scheduler_last_tick.set(last_tick.timestamp() if last_tick else 0)
+    fleet_scheduler_last_tick.set(
+        last_tick.timestamp() if isinstance(last_tick, datetime) else 0
+    )
 
 
 def _refresh_persistence_gauges() -> None:
@@ -487,9 +545,9 @@ def _refresh_persistence_gauges() -> None:
     try:
         with get_session_factory().session() as session:
             jobs = session.exec(
-                select(BackgroundJob.state, func.count(BackgroundJob.id)).group_by(
-                    BackgroundJob.state
-                )
+                select(
+                    col(BackgroundJob.state), func.count(col(BackgroundJob.id))
+                ).group_by(col(BackgroundJob.state))
             ).all()
             staged = session.exec(
                 select(func.coalesce(func.sum(StagingLease.size_bytes), 0))
@@ -497,7 +555,7 @@ def _refresh_persistence_gauges() -> None:
             intents = session.exec(
                 select(
                     StorageDeleteIntent.status,
-                    func.count(StorageDeleteIntent.id),
+                    func.count(col(StorageDeleteIntent.id)),
                 ).group_by(StorageDeleteIntent.status)
             ).all()
     except Exception:

@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from urllib.parse import unquote, urlparse
 
 import httpx
@@ -42,6 +42,7 @@ from printstash_core.files import (
 from printstash_core.files import (
     safe_subdir as _safe_subdir,
 )
+from printstash_core.imports import StagedAsset
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -55,6 +56,9 @@ from app.db.models import SUFFIX_TO_FILE_TYPE
 from app.db.session import SessionFactory
 from app.services.ingestion import ingest_mesh, ingest_orca_gcode
 from app.services.jobs import registry
+
+if TYPE_CHECKING:
+    from app.services.provenance import ProvenanceContext
 
 logger = get_logger(__name__)
 
@@ -309,6 +313,7 @@ def _ingest_one_file(
     model_name: Optional[str],
     actor_user_id: Optional[int],
     session_factory: SessionFactory,
+    provenance_context: ProvenanceContext | None = None,
 ) -> Optional[dict]:
     """Ingest one staged file under its own child job.
 
@@ -338,6 +343,7 @@ def _ingest_one_file(
                 actor_user_id=actor_user_id,
                 session_factory=session_factory,
                 source_url=source_url,
+                provenance_context=provenance_context,
             )
         else:
             file_type = SUFFIX_TO_FILE_TYPE.get(suffix)
@@ -356,6 +362,7 @@ def _ingest_one_file(
                 actor_user_id=actor_user_id,
                 session_factory=session_factory,
                 source_url=source_url,
+                provenance_context=provenance_context,
             )
         child_status = registry.get(child)
         if child_status and child_status.state == "completed":
@@ -376,7 +383,7 @@ def _ingest_one_file(
 def import_assets(
     *,
     job_id: str,
-    staged_files: list[tuple[Path, str]],
+    staged_files: list[tuple[Path, str] | StagedAsset],
     collection: Optional[str],
     tags: Optional[str],
     source_url: Optional[str],
@@ -384,6 +391,7 @@ def import_assets(
     session_factory: SessionFactory,
     model_name: Optional[str] = None,
     nest_subdirs: bool = False,
+    inbox_item_id: int | None = None,
 ) -> None:
     """Ingest each staged 3D file as its own Model, reporting aggregate progress.
 
@@ -408,7 +416,22 @@ def import_assets(
     )
     results: list[dict] = []
     done = 0
-    for staged, rel_name in staged_files:
+    for staged_file in staged_files:
+        if isinstance(staged_file, StagedAsset):
+            staged, rel_name = (
+                staged_file.staged_path,
+                staged_file.resolved.source_filename,
+            )
+            file_source_url = staged_file.resolved.member_url or source_url
+            provenance_context = _provenance_context(
+                staged=staged_file,
+                inbox_item_id=inbox_item_id,
+                actor_user_id=actor_user_id,
+            )
+        else:
+            staged, rel_name = staged_file
+            file_source_url = source_url
+            provenance_context = None
         file_collection = collection
         if nest_subdirs:
             subdir = _safe_subdir(rel_name)
@@ -420,13 +443,20 @@ def import_assets(
             rel_name,
             collection=file_collection,
             tags=tags,
-            source_url=source_url,
+            source_url=file_source_url,
             model_name=override,
             actor_user_id=actor_user_id,
             session_factory=session_factory,
+            provenance_context=provenance_context,
         )
         if res is None:
             continue
+        if isinstance(staged_file, StagedAsset):
+            res = {
+                **res,
+                "source_selection_id": staged_file.source_selection_id,
+                "result_key": staged_file.result_key,
+            }
         results.append(res)
         done += 1
         registry.update(job_id, step=done, progress=done / total * 100)
@@ -455,6 +485,31 @@ def import_assets(
             }
             for r in failures
         ],
+    )
+
+
+def _provenance_context(
+    *,
+    staged: StagedAsset,
+    inbox_item_id: int | None,
+    actor_user_id: int | None,
+) -> ProvenanceContext | None:
+    """Create provenance context only for the typed V2 asset path.
+
+    Legacy tuple callers remain fully compatible and deliberately cannot
+    accidentally fabricate capture provenance.
+    """
+    from app.services.provenance import ProvenanceContext
+
+    return ProvenanceContext(
+        manifest=staged.manifest,
+        source_file_id=staged.resolved.source_file_id,
+        source_filename=staged.resolved.source_filename,
+        source_selection_id=staged.source_selection_id,
+        container_entry_path=staged.container_entry_path,
+        blob_sha256=staged.blob_sha256,
+        inbox_item_id=inbox_item_id,
+        actor_id=actor_user_id,
     )
 
 

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+from .contracts import CaptureContractError, CaptureManifestV2
+
 MODEL_EXTENSIONS = (
     ".zip",
     ".3mf",
@@ -236,6 +238,121 @@ def printables_files_from_print(print_obj: dict[str, Any]) -> list[ModelFile]:
     return files
 
 
+def parse_printables_capture(payload: Any, canonical_url: str) -> CaptureManifestV2:
+    """Parse a Printables model response into the safe persisted capture shape.
+
+    Provider payloads may contain browser state and signed download links.  This
+    adapter takes only the small, reviewed allowlist below and feeds it through
+    the strict manifest boundary.
+    """
+    try:
+        print_obj = payload["data"]["print"]
+    except (KeyError, TypeError):
+        raise CaptureContractError("Printables payload has no print object") from None
+    if not isinstance(print_obj, dict):
+        raise CaptureContractError("Printables payload print object is invalid")
+    source_item_id = print_obj.get("id")
+    if source_item_id is not None and not str(source_item_id):
+        source_item_id = None
+
+    fields: dict[str, dict[str, str]] = {}
+    values = (
+        ("title", print_obj.get("name") or print_obj.get("title")),
+        ("description", print_obj.get("description")),
+        ("instructions", print_obj.get("instructions")),
+        ("creator_name", _printables_creator_name(print_obj)),
+        ("creator_id", _printables_creator_value(print_obj, "id")),
+        (
+            "creator_url",
+            _printables_creator_value(print_obj, "url", "profileUrl", "profile_url"),
+        ),
+        ("license_code", _printables_license_code(print_obj)),
+        ("license_url", _printables_license_value(print_obj, "url", "link")),
+        ("license_text", _printables_license_value(print_obj, "text", "description")),
+        (
+            "attribution_text",
+            print_obj.get("attribution") or print_obj.get("attributionText"),
+        ),
+    )
+    for name, value in values:
+        if isinstance(value, str) and value:
+            fields[name] = {"value": value, "origin": "confirmed"}
+
+    files = [
+        {
+            "id": file.file_id,
+            "name": file.name,
+            "file_type": file.file_type,
+            "size": file.size,
+        }
+        for file in printables_files_from_print(print_obj)
+    ]
+    return CaptureManifestV2.from_dict(
+        {
+            "schema_version": 2,
+            "kind": "model_files",
+            "source": {
+                "provider": "printables",
+                "canonical_url": canonical_url,
+                "source_item_id": str(source_item_id)
+                if source_item_id is not None
+                else None,
+                "source_revision": None,
+                "adapter_version": "printables-v1",
+                "tags": [],
+                "fields": fields,
+            },
+            "files": files,
+            "selected_ids": [file["id"] for file in files],
+        }
+    )
+
+
+def _printables_creator_name(print_obj: dict[str, Any]) -> str | None:
+    user = print_obj.get("user") or print_obj.get("creator")
+    if not isinstance(user, dict):
+        return None
+    for key in ("handle", "name", "username"):
+        value = user.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _printables_creator_value(print_obj: dict[str, Any], *keys: str) -> str | None:
+    user = print_obj.get("user") or print_obj.get("creator")
+    if not isinstance(user, dict):
+        return None
+    for key in keys:
+        value = user.get(key)
+        if isinstance(value, (str, int)) and str(value):
+            return str(value)
+    return None
+
+
+def _printables_license_code(print_obj: dict[str, Any]) -> str | None:
+    license_value = print_obj.get("license")
+    if isinstance(license_value, str):
+        return license_value
+    if isinstance(license_value, dict):
+        for key in ("code", "name", "slug"):
+            value = license_value.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _printables_license_value(print_obj: dict[str, Any], *keys: str) -> str | None:
+    license_value = print_obj.get("license")
+    if not isinstance(license_value, dict):
+        return None
+    for key in keys:
+        value = license_value.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def makerworld_instance_id(design: Any) -> str | None:
     """Select MakerWorld's default instance, then its first listed instance."""
     if not isinstance(design, dict):
@@ -330,6 +447,7 @@ __all__ = [
     "makerworld_instance_id",
     "pick_printables_pack",
     "printables_files_from_print",
+    "parse_printables_capture",
     "printables_id",
     "printables_link_from_output",
     "printables_links_from_output",

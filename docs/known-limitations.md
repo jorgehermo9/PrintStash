@@ -77,6 +77,8 @@ manufacturing platform.
   mesh input cap still applies first and is format-blind. Operators can adjust
   the deadline with `VAULT_MESH_STEP_TIMEOUT_SECONDS`; memory continues to use
   `VAULT_MESH_MEMORY_BUDGET_FRACTION` rather than a STEP-only byte guess.
+- Oversized STL previews run in a bounded streaming worker with a 45 s deadline;
+  operators can adjust it with `VAULT_MESH_STREAM_TIMEOUT_SECONDS` (up to 45 s).
 - The lite image intentionally omits browser-assisted imports and STEP/STP
   tessellation. It still includes NumPy, Pillow, and Trimesh, so STL/OBJ/3MF
   thumbnail generation does not depend on Chromium, OpenGL, or Cascadio.
@@ -144,8 +146,22 @@ manufacturing platform.
 - Authenticated source sites may still require a fresh browser session through
   the existing final import flow. Pending Imports and the browser helper never
   persist or copy source-site cookies.
-- URL captures are limited to existing Printables, MakerWorld, Thingiverse,
-  direct-file, and safe archive resolvers. The browser helper does no scraping.
+- Printables server capture is intentionally limited to fields and file choices
+  available from its supported server endpoints. The browser extension can
+  capture richer visible-page information, but no capture path guarantees every
+  field a source site displays.
+- MakerWorld packages require browser transfer. Thingiverse requires extension
+  capture or manual file upload: the server does not acquire Thingiverse ZIP
+  downloads. Cults credentials provide metadata only and do not enable automatic
+  file acquisition.
+- Browser staging is temporary. A review item whose staged browser upload is no
+  longer available fails with `staging_expired` and must be captured again.
+- URL captures are limited to supported providers, direct files, and safe
+  archives. The browser helper is not a general-purpose scraper.
+- Capture provenance is additive metadata, not a source-site archive: raw HTML,
+  source-site cookies, OAuth codes, signed download URLs, and resolved download
+  credentials are not retained. Active provider credentials are encrypted at
+  rest and never returned by capture APIs.
 - Facet counts describe Models in the currently filtered, accessible scope.
   They are not self-excluding counts; selecting a value can therefore narrow
   values in other groups.

@@ -47,6 +47,7 @@ from app.db.models import (
     FileType,
     Metadata,
     Model,
+    ModelProvenanceSource,
     ModelStar,
     ModelTagLink,
     Printer,
@@ -87,13 +88,20 @@ from app.schemas.models import (
     TrashPurgeRead,
     VaultStatsRead,
 )
+from app.schemas.provenance import (
+    ModelProvenancePatch,
+    ModelProvenanceRead,
+    ModelSourceCoverRead,
+)
 from app.schemas.saved_views import ModelStarRead
 from app.services import (
     job_import,
     library_transfer,
     model_views,
     print_results,
+    provenance,
     rbac,
+    source_covers,
     storage,
     taxonomy,
 )
@@ -101,7 +109,11 @@ from app.services.ingestion import add_gcode_revision_to_model
 from app.services.jobs import registry
 from app.services.moonraker import MoonrakerError
 from app.services.printer_jobs import reproducibility_payload
-from app.services.storage_deletion import process_storage_delete_intents
+from app.services.storage_backend import get_backend
+from app.services.storage_deletion import (
+    enqueue_owned_key,
+    process_storage_delete_intents,
+)
 from app.services.storage_ownership import UnsafeStorageDeleteError
 from app.services.trash import (
     hard_delete_expired_models,
@@ -730,6 +742,181 @@ def get_model(
     return _detail_or_404(session, model_id, current_user)
 
 
+@router.get(
+    "/{model_id}/provenance",
+    response_model=ModelProvenanceRead,
+    summary="Get model capture provenance",
+)
+def get_model_provenance(
+    model_id: int,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ModelProvenanceRead:
+    _require_model_role(session, current_user, model_id, CollectionRole.VIEW)
+    return model_views.provenance_detail(session, model_id)
+
+
+@router.patch(
+    "/{model_id}/provenance/{source_id}",
+    response_model=ModelProvenanceRead,
+    dependencies=[Depends(require_auth)],
+    summary="Set or clear explicit provenance field overrides",
+)
+def patch_model_provenance(
+    model_id: int,
+    source_id: int,
+    payload: ModelProvenancePatch,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ModelProvenanceRead:
+    _require_model_role(session, current_user, model_id, CollectionRole.EDIT)
+    source = session.exec(
+        select(ModelProvenanceSource).where(
+            ModelProvenanceSource.id == source_id,
+            ModelProvenanceSource.model_id == model_id,
+        )
+    ).first()
+    if source is None:
+        raise HTTPException(status_code=404, detail="provenance_source_not_found")
+    if set(payload.overrides) & set(payload.clear_overrides):
+        raise HTTPException(status_code=422, detail="provenance_override_conflict")
+    for field_name, value in payload.overrides.items():
+        provenance.set_user_override(
+            session,
+            provenance_source_id=source_id,
+            field_name=field_name,
+            value=value,
+            actor_id=current_user.id,
+        )
+    for field_name in payload.clear_overrides:
+        provenance.clear_user_override(
+            session,
+            provenance_source_id=source_id,
+            field_name=field_name,
+            actor_id=current_user.id,
+        )
+    session.commit()
+    return model_views.provenance_detail(session, model_id)
+
+
+def _provenance_source_or_404(
+    session: Session, model_id: int, source_id: int
+) -> ModelProvenanceSource:
+    source = session.exec(
+        select(ModelProvenanceSource).where(
+            ModelProvenanceSource.id == source_id,
+            ModelProvenanceSource.model_id == model_id,
+        )
+    ).first()
+    if source is None:
+        raise HTTPException(status_code=404, detail="provenance_source_not_found")
+    return source
+
+
+@router.get(
+    "/{model_id}/provenance/{source_id}/cover", response_model=ModelSourceCoverRead
+)
+def get_model_source_cover(
+    model_id: int,
+    source_id: int,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ModelSourceCoverRead:
+    _require_model_role(session, current_user, model_id, CollectionRole.VIEW)
+    _provenance_source_or_404(session, model_id, source_id)
+    cover = source_covers.get(session, source_id)
+    if cover is None:
+        raise HTTPException(status_code=404, detail="source_cover_not_found")
+    return ModelSourceCoverRead.model_validate(cover)
+
+
+@router.get("/{model_id}/provenance/{source_id}/cover/content")
+def stream_model_source_cover(
+    model_id: int,
+    source_id: int,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    _require_model_role(session, current_user, model_id, CollectionRole.VIEW)
+    _provenance_source_or_404(session, model_id, source_id)
+    cover = source_covers.get(session, source_id)
+    if cover is None:
+        raise HTTPException(status_code=404, detail="source_cover_not_found")
+    return Response(
+        content=get_backend().read_bytes(cover.storage_key),
+        media_type="image/webp",
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "ETag": f'"source-cover-{cover.id}-{int(cover.updated_at.timestamp())}"',
+        },
+    )
+
+
+@router.put(
+    "/{model_id}/provenance/{source_id}/cover",
+    response_model=ModelSourceCoverRead,
+    dependencies=[Depends(require_auth)],
+)
+async def put_model_source_cover(
+    model_id: int,
+    source_id: int,
+    file: UploadFile = UploadFileParam(...),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ModelSourceCoverRead:
+    _require_model_role(session, current_user, model_id, CollectionRole.EDIT)
+    _provenance_source_or_404(session, model_id, source_id)
+    data = await file.read(15 * 1024 * 1024 + 1)
+    try:
+        result = source_covers.put(
+            session,
+            get_backend(),
+            provenance_source_id=source_id,
+            actor_id=current_user.id,
+            data=data,
+            content_type=file.content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="source_cover_invalid") from exc
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        source_covers.rollback_after_commit_failure(session, get_backend(), result)
+        raise
+    session.refresh(result.cover)
+    return ModelSourceCoverRead.model_validate(result.cover)
+
+
+@router.delete(
+    "/{model_id}/provenance/{source_id}/cover",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_auth)],
+)
+def delete_model_source_cover(
+    model_id: int,
+    source_id: int,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    _require_model_role(session, current_user, model_id, CollectionRole.EDIT)
+    _provenance_source_or_404(session, model_id, source_id)
+    cover = source_covers.get(session, source_id)
+    if cover is None:
+        raise HTTPException(status_code=404, detail="source_cover_not_found")
+    enqueue_owned_key(
+        session,
+        get_backend(),
+        cover.storage_key,
+        required_proof=True,
+        resource_kind="model_source_cover",
+        resource_id=cover.id,
+    )
+    session.delete(cover)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post(
     "/{model_id}/gcode-revisions",
     response_model=ModelRead,
@@ -1004,7 +1191,8 @@ def create_manual_print_job(
             file_type=file_row.file_type,
             download_url=(
                 f"/api/v1/files/{job.file_id}/download"
-                if job.source != "external" or job.artifact_evidence.endswith("_archived")
+                if job.source != "external"
+                or job.artifact_evidence.endswith("_archived")
                 else None
             ),
         ),

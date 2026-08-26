@@ -4,6 +4,59 @@ import { Children, cloneElement, isValidElement, useEffect, useRef, type ReactNo
 import { useI18n, useOptionalI18n, type Locale } from "@/lib/i18n";
 
 const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
+  ["Restore captured value", "Restaurar valor capturado"],
+  ["Restore captured value?", "¿Restaurar el valor capturado?"],
+  [
+    "This discards your correction and restores the value captured from the source.",
+    "Esto descarta tu corrección y restaura el valor capturado de la fuente.",
+  ],
+  ["No captured source", "No hay fuente capturada"],
+  [
+    "This Model has no structured source snapshot yet.",
+    "Este modelo todavía no tiene una instantánea de fuente estructurada.",
+  ],
+  ["ID:", "ID:"],
+  ["· Revision:", "· Revisión:"],
+  ["Captured", "Capturado"],
+  ["· Checked", "· Comprobado"],
+  [
+    "Create a durable capture, then choose files and destination on the review page.",
+    "Crea una captura duradera y elige archivos y destino en la página de revisión.",
+  ],
+  ["Pending Import", "Importación pendiente"],
+  [
+    "Review this capture before it enters your vault.",
+    "Revisa esta captura antes de que entre en tu bóveda.",
+  ],
+  ["Back to inbox", "Volver a pendientes"],
+  ["Source", "Fuente"],
+  ["Source is being prepared.", "Se está preparando la fuente."],
+  ["Importing selected files…", "Importando los archivos seleccionados…"],
+  ["Files to import", "Archivos que importar"],
+  ["Destination", "Destino"],
+  ["No collection", "Sin colección"],
+  ["comma separated", "separados por comas"],
+  ["Import selected", "Importar seleccionados"],
+  ["Results", "Resultados"],
+  ["Open model", "Abrir modelo"],
+  ["Retry failed files", "Reintentar archivos fallidos"],
+  ["Dismiss capture", "Descartar captura"],
+  ["Dismiss pending import?", "¿Descartar importación pendiente?"],
+  [
+    "This removes the staged capture. Imported Models remain in your vault.",
+    "Esto elimina la captura preparada. Los modelos importados permanecen en tu bóveda.",
+  ],
+  [
+    "Review captures before they enter your vault.",
+    "Revisa las capturas antes de que entren en tu bóveda.",
+  ],
+  ["Capture a source URL", "Captura una URL de origen"],
+  [
+    "Use From URL in Upload to create a reviewable pending import.",
+    "Usa Desde URL en Cargar para crear una importación pendiente revisable.",
+  ],
+  ["Needs review", "Necesita revisión"],
+  ["In progress", "En curso"],
   ["Release", "Liberar"],
   ["Hold", "Retener"],
   ["release needed", "liberación pendiente"],
@@ -1009,6 +1062,10 @@ const ES_PHRASES: ReadonlyArray<readonly [string, string]> = [
   [
     "No print settings recorded yet. Add a sliced G-code revision to capture them.",
     "Aún no hay ajustes de impresión registrados. Añade una revisión G-code laminada para capturarlos.",
+  ],
+  [
+    "This file contains mesh geometry only. Printer, material, and slicer settings are not embedded. Add a sliced G-code or 3MF revision to capture them.",
+    "Este archivo solo contiene geometría de malla. No incluye ajustes de impresora, material ni laminador. Añade una revisión G-code o 3MF laminada para capturarlos.",
   ],
   ["No active print", "No hay ninguna impresión activa"],
   [

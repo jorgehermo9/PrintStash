@@ -16,6 +16,8 @@ from app.core.config import FrozenSettings
         ("mesh_memory_budget_fraction", 1.01),
         ("mesh_render_face_chunk_size", 0),
         ("mesh_step_timeout_seconds", 0),
+        ("mesh_stream_timeout_seconds", 0),
+        ("mesh_stream_timeout_seconds", 46),
         ("max_archive_entries", 0),
         ("backup_retention_days", -1),
         ("trash_retention_days", -1),

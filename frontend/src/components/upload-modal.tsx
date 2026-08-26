@@ -14,12 +14,12 @@ import {
 } from "lucide-react";
 import {
   createTag,
+  capturePendingImport,
   getModel,
   getVaultConfig,
   inspectArchive,
   ingestModel,
   ingestOrca,
-  ingestUrl,
   listExternalLibraries,
   selectArchiveEntries,
   selectCollectionMembers,
@@ -62,6 +62,7 @@ import {
   ModelFilesManifest,
 } from "@/types";
 import { ApiError } from "@/lib/errors";
+import { useRouter } from "@/lib/navigation";
 
 // `webkitdirectory` enables folder selection on a file input but isn't in the
 // standard DOM typings — augment so the JSX attribute typechecks.
@@ -133,6 +134,7 @@ export function UploadModal({
   preloadItems?: BulkItem[] | null;
   initialMode?: UploadMode;
 }) {
+  const router = useRouter();
   const auth = useRequireAuth();
   const { user } = useAuth();
   const meshRef = useRef<HTMLInputElement>(null);
@@ -152,7 +154,6 @@ export function UploadModal({
   const [manifest, setManifest] = useState<ArchiveManifest | null>(null);
   const [filesManifest, setFilesManifest] = useState<ModelFilesManifest | null>(null);
   const [collectionManifest, setCollectionManifest] = useState<CollectionManifest | null>(null);
-  const [reviewCollection, setReviewCollection] = useState(false);
   // Selected ids: archive entry names, model file ids, or collection member ids
   // — only one manifest is ever active at a time, so a single set is enough.
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
@@ -301,7 +302,6 @@ export function UploadModal({
     setManifest(null);
     setFilesManifest(null);
     setCollectionManifest(null);
-    setReviewCollection(false);
     setSelectedEntries(new Set());
     setModelName("");
     setPickedCollection(null);
@@ -558,63 +558,22 @@ export function UploadModal({
   }
 
   async function runUrlImport() {
-    if (!collectionGate() || submitting) return;
+    if (!auth.isAuthenticated || submitting) {
+      if (!auth.isAuthenticated) auth.showAuthRequiredToast();
+      return;
+    }
     setSubmitting(true);
     try {
-      const res = await ingestUrl({
+      const item = await capturePendingImport({
         url: urlValue.trim(),
-        collection: collectionPath || undefined,
-        tags: selectedTags.length ? selectedTags.join(",") : undefined,
-        review: reviewCollection || undefined,
+        collection_id: collectionPath
+          ? (collections.find((collection) => collection.path === collectionPath)?.id ?? null)
+          : null,
+        tags: selectedTags,
       });
-      const status = await waitForJobInline(res.job_id);
-      if (status.state === "failed") {
-        throw new Error(status.error || "Import failed");
-      }
-      const result: IngestJobResult = status.result ?? {};
-      if (result.kind === "archive_manifest") {
-        const m: ArchiveManifest = {
-          archive_id: String(result.archive_id),
-          archive_name: String(result.archive_name),
-          entries: result.entries ?? [],
-        };
-        showManifest(m);
-        setSubmitting(false);
-        return;
-      }
-      if (result.kind === "model_files_manifest") {
-        const m: ModelFilesManifest = {
-          files_token: String(result.files_token),
-          page_title: String(result.page_title),
-          files: result.files ?? [],
-        };
-        setFilesManifest(m);
-        setSelectedEntries(new Set(m.files.map((f) => f.file_id)));
-        setSubmitting(false);
-        return;
-      }
-      if (result.kind === "collection_manifest") {
-        const m: CollectionManifest = {
-          collection_token: String(result.collection_token),
-          collection_name: String(result.collection_name),
-          target_collection: String(result.target_collection),
-          members: result.members ?? [],
-        };
-        setCollectionManifest(m);
-        setSelectedEntries(new Set(m.members.map((mm) => mm.source_id)));
-        setSubmitting(false);
-        return;
-      }
-      if (result.kind === "collection_import") {
-        const imported = Number(result.imported ?? 0);
-        toast.success(`Imported ${imported} model${imported === 1 ? "" : "s"} from collection`);
-        await onUploaded();
-        close();
-        return;
-      }
-      toast.success("Model imported from URL");
-      await onUploaded();
+      toast.success("Captured URL. Review it before importing.");
       close();
+      router.push(`/inbox/${item.id}`);
     } catch (err) {
       toast.error(err);
       setSubmitting(false);
@@ -969,20 +928,8 @@ export function UploadModal({
                 placeholder="Model page, collection, or direct .stl/.zip link"
               />
               <p className="mt-1.5 font-mono text-3xs text-on-surface-variant/70">
-                A model page, a <span className="text-on-surface">collection</span> (Printables /
-                MakerWorld), or a direct file/.zip link — fetched on the server.
+                Create a durable capture, then choose files and destination on the review page.
               </p>
-              <label className="mt-3 flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={reviewCollection}
-                  onChange={(e) => setReviewCollection(e.target.checked)}
-                  className="accent-primary"
-                />
-                <span className="font-mono text-3xs text-on-surface-variant uppercase tracking-wider">
-                  Review collection items before importing
-                </span>
-              </label>
             </div>
           ) : (
             <FileSlot
@@ -1236,7 +1183,7 @@ export function UploadModal({
                   "Upload to vault"
                 )
               ) : mode === "url" ? (
-                "Import from URL"
+                "Review URL"
               ) : mode === "zip" ? (
                 "Inspect archive"
               ) : (

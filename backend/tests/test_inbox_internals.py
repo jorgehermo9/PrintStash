@@ -4,25 +4,42 @@ in test_inbox_api.py don't reach."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from datetime import timedelta
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
-from sqlmodel import Session
+from printstash_core.imports import CaptureManifestV2
+from sqlmodel import Session, select
 
 from app.core.config import _overlay, settings
 from app.core.time import utcnow
 from app.db.models import (
+    ArtifactProvenanceLink,
+    BackgroundJob,
+    CaptureUploadSlot,
     Collection,
+    File,
+    FileType,
     InboxItem,
+    InboxItemCompletion,
+    InboxItemResult,
+    InboxItemResultState,
     InboxItemState,
+    InboxSourceKind,
+    Model,
+    ModelProvenanceSource,
+    StagingLease,
+    StorageDeleteIntent,
     User,
 )
 from app.db.session import get_session_factory
-from app.schemas.inbox import InboxItemUpdate
-from app.services import import_resolvers, importer, inbox
+from app.schemas.inbox import CaptureUploadSlotsCreate, InboxItemUpdate
+from app.services import import_resolvers, importer, inbox, staging_leases
 from app.services.auth import hash_password
 from app.services.jobs import registry
 
@@ -62,6 +79,94 @@ def _make_item(session: Session, owner: User, **overrides) -> InboxItem:
     return row
 
 
+def test_begin_browser_import_transfer_failure_rolls_back_job_and_lease(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = _make_user(db_session, "lease-transfer-rollback")
+    staged = tmp_path / "capture.stl"
+    staged.write_bytes(b"solid x endsolid")
+    item = _make_item(
+        db_session,
+        owner,
+        source_kind=InboxSourceKind.BROWSER,
+        state=InboxItemState.REVIEW,
+        staging_key=str(staged),
+        manifest_json=json.dumps({"kind": "browser_file", "filename": "capture.stl"}),
+    )
+    lease = staging_leases.create_review_lease(
+        db_session,
+        inbox_item_id=item.id,
+        owner_user_id=owner.id,
+        path=staged,
+        size_bytes=staged.stat().st_size,
+        sha256="a" * 64,
+    )
+    original = (lease.id, lease.inbox_item_id, lease.path, lease.expires_at)
+    db_session.commit()
+
+    def fail_transfer(*_args, **_kwargs) -> StagingLease:
+        raise staging_leases.StagingLeaseError("injected")
+
+    monkeypatch.setattr(staging_leases, "transfer_inbox_to_job", fail_transfer)
+    assert inbox._begin_import(item.id, [], get_session_factory()) is None
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, item.id)
+        assert fresh is not None
+        assert fresh.state == InboxItemState.FAILED
+        assert fresh.error_code == "staging_expired"
+        assert fresh.retryable is False
+        assert not session.exec(select(BackgroundJob)).all()
+        retained = session.get(StagingLease, original[0])
+        assert retained is not None
+        assert (retained.inbox_item_id, retained.path) == original[1:3]
+        assert retained.expires_at.replace(tzinfo=None) == original[3].replace(
+            tzinfo=None
+        )
+
+
+def test_retry_partial_reselects_only_failed_source_ids(db_session: Session) -> None:
+    owner = _make_user(db_session, "retry-partial")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.COMPLETED,
+        completion=InboxItemCompletion.PARTIAL,
+        retryable=True,
+        manifest_json=json.dumps(
+            {"kind": "model_files", "selected_ids": ["ok", "bad"]}
+        ),
+    )
+    db_session.add_all(
+        [
+            InboxItemResult(
+                inbox_item_id=row.id,
+                source_selection_id="ok",
+                result_key="self",
+                original_filename="ok.stl",
+                state=InboxItemResultState.IMPORTED,
+                retryable=False,
+            ),
+            InboxItemResult(
+                inbox_item_id=row.id,
+                source_selection_id="bad",
+                result_key="self",
+                original_filename="bad.stl",
+                state=InboxItemResultState.FAILED,
+                error_code="captured_artifact_trashed",
+                retryable=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    retried = inbox.retry(db_session, row)
+
+    assert retried.state == InboxItemState.REVIEW
+    assert retried.completion is None
+    assert inbox._json_dict(retried.manifest_json)["selected_ids"] == ["bad"]
+
+
 # --------------------------------------------------------------------------- #
 # sanitize_source_url / _json_dict / requested_tags
 # --------------------------------------------------------------------------- #
@@ -82,6 +187,146 @@ def test_sanitize_source_url_keeps_port_and_strips_secrets() -> None:
         "HTTPS://Example.com:8443/model?token=secret&view=files"
     )
     assert result == "https://example.com:8443/model?view=files"
+
+
+def test_sanitize_source_url_rejects_userinfo_before_redaction() -> None:
+    with pytest.raises(ValueError, match="url_invalid"):
+        inbox.sanitize_source_url(
+            "HTTPS://alice:password@Example.com/model?view=files"
+            "&X-Amz-Credential=credential&x_amz.signature=signature"
+            "&X-Amz-Security-Token=session#private"
+        )
+
+
+def test_sanitize_source_url_redacts_normalized_signed_query_keys() -> None:
+    result = inbox.sanitize_source_url(
+        "HTTPS://Example.com/model?view=files"
+        "&X-Amz-Credential=credential&x_amz.signature=signature"
+        "&X-Amz-Security-Token=session#private"
+    )
+    assert result == "https://example.com/model?view=files"
+
+
+@pytest.mark.parametrize("requested", [["missing"], ["ok", "missing"], [""]])
+def test_v2_import_selection_rejects_invalid_ids_without_fallback(
+    db_session: Session, requested: list[str]
+) -> None:
+    owner = _make_user(db_session, "selection-validation")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.REVIEW,
+        manifest_json=json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "model_files",
+                "files": [{"id": "ok"}, {"id": "other"}],
+                "selected_ids": ["ok", "other"],
+            }
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        inbox.validate_import_selection(row, requested)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == "file_selection_invalid"
+
+
+def test_v2_import_selection_accepts_valid_subset_and_defaults_when_empty(
+    db_session: Session,
+) -> None:
+    owner = _make_user(db_session, "selection-validation-valid")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.REVIEW,
+        manifest_json=json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "model_files",
+                "files": [{"id": "ok"}, {"id": "other"}],
+                "selected_ids": ["ok", "other"],
+            }
+        ),
+    )
+
+    assert inbox.validate_import_selection(row, ["other"]) == ["other"]
+    assert inbox.validate_import_selection(row, []) == ["ok", "other"]
+
+
+def test_update_rejects_invalid_v2_selection_before_persisting(
+    db_session: Session,
+) -> None:
+    owner = _make_user(db_session, "selection-update-validation")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.REVIEW,
+        manifest_json=json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "model_files",
+                "files": [{"id": "ok"}],
+                "selected_ids": ["ok"],
+            }
+        ),
+    )
+    original = row.manifest_json
+
+    with pytest.raises(HTTPException) as exc_info:
+        inbox.update(db_session, owner, row, InboxItemUpdate(selected_ids=["bad"]))
+
+    assert exc_info.value.detail == "file_selection_invalid"
+    assert row.manifest_json == original
+
+
+def test_update_empty_v2_selection_persists_manifest_default_selection(
+    db_session: Session,
+) -> None:
+    owner = _make_user(db_session, "selection-update-empty")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.REVIEW,
+        manifest_json=json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "model_files",
+                "source": {
+                    "provider": "makerworld",
+                    "canonical_url": "https://makerworld.com/en/models/1234-widget",
+                    "source_item_id": "1234",
+                    "source_revision": "1",
+                    "adapter_version": "test",
+                    "fields": {},
+                    "tags": [],
+                },
+                "files": [
+                    {
+                        "id": "first",
+                        "name": "first.stl",
+                        "file_type": "stl",
+                        "size": None,
+                    },
+                    {
+                        "id": "second",
+                        "name": "second.stl",
+                        "file_type": "stl",
+                        "size": None,
+                    },
+                ],
+                "selected_ids": ["first"],
+            }
+        ),
+    )
+
+    updated = inbox.update(db_session, owner, row, InboxItemUpdate(selected_ids=[]))
+
+    manifest = json.loads(updated.manifest_json)
+    assert manifest["selected_ids"] == ["first"]
+    # The persisted value must remain parseable by the strict V2 contract.
+    CaptureManifestV2.from_dict(manifest)
 
 
 def test_json_dict_returns_empty_on_bad_json() -> None:
@@ -195,6 +440,70 @@ async def test_resolve_ignores_item_in_wrong_state(db_session: Session) -> None:
     with get_session_factory().scoped_session() as session:
         fresh = session.get(InboxItem, row.id)
         assert fresh.state == InboxItemState.REVIEW
+
+
+def test_dismiss_rejects_item_while_resolving(db_session: Session) -> None:
+    owner = _make_user(db_session, "dismiss-resolving")
+    managed = settings.incoming_dir / "inbox" / "dismiss-resolving" / "source.zip"
+    managed.parent.mkdir(parents=True, exist_ok=True)
+    managed.write_bytes(b"resolver-owned")
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.RESOLVING,
+        staging_key=str(managed),
+    )
+
+    with pytest.raises(HTTPException, match="pending_import_busy"):
+        inbox.dismiss(db_session, row)
+
+    db_session.rollback()
+    fresh = db_session.get(InboxItem, row.id)
+    assert fresh is not None
+    assert fresh.state == InboxItemState.RESOLVING
+    assert fresh.staging_key == str(managed)
+    assert managed.exists()
+    managed.unlink()
+    managed.parent.rmdir()
+
+
+def test_resolve_completion_does_not_resurrect_dismissed_item_or_leak_staging(
+    db_session: Session,
+) -> None:
+    owner = _make_user(db_session, "resolve-dismiss-race")
+    managed = settings.incoming_dir / "inbox" / "resolve-dismiss-race" / "source.zip"
+    managed.parent.mkdir(parents=True, exist_ok=True)
+    managed.write_bytes(b"resolver-owned")
+    row = _make_item(db_session, owner, state=InboxItemState.DISMISSED)
+    staging_leases.create_review_lease(
+        db_session,
+        inbox_item_id=row.id,
+        owner_user_id=owner.id,
+        path=managed,
+        size_bytes=managed.stat().st_size,
+        sha256=hashlib.sha256(managed.read_bytes()).hexdigest(),
+    )
+    db_session.commit()
+
+    inbox._finish_resolve(
+        row.id,
+        {"kind": "archive", "title": "must-not-publish"},
+        managed,
+    )
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, row.id)
+        assert fresh is not None
+        assert fresh.state == InboxItemState.DISMISSED
+        assert fresh.manifest_json == "{}"
+        assert fresh.staging_key is None
+        assert (
+            session.exec(
+                select(StagingLease).where(StagingLease.inbox_item_id == row.id)
+            ).first()
+            is None
+        )
+    assert not managed.exists()
 
 
 @pytest.mark.asyncio
@@ -753,6 +1062,73 @@ def test_retry_returns_to_captured_without_manifest(db_session: Session) -> None
     assert updated.state == InboxItemState.CAPTURED
 
 
+@pytest.mark.asyncio
+async def test_legacy_browser_file_failure_retry_then_success_returns_lease_to_review(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    owner = _make_user(db_session, "legacy-browser-retry")
+    _overlay["staging_dir"] = tmp_path / "staging"
+    staged = settings.incoming_dir / "legacy" / "widget.3mf"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"legacy-browser-file")
+    row = _make_item(
+        db_session,
+        owner,
+        source_kind=InboxSourceKind.BROWSER,
+        state=InboxItemState.REVIEW,
+        source_url="https://makerworld.com/en/models/1234-widget",
+        manifest_json=json.dumps({"kind": "browser_file", "filename": "widget.3mf"}),
+        staging_key=str(staged),
+    )
+    staging_leases.create_review_lease(
+        db_session,
+        inbox_item_id=row.id,
+        owner_user_id=owner.id,
+        path=staged,
+        size_bytes=staged.stat().st_size,
+        sha256=hashlib.sha256(staged.read_bytes()).hexdigest(),
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        inbox.importer,
+        "import_assets",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("first import failed")),
+    )
+    await inbox.run_import(row.id, [], get_session_factory())
+
+    db_session.expire_all()
+    failed = db_session.get(InboxItem, row.id)
+    assert failed is not None
+    assert failed.state == InboxItemState.FAILED
+    assert failed.background_job_id is not None
+    job_id = failed.background_job_id
+    lease = db_session.exec(
+        select(StagingLease).where(StagingLease.background_job_id == job_id)
+    ).one()
+    assert lease.inbox_item_id is None
+
+    retried = inbox.retry(db_session, failed)
+    assert retried.state == InboxItemState.REVIEW
+    returned = db_session.exec(
+        select(StagingLease).where(StagingLease.id == lease.id)
+    ).one()
+    assert returned.inbox_item_id == row.id
+    assert returned.background_job_id is None
+
+    def complete_import(*, job_id: str, **_kwargs) -> None:
+        registry.update(job_id, state="completed", model_id=23)
+
+    monkeypatch.setattr(inbox.importer, "import_assets", complete_import)
+    await inbox.run_import(row.id, [], get_session_factory())
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, row.id)
+        assert fresh is not None
+        assert fresh.state == InboxItemState.COMPLETED
+        assert fresh.resulting_model_id == 23
+
+
 def test_dismiss_rejects_importing_item(db_session: Session) -> None:
     owner = _make_user(db_session, "dismiss-owner")
     row = _make_item(db_session, owner, state=InboxItemState.IMPORTING)
@@ -814,6 +1190,404 @@ def test_reconcile_completes_importing_item_with_finished_job(
         fresh = session.get(InboxItem, row.id)
         assert fresh.state == InboxItemState.COMPLETED
         assert fresh.resulting_model_id == 5
+
+
+def test_reconcile_finished_capture_runs_normal_terminalization(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restarted job cleans slots after ownership moves to its origin lease.
+
+    Upload publication has already removed each local spool by the time the
+    import job is terminalized.  The cleanup seam must therefore use the
+    transferred ``capture_upload_slot_origin_id`` lease, not try to look the
+    slot up through its pre-import owner column.
+    """
+    owner = _make_user(db_session, "reconcile-capture-terminalization")
+    file_bytes = b"captured-model"
+    cover_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
+        "AScY42YAAAAASUVORK5CYII="
+    )
+    payload = CaptureUploadSlotsCreate.model_validate(
+        {
+            "source_url": "https://makerworld.com/en/models/1234-widget",
+            "capture_source": {
+                "provider": "makerworld",
+                "canonical_url": "https://makerworld.com/en/models/1234-widget",
+                "source_item_id": "1234",
+                "adapter_version": "extension-v1",
+                "fields": {},
+                "tags": [],
+            },
+            "files": [
+                {
+                    "id": "widget.3mf",
+                    "filename": "widget.3mf",
+                    "media_type": "application/octet-stream",
+                    "size_bytes": len(file_bytes),
+                    "sha256": hashlib.sha256(file_bytes).hexdigest(),
+                }
+            ],
+            "cover": {
+                "id": "cover",
+                "filename": "cover.png",
+                "media_type": "image/png",
+                "size_bytes": len(cover_bytes),
+                "sha256": hashlib.sha256(cover_bytes).hexdigest(),
+            },
+        }
+    )
+    row, slots = inbox.create_capture_upload_slots(db_session, owner, payload)
+    slot_ids = {slot.id for slot in slots}
+    file_slot = next(slot for slot in slots if slot.role == "file")
+    cover_slot = next(slot for slot in slots if slot.role == "cover")
+    inbox.upload_capture_slot(
+        db_session,
+        file_slot,
+        stream=BytesIO(file_bytes),
+        media_type=file_slot.media_type,
+    )
+    inbox.upload_capture_slot(
+        db_session,
+        cover_slot,
+        stream=BytesIO(cover_bytes),
+        media_type=cover_slot.media_type,
+    )
+    inbox.finalize_capture_upload(db_session, owner, row.id)
+
+    model = Model(name="Widget", slug="reconcile-widget", hash="f" * 64)
+    db_session.add(model)
+    db_session.commit()
+    db_session.refresh(model)
+    source = ModelProvenanceSource(
+        model_id=model.id,
+        provider="makerworld",
+        source_item_id="1234",
+        canonical_url="https://makerworld.com/en/models/1234-widget",
+        identity_key="reconcile-widget",
+    )
+    artifact = File(
+        model_id=model.id,
+        path="reconcile/widget.3mf",
+        original_filename="widget.3mf",
+        file_type=FileType.THREE_MF,
+        size_bytes=len(file_bytes),
+        sha256=hashlib.sha256(file_bytes).hexdigest(),
+    )
+    db_session.add_all([source, artifact])
+    db_session.flush()
+    assert source.id is not None
+    assert artifact.id is not None
+    db_session.add(
+        ArtifactProvenanceLink(
+            file_id=artifact.id,
+            provenance_source_id=source.id,
+            source_file_id="widget.3mf",
+            source_filename="widget.3mf",
+            blob_sha256=artifact.sha256,
+            import_key="reconcile-widget-import",
+        )
+    )
+    db_session.commit()
+
+    attached_sources: list[int] = []
+    monkeypatch.setattr(
+        inbox.source_covers,
+        "put",
+        lambda _session, _backend, **kwargs: attached_sources.append(
+            kwargs["provenance_source_id"]
+        ),
+    )
+    job_id = registry.create(owner_user_id=owner.id)
+    registry.update(
+        job_id,
+        state="completed",
+        model_id=model.id,
+        result={
+            "items": [
+                {
+                    "source_selection_id": "widget.3mf",
+                    "result_key": "self",
+                    "name": "widget.3mf",
+                    "model_id": model.id,
+                    "file_id": artifact.id,
+                }
+            ]
+        },
+    )
+    row = db_session.get(InboxItem, row.id)
+    assert row is not None
+    row.state = InboxItemState.IMPORTING
+    row.background_job_id = job_id
+    staging_leases.transfer_capture_slots_to_job(
+        db_session, inbox_item_id=row.id, job_id=job_id
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    for slot in slots:
+        assert not staging_leases.capture_slot_staging_path(slot.id).exists()
+    with get_session_factory().scoped_session() as session:
+        transferred = session.exec(
+            select(StagingLease).where(
+                StagingLease.capture_upload_slot_origin_id.in_(slot_ids),
+                StagingLease.background_job_id == job_id,
+                StagingLease.capture_upload_slot_id.is_(None),
+            )
+        ).all()
+        assert {
+            lease.capture_upload_slot_origin_id for lease in transferred
+        } == slot_ids
+
+    inbox.reconcile_interrupted_items()
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, row.id)
+        assert fresh is not None
+        assert fresh.state == InboxItemState.COMPLETED
+        assert fresh.resulting_model_id == model.id
+        assert fresh.retryable is False
+        assert fresh.error_code is None
+        result = session.exec(
+            select(InboxItemResult).where(InboxItemResult.inbox_item_id == row.id)
+        ).one()
+        assert (
+            result.source_selection_id,
+            result.result_key,
+            result.model_id,
+            result.file_id,
+            result.provenance_source_id,
+            result.retryable,
+        ) == ("widget.3mf", "self", model.id, artifact.id, source.id, False)
+        assert (
+            session.exec(
+                select(CaptureUploadSlot).where(
+                    CaptureUploadSlot.inbox_item_id == row.id
+                )
+            ).all()
+            == []
+        )
+        assert (
+            session.exec(
+                select(StagingLease).where(StagingLease.background_job_id == job_id)
+            ).all()
+            == []
+        )
+        intents = session.exec(select(StorageDeleteIntent)).all()
+        assert {intent.resource_id for intent in intents} == slot_ids
+    assert attached_sources == [source.id]
+
+
+def test_reconcile_completed_capture_cleanup_pending_preserves_imported_result(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Startup cleanup repairs a completed item without re-running ingestion."""
+    owner = _make_user(db_session, "reconcile-completed-cleanup")
+    file_bytes = b"already-imported-model"
+    source_url = "https://makerworld.com/en/models/9876-widget"
+    payload = CaptureUploadSlotsCreate.model_validate(
+        {
+            "source_url": source_url,
+            "capture_source": {
+                "provider": "makerworld",
+                "canonical_url": source_url,
+                "source_item_id": "9876",
+                "adapter_version": "extension-v1",
+                "fields": {},
+                "tags": [],
+            },
+            "files": [
+                {
+                    "id": "widget.3mf",
+                    "filename": "widget.3mf",
+                    "media_type": "application/octet-stream",
+                    "size_bytes": len(file_bytes),
+                    "sha256": hashlib.sha256(file_bytes).hexdigest(),
+                }
+            ],
+        }
+    )
+    row, slots = inbox.create_capture_upload_slots(db_session, owner, payload)
+    slot = slots[0]
+    inbox.upload_capture_slot(
+        db_session, slot, stream=BytesIO(file_bytes), media_type=slot.media_type
+    )
+    assert slot.storage_key is not None
+    slot_id = slot.id
+    slot_key = slot.storage_key
+
+    model = Model(
+        name="Completed widget",
+        slug="completed-widget",
+        hash="c" * 64,
+        source_url=source_url,
+    )
+    db_session.add(model)
+    db_session.flush()
+    source = ModelProvenanceSource(
+        model_id=model.id,
+        provider="makerworld",
+        source_item_id="9876",
+        canonical_url=source_url,
+        identity_key="completed-widget-source",
+    )
+    artifact = File(
+        model_id=model.id,
+        path="completed/widget.3mf",
+        original_filename="widget.3mf",
+        file_type=FileType.THREE_MF,
+        size_bytes=len(file_bytes),
+        sha256=hashlib.sha256(file_bytes).hexdigest(),
+    )
+    db_session.add_all([source, artifact])
+    db_session.flush()
+    link = ArtifactProvenanceLink(
+        file_id=artifact.id,
+        provenance_source_id=source.id,
+        source_file_id="widget.3mf",
+        source_filename="widget.3mf",
+        blob_sha256=artifact.sha256,
+        import_key="completed-widget-import",
+    )
+    result = InboxItemResult(
+        inbox_item_id=row.id,
+        source_selection_id="widget.3mf",
+        result_key="self",
+        original_filename="widget.3mf",
+        state=InboxItemResultState.IMPORTED,
+        model_id=model.id,
+        file_id=artifact.id,
+        provenance_source_id=source.id,
+        retryable=False,
+    )
+    db_session.add_all([link, result])
+    job_id = registry.create(owner_user_id=owner.id)
+    row.state = InboxItemState.COMPLETED
+    row.background_job_id = job_id
+    row.resulting_model_id = model.id
+    row.completion = InboxItemCompletion.COMPLETE
+    row.retryable = True
+    row.error_code = "capture_upload_cleanup_pending"
+    row.completed_at = utcnow()
+    staging_leases.transfer_capture_slots_to_job(
+        db_session, inbox_item_id=row.id, job_id=job_id
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    model_snapshot = (model.name, model.source_url, model.hash)
+    artifact_snapshot = (
+        artifact.path,
+        artifact.original_filename,
+        artifact.file_type,
+        artifact.size_bytes,
+        artifact.sha256,
+    )
+    result_snapshot = (
+        result.source_selection_id,
+        result.result_key,
+        result.model_id,
+        result.file_id,
+        result.provenance_source_id,
+        result.state,
+    )
+    monkeypatch.setattr(
+        inbox,
+        "_finish_import",
+        lambda *_args: pytest.fail("completed cleanup must not re-run ingestion"),
+    )
+    monkeypatch.setattr(
+        inbox,
+        "_attach_capture_cover",
+        lambda *_args: pytest.fail("completed cleanup must not re-attach cover"),
+    )
+
+    inbox.reconcile_interrupted_items()
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, row.id)
+        assert fresh is not None
+        assert fresh.state == InboxItemState.COMPLETED
+        assert fresh.resulting_model_id == model.id
+        assert fresh.retryable is False
+        assert fresh.error_code is None
+        assert (
+            session.exec(
+                select(CaptureUploadSlot).where(
+                    CaptureUploadSlot.inbox_item_id == row.id
+                )
+            ).all()
+            == []
+        )
+        assert (
+            session.exec(
+                select(StagingLease).where(StagingLease.background_job_id == job_id)
+            ).all()
+            == []
+        )
+        intent = session.exec(select(StorageDeleteIntent)).one()
+        assert intent.key == slot_key
+        assert intent.resource_id == slot_id
+        preserved_model = session.get(Model, model.id)
+        preserved_artifact = session.get(File, artifact.id)
+        preserved_result = session.exec(
+            select(InboxItemResult).where(InboxItemResult.inbox_item_id == row.id)
+        ).one()
+        assert preserved_model is not None
+        assert preserved_artifact is not None
+        assert (
+            preserved_model.name,
+            preserved_model.source_url,
+            preserved_model.hash,
+        ) == model_snapshot
+        assert (
+            preserved_artifact.path,
+            preserved_artifact.original_filename,
+            preserved_artifact.file_type,
+            preserved_artifact.size_bytes,
+            preserved_artifact.sha256,
+        ) == artifact_snapshot
+        assert (
+            preserved_result.source_selection_id,
+            preserved_result.result_key,
+            preserved_result.model_id,
+            preserved_result.file_id,
+            preserved_result.provenance_source_id,
+            preserved_result.state,
+        ) == result_snapshot
+    assert inbox.get_backend().exists(slot_key)
+
+
+def test_reconcile_completed_v2_job_without_results_stays_retryable(
+    db_session: Session,
+) -> None:
+    owner = _make_user(db_session, "reconcile-v2-no-results")
+    job_id = registry.create(owner_user_id=owner.id)
+    registry.update(job_id, state="completed", model_id=55)
+    row = _make_item(
+        db_session,
+        owner,
+        state=InboxItemState.IMPORTING,
+        background_job_id=job_id,
+        manifest_json=json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "model_files",
+                "source": {},
+                "files": [],
+                "selected_ids": [],
+            }
+        ),
+    )
+
+    inbox.reconcile_interrupted_items()
+
+    with get_session_factory().scoped_session() as session:
+        fresh = session.get(InboxItem, row.id)
+        assert fresh is not None
+        assert fresh.state == InboxItemState.FAILED
+        assert fresh.retryable is True
+        assert fresh.resulting_model_id is None
 
 
 def test_reconcile_fails_importing_item_without_finished_job(

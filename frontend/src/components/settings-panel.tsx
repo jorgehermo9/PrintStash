@@ -47,6 +47,7 @@ import { CURRENCY_OPTIONS } from "@/lib/currency";
 import { ExternalLibrariesPanel } from "@/components/external-libraries-panel";
 import { StorageConfigCard } from "@/components/storage-config-card";
 import { MakerWorldConnectCard } from "@/components/makerworld-connect-card";
+import { ProviderConnectionsPanel } from "@/components/provider-connections-panel";
 import { NotificationsPanel } from "@/components/notifications-panel";
 import { SpoolmanConnectCard } from "@/components/spoolman-connect-card";
 import { OidcSettingsCard } from "@/components/oidc-settings-card";
@@ -2095,6 +2096,7 @@ export function SettingsPanel() {
             {activeSection === "imports" && (
               <div className="space-y-6 animate-panel-in">
                 <MakerWorldConnectCard />
+                <ProviderConnectionsPanel />
               </div>
             )}
 

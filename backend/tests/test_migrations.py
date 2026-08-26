@@ -35,6 +35,13 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
     assert "refresh_tokens" in tables
     assert "printer_profiles" in tables
     assert "share_links" in tables
+    assert {
+        "model_provenance_sources",
+        "model_provenance_fields",
+        "provenance_captures",
+        "artifact_provenance_links",
+        "inbox_item_results",
+    } <= tables
     print_job_columns = {
         col["name"]: col for col in inspector.get_columns("print_jobs")
     }
@@ -95,6 +102,37 @@ def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) ->
     assert "oidc_client_secret" in config_columns
     assert "oidc_admin_groups" in config_columns
 
+    inbox_columns = {col["name"]: col for col in inspector.get_columns("inbox_items")}
+    assert "completion" in inbox_columns
+    inbox_fks = {
+        fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+        for fk in inspector.get_foreign_keys("inbox_items")
+    }
+    assert inbox_fks["background_job_id"] == "SET NULL"
+    provenance_source_indexes = {
+        index["name"]: index
+        for index in inspector.get_indexes("model_provenance_sources")
+    }
+    assert provenance_source_indexes["ix_provenance_source_provider_item"][
+        "column_names"
+    ] == [
+        "provider",
+        "source_item_id",
+    ]
+    provenance_link_columns = {
+        col["name"]: col for col in inspector.get_columns("artifact_provenance_links")
+    }
+    assert "import_key" in provenance_link_columns
+    provenance_link_fks = {
+        fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+        for fk in inspector.get_foreign_keys("artifact_provenance_links")
+    }
+    assert provenance_link_fks == {
+        "file_id": "CASCADE",
+        "provenance_source_id": "CASCADE",
+        "capture_id": "SET NULL",
+    }
+
 
 def test_bambu_identity_migration_absorbs_duplicate_pair_without_delete(
     tmp_path: Path,
@@ -132,24 +170,100 @@ def test_bambu_identity_migration_absorbs_duplicate_pair_without_delete(
                 )
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
-            rows = connection.execute(
-                text(
-                    "SELECT id, dedupe_absorbed_at, dedupe_survivor_id, "
-                    "external_project_id, external_task_id, artifact_evidence "
-                    "FROM print_jobs ORDER BY id"
+            rows = (
+                connection.execute(
+                    text(
+                        "SELECT id, dedupe_absorbed_at, dedupe_survivor_id, "
+                        "external_project_id, external_task_id, artifact_evidence "
+                        "FROM print_jobs ORDER BY id"
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         assert rows[0]["dedupe_absorbed_at"] is None
         assert rows[0]["external_project_id"] == "project-1"
         assert rows[0]["external_task_id"] == "task-1"
         assert rows[0]["artifact_evidence"] == "gcode_archived"
         assert rows[1]["dedupe_absorbed_at"] is not None
         assert rows[1]["dedupe_survivor_id"] == 1
-        with pytest.raises(RuntimeError, match="cannot downgrade Bambu identity repair"):
+        with pytest.raises(
+            RuntimeError, match="cannot downgrade Bambu identity repair"
+        ):
             command.downgrade(cfg, "e7b4c1d9a6f2")
         assert {
             column["name"] for column in inspect(engine).get_columns("print_jobs")
         } >= {"dedupe_absorbed_at", "dedupe_survivor_id"}
+    finally:
+        engine.dispose()
+
+
+def test_inbox_job_set_null_migration_preserves_completed_history(
+    tmp_path: Path,
+) -> None:
+    """Upgrade changes only the FK action and keeps terminal inbox rows."""
+    url = f"sqlite:///{tmp_path / 'inbox-job-fk.sqlite'}"
+    cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "f9a7c3e5b1d2")
+
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(username, hashed_password, is_superuser, is_active, "
+                    "created_at, updated_at) VALUES "
+                    "('history-owner', 'hash', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            owner_id = connection.execute(
+                text("SELECT id FROM users WHERE username = 'history-owner'")
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO background_jobs "
+                    "(id, visible, kind, state, status_json, replay_safe, "
+                    "created_at, updated_at, finished_at) VALUES "
+                    "('history-job', 1, 'pending_import', 'completed', '{}', 1, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO inbox_items "
+                    "(owner_user_id, source_kind, state, manifest_json, "
+                    "requested_tags_json, background_job_id, retryable, "
+                    "attempt_count, created_at, updated_at) VALUES "
+                    "(:owner_id, 'BROWSER', 'COMPLETED', '{}', '[]', "
+                    "'history-job', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {"owner_id": owner_id},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(url)
+    try:
+        inbox_fks = {
+            fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+            for fk in inspect(engine).get_foreign_keys("inbox_items")
+        }
+        assert inbox_fks["background_job_id"] == "SET NULL"
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.execute(
+                text("DELETE FROM background_jobs WHERE id = 'history-job'")
+            )
+            assert connection.execute(
+                text(
+                    "SELECT state, background_job_id FROM inbox_items "
+                    "WHERE owner_user_id = :owner_id"
+                ),
+                {"owner_id": owner_id},
+            ).one() == ("COMPLETED", None)
     finally:
         engine.dispose()
 
@@ -238,6 +352,7 @@ def test_bambu_identity_grouping_rejects_fast_reprints_and_transitive_chains() -
         },
     ]
     assert migration._groups(multi_printer) == []
+
 
 # --------------------------------------------------------------------------- #
 # Strict coverage for the migration runner (app/db/migrate.py) and create_all

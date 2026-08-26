@@ -195,11 +195,17 @@ const modelList = [
 ];
 
 // Mutable server state a test can flip before navigating (workers: 1, serial).
+let inboxCollectionId: number | null = null;
 const state = {
   externalLibrariesEnabled: false,
   ingestJobQueued: false,
   thumbnailRebuildQueued: false,
   apiKeySequence: 0,
+  inboxCaptured: false,
+  inboxImported: false,
+  sourceOverride: false,
+  sourceCover: true,
+  browserDeviceRevoked: false,
 };
 
 export function resetMockApiState(): void {
@@ -207,6 +213,160 @@ export function resetMockApiState(): void {
   state.ingestJobQueued = false;
   state.thumbnailRebuildQueued = false;
   state.apiKeySequence = 0;
+  state.inboxCaptured = false;
+  state.inboxImported = false;
+  inboxCollectionId = null;
+  state.sourceOverride = false;
+  state.sourceCover = true;
+  state.browserDeviceRevoked = false;
+}
+
+function inboxItem() {
+  return {
+    id: 41,
+    owner_user_id: 1,
+    source_kind: "url",
+    source_url: "https://www.printables.com/model/41-capture-bracket",
+    display_title: "Capture bracket",
+    source_hostname: "www.printables.com",
+    state: "review",
+    manifest: {
+      schema_version: 2,
+      kind: "model_files",
+      source: {
+        provider: "printables",
+        canonical_url: "https://www.printables.com/model/41-capture-bracket",
+        source_item_id: "41",
+        source_revision: "v2",
+        adapter_version: "fixture-1",
+        tags: [],
+        fields: {},
+      },
+      files: [
+        { id: "bracket-stl", name: "capture-bracket.stl", file_type: "stl", size: 1024 },
+        { id: "bracket-3mf", name: "capture-bracket.3mf", file_type: "3mf", size: 2048 },
+      ],
+      selected_ids: ["bracket-stl", "bracket-3mf"],
+    },
+    target_collection_id: inboxCollectionId,
+    requested_tags: ["fixture"],
+    background_job_id: null,
+    resulting_model_id: null,
+    results: [],
+    error_code: null,
+    retryable: true,
+    attempt_count: 0,
+    created_at: now,
+    updated_at: now,
+    completed_at: null,
+    completion: null,
+  };
+}
+
+function importedInboxItem() {
+  return {
+    ...inboxItem(),
+    state: "completed",
+    resulting_model_id: 1,
+    completion: "partial",
+    completed_at: now,
+    results: [
+      {
+        id: 1,
+        source_selection_id: "bracket-stl",
+        result_key: "one",
+        original_filename: "capture-bracket.stl",
+        state: "imported",
+        model_id: 1,
+        file_id: 1,
+        provenance_source_id: 8,
+        error_code: null,
+        retryable: false,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 2,
+        source_selection_id: "bracket-3mf",
+        result_key: "two",
+        original_filename: "capture-bracket.3mf",
+        state: "failed",
+        model_id: null,
+        file_id: null,
+        provenance_source_id: null,
+        error_code: "download_failed",
+        retryable: true,
+        created_at: now,
+        updated_at: now,
+      },
+    ],
+  };
+}
+
+function provenance() {
+  return {
+    schema_version: 2,
+    sources: [
+      {
+        id: 8,
+        provider: "printables",
+        source_item_id: "41",
+        canonical_url: "https://www.printables.com/model/41-capture-bracket",
+        source_revision: "v2",
+        first_captured_at: now,
+        last_checked_at: now,
+        captures: [],
+        fields: [
+          {
+            field_name: "description",
+            captured_value:
+              "New balloon-powered speedboat with an inflation adapter and twin nozzles for straight, long-lasting fun.",
+            captured_origin: "confirmed",
+            user_value: null,
+            user_override_set: false,
+            effective_value:
+              "New balloon-powered speedboat with an inflation adapter and twin nozzles for straight, long-lasting fun.",
+            effective_origin: "confirmed",
+            captured_at: now,
+            user_updated_at: null,
+          },
+          {
+            field_name: "creator_name",
+            captured_value: "Fixture maker",
+            captured_origin: "confirmed",
+            user_value: state.sourceOverride ? "Corrected maker" : null,
+            user_override_set: state.sourceOverride,
+            effective_value: state.sourceOverride ? "Corrected maker" : "Fixture maker",
+            effective_origin: state.sourceOverride ? "user" : "confirmed",
+            captured_at: now,
+            user_updated_at: state.sourceOverride ? now : null,
+          },
+          {
+            field_name: "license_text",
+            captured_value: "CC BY 4.0",
+            captured_origin: "confirmed",
+            user_value: null,
+            user_override_set: false,
+            effective_value: "CC BY 4.0",
+            effective_origin: "confirmed",
+            captured_at: now,
+            user_updated_at: null,
+          },
+          {
+            field_name: "instructions",
+            captured_value: "Print with supports.",
+            captured_origin: "confirmed",
+            user_value: null,
+            user_override_set: false,
+            effective_value: "Print with supports.",
+            effective_origin: "confirmed",
+            captured_at: now,
+            user_updated_at: null,
+          },
+        ],
+      },
+    ],
+  };
 }
 
 export function setExternalLibrariesEnabled(value: boolean): void {
@@ -331,7 +491,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
+      "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
       "access-control-allow-headers": "*",
     });
     res.end();
@@ -371,6 +531,51 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     sendJson(res, []);
     return;
   }
+  if (url.pathname === "/api/v1/provider-connections") {
+    sendJson(res, [
+      { provider: "myminifactory", connected: false, updated_at: null },
+      { provider: "cults", connected: false, updated_at: null },
+    ]);
+    return;
+  }
+  if (url.pathname === "/api/v1/browser-pairings") {
+    if (req.method === "POST") {
+      drainRequest(req, () =>
+        sendJson(res, { code: "PAIR-1234", expires_at: "2026-06-04T00:34:22.000000" }, 201),
+      );
+      return;
+    }
+    sendJson(res, [
+      {
+        id: 9,
+        name: "Fixture Firefox",
+        created_at: now,
+        last_used_at: null,
+        revoked_at: state.browserDeviceRevoked ? now : null,
+      },
+    ]);
+    return;
+  }
+  if (url.pathname === "/api/v1/browser-pairings/9") {
+    if (req.method === "DELETE") {
+      state.browserDeviceRevoked = true;
+      res.writeHead(204, { "access-control-allow-origin": "*" });
+      res.end();
+      return;
+    }
+    if (req.method === "PATCH") {
+      drainRequest(req, () =>
+        sendJson(res, {
+          id: 9,
+          name: "Renamed fixture browser",
+          created_at: now,
+          last_used_at: null,
+          revoked_at: null,
+        }),
+      );
+      return;
+    }
+  }
   if (url.pathname === "/api/v1/admin/users") {
     sendJson(res, [
       {
@@ -386,7 +591,26 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (url.pathname === "/api/v1/collections") {
-    sendJson(res, [
+    if (req.method === "POST") {
+      drainRequest(req, () => {
+        inboxCollectionId = 42;
+        sendJson(
+          res,
+          {
+            id: 42,
+            name: "Capture bracket",
+            slug: "capture-bracket",
+            path: "capture-bracket",
+            parent_id: null,
+            model_count: 0,
+            effective_role: "admin",
+          },
+          201,
+        );
+      });
+      return;
+    }
+    const collections = [
       {
         id: 1,
         name: "maraio",
@@ -396,7 +620,19 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
         model_count: 1,
         effective_role: "admin",
       },
-    ]);
+    ];
+    if (inboxCollectionId !== null) {
+      collections.push({
+        id: 42,
+        name: "Capture bracket",
+        slug: "capture-bracket",
+        path: "capture-bracket",
+        parent_id: null,
+        model_count: 0,
+        effective_role: "admin",
+      });
+    }
+    sendJson(res, collections);
     return;
   }
   if (url.pathname === "/api/v1/collections/1/permissions") {
@@ -412,7 +648,119 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (url.pathname === "/api/v1/inbox") {
-    sendJson(res, []);
+    if (req.method === "POST") {
+      drainRequest(req, () => {
+        state.inboxCaptured = true;
+        state.inboxImported = false;
+        sendJson(res, inboxItem(), 201);
+      });
+      return;
+    }
+    sendJson(
+      res,
+      state.inboxCaptured ? [state.inboxImported ? importedInboxItem() : inboxItem()] : [],
+    );
+    return;
+  }
+  if (url.pathname === "/api/v1/inbox/batch" && req.method === "POST") {
+    drainRequest(req, () => {
+      state.inboxCaptured = false;
+      state.inboxImported = false;
+      sendJson(res, []);
+    });
+    return;
+  }
+  if (url.pathname === "/api/v1/inbox/41") {
+    if (req.method === "DELETE") {
+      state.inboxCaptured = false;
+      state.inboxImported = false;
+      inboxCollectionId = null;
+      res.writeHead(204, { "access-control-allow-origin": "*" });
+      res.end();
+      return;
+    }
+    if (req.method === "PATCH") {
+      drainRequest(req, () => sendJson(res, inboxItem()));
+      return;
+    }
+    sendJson(
+      res,
+      state.inboxCaptured
+        ? state.inboxImported
+          ? importedInboxItem()
+          : inboxItem()
+        : { detail: "not_found" },
+      state.inboxCaptured ? 200 : 404,
+    );
+    return;
+  }
+  if (url.pathname === "/api/v1/inbox/41/import" && req.method === "POST") {
+    if (inboxCollectionId === null) {
+      drainRequest(req, () => sendJson(res, { detail: "collection_required" }, 409));
+      return;
+    }
+    drainRequest(req, () => {
+      state.inboxImported = true;
+      sendJson(res, importedInboxItem());
+    });
+    return;
+  }
+  if (url.pathname === "/api/v1/inbox/41/retry" && req.method === "POST") {
+    drainRequest(req, () => sendJson(res, importedInboxItem()));
+    return;
+  }
+  if (url.pathname === "/api/v1/models/1/provenance") {
+    sendJson(res, provenance());
+    return;
+  }
+  if (url.pathname === "/api/v1/models/1/provenance/8" && req.method === "PATCH") {
+    drainRequest(req, () => {
+      state.sourceOverride = !state.sourceOverride;
+      sendJson(res, provenance());
+    });
+    return;
+  }
+  if (url.pathname === "/api/v1/models/1/provenance/8/cover") {
+    if (req.method === "GET") {
+      if (!state.sourceCover) {
+        sendJson(res, { detail: "source_cover_not_found" }, 404);
+      } else {
+        sendJson(res, {
+          id: 1,
+          provenance_source_id: 8,
+          content_type: "image/webp",
+          size_bytes: 68,
+          updated_at: now,
+        });
+      }
+      return;
+    }
+    if (req.method === "PUT") {
+      drainRequest(req, () => {
+        state.sourceCover = true;
+        sendJson(res, {
+          id: 1,
+          provenance_source_id: 8,
+          content_type: "image/webp",
+          size_bytes: 68,
+          updated_at: now,
+        });
+      });
+      return;
+    }
+    if (req.method === "DELETE") {
+      state.sourceCover = false;
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+  }
+  if (url.pathname === "/api/v1/models/1/provenance/8/cover/content") {
+    if (!state.sourceCover) {
+      sendJson(res, { detail: "source_cover_not_found" }, 404);
+    } else {
+      sendPng(res);
+    }
     return;
   }
   if (url.pathname === "/api/v1/models/trash") {
@@ -1020,7 +1368,9 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
       "content-type": "application/sla",
       "access-control-allow-origin": "*",
     });
-    res.end("solid empty\nendsolid empty\n");
+    res.end(
+      "solid triangle\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid triangle\n",
+    );
     return;
   }
 

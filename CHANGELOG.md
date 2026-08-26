@@ -2,15 +2,38 @@
 
 ## Unreleased
 
+### Added
+
+- **Rich URL capture and Model Source records.** Pending Imports can now accept
+  browser-transferred files, show complete/partial outcomes, retry only failed
+  or partial captures, and preserve per-Artifact source snapshots, confirmed or
+  inferred fields, and explicit user overrides. Portable library archives carry
+  optional provenance sidecars while remaining compatible with earlier exports.
+- **Capture provider connections and browser pairing.** Per-user MyMiniFactory
+  OAuth and Cults metadata connections, plus named and revocable paired browser
+  devices, support source-aware capture without sharing source-site sessions.
+
 ### Security
 
 - Delegated printer administrators can no longer redirect provider endpoints or
   forward stored credentials, view-only shares no longer expose original G-code,
   blank JWT secrets are replaced automatically, and optional Postgres, SeaweedFS,
   and migration MinIO services stay off host interfaces by default.
+- Capture rejects URL credentials and strips secret-shaped URL parameters. It
+  does not retain raw HTML, source-site cookies, OAuth codes, signed download
+  URLs, resolved credentials, or staging paths; active provider credentials are
+  encrypted at rest and never returned. Provider traffic is restricted to
+  bounded, validated endpoints.
 
 ### Changed
 
+- **Dense STL previews preserve surface coverage.** Oversized binary and ASCII
+  meshes now use an isolated, bounded two-pass streaming renderer before the
+  deterministic sampled fallback, keeping previews coherent without loading the
+  full mesh into API memory ([#67](https://github.com/xiao-villamor/PrintStash/issues/67)).
+- **Embedded 3MF previews take precedence.** Valid slicer-provided PNG previews
+  bypass mesh regeneration, while invalid or oversized candidates are skipped
+  safely in favour of the next bounded candidate.
 - **Frontend toolchain moved to oxc.** ESLint and `typescript-eslint` are
   replaced by [oxlint](https://oxc.rs), formatting is now enforced by
   [oxfmt](https://oxc.rs) (the frontend was previously unformatted), and
@@ -26,6 +49,13 @@
   now enforced.
 - The i18n coverage test parses JSX with `oxc-parser` instead of the TypeScript
   compiler API, which TypeScript 7 no longer exposes.
+
+### Fixed
+
+- Pending Imports can now be dismissed after a completed capture without
+  affecting its imported Model or Artifacts; expired terminal import jobs no
+  longer make a subsequent upload fail during pruning, and dismissed items
+  leave the visible inbox.
 
 ## 0.12.1
 

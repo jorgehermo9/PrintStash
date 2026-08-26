@@ -1,5 +1,5 @@
 /* global self, caches */
-const CACHE = "printstash-shell-v2";
+const CACHE = "printstash-shell-v3";
 const SHELL = ["/", "/offline.html", "/manifest.webmanifest", "/icon-light.svg", "/icon-dark.svg"];
 
 self.addEventListener("install", (event) => {

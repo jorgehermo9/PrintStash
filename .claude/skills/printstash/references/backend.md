@@ -12,6 +12,10 @@ library/trash/storage code.
   - `ingestion.persist_artifact` — the ONLY artifact-persistence path
     (version → canonical move → File row → thumbnail → Metadata).
   - `model_views` — the ONLY Model→response composition.
+  - `inbox` + `staging_leases` — Pending Import state transitions and durable
+    staging ownership; see [capture.md](capture.md).
+  - `provenance` + `source_covers` — Model Source snapshots, overrides, and
+    cover lifecycle; portable capture contracts live in `printstash-core`.
   - `trash` — full trash lifecycle incl. hourly GC.
   - `storage_backend` / `storage` — StorageBackend seam (local + S3); callers
     use storage keys and `local_path()`, never branch on backend type.
@@ -29,7 +33,8 @@ library/trash/storage code.
 `backend/app/core/config.py` `Settings` is the source of truth for every env
 var; prefix is `VAULT_` (e.g. `VAULT_DB_URL`, `VAULT_DATA_DIR`). Add new
 settings there with a safe local-first default; document user-facing ones in
-README/docs (docs live in the `printstash-landing` repo, not this one).
+the in-repository README/docs. If the public site also needs an update, identify
+the separate `printstash-landing` change without widening scope implicitly.
 Compose files: `docker-compose.yml` (build),
 `docker-compose.light.yml` (prebuilt GHCR image), `.prod`, `.test`.
 
@@ -52,15 +57,15 @@ Files in `backend/alembic/versions/`, named `<rev>_snake_description.py`
 
 ## Testing expectations
 
-Writing or changing tests: `.claude/skills/create-tests/SKILL.md` (policy +
-coverage matrix) and its `references/backend.md` (fixtures, seams,
-emulators). This section only lists the gates.
-
-- `cd backend && uv run pytest tests -v` — must pass; report actual results,
-  never claim a run you didn't do.
+- `cd backend && ./scripts/test.sh fast -q` — focused development loop.
+- `cd backend && ./scripts/test.sh full -q` — backend handoff gate, including
+  the full test layers configured by the repository scripts.
+- Report actual results; never claim a run you did not do.
 - Data-integrity and security fixes: write the failing test first
   (AGENTS.md rule 4).
-- Lint: `uv run ruff check app/ tests/` and `uv run ruff format app/ tests/`.
+- Lint: `uv run ruff check app/ tests/`; typecheck: `uv run pyright`.
+- Formatting writes files. Run `uv run ruff format --check app/ tests/` for a
+  read-only check, and `uv run ruff format app/ tests/` only for owned files.
 - No real secrets/access codes in fixtures or tests.
 
 ### Test layers

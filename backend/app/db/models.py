@@ -19,8 +19,10 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
     text,
@@ -130,6 +132,27 @@ class InboxItemState(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     DISMISSED = "dismissed"
+
+
+class InboxItemCompletion(str, Enum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+
+
+class InboxItemResultState(str, Enum):
+    IMPORTED = "imported"
+    DEDUPLICATED = "deduplicated"
+    FAILED = "failed"
+
+
+class CaptureUploadSlotState(str, Enum):
+    PENDING = "pending"
+    UPLOADED = "uploaded"
+
+
+class CaptureProvider(str, Enum):
+    MYMINIFACTORY = "myminifactory"
+    CULTS = "cults"
 
 
 class RoutingStrategy(str, Enum):
@@ -542,6 +565,252 @@ class Model(SQLModel, table=True):
     )
 
 
+class ModelProvenanceSource(SQLModel, table=True):
+    """One captured remote source, owned by a single Model."""
+
+    __tablename__ = "model_provenance_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "model_id", "identity_key", name="uq_provenance_source_identity"
+        ),
+        Index("ix_provenance_source_provider_item", "provider", "source_item_id"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    model_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("models.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    provider: str = Field(max_length=64, index=True)
+    source_item_id: Optional[str] = Field(default=None, max_length=255)
+    canonical_url: str = Field(max_length=2048)
+    identity_key: str = Field(max_length=64, index=True)
+    source_revision: Optional[str] = Field(default=None, max_length=255)
+    tags_json: str = Field(default="[]", sa_column=Column(Text, nullable=False))
+    first_captured_at: datetime = Field(default_factory=utcnow)
+    last_checked_at: datetime = Field(default_factory=utcnow, index=True)
+    created_by: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ),
+    )
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class ModelSourceCover(SQLModel, table=True):
+    """One private, normalized representative image for a provenance source."""
+
+    __tablename__ = "model_source_covers"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provenance_source_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("model_provenance_sources.id", ondelete="CASCADE"),
+            nullable=False,
+            unique=True,
+            index=True,
+        )
+    )
+    storage_key: str = Field(max_length=2048, unique=True)
+    content_type: str = Field(default="image/webp", max_length=64)
+    size_bytes: int
+    created_by: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class ModelProvenanceField(SQLModel, table=True):
+    """Captured and explicitly-overridden value for one allowlisted field."""
+
+    __tablename__ = "model_provenance_fields"
+    __table_args__ = (
+        UniqueConstraint(
+            "provenance_source_id", "field_name", name="uq_provenance_field_name"
+        ),
+        CheckConstraint(
+            "captured_origin IN ('confirmed', 'inferred')",
+            name="ck_provenance_field_origin",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provenance_source_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("model_provenance_sources.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    field_name: str = Field(max_length=64)
+    captured_value_json: str = Field(sa_column=Column(Text, nullable=False))
+    captured_origin: str = Field(max_length=16)
+    user_value_json: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+    user_override_set: bool = Field(default=False)
+    user_updated_by: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ),
+    )
+    captured_at: Optional[datetime] = Field(default=None)
+    user_updated_at: Optional[datetime] = Field(default=None)
+
+
+class ProvenanceCapture(SQLModel, table=True):
+    """Append-only normalized snapshot history for a provenance source."""
+
+    __tablename__ = "provenance_captures"
+    __table_args__ = (
+        UniqueConstraint(
+            "provenance_source_id",
+            "snapshot_sha256",
+            name="uq_provenance_capture_snapshot",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provenance_source_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("model_provenance_sources.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    inbox_item_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("inbox_items.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    captured_by: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ),
+    )
+    adapter_version: str = Field(max_length=64)
+    source_revision: Optional[str] = Field(default=None, max_length=255)
+    snapshot_json: str = Field(sa_column=Column(Text, nullable=False))
+    snapshot_sha256: str = Field(max_length=64, index=True)
+    captured_at: datetime = Field(default_factory=utcnow)
+    checked_at: datetime = Field(default_factory=utcnow)
+
+
+class ArtifactProvenanceLink(SQLModel, table=True):
+    """A source-file identity attached to one Artifact; it never owns bytes."""
+
+    __tablename__ = "artifact_provenance_links"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    file_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("files.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    provenance_source_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("model_provenance_sources.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    capture_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("provenance_captures.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
+    source_file_id: Optional[str] = Field(default=None, max_length=255)
+    source_filename: str = Field(max_length=512)
+    container_entry_path: Optional[str] = Field(default=None, max_length=1024)
+    source_revision: Optional[str] = Field(default=None, max_length=255)
+    blob_sha256: str = Field(max_length=64, index=True)
+    import_key: str = Field(max_length=64, unique=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class InboxItemResult(SQLModel, table=True):
+    __tablename__ = "inbox_item_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "inbox_item_id",
+            "source_selection_id",
+            "result_key",
+            name="uq_inbox_result_key",
+        ),
+        CheckConstraint(
+            "state IN ('imported', 'deduplicated', 'failed')",
+            name="ck_inbox_result_state",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inbox_item_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("inbox_items.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    source_selection_id: str = Field(max_length=512)
+    result_key: str = Field(max_length=64)
+    original_filename: str = Field(max_length=512)
+    state: InboxItemResultState = Field(
+        sa_column=Column(String(16), nullable=False, index=True)
+    )
+    model_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("models.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    file_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("files.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    provenance_source_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("model_provenance_sources.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    error_code: Optional[str] = Field(default=None, max_length=128)
+    retryable: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class DocumentKind(str, Enum):
     MARKDOWN = "markdown"  # editable in-app, content in ``body``
     PDF = "pdf"  # binary blob under document_file_key
@@ -808,6 +1077,103 @@ class ApiKey(SQLModel, table=True):
     prefix: str = Field(max_length=16, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = Field(default=None, index=True)
+
+
+class ProviderConnection(SQLModel, table=True):
+    """One encrypted external-provider credential set owned by a user."""
+
+    __tablename__ = "provider_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "provider", name="uq_provider_connection_user_provider"
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    provider: CaptureProvider = Field(
+        sa_column=Column(String(32), nullable=False, index=True)
+    )
+    access_token: Optional[str] = Field(
+        default=None, sa_column=Column(EncryptedText(), nullable=True)
+    )
+    refresh_token: Optional[str] = Field(
+        default=None, sa_column=Column(EncryptedText(), nullable=True)
+    )
+    credential_secret: Optional[str] = Field(
+        default=None, sa_column=Column(EncryptedText(), nullable=True)
+    )
+    token_expires_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ProviderOAuthState(SQLModel, table=True):
+    __tablename__ = "provider_oauth_states"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    provider: CaptureProvider = Field(sa_column=Column(String(32), nullable=False))
+    state_hash: str = Field(max_length=64, unique=True, index=True)
+    redirect_uri: str = Field(max_length=2048)
+    expires_at: datetime = Field(index=True)
+    used_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class BrowserPairingCode(SQLModel, table=True):
+    __tablename__ = "browser_pairing_codes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    code_hash: str = Field(max_length=64, unique=True, index=True)
+    expires_at: datetime = Field(index=True)
+    used_at: Optional[datetime] = Field(default=None, index=True)
+    attempts: int = Field(default=0)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class BrowserDevice(SQLModel, table=True):
+    __tablename__ = "browser_devices"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_browser_device_user_name"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    name: str = Field(max_length=128)
+    credential_hash: str = Field(max_length=64, unique=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    last_used_at: Optional[datetime] = Field(default=None)
     revoked_at: Optional[datetime] = Field(default=None, index=True)
 
 
@@ -1360,14 +1726,56 @@ class StagingLease(SQLModel, table=True):
     """Exact durable ownership record for one staged ingestion object."""
 
     __tablename__ = "staging_leases"
+    __table_args__ = (
+        CheckConstraint(
+            "(background_job_id IS NOT NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NULL) OR "
+            "(background_job_id IS NULL AND inbox_item_id IS NOT NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NULL) OR "
+            "(background_job_id IS NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NOT NULL AND capture_upload_slot_id IS NULL) OR "
+            "(background_job_id IS NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NOT NULL)",
+            name="ck_staging_leases_exactly_one_owner",
+        ),
+    )
 
     id: str = Field(primary_key=True, max_length=64)
     path: str = Field(unique=True, max_length=2048)
     owner_user_id: Optional[int] = Field(
         default=None, foreign_key="users.id", index=True
     )
-    background_job_id: str = Field(
-        foreign_key="background_jobs.id", unique=True, index=True
+    background_job_id: Optional[str] = Field(
+        default=None, foreign_key="background_jobs.id", index=True
+    )
+    inbox_item_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("inbox_items.id", ondelete="CASCADE"),
+            nullable=True,
+            unique=True,
+            index=True,
+        ),
+    )
+    model_source_cover_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("model_source_covers.id", ondelete="CASCADE"),
+            nullable=True,
+            unique=True,
+            index=True,
+        ),
+    )
+    capture_upload_slot_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            String(64),
+            ForeignKey("capture_upload_slots.id", ondelete="CASCADE"),
+            nullable=True,
+            unique=True,
+            index=True,
+        ),
+    )
+    capture_upload_slot_origin_id: Optional[str] = Field(
+        default=None, max_length=64, index=True
     )
     size_bytes: int
     sha256: str = Field(max_length=64, index=True)
@@ -1445,7 +1853,13 @@ class InboxItem(SQLModel, table=True):
         default="[]", sa_column=Column(Text, nullable=False)
     )
     background_job_id: Optional[str] = Field(
-        default=None, foreign_key="background_jobs.id", index=True
+        default=None,
+        sa_column=Column(
+            String(64),
+            ForeignKey("background_jobs.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
     )
     resulting_model_id: Optional[int] = Field(
         default=None, foreign_key="models.id", index=True
@@ -1456,6 +1870,36 @@ class InboxItem(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow, index=True)
     updated_at: datetime = Field(default_factory=utcnow, index=True)
     completed_at: Optional[datetime] = None
+    completion: Optional[InboxItemCompletion] = Field(
+        default=None, sa_column=Column(String(16), nullable=True)
+    )
+
+
+class CaptureUploadSlot(SQLModel, table=True):
+    """Declared browser capture object and its durable staging receipt."""
+
+    __tablename__ = "capture_upload_slots"
+
+    id: str = Field(primary_key=True, max_length=64)
+    inbox_item_id: int = Field(
+        sa_column=Column(
+            Integer, ForeignKey("inbox_items.id", ondelete="CASCADE"), nullable=False
+        ),
+    )
+    role: str = Field(max_length=16, index=True)
+    source_file_id: Optional[str] = Field(default=None, max_length=255)
+    filename: str = Field(max_length=512)
+    media_type: str = Field(max_length=128)
+    size_bytes: int
+    sha256: str = Field(max_length=64, index=True)
+    state: CaptureUploadSlotState = Field(
+        default=CaptureUploadSlotState.PENDING, index=True
+    )
+    storage_key: Optional[str] = Field(default=None, max_length=2048, unique=True)
+    receipt_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    uploaded_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class PrinterFile(SQLModel, table=True):
