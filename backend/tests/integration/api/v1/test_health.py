@@ -1,284 +1,448 @@
-"""Coverage for the operational health probes (app/api/v1/health.py).
+"""What ``/health``, ``/health/details`` and ``/health/releases/latest`` promise.
 
-Complements test_api_hardening.py (auth/shape) and test_r2_ops.py (jobs /
-external-libraries happy paths) by exercising each probe's error branch and
-the Spoolman probe, which neither of those files touch at all.
+The detailed probe is the operator's diagnosis: the Docker healthcheck and the release
+verification in ``docs/release-validation.md`` both read it, and the UI disables printer
+controls from the capability summary it returns. So its shape is a contract — every
+component key, the provider support levels, and above all *when* the service calls
+itself degraded. A broken dependency (database, storage, backup) must degrade it; an
+optional integration that is merely switched off or unreachable must not, or every
+self-hoster without Spoolman sees a red service.
+
+The public ``/health`` is the other half of that contract: it answers an unauthenticated
+caller, so it must disclose liveness and nothing else.
+
+Probe error branches — the ones a real dependency cannot produce on demand — live in
+``unit/api/v1/test_health.py``.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
+import httpx
+import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 import app.api.v1.health as health_mod
-from app.db.models import Printer, PrinterStatus
+from app.core.config import get_config
+from app.core.time import utcnow
+from app.db.models import (
+    ExternalLibrary,
+    ExternalLibraryScanStatus,
+    File,
+    FileType,
+    Model,
+    Printer,
+    PrinterProvider,
+    PrinterStatus,
+    PrintJob,
+    PrintJobState,
+)
+from tests.integration.conftest import UserHeaders
+
+SPOOLMAN_URL = "http://spoolman.local:7912"
+SPOOLMAN_KEY = "spoolman-api-key"
 
 
-def test_runtime_capabilities_are_explicit(monkeypatch) -> None:
-    installed = {"numpy", "PIL", "trimesh", "cascadio"}
-    monkeypatch.setattr(
-        health_mod,
-        "find_spec",
-        lambda module: object() if module in installed else None,
-    )
-    capabilities = health_mod._runtime_capabilities()
-    assert capabilities["browser"] is False
-    assert capabilities["step"] is True
-    assert capabilities["thumbnails"] is True
+def _printer(name: str = "Ender", **overrides: Any) -> Printer:
+    fields: dict[str, Any] = {
+        "name": name,
+        "moonraker_url": "http://printer.local:7125",
+        "status": PrinterStatus.READY,
+    }
+    fields.update(overrides)
+    return Printer(**fields)
 
 
-# --------------------------------------------------------------------------- #
-# _database_probe
-# --------------------------------------------------------------------------- #
-
-
-def test_database_probe_ok(db_session: Session) -> None:
-    out = health_mod._database_probe()
-    assert out["ok"] is True
-    assert "counts" in out
-
-
-def test_database_probe_reports_error_on_failure(monkeypatch) -> None:
-    class _BoomFactory:
-        def session(self):
-            raise RuntimeError("db unreachable")
-
-    monkeypatch.setattr(health_mod, "get_session_factory", lambda: _BoomFactory())
-    out = health_mod._database_probe()
-    assert out["ok"] is False
-    assert out["error"] == "RuntimeError"
-
-
-# --------------------------------------------------------------------------- #
-# _backup_probe
-# --------------------------------------------------------------------------- #
-
-
-def test_backup_probe_ok(tmp_path) -> None:
-    from app.core.config import _overlay
-
-    _overlay["backup_dir"] = tmp_path / "backups"
-    (tmp_path / "backups").mkdir()
-    out = health_mod._backup_probe()
-    assert out["ok"] is True
-    assert out["local_count"] == 0
-    assert out["latest"] is None
-
-
-def test_backup_probe_reports_oserror(monkeypatch, tmp_path) -> None:
-    """A real ``pathlib.Path.glob()`` silently swallows PermissionError, so the
-    OSError branch is forced via a fake ``Path`` bound only in the health
-    module's namespace — the real ``pathlib.Path`` used everywhere else in
-    the process is untouched."""
-    from app.core.config import _overlay
-    from app.core.config import settings as real_settings
-
-    _overlay["backup_dir"] = tmp_path / "backups"
-    real_path = health_mod.Path
-
-    class _BoomPath:
-        def __init__(self, *a, **k):
-            pass
-
-        def glob(self, *_a, **_k):
-            raise OSError("disk error")
-
-        def exists(self):
-            return True
-
-        def is_dir(self):
-            return True
-
-        def __str__(self):
-            return str(real_settings.backup_dir)
-
-    monkeypatch.setattr(health_mod, "Path", _BoomPath)
-    try:
-        out = health_mod._backup_probe()
-    finally:
-        monkeypatch.setattr(health_mod, "Path", real_path)
-    assert out["ok"] is False
-    assert out["error"] == "OSError"
-
-
-# --------------------------------------------------------------------------- #
-# _storage_probe
-# --------------------------------------------------------------------------- #
-
-
-def test_storage_probe_reports_error_on_failure(monkeypatch) -> None:
-    def _boom():
-        raise RuntimeError("backend unavailable")
-
-    monkeypatch.setattr(health_mod, "get_backend", _boom)
-    out = health_mod._storage_probe()
-    assert out["ok"] is False
-    assert out["error"] == "RuntimeError"
-
-
-# --------------------------------------------------------------------------- #
-# _provider_probe
-# --------------------------------------------------------------------------- #
-
-
-def test_provider_probe_counts_live_printers(db_session: Session) -> None:
+def _model_with_file(db_session: Session, name: str) -> Model:
+    model = Model(name=name, slug=name.lower(), hash=f"{name.lower():x<64}"[:64])
+    db_session.add(model)
+    db_session.commit()
+    db_session.refresh(model)
     db_session.add(
-        Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.READY)
+        File(
+            model_id=model.id,
+            path=f"{name}.gcode",
+            original_filename=f"{name}.gcode",
+            file_type=FileType.GCODE,
+            version=1,
+            size_bytes=10,
+            sha256=f"{name.lower():f<64}"[:64],
+        )
     )
     db_session.commit()
-
-    out = health_mod._provider_probe()
-    assert out["ok"] is True
-    assert out["configured"]["moonraker"] == 1
-    assert out["status_counts"]["ready"] == 1
-    assert len(out["providers"]) == 5
+    return model
 
 
-def test_provider_probe_reports_error_on_failure(monkeypatch) -> None:
-    class _BoomFactory:
-        def session(self):
-            raise RuntimeError("db down")
-
-    monkeypatch.setattr(health_mod, "get_session_factory", lambda: _BoomFactory())
-    out = health_mod._provider_probe()
-    assert out["ok"] is False
-    assert out["error"] == "RuntimeError"
-    assert "providers" in out  # capability summary still surfaced
-
-
-# --------------------------------------------------------------------------- #
-# _jobs_probe
-# --------------------------------------------------------------------------- #
-
-
-def test_jobs_probe_reports_error_on_failure(monkeypatch) -> None:
-    import app.services.jobs as jobs_mod
-
-    def _boom():
-        raise RuntimeError("registry broken")
-
-    monkeypatch.setattr(jobs_mod.registry, "snapshot_counts", _boom)
-    out = health_mod._jobs_probe()
-    assert out["ok"] is False
-    assert out["error"] == "RuntimeError"
-
-
-# --------------------------------------------------------------------------- #
-# _fleet_scheduler_probe
-# --------------------------------------------------------------------------- #
-
-
-def test_fleet_scheduler_probe_reports_error_on_failure(monkeypatch) -> None:
-    class _BoomFactory:
-        def session(self):
-            raise RuntimeError("db down")
-
-    monkeypatch.setattr(health_mod, "get_session_factory", lambda: _BoomFactory())
-    out = health_mod._fleet_scheduler_probe()
-    assert out["ok"] is False
-    assert out["error"] == "RuntimeError"
-
-
-# --------------------------------------------------------------------------- #
-# _external_libraries_probe
-# --------------------------------------------------------------------------- #
-
-
-def test_external_libraries_probe_reports_error_on_failure(monkeypatch) -> None:
-    class _BoomFactory:
-        def session(self):
-            raise RuntimeError("db down")
-
-    monkeypatch.setattr(health_mod, "get_session_factory", lambda: _BoomFactory())
-    out = health_mod._external_libraries_probe()
-    assert out["ok"] is False
-    assert out["error"] == "RuntimeError"
-
-
-# --------------------------------------------------------------------------- #
-# _spoolman_probe — entirely untested elsewhere
-# --------------------------------------------------------------------------- #
-
-
-def test_spoolman_probe_disabled_by_default(db_session: Session) -> None:
-    out = health_mod._spoolman_probe()
-    assert out == {"ok": True, "enabled": False}
-
-
-def test_spoolman_probe_enabled_but_unconfigured(db_session: Session) -> None:
+@pytest.fixture
+def spoolman_enabled(db_session: Session):
+    """Turn the optional Spoolman integration on, with an optional API key."""
     from app.services import runtime_config
 
-    runtime_config.set_spoolman_enabled(db_session, True)
-    out = health_mod._spoolman_probe()
-    assert out == {"ok": True, "enabled": True, "configured": False}
+    def enable(*, base_url: str | None = SPOOLMAN_URL, api_key: str | None = None):
+        runtime_config.set_spoolman_enabled(db_session, True)
+        if base_url is not None:
+            runtime_config.set_spoolman_config(
+                db_session, base_url=base_url, api_key=api_key
+            )
+
+    return enable
 
 
-def test_spoolman_probe_reachable(db_session: Session, monkeypatch) -> None:
-    from app.services import runtime_config
+@pytest.fixture
+def spoolman_server(monkeypatch: pytest.MonkeyPatch):
+    """Stand in for the Spoolman server, recording the request it received."""
+    calls: list[dict[str, Any]] = []
 
-    runtime_config.set_spoolman_enabled(db_session, True)
-    runtime_config.set_spoolman_config(
-        db_session, base_url="http://spoolman.local:7912", api_key="secret"
-    )
+    def respond(
+        *,
+        status_code: int = 200,
+        body: dict | None = None,
+        error: Exception | None = None,
+    ):
+        def fake_get(url: str, **kwargs: Any):
+            calls.append({"url": url, "headers": kwargs.get("headers", {})})
+            if error is not None:
+                raise error
+            return httpx.Response(
+                status_code, json=body if body is not None else {"version": "1.9.0"}
+            )
 
-    class _Resp:
-        status_code = 200
+        monkeypatch.setattr(httpx, "get", fake_get)
+        return calls
 
-        def json(self):
-            return {"version": "1.9.0"}
-
-    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp())
-    out = health_mod._spoolman_probe()
-    assert out["ok"] is True
-    assert out["reachable"] is True
-    assert out["version"] == "1.9.0"
-
-
-def test_spoolman_probe_unreachable_http_error(
-    db_session: Session, monkeypatch
-) -> None:
-    import httpx
-
-    from app.services import runtime_config
-
-    runtime_config.set_spoolman_enabled(db_session, True)
-    runtime_config.set_spoolman_config(
-        db_session, base_url="http://spoolman.local:7912"
-    )
-
-    def _boom(*a, **k):
-        raise httpx.ConnectError("connection refused")
-
-    monkeypatch.setattr("httpx.get", _boom)
-    out = health_mod._spoolman_probe()
-    assert out["ok"] is True
-    assert out["reachable"] is False
-    assert out["error"] == "ConnectError"
+    return respond
 
 
-def test_spoolman_probe_reports_error_on_failure(monkeypatch) -> None:
-    class _BoomFactory:
-        def session(self):
-            raise RuntimeError("db down")
+class TestHealth:
+    def test_reports_status_and_name(self, client: TestClient) -> None:
+        response = client.get("/api/v1/health")
 
-    monkeypatch.setattr(health_mod, "get_session_factory", lambda: _BoomFactory())
-    out = health_mod._spoolman_probe()
-    assert out["ok"] is False
-    assert out["error"] == "RuntimeError"
+        assert response.status_code == 200, response.text
+        assert response.json() == {"status": "ok", "name": get_config().app_name}
+
+    def test_needs_no_authentication(self, client: TestClient) -> None:
+        assert client.get("/api/v1/health").status_code == 200
+
+    def test_discloses_nothing_beyond_liveness(self, client: TestClient) -> None:
+        body = client.get("/api/v1/health").json()
+
+        assert set(body) == {"status", "name"}
 
 
-# --------------------------------------------------------------------------- #
-# Full endpoint: a degraded component flips overall status
-# --------------------------------------------------------------------------- #
+class TestHealthDetails:
+    def test_reports_the_running_version(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        assert body["version"] == get_config().app_version
+
+    def test_reports_the_deployment_shape(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        assert body["deployment"] == {
+            "mode": "single_process",
+            "processes": 1,
+            "distributed_coordination": False,
+        }
+
+    def test_reports_every_component(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        assert set(body["components"]) == {
+            "database",
+            "storage",
+            "backup",
+            "printer_providers",
+            "jobs",
+            "fleet_scheduler",
+            "external_libraries",
+            "spoolman",
+        }
+
+    def test_mirrors_database_counts_into_metrics(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        _model_with_file(db_session, "Widget")
+
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        assert body["metrics"] == body["components"]["database"]["counts"]
+
+    def test_reports_provider_support_levels(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        summaries = {
+            p["provider"]: p
+            for p in body["components"]["printer_providers"]["providers"]
+        }
+        assert set(summaries) == {p.value for p in PrinterProvider}
+        for provider, summary in summaries.items():
+            assert summary["support_level"], f"{provider} has no support level"
+            assert "unsupported_actions" in summary, provider
+
+    def test_flips_to_degraded_when_a_component_fails(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def unavailable():
+            raise RuntimeError("backend unavailable")
+
+        monkeypatch.setattr(health_mod, "get_backend", unavailable)
+
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        assert body["status"] == "degraded"
+        assert body["components"]["storage"]["ok"] is False
+
+    def test_stays_ok_when_an_informational_component_is_unreachable(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        spoolman_enabled,
+        spoolman_server,
+    ) -> None:
+        spoolman_enabled()
+        spoolman_server(error=httpx.ConnectError("connection refused"))
+
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        assert body["status"] == "ok", (
+            "an optional integration must not degrade the service"
+        )
+        assert body["components"]["spoolman"]["reachable"] is False
+
+    def test_rejects_an_unauthenticated_caller(self, client: TestClient) -> None:
+        assert client.get("/api/v1/health/details").status_code == 401
+
+    def test_rejects_a_non_superuser(
+        self, client: TestClient, user_headers: UserHeaders
+    ) -> None:
+        headers = user_headers("operator")
+
+        response = client.get("/api/v1/health/details", headers=headers)
+
+        assert response.status_code == 403, response.text
 
 
-def test_health_details_flips_to_degraded_when_a_component_fails(
-    client: TestClient, auth_headers: dict[str, str], monkeypatch
-) -> None:
-    def _boom():
-        raise RuntimeError("backend unavailable")
+class TestLatestRelease:
+    @pytest.fixture
+    def release_check(self, monkeypatch: pytest.MonkeyPatch):
+        """Stand in for the GitHub release lookup, recording how it was called."""
+        calls: list[dict[str, Any]] = []
 
-    monkeypatch.setattr(health_mod, "get_backend", _boom)
-    body = client.get("/api/v1/health/details", headers=auth_headers).json()
-    assert body["status"] == "degraded"
-    assert body["components"]["storage"]["ok"] is False
+        async def fake_release_status(current_version: str, *, force: bool = False):
+            calls.append({"current_version": current_version, "force": force})
+            return {
+                "status": "up_to_date",
+                "current_version": current_version,
+                "latest_version": current_version,
+                "update_available": False,
+                "release_url": "https://example.test/release",
+                "published_at": "2026-07-14T10:00:00Z",
+                "checked_at": "2026-07-14T11:00:00Z",
+            }
+
+        monkeypatch.setattr(health_mod, "get_release_status", fake_release_status)
+        return calls
+
+    def test_returns_the_release_status(
+        self, client: TestClient, auth_headers: dict[str, str], release_check
+    ) -> None:
+        response = client.get("/api/v1/health/releases/latest", headers=auth_headers)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "up_to_date"
+        assert body["current_version"] == get_config().app_version
+        assert body["update_available"] is False
+
+    def test_forces_a_recheck_when_refresh_is_set(
+        self, client: TestClient, auth_headers: dict[str, str], release_check
+    ) -> None:
+        client.get("/api/v1/health/releases/latest?refresh=true", headers=auth_headers)
+
+        assert [call["force"] for call in release_check] == [True]
+
+    def test_rejects_an_unauthenticated_caller(self, client: TestClient) -> None:
+        assert client.get("/api/v1/health/releases/latest").status_code == 401
+
+    def test_rejects_a_non_superuser(
+        self, client: TestClient, user_headers: UserHeaders
+    ) -> None:
+        headers = user_headers("release-reader")
+
+        response = client.get("/api/v1/health/releases/latest", headers=headers)
+
+        assert response.status_code == 403, response.text
+
+
+class TestDatabaseProbe:
+    def test_reports_backend_database_and_counts(self, db_session: Session) -> None:
+        _model_with_file(db_session, "Widget")
+
+        out = health_mod._database_probe()
+
+        assert out["ok"] is True
+        assert out["backend"] == "sqlite"
+        # The sentinel rows the suite seeds are real rows; count the delta instead.
+        assert out["counts"]["models"] >= 1
+        assert out["counts"]["files"] >= 1
+
+
+class TestProviderProbe:
+    def test_counts_live_printers_by_provider_and_status(
+        self, db_session: Session
+    ) -> None:
+        db_session.add(_printer("Ender"))
+        db_session.commit()
+
+        out = health_mod._provider_probe()
+
+        assert out["ok"] is True
+        assert out["configured"][PrinterProvider.MOONRAKER.value] == 1
+        assert out["status_counts"][PrinterStatus.READY.value] == 1
+
+    def test_ignores_a_trashed_printer(self, db_session: Session) -> None:
+        db_session.add(_printer("Trashed", deleted_at=utcnow()))
+        db_session.commit()
+
+        out = health_mod._provider_probe()
+
+        assert out["configured"] == {}
+        assert out["status_counts"] == {}
+
+
+class TestFleetSchedulerProbe:
+    def test_counts_print_jobs_per_state(self, db_session: Session) -> None:
+        printer = _printer("Queue Owner")
+        db_session.add(printer)
+        model = _model_with_file(db_session, "Queued")
+        db_session.commit()
+        db_session.refresh(printer)
+        gcode = db_session.exec(select(File).where(File.model_id == model.id)).one()
+        db_session.add(
+            PrintJob(
+                printer_id=printer.id,
+                model_id=model.id,
+                file_id=gcode.id,
+                remote_filename=gcode.original_filename,
+                state=PrintJobState.QUEUED,
+            )
+        )
+        db_session.commit()
+
+        out = health_mod._fleet_scheduler_probe()
+
+        assert out["counts"][PrintJobState.QUEUED.value] == 1
+
+    def test_zero_fills_every_state(self, db_session: Session) -> None:
+        out = health_mod._fleet_scheduler_probe()
+
+        assert set(out["counts"]) == {state.value for state in PrintJobState}
+        assert set(out["counts"].values()) == {0}
+
+    def test_surfaces_the_scheduler_snapshot(self, db_session: Session) -> None:
+        out = health_mod._fleet_scheduler_probe()
+
+        assert set(out) >= {"running", "last_tick_at", "last_dispatch_at", "last_error"}
+
+
+class TestExternalLibrariesProbe:
+    def test_counts_configured_and_enabled_libraries(self, db_session: Session) -> None:
+        db_session.add(ExternalLibrary(name="nas", root_path="/mnt/nas", enabled=True))
+        db_session.add(
+            ExternalLibrary(name="archive", root_path="/mnt/archive", enabled=False)
+        )
+        db_session.commit()
+
+        out = health_mod._external_libraries_probe()
+
+        assert out["configured"] == 2
+        assert out["enabled"] == 1
+
+    def test_counts_a_running_scan_without_degrading(self, db_session: Session) -> None:
+        db_session.add(
+            ExternalLibrary(
+                name="nas",
+                root_path="/mnt/nas",
+                last_scan_status=ExternalLibraryScanStatus.RUNNING,
+            )
+        )
+        db_session.commit()
+
+        out = health_mod._external_libraries_probe()
+
+        assert out["running"] == 1
+        assert out["ok"] is True, "a scan in progress is not a fault"
+
+
+class TestSpoolmanProbe:
+    def test_reports_the_integration_as_disabled_by_default(
+        self, db_session: Session
+    ) -> None:
+        assert health_mod._spoolman_probe() == {"ok": True, "enabled": False}
+
+    def test_reports_enabled_but_unconfigured(
+        self, db_session: Session, spoolman_enabled
+    ) -> None:
+        spoolman_enabled(base_url=None)
+
+        out = health_mod._spoolman_probe()
+
+        assert out == {"ok": True, "enabled": True, "configured": False}
+
+    def test_reports_the_reachable_servers_version(
+        self, db_session: Session, spoolman_enabled, spoolman_server
+    ) -> None:
+        spoolman_enabled()
+        spoolman_server(body={"version": "1.9.0"})
+
+        out = health_mod._spoolman_probe()
+
+        assert out["reachable"] is True
+        assert out["version"] == "1.9.0"
+
+    def test_sends_the_stored_api_key(
+        self, db_session: Session, spoolman_enabled, spoolman_server
+    ) -> None:
+        spoolman_enabled(api_key=SPOOLMAN_KEY)
+        calls = spoolman_server()
+
+        health_mod._spoolman_probe()
+
+        assert calls[0]["headers"]["Authorization"] == f"Bearer {SPOOLMAN_KEY}"
+        assert calls[0]["headers"]["X-Api-Key"] == SPOOLMAN_KEY
+
+    def test_stays_ok_when_the_server_is_unreachable(
+        self, db_session: Session, spoolman_enabled, spoolman_server
+    ) -> None:
+        spoolman_enabled()
+        spoolman_server(error=httpx.ConnectError("connection refused"))
+
+        out = health_mod._spoolman_probe()
+
+        assert out["ok"] is True
+        assert out["reachable"] is False
+        assert out["error"] == "ConnectError"
+
+    def test_treats_a_non_2xx_response_as_unreachable(
+        self, db_session: Session, spoolman_enabled, spoolman_server
+    ) -> None:
+        spoolman_enabled()
+        spoolman_server(status_code=500, body={"detail": "boom"})
+
+        out = health_mod._spoolman_probe()
+
+        assert out["reachable"] is False
+        assert out["version"] is None

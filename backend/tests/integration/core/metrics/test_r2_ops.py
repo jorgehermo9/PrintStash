@@ -25,37 +25,9 @@ from app.services.jobs import JobRegistry
 # --- Item 1: richer /health output --------------------------------------------
 
 
-def test_health_reports_jobs_and_external_libraries(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    body = client.get("/api/v1/health/details", headers=auth_headers).json()
-    components = body["components"]
-    assert "jobs" in components
-    assert "external_libraries" in components
-    assert components["jobs"]["ok"] is True
-    assert "counts" in components["jobs"]
-    assert components["external_libraries"]["ok"] is True
-
-
-def test_health_external_library_status_counts(
-    client: TestClient, db_session: Session, auth_headers: dict[str, str]
-) -> None:
-    db_session.add(
-        ExternalLibrary(
-            name="nas",
-            root_path="/mnt/nas",
-            last_scan_status=ExternalLibraryScanStatus.RUNNING,
-        )
-    )
-    db_session.commit()
-
-    el = client.get("/api/v1/health/details", headers=auth_headers).json()[
-        "components"
-    ]["external_libraries"]
-    assert el["running"] == 1
-    assert el["status_counts"].get("running") == 1
-    # A genuinely running scan must not flip overall status to degraded.
-    assert el["ok"] is True
+# The two health-endpoint tests that used to live here (component presence, and the
+# external-library status counts) moved to tests/integration/api/v1/test_health.py, the
+# mirror of the module they defend.
 
 
 # --- Item 2: background-scan restart cleanup ----------------------------------
