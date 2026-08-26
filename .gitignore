@@ -57,17 +57,14 @@ docs/*-internal.md
 **/*-plans.md
 
 # AI assistant tooling (kept local, not published) — except the shared
-# project skill and the two repository-scoped PrintStash implementation agents.
-.codex/*
-!.codex/agents/
-.codex/agents/*
-!.codex/agents/printstash-backend-implementer.toml
-!.codex/agents/printstash-web-implementer.toml
+# project skills in .claude/skills/{printstash,create-tests}/
+.codex/
 .mcp.json
 .claude/*
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/printstash/
+!.claude/skills/create-tests/
 .opencode/
 .agents/
 skills-lock.json

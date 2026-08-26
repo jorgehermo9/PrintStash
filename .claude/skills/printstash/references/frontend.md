@@ -34,6 +34,9 @@ pnpm typecheck     # tsc --noEmit, root + both workspace packages
 pnpm test          # vitest, when logic changed
 ```
 
+Writing or changing tests (vitest or Playwright): `.claude/skills/create-tests/SKILL.md`
+and its `references/frontend.md` / `references/playwright.md`.
+
 The frontend lints with **oxlint**, formats with **oxfmt**, and typechecks with the
 **TypeScript 7 native compiler**. There is no ESLint and no prettier — do not
 reintroduce them, and do not hand-format: run `pnpm format`.
