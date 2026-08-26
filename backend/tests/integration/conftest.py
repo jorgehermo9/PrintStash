@@ -9,12 +9,27 @@ test that needs one is a contract test and belongs in ``tests/contract/``.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 import pytest
 from sqlmodel import Session
 
 from tests._guards import block_real_network  # noqa: F401 — autouse
+
+if TYPE_CHECKING:
+    from app.db.models import User
+
+
+class MakeUser(Protocol):
+    """Signature of the ``make_user`` factory."""
+
+    def __call__(
+        self,
+        username: str,
+        *,
+        is_superuser: bool = False,
+        password: str = "Password123",
+    ) -> User: ...
 
 
 class UserHeaders(Protocol):
@@ -31,24 +46,17 @@ class UserHeaders(Protocol):
 
 
 @pytest.fixture
-def user_headers(db_session: Session) -> UserHeaders:
-    """Bearer headers for a user who is *not* the suite's superuser.
-
-    ``auth_headers`` is an admin-scoped superuser, which proves nothing about the
-    403 half of an endpoint's contract. Every RBAC and scope row needs the other
-    side, and hand-rolling one per file drifted: this returns a fresh user each
-    call, so two identities in one test are two calls.
-    """
+def make_user(db_session: Session) -> MakeUser:
+    """Create and return a user row. Create-or-fail: a repeat name is a collision."""
     from app.db.models import User
-    from app.services.auth import create_access_token, hash_password
+    from app.services.auth import hash_password
 
     def make(
         username: str,
         *,
         is_superuser: bool = False,
-        scope: str = "write",
         password: str = "Password123",
-    ) -> dict[str, str]:
+    ) -> User:
         user = User(
             username=username,
             hashed_password=hash_password(password),
@@ -58,10 +66,53 @@ def user_headers(db_session: Session) -> UserHeaders:
         db_session.add(user)
         db_session.commit()
         db_session.refresh(user)
-        token = create_access_token(user.id, user.username, scope=scope)
-        return {"Authorization": f"Bearer {token}"}
+        return user
 
     return make
 
 
-__all__ = ["UserHeaders", "block_real_network", "user_headers"]
+@pytest.fixture
+def headers_for() -> Callable[..., dict[str, str]]:
+    """Bearer headers for an existing user, at the scope you name."""
+    from app.services.auth import create_access_token
+
+    def build(user: User, *, scope: str = "write") -> dict[str, str]:
+        token = create_access_token(user.id, user.username, scope=scope)
+        return {"Authorization": f"Bearer {token}"}
+
+    return build
+
+
+@pytest.fixture
+def user_headers(make_user: MakeUser, headers_for) -> UserHeaders:
+    """Bearer headers for a user who is *not* the suite's superuser.
+
+    ``auth_headers`` is an admin-scoped superuser, which proves nothing about the
+    403 half of an endpoint's contract. Every RBAC and scope row needs the other
+    side, and hand-rolling one per file drifted: this returns a fresh user each
+    call, so two identities in one test are two calls. When the test also needs the
+    row (to grant it a collection role, say), take ``make_user`` and ``headers_for``
+    instead.
+    """
+
+    def make(
+        username: str,
+        *,
+        is_superuser: bool = False,
+        scope: str = "write",
+        password: str = "Password123",
+    ) -> dict[str, str]:
+        user = make_user(username, is_superuser=is_superuser, password=password)
+        return headers_for(user, scope=scope)
+
+    return make
+
+
+__all__ = [
+    "MakeUser",
+    "UserHeaders",
+    "block_real_network",
+    "headers_for",
+    "make_user",
+    "user_headers",
+]
