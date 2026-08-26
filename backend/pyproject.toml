@@ -11,6 +11,13 @@ dependencies = [
     "botocore>=1.43,<2",
     "croniter>=6.2,<7",
     "fastapi>=0.141,<1",
+    # SQLAlchemy needs greenlet for every asyncio path, but declares it only for
+    # platform_machine in (AMD64, WIN32, aarch64, amd64, ppc64le, win32, x86_64).
+    # macOS on Apple Silicon reports arm64, so that marker is False there and a
+    # plain `uv sync` leaves greenlet out — `create_async_engine_for_db` then dies
+    # at runtime on a developer Mac while passing in CI. Declare it ourselves so
+    # the async DB capability is present on every platform we support.
+    "greenlet>=3.5,<4",
     "httpx>=0.28,<0.29",
     "lxml>=6.1,<7",
     "networkx>=3.6,<4",
@@ -45,6 +52,10 @@ full = [
     "cascadio>=0.1.1,<0.2",
 ]
 dev = [
+    # Shipped as the `async-db` extra for operators; installed for every
+    # developer and CI run so the SQLite async contracts execute instead of
+    # skipping. The capability-absent path is covered by patching find_spec.
+    "aiosqlite>=0.22,<1",
     "bandit>=1.8",
     "deptry>=0.23,<1",
     "httpx2>=2.10,<3",
@@ -83,6 +94,7 @@ optional_dependencies_dev_groups = ["dev"]
 DEP002 = [
     "aiosqlite",
     "cascadio",
+    "greenlet",
     "lxml",
     "networkx",
     "psycopg",
