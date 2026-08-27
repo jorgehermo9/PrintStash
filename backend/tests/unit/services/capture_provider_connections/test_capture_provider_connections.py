@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.core.config import FrozenSettings
+from app.services import capture_provider_connections as connections_module
 from app.services.capture_provider_connections import (
     CultsCredentials,
     CultsMetadataClient,
@@ -399,3 +400,155 @@ async def test_mmf_rejects_malformed_json_without_exposing_response_content() ->
     assert exc.value.code == "provider_response_invalid"
     assert "secret-token" not in repr(exc.value)
     assert "secret-token" not in str(exc.value)
+
+
+class TestJsonGuards:
+    """Every provider response is bounded before it is read as data.
+
+    A provider's JSON is untrusted input that reaches a database, a UI, and a log. The
+    guards here are all about the *shape* rather than the meaning: a body larger than the
+    cap, a string longer than a field can hold, an object with more keys than any real
+    payload has, a list longer than any real one, and nesting deep enough to blow the
+    parser's stack. Each is refused with the same opaque code so the response's own
+    content never becomes the error message.
+    """
+
+    def _response(self, payload: object) -> httpx.Response:
+        import json
+
+        return httpx.Response(200, content=json.dumps(payload).encode("utf-8"))
+
+    def test_reads_an_ordinary_object(self) -> None:
+        assert connections_module._json_object(self._response({"a": 1})) == {"a": 1}
+
+    def test_refuses_a_body_larger_than_the_cap(self) -> None:
+        oversized = httpx.Response(
+            200, content=b"{}" + b" " * connections_module._MAX_RESPONSE_BYTES
+        )
+
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._json_object(oversized)
+
+    def test_refuses_something_that_is_not_json(self) -> None:
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._json_object(httpx.Response(200, content=b"{not json"))
+
+    def test_refuses_json_that_is_not_an_object(self) -> None:
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._json_object(self._response([1, 2, 3]))
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("text", id="string"),
+            pytest.param(1, id="int"),
+            pytest.param(1.5, id="float"),
+            pytest.param(True, id="bool"),
+            pytest.param(None, id="null"),
+            pytest.param({"a": [1, {"b": "c"}]}, id="nested-mix"),
+        ],
+    )
+    def test_accepts_every_json_value_it_should(self, value: object) -> None:
+        connections_module._validate_json_value(value)
+
+    def test_refuses_a_string_longer_than_a_field_can_hold(self) -> None:
+        oversized = "x" * (connections_module._MAX_JSON_STRING_LENGTH + 1)
+
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._validate_json_value(oversized)
+
+    def test_refuses_an_object_with_more_keys_than_any_real_payload(self) -> None:
+        wide = {
+            str(index): index
+            for index in range(connections_module._MAX_JSON_FIELDS + 1)
+        }
+
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._validate_json_value(wide)
+
+    def test_refuses_a_key_that_is_too_long(self) -> None:
+        long_key = "k" * (connections_module._MAX_JSON_STRING_LENGTH + 1)
+
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._validate_json_value({long_key: 1})
+
+    def test_refuses_a_list_longer_than_any_real_one(self) -> None:
+        long_list = list(range(connections_module._MAX_JSON_LIST_ITEMS + 1))
+
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._validate_json_value(long_list)
+
+    def test_refuses_nesting_deep_enough_to_exhaust_the_stack(self) -> None:
+        deep: object = 1
+        for _ in range(connections_module._MAX_JSON_DEPTH + 2):
+            deep = {"a": deep}
+
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._validate_json_value(deep)
+
+    def test_refuses_a_value_of_a_type_json_cannot_carry(self) -> None:
+        # Only reachable from a hand-built payload, but the guard is a closed
+        # allowlist rather than a blocklist, which is why it is here.
+        with pytest.raises(ProviderConnectionError, match="provider_response_invalid"):
+            connections_module._validate_json_value(object())
+
+
+class TestRaiseForStatus:
+    """Each upstream status maps to a code the caller can act on differently."""
+
+    def _raise(self, status: int) -> None:
+        connections_module._raise_for_status(httpx.Response(status))
+
+    @pytest.mark.parametrize("status", [200, 201, 204, 299])
+    def test_lets_a_success_through(self, status: int) -> None:
+        self._raise(status)
+
+    @pytest.mark.parametrize("status", [401, 403], ids=["unauthorized", "forbidden"])
+    def test_maps_an_auth_failure(self, status: int) -> None:
+        # The caller refreshes the token exactly once on this code, so it cannot
+        # be folded into the generic failure.
+        with pytest.raises(ProviderConnectionError, match="provider_auth_failed"):
+            self._raise(status)
+
+    def test_maps_a_missing_page(self) -> None:
+        with pytest.raises(ProviderConnectionError, match="provider_not_found"):
+            self._raise(404)
+
+    def test_marks_a_server_error_retryable(self) -> None:
+        with pytest.raises(ProviderConnectionError) as exc_info:
+            self._raise(503)
+
+        assert exc_info.value.retryable is True
+
+    def test_does_not_mark_a_client_error_retryable(self) -> None:
+        # Retrying a 400 just sends the same bad request again.
+        with pytest.raises(ProviderConnectionError) as exc_info:
+            self._raise(400)
+
+        assert exc_info.value.retryable is False
+
+
+class TestText:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param("  Widget  ", "Widget", id="trimmed"),
+            pytest.param("Widget", "Widget", id="plain"),
+        ],
+    )
+    def test_returns_a_trimmed_string(self, value: str, expected: str) -> None:
+        assert connections_module._text(value) == expected
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("   ", id="whitespace"),
+            pytest.param(1, id="not-a-string"),
+            pytest.param(None, id="absent"),
+        ],
+    )
+    def test_treats_anything_else_as_absent(self, value: object) -> None:
+        # A provider sending `""` for a title means "no title", not a model
+        # named nothing.
+        assert connections_module._text(value) is None
