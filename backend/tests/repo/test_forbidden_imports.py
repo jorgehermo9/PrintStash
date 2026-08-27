@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.paths import CORE_PACKAGE_ROOT
+from tests.paths import BACKEND_DIR, CORE_PACKAGE_ROOT
 
 CORE_ROOT = CORE_PACKAGE_ROOT
 RUNTIME_ROOT = CORE_ROOT / "src" / "printstash_core"
@@ -95,3 +95,32 @@ class TestImportBoundaries:
             (CORE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
         assert metadata["project"]["dependencies"] == []
+
+
+class TestSoftDeleteScopes:
+    """Soft-delete filtering goes through `app.db.scopes`, never spelled out by hand.
+
+    `live()` and `trashed()` are the single place the rule lives. A query that writes
+    `deleted_at.is_(None)` itself is a query that will not follow when the rule
+    changes — and there is more to it than one column: `CONTEXT.md` makes live/trashed
+    binding vocabulary, and the scopes are its only implementation.
+
+    Two of these had drifted into `app/api/v1/admin.py`. Both were correct on the day
+    they were written, which is exactly why a guard is worth more than a review.
+    """
+
+    def test_no_production_module_filters_soft_deletes_by_hand(self) -> None:
+        offenders = []
+        for module in sorted((BACKEND_DIR / "app").rglob("*.py")):
+            if module.name == "scopes.py":
+                continue
+            source = module.read_text(encoding="utf-8")
+            for pattern in ("deleted_at.is_(None)", "deleted_at == None"):
+                if pattern in source:
+                    offenders.append(f"{module.relative_to(BACKEND_DIR)} ({pattern})")
+
+        assert not offenders, (
+            "these modules filter soft-deleted rows by hand: "
+            + ", ".join(offenders)
+            + ". Use `live(Model)` / `trashed(Model)` from app.db.scopes."
+        )
