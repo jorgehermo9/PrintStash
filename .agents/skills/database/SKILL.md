@@ -102,9 +102,40 @@ That is the Django prompt in non-interactive form: the intent has to be stated, 
 by the person who has it. A genuine drop is acknowledged explicitly and recorded in the
 shell history that produced the migration.
 
+#### How to actually write the rename
+
+Alembic's own documentation lists column and table renames under *what autogenerate
+does not detect*, and says its output "is always to be reviewed and corrected by hand".
+So this is the sanctioned path, not a workaround: you correct the generated file.
+
+Measured, because the cheap form is not the obvious one:
+
+| How you write it | What SQLite runs |
+| --- | --- |
+| `op.alter_column("things", "old_name", new_column_name="new_name")` | `ALTER TABLE things RENAME COLUMN old_name TO new_name` — **in place**, no rebuild |
+| the same inside `with op.batch_alter_table(...)` | full table rebuild |
+
+Both preserve the data. But autogenerate wraps everything in batch blocks — that is
+what `render_as_batch` does — so the correction is to **replace the `add_column` and
+`remove_column` with an `alter_column` outside the batch block**, not inside it. SQLite
+has had `RENAME COLUMN` since 3.25; batch mode is for the things it genuinely cannot do,
+and a rename is not one of them.
+
+```python
+def upgrade() -> None:
+    # Autogenerate offered a batch block with add_column + remove_column. This is the
+    # same change without the data loss, and without the rebuild.
+    op.alter_column("things", "old_name", new_column_name="new_name")
+```
+
+This is the one place rule 1 below bends, and it bends because Alembic says so: *never
+author DDL from scratch* is about not inventing operations the tool can generate
+correctly. A rename is a documented blind spot — the tool cannot generate it, tells you
+so, and expects the correction.
+
 The same reasoning applies to a table rename and to splitting one column into two —
-neither is visible to a state comparison either, and neither is guarded, so they are
-still yours to notice.
+neither is visible to a state comparison either, and neither is guarded by the hook, so
+they are still yours to notice.
 
 The same hook also **declines to write an empty migration**. `--autogenerate` with
 nothing to do otherwise produces a file whose `upgrade()` is `pass`, and a chain
@@ -184,7 +215,9 @@ three months. `tests/repo/test_migration_patterns.py` now fails on that shape.
 ### The four rules
 
 1. **Autogenerate the DDL; edit the file freely.** These are not in tension, because
-   they are about different things.
+   they are about different things. (One documented exception, from Alembic itself: a
+   *rename* cannot be generated, so it is written by hand — see "It cannot see a
+   rename" above.)
 
    *Never author a DDL operation from scratch* — `op.create_foreign_key`,
    `op.alter_column`, `op.create_index`. Autogenerate knows the dialect's limits and
