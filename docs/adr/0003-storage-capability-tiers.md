@@ -306,42 +306,194 @@ Purge therefore requires explicit confirmation on a non-Verified backend **even
 after** `VAULT_STORAGE_ALLOW_UNVERIFIED` is set. The blanket acknowledgement
 covers ingest; it does not cover irreversible deletion.
 
-### 7. OpenDAL is configured through typed settings, never a forwarded URL
+### 7. A provider catalogue is the product surface. OpenDAL is never named in it
 
-```python
-storage_backend: str = "local"                     # local | s3 | opendal
-opendal_scheme: str = ""                           # webdav, azblob, gcs, sftp, …
-opendal_root: str = ""                             # MANDATORY
-opendal_options: str = "{}"                        # JSON, non-secret
-opendal_secret_options: SecretStr = SecretStr("{}")  # JSON, never logged
+The user-facing configuration must not contain the word "opendal", a scheme
+string, or an options blob. Those are implementation detail. A self-hoster
+choosing Nextcloud picks **Nextcloud** and fills in a Nextcloud form; whether
+that is served by OpenDAL's `webdav` service, a future native client, or
+something else is ours to change without touching a single `.env` file.
+
+So PrintStash models **every** backend as a first-class typed provider,
+including the two that exist today, and OpenDAL becomes one *transport* behind
+that catalogue rather than a configuration surface of its own.
+
+#### Layering
+
+```
+StorageProvider          product vocabulary — what the operator picks
+      |                  (local, s3, nextcloud, webdav, sftp, azure_blob, gcs)
+      |  ProviderSpec: typed config model + UI metadata + expected tier
+      v
+TransportSpec            how we actually talk to it
+      |                  (NATIVE_LOCAL | NATIVE_S3 | OPENDAL(scheme, root, options))
+      v
+StorageBackend           the existing ABC — unchanged
 ```
 
-Not a DSN (`VAULT_STORAGE_DSN=s3://key:secret@host/bucket?...`), because:
+The catalogue is the single source of truth for **five** consumers that
+currently drift apart: environment variable names, the ADR-0002 runtime
+overlay, the Settings form, the documentation table, and the tier badge. One
+declaration feeds all of them.
 
-1. **Storage config is already overridden field-by-field.**
-   `runtime_config.update_storage` takes discrete optional parameters and
-   layers them into the ADR-0002 overlay. One opaque string cannot be rendered
-   as a form, and partial updates become string surgery.
-2. **Secrets.** A DSN embeds the key in the value that gets logged, echoed by
-   `/health`, and written to the database. Splitting secret from non-secret
-   options means both can be echoed verbatim with no redaction pass —
-   `create_backend` already logs the bucket name today, which under a DSN would
-   become a credential leak.
-3. **Upstream URI mapping is not a stability contract we control.** The real
-   interface is a scheme plus an options mapping; per-scheme URI key names live
-   upstream. Self-hosters' `.env` files *are* our compatibility contract.
-4. **Boot-time validation.** `Settings` validators already reject impossible
-   combinations before anything runs; an opaque bag fails at first write.
+#### The provider model
 
-`opendal_root` is mandatory and validated non-empty, because `walk_keys("")`
-and `usage("")` drive `services/storage_deletion`. With an empty root on a
-shared container, a purge would enumerate and delete data that is not ours.
-Carry `f"{scheme}/{root}"` into `CreationReceipt.namespace`, exactly as the S3
-adapter carries `f"{bucket}/{prefix}"`.
+```python
+class StorageProvider(StrEnum):
+    LOCAL = "local"
+    S3 = "s3"
+    NEXTCLOUD = "nextcloud"
+    WEBDAV = "webdav"
+    SFTP = "sftp"
+    AZURE_BLOB = "azure_blob"
+    GCS = "gcs"
 
-Capabilities are probed once in `ensure_setup()` from
-`operator.capability()` and cached — never consulted per call, and never
-trusted blindly (see Consequences).
+
+class TransportKind(StrEnum):
+    NATIVE_LOCAL = "native_local"
+    NATIVE_S3 = "native_s3"
+    OPENDAL = "opendal"
+
+
+@dataclass(frozen=True)
+class TransportSpec:
+    """Resolved, internal-only. Never rendered, never accepted from an operator."""
+    kind: TransportKind
+    scheme: str = ""
+    root: str = ""
+    options: Mapping[str, str] = field(default_factory=dict)
+    secret_options: Mapping[str, str] = field(default_factory=dict)
+
+
+class ProviderConfig(BaseModel, ABC):
+    """One provider's typed, user-facing settings."""
+
+    @abstractmethod
+    def transport(self) -> TransportSpec: ...
+```
+
+One provider, in full — and it is the clearest argument for the whole design:
+
+```python
+class NextcloudConfig(ProviderConfig):
+    server_url: HttpUrl = Field(title="Nextcloud URL",
+                                description="e.g. https://cloud.example.com")
+    username: str = Field(title="Username")
+    app_password: SecretStr = Field(
+        title="App password",
+        description="Settings → Security → Create new app password.")
+    folder: str = Field(default="/PrintStash", title="Folder")
+
+    def transport(self) -> TransportSpec:
+        # Nextcloud's WebDAV endpoint layout is our problem, not the user's.
+        return TransportSpec(
+            kind=TransportKind.OPENDAL,
+            scheme="webdav",
+            root=self.folder,
+            options={"endpoint":
+                     f"{self.server_url}/remote.php/dav/files/{self.username}"},
+            secret_options={"username": self.username,
+                            "password": self.app_password.get_secret_value()},
+        )
+```
+
+Under a raw-scheme configuration the operator would have to know that
+`/remote.php/dav/files/{username}` is where Nextcloud hides WebDAV. Under the
+catalogue they type the URL from their browser's address bar. That difference
+is the entire justification: **a provider is a piece of product knowledge, and a
+scheme is a piece of library trivia.**
+
+`local` and `s3` are providers too, and their `transport()` returns
+`NATIVE_LOCAL` / `NATIVE_S3`. They gain the same typed model, the same generated
+form, and the same tier badge — so the catalogue is uniform rather than "the two
+real ones plus the OpenDAL ones".
+
+#### The registry
+
+```python
+@dataclass(frozen=True)
+class ProviderSpec:
+    model: type[ProviderConfig]
+    label: str                  # "Nextcloud"
+    blurb: str                  # one line for the settings card
+    expected_tier: StorageTier  # what the docs claim before we probe
+    docs_anchor: str
+
+PROVIDERS: Mapping[StorageProvider, ProviderSpec] = {...}
+```
+
+`expected_tier` is what documentation and the picker show *before* a backend is
+bound; the probe in decision 2 produces the real one at `ensure_setup()`. When
+they disagree, the probe wins and the difference is logged — that mismatch is
+how we learn upstream changed something.
+
+#### Configuration surface
+
+```
+VAULT_STORAGE_PROVIDER=nextcloud
+VAULT_NEXTCLOUD_URL=https://cloud.example.com
+VAULT_NEXTCLOUD_USERNAME=printstash
+VAULT_NEXTCLOUD_APP_PASSWORD=…
+VAULT_NEXTCLOUD_FOLDER=/PrintStash
+```
+
+Env var names are derived from the provider's field names under a
+`VAULT_{PROVIDER}_` prefix, so adding a provider adds its variables without a
+second declaration. **No `VAULT_OPENDAL_*` variable exists**, and neither does a
+scheme or an options blob.
+
+Persistence follows the `SystemConfig` pattern already used for OIDC: a
+`storage_provider` column, a `storage_provider_config` JSON column for
+non-secret fields, and a `storage_provider_secrets` column typed
+`EncryptedText` for the `SecretStr` ones — validated through the provider's own
+model on both read and write. The existing `data_dir` / `s3_*` columns stay
+exactly as they are, so no self-hoster's stored configuration is rewritten.
+
+The Settings form is **generated** from the selected provider's model — field
+titles, descriptions, and secret-ness all come from the pydantic `Field`s. There
+is no per-provider React component, and adding a provider does not require a
+frontend change.
+
+#### Why a DSN is rejected as well
+
+The same argument as against exposing schemes, plus:
+
+1. **Storage config is already overridden field-by-field.** `SystemConfig`
+   stores discrete columns and `runtime_config` layers them into the ADR-0002
+   overlay. One opaque string cannot be rendered as a form, and partial updates
+   become string surgery.
+2. **Secrets.** A DSN embeds the credential in the value that gets logged,
+   echoed by `/health`, and written to the database. Typed fields separate
+   secret from non-secret structurally, so both can be echoed with no redaction
+   pass — `create_backend` already logs the bucket name today, which under a DSN
+   would be a credential leak.
+3. **Upstream URI mapping is not a stability contract we control.**
+   Self-hosters' `.env` files *are* our compatibility contract.
+4. **Boot-time validation.** A typed model rejects a malformed URL at import;
+   an opaque bag fails at first write.
+
+#### No generic escape hatch
+
+Deliberately **no** passthrough for arbitrary OpenDAL schemes. Adding a provider
+is a small, mechanical PR — a pydantic model, a `transport()`, a registry entry —
+and that PR is forced to add a `contract/` test for its scheme. A passthrough
+would let an operator reach an untested scheme whose tier we could not state
+truthfully, which defeats the one thing this ADR is for. The cost of "support one
+more" is low precisely so that the escape hatch is unnecessary.
+
+#### Root is mandatory
+
+`TransportSpec.root` is validated non-empty for every OpenDAL provider, because
+`walk_keys("")` and `usage("")` drive `services/storage_deletion`. With an empty
+root on a shared container, a purge would enumerate and delete data that is not
+ours. Carry `f"{scheme}/{root}"` into `CreationReceipt.namespace`, exactly as the
+S3 adapter carries `f"{bucket}/{prefix}"`.
+
+#### Compatibility
+
+`VAULT_STORAGE_BACKEND=local|s3` keeps working as a deprecated alias for
+`VAULT_STORAGE_PROVIDER`, and `SystemConfig.storage_backend` keeps being read.
+Self-hosters auto-upgrade; nothing in an existing `.env` may stop working.
 
 ### 8. Retire the two bucket-administration writes
 
@@ -416,6 +568,10 @@ adapter for, and that scope is not expected to grow.
 - The orphan sweep reclaims leaked bytes on backends we already support.
 - One place decides tier and warnings, so `/health`, Settings, and the boot log
   cannot drift apart.
+- **A uniform provider catalogue for every backend, including the two we already
+  have.** Env var names, the runtime overlay, the Settings form, the docs table,
+  and the tier badge are all generated from one declaration, so adding a backend
+  is a backend-only change and the five surfaces cannot disagree.
 
 **Accepted costs**
 
@@ -470,7 +626,17 @@ fact is read by nobody, and the failure it warns about is silent.
 Rejected: decision 2. It invites the `isinstance` branching the base class
 explicitly forbids, and two classes cannot express six independent axes.
 
-**Forward an OpenDAL URI from configuration.** Rejected: decision 7.
+**Forward an OpenDAL URI, or expose scheme + options, from configuration.**
+Rejected: decision 7. Both leak a library's vocabulary into the product's
+configuration, which then cannot change without breaking `.env` files, and both
+put knowledge on the operator (that Nextcloud serves WebDAV at
+`/remote.php/dav/files/{username}`) that belongs in our code.
+
+**A generic passthrough provider for unsupported schemes.** Rejected: it would
+admit backends with no `contract/` coverage, whose tier we could not state
+truthfully. Since a tier claim is the deliverable, an untestable backend is worse
+than an absent one. Adding a provider is cheap enough that the hatch is
+unnecessary.
 
 ## Testing
 
@@ -478,7 +644,11 @@ Docs-only change; no coverage matrix applies to this PR. The implementation
 work it authorises carries these obligations:
 
 - `unit/` — tier derivation: one case per axis combination, plus one per
-  warning-table row.
+  warning-table row. Provider registry: every `StorageProvider` has a spec, every
+  spec's model round-trips through the config/secrets columns, and every
+  `transport()` produces a non-empty root.
+- `repo/` — one invariant test that every enum member appears in `PROVIDERS`, so
+  a new provider cannot ship without its spec, docs anchor, and expected tier.
 - `integration/` — the ledger's insert-then-write ordering, the orphan sweep's
   refusal to touch committed rows, and the boot gate's refusal without the flag.
 - `contract/` — each supported OpenDAL scheme against a real server over a
