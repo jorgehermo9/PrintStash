@@ -17,7 +17,6 @@ from sqlmodel import Session
 
 from app.db.models import (
     FileType,
-    Printer,
     PrinterProvider,
     PrintJobState,
 )
@@ -237,12 +236,9 @@ class TestPrinterControl:
     def test_home_404_deleted_printer(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        from app.core.time import utcnow
-
-        p = Printer(name="Gone", moonraker_url="http://gone.local")
-        p.deleted_at = utcnow()
-        db_session.add(p)
-        db_session.commit()
+        p = build_printer(
+            db_session, "Gone", moonraker_url="http://gone.local", trashed=True
+        )
         db_session.refresh(p)
 
         resp = client.post(

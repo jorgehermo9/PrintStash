@@ -176,21 +176,42 @@ module-level `_build_*` function that duplicates a factory. Single-use setup tha
 is genuinely local stays inline in its test, not in a helper at the top of the
 file — a helper with one caller just moves the reader away from the assertion.
 
+## Rows nothing may save
+
+A few builders return a row and deliberately do not commit it, because the row's
+*absence* from the database is the thing under test. `detached_model`,
+`detached_file` and `detached_collection` feed the guards that must refuse an
+id-less row — a purge that reasoned about one would delete bytes it has no record
+of, so these branches are only reachable with a row that was never saved.
+
+Separately, `printer_config`, `user_config` and `print_job_config` are the
+*configuration* half of their builders without the persistence. The contract tier
+has no session at all, and several pure functions take a row and return a
+decision about it. `build_printer` is `printer_config` plus `save`, so the two
+can never disagree about what a Bambu printer needs.
+
+Reach for one of these only when a session would be inventing persistence the
+test does not use. Everywhere else, the saving builder is the right tool.
+
 ## The migration ratchet
 
-`tests/repo/test_test_hygiene.py` enforces three rules, and two of them carry a
-list of files that have not been migrated yet:
+`tests/repo/test_test_hygiene.py` enforces the factory rules. One of them is now
+absolute: **no test file builds a factory-owned row by hand.** Every file was
+migrated, and the per-file exemption list is gone — if a file seems to need one,
+the answer is a factory that covers its case (`printer_config` and the
+`detached_*` helpers came from exactly that) or an entry in
+`CONSTRUCTION_ALLOWED` with a reason.
 
-- `PENDING_INLINE_CONSTRUCTION` — files that still build rows by hand.
+One ratchet remains:
+
 - `PENDING_DUPLICATE_BUILDERS` — builder names still defined in more than one file.
 
-**Both lists may only shrink.** A companion test fails if a listed entry has
-already been cleaned up, so the counts are the real remaining debt rather than
-numbers somebody forgot to update. A *new* file or a *new* duplicate name fails
-immediately — the ratchet guards new code while the backlog drains.
+**It may only shrink.** A companion test fails if a listed entry has already been
+cleaned up, so the count is the real remaining debt rather than a number somebody
+forgot to update. A *new* duplicate name fails immediately.
 
-If you touch a listed file for any reason, migrating it is usually the cheapest
-part of the change: delete its local builder, call the factory, and make explicit
+If you touch a listed name for any reason, migrating it is usually the cheapest
+part of the change: delete the local builder, call the factory, and make explicit
 whatever state the local default was hiding. Then remove its line from the list in
 the same commit.
 

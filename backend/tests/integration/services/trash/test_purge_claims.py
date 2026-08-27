@@ -31,7 +31,10 @@ from app.db.models import (
 )
 from app.services import trash
 from app.services.storage_ownership import UnsafeStorageDeleteError
-from tests.factories import build_model
+from tests.factories import (
+    build_model,
+    detached_model,
+)
 
 
 @pytest.fixture
@@ -79,7 +82,7 @@ class TestClaimPurge:
         from datetime import timedelta
 
         model = trashed()
-        stale = Model(
+        stale = detached_model(
             id=model.id,
             name=model.name,
             slug=model.slug,
@@ -100,7 +103,7 @@ class TestClaimPurge:
 
     def test_refuses_a_row_that_was_never_persisted(self, db_session: Session) -> None:
         with pytest.raises(trash.PurgeConflictError):
-            trash._claim_purge(db_session, Model(name="x", slug="x", hash="0" * 64))
+            trash._claim_purge(db_session, detached_model(name="x", slug="x"))
 
 
 class TestRestoreModel:

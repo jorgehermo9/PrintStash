@@ -33,6 +33,16 @@ no database. Prefer a real slicer file from `tests/fixtures/` when one will do;
 reach for a builder when the test needs content shaped a particular way — over a
 size limit, deliberately malformed, a PNG that lies about its dimensions.
 
+**Rows nothing may save.** A few builders return a row and deliberately do not
+commit it, because the row's *absence* from the database is the thing under test —
+`detached_model`, `detached_file` and `detached_collection` feed the guards that
+must refuse an id-less row, and a purge that reasoned about one would delete bytes
+it has no record of. Separately, `printer_config`, `user_config` and
+`print_job_config` are the configuration half of their builders without the
+persistence: the contract tier has no session at all, and several pure functions
+take a row and return a decision about it. `build_printer` is `printer_config`
+plus `save`, so the two can never disagree about what a Bambu printer needs.
+
 Layout mirrors the domain, not the tables: `identity` (who is asking),
 `library` (models and artifacts), `printers` (the fleet), `provenance` (where a
 model came from), `capture` (the inbox pipeline), `ops` (everything operational).
@@ -65,6 +75,7 @@ from tests.factories.identity import (
     build_user,
     grant_collection_role,
     grant_printer_role,
+    user_config,
 )
 from tests.factories.library import (
     build_collection,
@@ -72,6 +83,9 @@ from tests.factories.library import (
     build_metadata,
     build_model,
     build_tag,
+    detached_collection,
+    detached_file,
+    detached_model,
     tag_model,
 )
 from tests.factories.ops import (
@@ -85,9 +99,14 @@ from tests.factories.ops import (
     build_share_link,
 )
 from tests.factories.printers import (
+    build_material_requirement,
+    build_material_slot,
     build_print_job,
     build_printer,
     build_printer_file,
+    build_printer_tool,
+    print_job_config,
+    printer_config,
 )
 from tests.factories.provenance import (
     build_artifact_link,
@@ -126,21 +145,30 @@ __all__ = [
     "build_filament_profile",
     "build_inbox_item",
     "build_inbox_result",
+    "build_material_requirement",
+    "build_material_slot",
     "build_metadata",
     "build_model",
     "build_notification_channel",
     "build_print_job",
     "build_printer",
     "build_printer_file",
+    "build_printer_tool",
     "build_provenance_source",
     "build_share_link",
     "build_stored_file",
     "build_tag",
     "build_unowned_file",
     "build_user",
+    "detached_collection",
+    "detached_file",
+    "detached_model",
     "capture_source",
     "content",
     "grant_collection_role",
+    "print_job_config",
+    "printer_config",
+    "user_config",
     "grant_printer_role",
     "manifest_for_source",
     "nth",

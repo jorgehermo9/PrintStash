@@ -13,21 +13,24 @@ import pytest
 from sqlalchemy import event
 from sqlmodel import Session
 
-from app.db.models import CollectionPermission, CollectionRole, Model
+from app.db.models import CollectionRole
 from app.schemas.models import ModelFilters, ModelSort
 from app.services import model_views, taxonomy
-from tests.factories import build_user
+from tests.factories import (
+    build_model,
+    build_user,
+    grant_collection_role,
+)
 
 
 def _seed_models(session: Session, count: int, collection_id: int | None) -> None:
     for i in range(count):
-        session.add(
-            Model(
-                name=f"Model {i}",
-                slug=f"model-{i}",
-                hash=f"{i:064d}",
-                collection_id=collection_id,
-            )
+        build_model(
+            session,
+            name=f"Model {i}",
+            slug=f"model-{i}",
+            hash=f"{i:064d}",
+            collection_id=collection_id,
         )
     session.commit()
 
@@ -55,14 +58,7 @@ def test_list_query_count_is_independent_of_page_size(
     assert collection is not None
     user = build_user(db_session, f"lister-{superuser}", superuser=superuser)
     if not superuser:
-        db_session.add(
-            CollectionPermission(
-                user_id=user.id,
-                collection_id=collection.id,
-                role=CollectionRole.EDIT,
-            )
-        )
-        db_session.commit()
+        grant_collection_role(db_session, user, collection, CollectionRole.EDIT)
 
     _seed_models(db_session, 2, collection.id)
     small = _count_queries(
@@ -71,13 +67,12 @@ def test_list_query_count_is_independent_of_page_size(
 
     _seed_models_more = 30
     for i in range(_seed_models_more):
-        db_session.add(
-            Model(
-                name=f"Extra {i}",
-                slug=f"extra-{i}",
-                hash=f"e{i:063d}",
-                collection_id=collection.id,
-            )
+        build_model(
+            db_session,
+            name=f"Extra {i}",
+            slug=f"extra-{i}",
+            hash=f"e{i:063d}",
+            collection_id=collection.id,
         )
     db_session.commit()
 
@@ -97,21 +92,11 @@ def test_effective_role_is_still_correct_per_row(db_session: Session) -> None:
     toys = taxonomy.resolve_or_create_collection(db_session, "Toys")
     assert parts is not None and toys is not None
     user = build_user(db_session, "mixed")
-    db_session.add(
-        CollectionPermission(
-            user_id=user.id, collection_id=parts.id, role=CollectionRole.ADMIN
-        )
-    )
-    db_session.add(
-        CollectionPermission(
-            user_id=user.id, collection_id=toys.id, role=CollectionRole.VIEW
-        )
-    )
-    db_session.commit()
+    grant_collection_role(db_session, user, parts, CollectionRole.ADMIN)
+    grant_collection_role(db_session, user, toys, CollectionRole.VIEW)
 
-    db_session.add(Model(name="P", slug="p", hash="p" * 64, collection_id=parts.id))
-    db_session.add(Model(name="T", slug="t", hash="t" * 64, collection_id=toys.id))
-    db_session.commit()
+    build_model(db_session, name="P", slug="p", hash="p" * 64, collection_id=parts.id)
+    build_model(db_session, name="T", slug="t", hash="t" * 64, collection_id=toys.id)
 
     items = model_views.list_items(db_session, user, limit=100)
     roles = {item.name: item.effective_role for item in items}

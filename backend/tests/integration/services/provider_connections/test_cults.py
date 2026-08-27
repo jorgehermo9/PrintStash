@@ -26,6 +26,7 @@ from app.services.capture_provider_connections import (
     ProviderConnectionError,
     ProviderModelMetadata,
 )
+from tests.factories import build_user
 
 
 class _AcceptingCults:
@@ -40,10 +41,7 @@ class _RejectingCults:
 
 @pytest.fixture
 def user(db_session: Session) -> User:
-    row = User(username="cults-service", hashed_password="x")
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
+    row = build_user(db_session, "cults-service")
     assert row.id is not None
     return row
 

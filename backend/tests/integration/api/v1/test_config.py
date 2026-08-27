@@ -25,7 +25,7 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.db.models import File, FileType, Model
-from tests.factories import build_model
+from tests.factories import build_file, build_model
 from tests.integration.conftest import UserHeaders
 
 MAKERWORLD_LEGACY_ROUTES = [
@@ -70,18 +70,15 @@ def _own_an_artifact(db_session: Session, data_dir: Path) -> Path:
     blob.parent.mkdir(parents=True, exist_ok=True)
     blob.write_bytes(b"owned")
     model = build_model(db_session, name="Owned", slug="owned", hash="a" * 64)
-    db_session.add(
-        File(
-            model_id=model.id,
-            path=str(blob),
-            original_filename="part.stl",
-            file_type=FileType.STL,
-            version=1,
-            size_bytes=5,
-            sha256="b" * 64,
-        )
+    build_file(
+        db_session,
+        model,
+        path=str(blob),
+        filename="part.stl",
+        file_type=FileType.STL,
+        size_bytes=5,
+        sha256="b" * 64,
     )
-    db_session.commit()
     return blob
 
 

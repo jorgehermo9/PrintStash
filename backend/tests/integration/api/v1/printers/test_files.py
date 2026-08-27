@@ -18,19 +18,22 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.db.models import (
-    Collection,
-    CollectionPermission,
     CollectionRole,
     File,
     FileType,
-    Model,
     PrinterFile,
     PrintJob,
     PrintJobState,
     User,
 )
 from app.services.printer_provider import ProviderError
-from tests.factories import build_collection, build_file, build_model, build_printer
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    build_printer,
+    grant_collection_role,
+)
 from tests.integration.api.v1.printers._helpers import grant_printer, user_headers
 
 
@@ -227,7 +230,9 @@ class TestPrinterFiles:
     ):
         headers = user_headers(db_session, "viewer")
         viewer = db_session.exec(select(User).where(User.username == "viewer")).one()
-        allowed = Collection(name="Allowed", slug="allowed", path="allowed")
+        allowed = build_collection(
+            db_session, name="Allowed", slug="allowed", path="allowed"
+        )
         denied = build_collection(
             db_session, name="Denied", slug="denied", path="denied"
         )
@@ -235,14 +240,9 @@ class TestPrinterFiles:
         db_session.commit()
         db_session.refresh(allowed)
         db_session.refresh(denied)
-        db_session.add(
-            CollectionPermission(
-                user_id=viewer.id,
-                collection_id=allowed.id,
-                role=CollectionRole.VIEW,
-            )
-        )
-        allowed_model = Model(
+        grant_collection_role(db_session, viewer, allowed, CollectionRole.VIEW)
+        allowed_model = build_model(
+            db_session,
             name="Allowed model",
             slug="allowed-model",
             hash="1" * 64,
@@ -259,21 +259,21 @@ class TestPrinterFiles:
         db_session.commit()
         db_session.refresh(allowed_model)
         db_session.refresh(denied_model)
-        allowed_file = File(
-            model_id=allowed_model.id,
+        allowed_file = build_file(
+            db_session,
+            allowed_model,
             path="/data/allowed.gcode",
-            original_filename="allowed.gcode",
+            filename="allowed.gcode",
             file_type=FileType.GCODE,
-            version=1,
             size_bytes=100,
             sha256="3" * 64,
         )
-        denied_file = File(
-            model_id=denied_model.id,
+        denied_file = build_file(
+            db_session,
+            denied_model,
             path="/data/denied.gcode",
-            original_filename="denied.gcode",
+            filename="denied.gcode",
             file_type=FileType.GCODE,
-            version=1,
             size_bytes=100,
             sha256="4" * 64,
         )
@@ -327,12 +327,12 @@ class TestPrinterFiles:
             hash="5" * 64,
             collection_id=collection.id,
         )
-        file_row = File(
-            model_id=model.id,
+        file_row = build_file(
+            db_session,
+            model,
             path="/data/private.gcode",
-            original_filename="private.gcode",
+            filename="private.gcode",
             file_type=FileType.GCODE,
-            version=1,
             size_bytes=100,
             sha256="6" * 64,
         )
@@ -394,7 +394,7 @@ class TestPrinterFiles:
     def test_start_external_printer_file_creates_external_job(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        from app.db.models import SENTINEL_FILE_HASH, File, PrinterFile
+        from app.db.models import SENTINEL_FILE_HASH, PrinterFile
 
         p = build_printer(
             db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"

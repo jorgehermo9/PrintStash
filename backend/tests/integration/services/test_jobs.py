@@ -32,11 +32,11 @@ from app.db.models import (
     InboxItem,
     InboxItemState,
     StagingLease,
-    User,
 )
 from app.db.session import get_session_factory
 from app.services import jobs as jobs_module
 from app.services.jobs import JobRegistry, reconcile_interrupted_jobs
+from tests.factories import build_user
 
 
 class TestJobRegistry:
@@ -151,9 +151,7 @@ class TestJobRegistry:
         monotonic_now = 0.0
         monkeypatch.setattr(jobs_module, "monotonic", lambda: monotonic_now)
         db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
-        owner = User(username="prune-inbox-owner", hashed_password="hash")
-        db_session.add(owner)
-        db_session.commit()
+        owner = build_user(db_session, "prune-inbox-owner")
         db_session.refresh(owner)
 
         registry = JobRegistry()
@@ -186,9 +184,7 @@ class TestJobRegistry:
         monotonic_now = 0.0
         monkeypatch.setattr(jobs_module, "monotonic", lambda: monotonic_now)
         db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
-        owner = User(username="prune-lease-owner", hashed_password="hash")
-        db_session.add(owner)
-        db_session.commit()
+        owner = build_user(db_session, "prune-lease-owner")
         db_session.refresh(owner)
 
         registry = JobRegistry()

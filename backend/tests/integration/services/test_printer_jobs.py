@@ -18,7 +18,6 @@ import pytest
 from sqlmodel import Session
 
 from app.db.models import (
-    File,
     FileType,
     Printer,
     PrinterPermission,
@@ -27,7 +26,6 @@ from app.db.models import (
     PrintJob,
     PrintJobState,
     RoutingStrategy,
-    User,
 )
 from app.services import printer_jobs
 from app.services.printer_jobs import (
@@ -40,7 +38,14 @@ from app.services.printer_provider import (
     ProviderCapabilities,
     ProviderError,
 )
-from tests.factories import a_gcode_artifact, build_print_job, build_printer
+from tests.factories import (
+    a_gcode_artifact,
+    build_print_job,
+    build_printer,
+    detached_file,
+    printer_config,
+    user_config,
+)
 
 
 def _provider_builder(provider: PrinterProviderClient):
@@ -94,14 +99,11 @@ class TestTransferArtifact:
         backend.download_to_path = lambda *_a, **_kw: (_ for _ in ()).throw(
             OSError("disk full")
         )
-        artifact = File(
+        artifact = detached_file(
             id=1,
-            model_id=1,
             path="vault-data/x.gcode",
             original_filename="x.gcode",
             file_type=FileType.GCODE,
-            version=1,
-            size_bytes=1,
             sha256="a" * 64,
         )
 
@@ -116,14 +118,11 @@ class TestTransferArtifact:
     def test_transfer_artifact_raises_when_blob_missing(self) -> None:
         backend = AsyncMock()
         backend.exists = lambda _key: False
-        artifact = File(
+        artifact = detached_file(
             id=1,
-            model_id=1,
             path="vault-data/gone.gcode",
             original_filename="gone.gcode",
             file_type=FileType.GCODE,
-            version=1,
-            size_bytes=1,
             sha256="a" * 64,
         )
 
@@ -147,14 +146,11 @@ class TestTransferArtifact:
                 target.write_bytes(b"G28\n")
                 return target
 
-        artifact = File(
+        artifact = detached_file(
             id=1,
-            model_id=1,
             path="vault-data/x.gcode",
             original_filename="x.gcode",
             file_type=FileType.GCODE,
-            version=1,
-            size_bytes=1,
             sha256="a" * 64,
         )
         provider = AsyncMock()
@@ -369,10 +365,10 @@ class TestPrinter:
     def test_dispatch_rechecks_printer_grant_after_enqueue(
         self, db_session: Session
     ) -> None:
-        printer = Printer(
-            name="Revoked", moonraker_url="http://revoked", status=PrinterStatus.READY
+        printer = printer_config(
+            "Revoked", moonraker_url="http://revoked", status=PrinterStatus.READY
         )
-        user = User(username="revoked-user", hashed_password="unused", is_active=True)
+        user = user_config("revoked-user")
         db_session.add_all([printer, user])
         db_session.commit()
         db_session.refresh(printer)

@@ -30,7 +30,12 @@ from app.db.models import (
     PrintJobState,
 )
 from app.services import print_results
-from tests.factories import build_collection, build_file, build_model
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    print_job_config,
+)
 
 
 def _model(
@@ -87,10 +92,8 @@ def _job(
 ) -> PrintJob:
     """Seed a PrintJob the way a real write path would: cost/effective grams
     resolved and frozen at completion (mirrors printer_hub/manual-log/import)."""
-    job = PrintJob(
-        file_id=file_row.id,
-        model_id=model.id,
-        remote_filename=file_row.original_filename,
+    job = print_job_config(
+        file_row,
         state=state,
         filament_used_g=grams,
         actual_duration_s=duration_s,
@@ -261,9 +264,8 @@ class TestPrintStats:
                 estimated_time_s=1200,
             )
         )
-        job = PrintJob(
-            file_id=file_row.id,
-            model_id=model.id,
+        job = print_job_config(
+            file_row,
             remote_filename="c.gcode",
             state=PrintJobState.COMPLETED,
             filament_used_g=None,
@@ -376,10 +378,8 @@ class TestPrintStats:
     ) -> None:
         model = _model(db_session, slug="manual")
         file_row = _file_with_material(db_session, model, sha="m", material_type="PLA")
-        job = PrintJob(
-            file_id=file_row.id,
-            model_id=model.id,
-            remote_filename=file_row.original_filename,
+        job = print_job_config(
+            file_row,
             state=PrintJobState.COMPLETED,
             filament_used_g=20.0,
             finished_at=None,

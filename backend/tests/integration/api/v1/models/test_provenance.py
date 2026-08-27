@@ -28,7 +28,6 @@ from sqlmodel import Session, select
 from app.core.time import utcnow
 from app.db.models import (
     Collection,
-    CollectionPermission,
     CollectionRole,
     Model,
     ModelProvenanceField,
@@ -36,7 +35,7 @@ from app.db.models import (
     ModelSourceCover,
     ProvenanceCapture,
 )
-from tests.factories import build_collection, build_model
+from tests.factories import build_collection, build_model, grant_collection_role
 
 SECRET_IN_SNAPSHOT = "must-not-be-returned"
 
@@ -133,12 +132,7 @@ def viewer(db_session: Session, model: Model, make_user, headers_for):
         assert target is not None
         target.collection_id = collection.id
         user = make_user(username)
-        db_session.add(
-            CollectionPermission(
-                collection_id=collection.id, user_id=user.id, role=role
-            )
-        )
-        db_session.commit()
+        grant_collection_role(db_session, user, collection, role)
         return headers_for(user)
 
     return grant

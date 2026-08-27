@@ -34,7 +34,6 @@ from app.db.models import (
     PrinterProvider,
     PrinterStatus,
     StagingLease,
-    User,
 )
 from app.services import storage_backend
 from app.services.auth import create_access_token
@@ -152,9 +151,7 @@ def test_startup_reconciles_completed_capture_slot_after_storage_binding(
     from app.services import inbox, staging_leases, storage_backend
     from app.services.storage_backend import LocalStorageBackend
 
-    owner = User(username="startup-capture-owner", hashed_password="hash")
-    db_session.add(owner)
-    db_session.flush()
+    owner = build_user(db_session, "startup-capture-owner")
     assert owner.id is not None
     item = InboxItem(
         owner_user_id=owner.id,

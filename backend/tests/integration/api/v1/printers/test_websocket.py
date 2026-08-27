@@ -15,9 +15,6 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 from starlette.websockets import WebSocketDisconnect
 
-from app.db.models import (
-    Printer,
-)
 from tests.factories import build_printer
 
 
@@ -90,12 +87,9 @@ class TestWsTicket:
     def test_ws_ticket_404_deleted_printer(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        from app.core.time import utcnow
-
-        p = Printer(name="Gone", moonraker_url="http://gone.local")
-        p.deleted_at = utcnow()
-        db_session.add(p)
-        db_session.commit()
+        p = build_printer(
+            db_session, "Gone", moonraker_url="http://gone.local", trashed=True
+        )
         db_session.refresh(p)
 
         resp = client.post(f"/api/v1/printers/{p.id}/ws-ticket", headers=auth_headers)

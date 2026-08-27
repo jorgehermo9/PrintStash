@@ -19,7 +19,11 @@ from app.db.models import (
 from app.db.scopes import live
 from app.services import rbac, taxonomy
 from app.services.rbac import ROLE_ORDER, role_allows
-from tests.factories import build_collection, build_user
+from tests.factories import (
+    build_collection,
+    build_user,
+    grant_collection_role,
+)
 
 
 def _oracle(
@@ -55,10 +59,7 @@ def _oracle(
 def _grant(
     session: Session, user: User, collection_id: int, role: CollectionRole
 ) -> None:
-    session.add(
-        CollectionPermission(user_id=user.id, collection_id=collection_id, role=role)
-    )
-    session.commit()
+    grant_collection_role(session, user, collection_id, role)
 
 
 def _seed_tree(session: Session) -> dict[str, Collection]:
@@ -153,8 +154,10 @@ class TestAccessibleCollectionIds:
         directly: going through the taxonomy helper would silently sanitise the
         metacharacter and leave the escaping untested.
         """
-        granted = Collection(name="a_b", slug="a_b", path="a_b")
-        sibling_child = Collection(name="inner", slug="inner", path="axb/inner")
+        granted = build_collection(db_session, name="a_b", slug="a_b", path="a_b")
+        sibling_child = build_collection(
+            db_session, name="inner", slug="inner", path="axb/inner"
+        )
         granted_child = build_collection(
             db_session, name="inner", slug="inner", path="a_b/inner"
         )

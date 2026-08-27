@@ -28,6 +28,7 @@ from app.services.capture_provider_connections import (
     MyMiniFactoryTokens,
     ProviderConnectionError,
 )
+from tests.factories import build_user
 from tests.integration.services.provider_connections.conftest import MMF_CLIENT_ID
 
 REDIRECT_URI = "https://vault.example/callback"
@@ -48,9 +49,7 @@ class _ExchangeClient:
 
 @pytest.fixture
 def user(db_session: Session) -> User:
-    row = User(username="oauth-service", hashed_password="x")
-    db_session.add(row)
-    db_session.flush()
+    row = build_user(db_session, "oauth-service")
     assert row.id is not None
     return row
 
@@ -307,9 +306,7 @@ class TestFinishOauth:
     ) -> None:
         engine = file_engine("oauth-race")
         with Session(engine) as setup:
-            owner = User(username="oauth-race", hashed_password="x")
-            setup.add(owner)
-            setup.flush()
+            owner = build_user(setup, "oauth-race")
             assert owner.id is not None
             raw = service.begin_oauth(setup, owner.id, REDIRECT_URI)
             setup.commit()

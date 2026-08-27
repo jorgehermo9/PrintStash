@@ -14,9 +14,6 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.db.models import (
-    Printer,
-)
 from app.services.printer_provider import ProviderError
 from tests.factories import build_printer
 
@@ -85,12 +82,9 @@ class TestPrinterConfig:
     def test_config_404_deleted_printer(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        from app.core.time import utcnow
-
-        p = Printer(name="Gone", moonraker_url="http://gone.local")
-        p.deleted_at = utcnow()
-        db_session.add(p)
-        db_session.commit()
+        p = build_printer(
+            db_session, "Gone", moonraker_url="http://gone.local", trashed=True
+        )
         db_session.refresh(p)
 
         resp = client.get(f"/api/v1/printers/{p.id}/config", headers=auth_headers)

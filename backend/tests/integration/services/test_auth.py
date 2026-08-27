@@ -49,7 +49,10 @@ from app.services.auth import (
     verify_file_download_token,
     verify_password,
 )
-from tests.factories import build_user
+from tests.factories import (
+    build_user,
+    user_config,
+)
 
 
 def _legacy_bcrypt_hash(password: str) -> str:
@@ -81,13 +84,11 @@ class TestPasswordsAndSessions:
         self,
         db_session: Session,
     ) -> None:
-        user = User(
-            username="legacy-bcrypt",
-            hashed_password=_legacy_bcrypt_hash("Password123"),
-            is_active=True,
+        user = build_user(
+            db_session,
+            "legacy-bcrypt",
+            password_hash=_legacy_bcrypt_hash("Password123"),
         )
-        db_session.add(user)
-        db_session.commit()
         db_session.refresh(user)
         user_id = user.id
 
@@ -107,13 +108,11 @@ class TestPasswordsAndSessions:
         shared_prefix = "🔐" * 18
         original = f"{shared_prefix}-original-suffix"
         same_legacy_prefix = f"{shared_prefix}-different-suffix"
-        user = User(
-            username="legacy-long-password",
-            hashed_password=_legacy_bcrypt_hash(original),
-            is_active=True,
+        user = build_user(
+            db_session,
+            "legacy-long-password",
+            password_hash=_legacy_bcrypt_hash(original),
         )
-        db_session.add(user)
-        db_session.commit()
 
         authenticated = authenticate_user(db_session, user.username, original)
 
@@ -125,13 +124,7 @@ class TestPasswordsAndSessions:
         self, db_session: Session
     ) -> None:
         legacy_hash = _legacy_bcrypt_hash("Password123")
-        user = User(
-            username="legacy-bad-login",
-            hashed_password=legacy_hash,
-            is_active=True,
-        )
-        db_session.add(user)
-        db_session.commit()
+        user = build_user(db_session, "legacy-bad-login", password_hash=legacy_hash)
 
         assert authenticate_user(db_session, user.username, "WrongPassword") is None
         db_session.refresh(user)
@@ -326,9 +319,7 @@ class TestInvalidateUserSessions:
 
     def test_refuses_a_user_that_was_never_saved(self, db_session: Session) -> None:
         with pytest.raises(ValueError, match="unpersisted user"):
-            invalidate_user_sessions(
-                db_session, User(username="ghost", hashed_password="x")
-            )
+            invalidate_user_sessions(db_session, user_config("ghost"))
 
 
 class TestPruneExpiredRefreshTokens:

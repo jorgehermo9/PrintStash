@@ -20,11 +20,13 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.db.models import (
-    Printer,
     PrinterRole,
     User,
 )
-from tests.factories import build_printer
+from tests.factories import (
+    build_printer,
+    printer_config,
+)
 from tests.integration.api.v1.printers._helpers import grant_printer, user_headers
 
 
@@ -32,8 +34,8 @@ class TestPrinterRbac:
     def test_user_only_lists_granted_printers_and_connection_is_redacted(
         self, client: TestClient, db_session: Session
     ) -> None:
-        visible = Printer(
-            name="Shared",
+        visible = printer_config(
+            "Shared",
             moonraker_url="http://shared.local:7125",
             api_key="secret",
         )

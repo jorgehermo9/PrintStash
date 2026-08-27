@@ -18,10 +18,8 @@ from app.db.models import (
     ExternalLibrary,
     ExternalLibraryCollectionMode,
     FilamentProfile,
-    File,
     FileType,
     Metadata,
-    Model,
     PrinterProfile,
 )
 from app.services import importer as imp
@@ -29,7 +27,11 @@ from app.services import model_views as mv
 from app.services.external_library import _collection_path_for, _walk, is_due
 from app.services.ingestion import _collision_safe_path
 from app.services.moonraker import MoonrakerClient
-from tests.factories import build_file, build_model
+from tests.factories import (
+    build_file,
+    build_model,
+    detached_model,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -274,29 +276,19 @@ class TestCsvCell:
 # --------------------------------------------------------------------------- #
 class TestThumbUrl:
     def test_prefers_thumbnail_file_id(self) -> None:
-        model = Model(
-            name="x",
-            slug="x",
-            hash="a" * 64,
-            thumbnail_file_id=7,
-            thumbnail_path="99.png",
-        )
+        model = detached_model(thumbnail_file_id=7, thumbnail_path="99.png")
         assert mv.thumb_url(model) == "/api/v1/files/7/thumbnail"
 
     def test_falls_back_to_legacy_digit_stem_path(self) -> None:
-        model = Model(
-            name="x", slug="x", hash="a" * 64, thumbnail_path="uploads/42.png"
-        )
+        model = detached_model(thumbnail_path="uploads/42.png")
         assert mv.thumb_url(model) == "/api/v1/files/42/thumbnail"
 
     def test_non_digit_legacy_stem_returns_none(self) -> None:
-        model = Model(
-            name="x", slug="x", hash="a" * 64, thumbnail_path="uploads/legacy.png"
-        )
+        model = detached_model(thumbnail_path="uploads/legacy.png")
         assert mv.thumb_url(model) is None
 
     def test_no_thumbnail_at_all_returns_none(self) -> None:
-        model = Model(name="x", slug="x", hash="a" * 64)
+        model = detached_model()
         assert mv.thumb_url(model) is None
 
 
@@ -307,10 +299,11 @@ class TestFilamentProfileUsage:
     def test_counts_live_files_matching_each_profile(self, db_session: Session) -> None:
         db_session.add_all(_profiles())
         model = build_model(db_session, name="m", slug="m", hash="b" * 64)
-        f1 = File(
-            model_id=model.id,
+        f1 = build_file(
+            db_session,
+            model,
             path="a.gcode",
-            original_filename="a.gcode",
+            filename="a.gcode",
             file_type=FileType.GCODE,
             size_bytes=1,
             sha256="1" * 64,

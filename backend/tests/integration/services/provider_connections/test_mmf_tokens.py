@@ -29,6 +29,7 @@ from app.services.capture_provider_connections import (
     ProviderConnectionError,
     ProviderModelMetadata,
 )
+from tests.factories import build_user
 
 SIGNED_URL = "https://downloads.example.test/signed?token=transient"
 
@@ -84,9 +85,7 @@ def connect(db_session: Session):
         expires_in: timedelta = timedelta(minutes=10),
     ) -> User:
         made["n"] += 1
-        user = User(username=f"mmf-token-{made['n']}", hashed_password="x")
-        db_session.add(user)
-        db_session.flush()
+        user = build_user(db_session, f"mmf-token-{made['n']}")
         assert user.id is not None
         db_session.add(
             ProviderConnection(
@@ -448,9 +447,7 @@ class TestFetchMmfFileDownloadUrl:
             ),
         )
         with Session(engine) as session:
-            owner = User(username="provider-refresh", hashed_password="x")
-            session.add(owner)
-            session.flush()
+            owner = build_user(session, "provider-refresh")
             assert owner.id is not None
             user_id = owner.id
             session.add(

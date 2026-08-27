@@ -35,6 +35,46 @@ from tests.factories._support import nth, reject_aliases, save
 PASSWORD = "Password123"
 
 
+def user_config(
+    username: str | None = None,
+    *,
+    superuser: bool = False,
+    active: bool = True,
+    password: str = PASSWORD,
+    password_hash: str | None = None,
+    **overrides: Any,
+) -> User:
+    """A `User` that is deliberately *not* saved.
+
+    A few checks are pure logic over an identity — the scope a token grants, the
+    403 half of a dependency — and giving them a session would be inventing a
+    database they do not use. They still need the same defaults, above all
+    `superuser=False`, because a test that accidentally holds an admin passes
+    every access check it meant to be refused by.
+
+    `password_hash=` stores a hash verbatim instead of hashing `password`. It is
+    for the upgrade path only — a row written by an older release's hasher, which
+    the current one cannot produce — and it is a separate argument from
+    `password=` so that a caller cannot pass a plaintext into the hash column by
+    getting one keyword wrong.
+    """
+    reject_aliases(
+        overrides,
+        {
+            "is_superuser": "superuser",
+            "is_active": "active",
+            "hashed_password": "password (or password_hash for a verbatim hash)",
+        },
+    )
+    return User(
+        username=username or f"user-{nth('user')}",
+        hashed_password=password_hash or hash_password(password),
+        is_active=active,
+        is_superuser=superuser,
+        **overrides,
+    )
+
+
 def build_user(
     session: Session,
     username: str | None = None,
@@ -42,6 +82,7 @@ def build_user(
     superuser: bool = False,
     active: bool = True,
     password: str = PASSWORD,
+    password_hash: str | None = None,
     **overrides: Any,
 ) -> User:
     """A user who can log in. Not a superuser unless you say so."""
@@ -50,16 +91,17 @@ def build_user(
         {
             "is_superuser": "superuser",
             "is_active": "active",
-            "hashed_password": "password",
+            "hashed_password": "password (or password_hash for a verbatim hash)",
         },
     )
     return save(
         session,
-        User(
-            username=username or f"user-{nth('user')}",
-            hashed_password=hash_password(password),
-            is_active=active,
-            is_superuser=superuser,
+        user_config(
+            username,
+            superuser=superuser,
+            active=active,
+            password=password,
+            password_hash=password_hash,
             **overrides,
         ),
     )
@@ -86,17 +128,22 @@ def bearer(user: User, *, scope: str | None = None) -> dict[str, str]:
 def grant_collection_role(
     session: Session,
     user: User,
-    collection: Collection,
+    collection: Collection | int,
     role: CollectionRole = CollectionRole.VIEW,
 ) -> CollectionPermission:
     """Share a collection with a user, the way an admin would.
 
     Roles are hierarchical (`view` < `edit` < `admin`) and resolve down the
     collection tree, so granting on a parent is how a test covers inheritance.
+
+    An id is accepted as well as a row because several callers only ever hold the
+    id — a collection resolved by path, or one read back out of a response body —
+    and making them re-fetch the row to grant on it is friction with no payoff.
     """
+    collection_id = collection if isinstance(collection, int) else collection.id
     return save(
         session,
-        CollectionPermission(user_id=user.id, collection_id=collection.id, role=role),
+        CollectionPermission(user_id=user.id, collection_id=collection_id, role=role),
     )
 
 

@@ -15,8 +15,8 @@ import pytest
 from sqlmodel import Session
 
 from app.core.config import DEFAULT_JWT_SECRET, _overlay, settings
-from app.db.models import User
 from app.services import runtime_config
+from tests.factories import build_user
 
 
 @pytest.fixture(autouse=True)
@@ -105,19 +105,11 @@ class TestIsConfigured:
         db_session: Session,
     ) -> None:
         from app.core.time import utcnow
-        from app.services.auth import hash_password
 
         config = runtime_config.get_or_create(db_session)
         config.configured_at = utcnow()
         db_session.add(config)
-        db_session.add(
-            User(
-                username="setup-admin",
-                hashed_password=hash_password("Password123"),
-                is_active=True,
-                is_superuser=True,
-            )
-        )
+        build_user(db_session, "setup-admin", superuser=True)
         db_session.commit()
 
         assert runtime_config.is_configured(db_session) is True

@@ -39,7 +39,6 @@ from app.db.models import (
     ModelSourceCover,
     ProvenanceCapture,
     StorageDeleteIntent,
-    User,
 )
 from app.schemas.provenance import CaptureManifestV2
 from app.services import provenance, storage_deletion, trash
@@ -48,7 +47,11 @@ from app.services.storage_ownership import (
     UnsafeStorageDeleteError,
     record_creation,
 )
-from tests.factories import build_file, build_model
+from tests.factories import (
+    build_file,
+    build_model,
+    build_user,
+)
 
 
 def _model(session: Session) -> Model:
@@ -320,11 +323,7 @@ class TestUpsertCapture:
         """Provenance follows its Model's lifecycle but never owns Artifact bytes."""
         model = _model(db_session)
         assert model.id is not None
-        actor = User(
-            username="provenance-admin",
-            hashed_password="not-used",
-            is_superuser=True,
-        )
+        actor = build_user(db_session, "provenance-admin", superuser=True)
         artifact = build_file(
             db_session,
             model,
@@ -529,10 +528,11 @@ class TestIdentityKey:
         db_session: Session,
     ) -> None:
         model = _model(db_session)
-        artifact = File(
-            model_id=model.id,
+        artifact = build_file(
+            db_session,
+            model,
             path="provenance/part.stl",
-            original_filename="part.stl",
+            filename="part.stl",
             file_type=FileType.STL,
             size_bytes=1,
             sha256="b" * 64,
@@ -559,7 +559,7 @@ class TestIdentityKey:
                 ),
             )
         )
-        actor = User(username="unrelated", hashed_password="not-used")
+        actor = build_user(db_session, "unrelated")
         db_session.add(actor)
         db_session.commit()
 
@@ -684,7 +684,7 @@ class TestSetUserOverride:
         db_session: Session,
     ) -> None:
         model = _model(db_session)
-        actor = User(username="provenance-override-owner", hashed_password="not-used")
+        actor = build_user(db_session, "provenance-override-owner")
         db_session.add(actor)
         db_session.flush()
         captured = provenance.upsert_capture(

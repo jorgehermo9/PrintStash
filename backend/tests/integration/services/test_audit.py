@@ -19,13 +19,12 @@ from sqlmodel import select
 from app.db.models import (
     ArtifactProvenanceLink,
     AuditLog,
-    File,
     FileType,
     ModelProvenanceSource,
     ProvenanceCapture,
 )
 from app.services.audit import _diff_for_obj, install_audit_listeners
-from tests.factories import build_model
+from tests.factories import build_file, build_model
 
 
 def test_provenance_audit_diff_redacts_snapshot_and_remote_identifiers(
@@ -60,10 +59,11 @@ def test_audit_listener_redacts_provenance_on_insert_and_update(db_session) -> N
     model = build_model(
         db_session, name="Audit bracket", slug="audit-bracket", hash="c" * 64
     )
-    artifact = File(
-        model_id=model.id,
+    artifact = build_file(
+        db_session,
+        model,
         path="provenance/audit.stl",
-        original_filename="audit.stl",
+        filename="audit.stl",
         file_type=FileType.STL,
         size_bytes=1,
         sha256="d" * 64,

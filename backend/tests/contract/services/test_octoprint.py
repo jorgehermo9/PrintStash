@@ -24,7 +24,13 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.services.printer_hub import PrinterHub
 from app.services.printer_provider import build_provider_registry, get_provider_client
-from tests.factories import build_file, build_model, build_print_job, build_printer
+from tests.factories import (
+    build_file,
+    build_model,
+    build_print_job,
+    build_printer,
+    printer_config,
+)
 from tests.fakes.mock_octoprint import create_app
 from tests.fakes.server import start_server
 
@@ -180,8 +186,8 @@ class TestRaises:
         app, _sim = create_app(total_mm=1000.0, total_seconds=10.0, api_key=API_KEY)
         running = start_server(app)
         try:
-            printer = Printer(
-                name="Bad key",
+            printer = printer_config(
+                "Bad key",
                 provider=PrinterProvider.OCTOPRINT,
                 octoprint_url=running.base_url,
                 octoprint_api_key="wrong-key",

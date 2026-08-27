@@ -36,10 +36,14 @@ from app.db.models import (
     Printer,
     PrinterProvider,
     PrinterStatus,
-    PrintJob,
     PrintJobState,
 )
-from tests.factories import build_model
+from tests.factories import (
+    build_file,
+    build_model,
+    build_print_job,
+    printer_config,
+)
 from tests.integration.conftest import UserHeaders
 
 SPOOLMAN_URL = "http://spoolman.local:7912"
@@ -53,25 +57,22 @@ def _printer(name: str = "Ender", **overrides: Any) -> Printer:
         "status": PrinterStatus.READY,
     }
     fields.update(overrides)
-    return Printer(**fields)
+    return printer_config(**fields)
 
 
 def _model_with_file(db_session: Session, name: str) -> Model:
     model = build_model(
         db_session, name=name, slug=name.lower(), hash=f"{name.lower():x<64}"[:64]
     )
-    db_session.add(
-        File(
-            model_id=model.id,
-            path=f"{name}.gcode",
-            original_filename=f"{name}.gcode",
-            file_type=FileType.GCODE,
-            version=1,
-            size_bytes=10,
-            sha256=f"{name.lower():f<64}"[:64],
-        )
+    build_file(
+        db_session,
+        model,
+        path=f"{name}.gcode",
+        filename=f"{name}.gcode",
+        file_type=FileType.GCODE,
+        size_bytes=10,
+        sha256=f"{name.lower():f<64}"[:64],
     )
-    db_session.commit()
     return model
 
 
@@ -331,16 +332,7 @@ class TestFleetSchedulerProbe:
         db_session.commit()
         db_session.refresh(printer)
         gcode = db_session.exec(select(File).where(File.model_id == model.id)).one()
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                model_id=model.id,
-                file_id=gcode.id,
-                remote_filename=gcode.original_filename,
-                state=PrintJobState.QUEUED,
-            )
-        )
-        db_session.commit()
+        build_print_job(db_session, gcode, printer=printer)
 
         out = health_mod._fleet_scheduler_probe()
 

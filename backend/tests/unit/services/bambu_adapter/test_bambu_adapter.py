@@ -24,8 +24,9 @@ import pytest
 from printstash_core.printers.bambu import BambuClient
 from printstash_core.printers.models import ProviderError
 
-from app.db.models import Printer, PrinterProvider
+from app.db.models import PrinterProvider
 from app.services.bambu_adapter import BambuLanProvider
+from tests.factories import printer_config
 
 
 def test_constructor_maps_legacy_arguments_to_immutable_core_config() -> None:
@@ -55,8 +56,8 @@ def test_class_level_ftps_factory_remains_compatible() -> None:
 
 class TestBuild:
     def test_build_maps_orm_fields_without_retaining_the_row(self) -> None:
-        printer = Printer(
-            name="Bambu",
+        printer = printer_config(
+            "Bambu",
             provider=PrinterProvider.BAMBU_LAN,
             bambu_host="192.0.2.20",
             bambu_serial="SERIAL-2",
@@ -82,8 +83,8 @@ class TestBuild:
             "bambu_access_code": "code-2",
         }
         values[field] = ""
-        printer = Printer(
-            name="Bambu",
+        printer = printer_config(
+            "Bambu",
             provider=PrinterProvider.BAMBU_LAN,
             **values,
         )

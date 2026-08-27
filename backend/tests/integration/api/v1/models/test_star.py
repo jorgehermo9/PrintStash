@@ -13,8 +13,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.db.models import Collection, CollectionPermission, CollectionRole, Model, User
-from tests.factories import build_collection, build_model
+from app.db.models import Collection, CollectionRole, Model, User
+from tests.factories import (
+    build_collection,
+    build_model,
+    grant_collection_role,
+)
 
 
 @pytest.fixture
@@ -29,12 +33,7 @@ def viewer(db_session: Session, make_user, headers_for, collection: Collection):
 
     def build(username: str) -> dict[str, str]:
         user: User = make_user(username)
-        db_session.add(
-            CollectionPermission(
-                user_id=user.id, collection_id=collection.id, role=CollectionRole.VIEW
-            )
-        )
-        db_session.commit()
+        grant_collection_role(db_session, user, collection, CollectionRole.VIEW)
         return headers_for(user)
 
     return build
@@ -150,12 +149,13 @@ class TestFavoritesFilter:
         model: Model,
     ) -> None:
         headers = viewer("favoriter")
-        db_session.add(
-            Model(
-                name="Plain", slug="plain", hash="2" * 64, collection_id=collection.id
-            )
+        build_model(
+            db_session,
+            name="Plain",
+            slug="plain",
+            hash="2" * 64,
+            collection_id=collection.id,
         )
-        db_session.commit()
         client.put(f"/api/v1/models/{model.id}/star", headers=headers)
 
         favorites = client.get(

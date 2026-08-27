@@ -31,7 +31,7 @@ from paho.mqtt import client as mqtt
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.reasoncodes import ReasonCode
 
-from app.db.models import Printer, PrinterProvider
+from app.db.models import PrinterProvider
 from app.services.printer_provider import (
     BambuLanProvider,
     BaseProvider,
@@ -48,6 +48,7 @@ from app.services.printer_provider import (
     get_provider_client,
     printer_config_from_model,
 )
+from tests.factories import printer_config
 
 
 class TestCapabilities:
@@ -96,39 +97,45 @@ class TestCapabilities:
 
 class TestDetectPrinterModel:
     def test_detects_bambu_model_from_serial_prefix(self):
-        p = Printer(
-            name="X1C",
+        p = printer_config(
+            "X1C",
+            credentials=False,
             provider=PrinterProvider.BAMBU_LAN,
             bambu_serial="01P00A123456",
         )
         assert detect_printer_model(p) == "Bambu Lab X1 Carbon"
 
     def test_unknown_bambu_serial_prefix_returns_none(self):
-        p = Printer(
-            name="Mystery",
+        p = printer_config(
+            "Mystery",
+            credentials=False,
             provider=PrinterProvider.BAMBU_LAN,
             bambu_serial="ZZZ00A123456",
         )
         assert detect_printer_model(p) is None
 
     def test_detects_elegoo_neptune4_from_provider_variant(self):
-        p = Printer(
-            name="Neptune",
+        p = printer_config(
+            "Neptune",
+            credentials=False,
             provider=PrinterProvider.MOONRAKER,
             provider_variant="elegoo_neptune4",
         )
         assert detect_printer_model(p) == "Elegoo Neptune 4 family"
 
     def test_detects_elegoo_centauri_carbon_2_from_provider_variant(self):
-        p = Printer(
-            name="Centauri",
+        p = printer_config(
+            "Centauri",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             provider_variant="elegoo_centauri_carbon_2",
         )
         assert detect_printer_model(p) == "Elegoo Centauri Carbon 2"
 
     def test_plain_moonraker_is_undetectable(self):
-        p = Printer(name="Voron", provider=PrinterProvider.MOONRAKER)
+        p = printer_config(
+            "Voron", credentials=False, provider=PrinterProvider.MOONRAKER
+        )
         assert detect_printer_model(p) is None
 
 
@@ -148,8 +155,9 @@ class TestProviderFactory:
         assert parameter.default is inspect.Parameter.empty
 
     def test_orm_record_is_copied_to_neutral_config(self):
-        p = Printer(
-            name="mk",
+        p = printer_config(
+            "mk",
+            credentials=False,
             provider=PrinterProvider.MOONRAKER,
             moonraker_url="http://10.0.0.1:7125",
             api_key="secret",
@@ -161,8 +169,9 @@ class TestProviderFactory:
         assert config.api_key == "secret"
 
     def test_get_provider_uses_injected_registry(self):
-        p = Printer(
-            name="mk",
+        p = printer_config(
+            "mk",
+            credentials=False,
             provider=PrinterProvider.MOONRAKER,
             moonraker_url="http://10.0.0.1:7125",
         )
@@ -176,8 +185,9 @@ class TestProviderFactory:
         self.registry = build_provider_registry()
 
     def test_get_moonraker_provider(self):
-        p = Printer(
-            name="mk",
+        p = printer_config(
+            "mk",
+            credentials=False,
             provider=PrinterProvider.MOONRAKER,
             moonraker_url="http://10.0.0.1:7125",
         )
@@ -185,8 +195,9 @@ class TestProviderFactory:
         assert isinstance(client, MoonrakerProvider)
 
     def test_get_bambu_provider(self):
-        p = Printer(
-            name="bambu",
+        p = printer_config(
+            "bambu",
+            credentials=False,
             provider=PrinterProvider.BAMBU_LAN,
             moonraker_url="",
             bambu_host="192.168.1.50",
@@ -197,8 +208,9 @@ class TestProviderFactory:
         assert isinstance(client, BambuLanProvider)
 
     def test_get_prusalink_digest_provider(self):
-        p = Printer(
-            name="mk4",
+        p = printer_config(
+            "mk4",
+            credentials=False,
             provider=PrinterProvider.PRUSALINK,
             prusalink_url="http://mk4.local",
             prusalink_auth_mode="digest",
@@ -209,8 +221,9 @@ class TestProviderFactory:
         assert isinstance(client, PrusaLinkProvider)
 
     def test_prusalink_missing_credentials_rejected(self):
-        p = Printer(
-            name="mk4",
+        p = printer_config(
+            "mk4",
+            credentials=False,
             provider=PrinterProvider.PRUSALINK,
             prusalink_url="http://mk4.local",
             prusalink_auth_mode="digest",
@@ -221,8 +234,9 @@ class TestProviderFactory:
         assert exc.value.code == "provider_credentials_missing"
 
     def test_get_centauri_carbon_provider(self):
-        p = Printer(
-            name="CC1",
+        p = printer_config(
+            "CC1",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             provider_variant="elegoo_centauri_carbon",
             elegoo_centauri_host="192.168.1.50",
@@ -232,8 +246,9 @@ class TestProviderFactory:
         )
 
     def test_centauri_carbon_2_requires_access_code(self):
-        p = Printer(
-            name="CC2",
+        p = printer_config(
+            "CC2",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             provider_variant="elegoo_centauri_carbon_2",
             elegoo_centauri_host="192.168.1.51",
@@ -243,8 +258,9 @@ class TestProviderFactory:
         assert exc.value.code == "provider_credentials_missing"
 
     def test_missing_bambu_creds_raises(self):
-        p = Printer(
-            name="bambu",
+        p = printer_config(
+            "bambu",
+            credentials=False,
             provider=PrinterProvider.BAMBU_LAN,
             moonraker_url="",
         )
@@ -252,8 +268,9 @@ class TestProviderFactory:
             get_provider_client(p, registry=self.registry)
 
     def test_get_octoprint_provider(self):
-        p = Printer(
-            name="octopi",
+        p = printer_config(
+            "octopi",
+            credentials=False,
             provider=PrinterProvider.OCTOPRINT,
             octoprint_url="http://octopi.local",
             octoprint_api_key="key-123",
@@ -262,8 +279,9 @@ class TestProviderFactory:
         assert isinstance(client, OctoPrintProvider)
 
     def test_octoprint_missing_credentials_rejected(self):
-        p = Printer(
-            name="octopi",
+        p = printer_config(
+            "octopi",
+            credentials=False,
             provider=PrinterProvider.OCTOPRINT,
             octoprint_url="http://octopi.local",
         )

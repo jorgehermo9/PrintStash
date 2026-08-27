@@ -39,8 +39,8 @@ from sqlmodel import Session, SQLModel
 import app.db.models  # noqa: F401 — register all tables on SQLModel.metadata
 from alembic import command
 from app.db import migrate as migrate_mod
-from app.db.models import User
 from app.db.session import _is_alembic_managed, init_db
+from tests.factories import build_user
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
 
 
@@ -560,15 +560,7 @@ class TestRunMigrations:
         engine = create_engine(url)
         SQLModel.metadata.create_all(engine)
         with Session(engine) as session:
-            session.add(
-                User(
-                    username="keepme",
-                    hashed_password="x",
-                    is_active=True,
-                    is_superuser=True,
-                )
-            )
-            session.commit()
+            build_user(session, "keepme", superuser=True)
         engine.dispose()
 
         migrate_mod.run_migrations(url)

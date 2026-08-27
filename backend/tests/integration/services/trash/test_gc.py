@@ -218,17 +218,17 @@ def test_gc_adopts_and_purges_pre_ledger_artifact_with_matching_content(
     content = b"artifact created before the ownership ledger"
     legacy_path = storage.blob_key("legacy-owned", 1, "legacy.stl")
     _write(legacy_path, content)
-    artifact = File(
-        model_id=model.id,
+    artifact = build_file(
+        db_session,
+        model,
         path=legacy_path,
-        original_filename="legacy.stl",
+        filename="legacy.stl",
         file_type=FileType.STL,
-        version=1,
         size_bytes=len(content),
         sha256=hashlib.sha256(content).hexdigest(),
     )
     model.deleted_at = utcnow() - timedelta(days=1)
-    db_session.add_all([model, artifact])
+    db_session.add(model)
     db_session.commit()
     model_id = model.id
     artifact_id = artifact.id

@@ -18,6 +18,7 @@ from app.services.spoolman import (
     get_spoolman_client,
     use_spool_weight_sync,
 )
+from tests.factories import print_job_config
 
 
 def _mock_resp(status_code: int, json_value=None, text: str = ""):
@@ -189,7 +190,7 @@ class TestGetSpoolmanClient:
 
 
 def _completed_job(spool_id=None, grams=None) -> PrintJob:
-    return PrintJob(
+    return print_job_config(
         id=42,
         printer_id=1,
         file_id=1,

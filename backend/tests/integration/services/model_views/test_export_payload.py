@@ -27,8 +27,6 @@ from sqlmodel import Session, select
 from app.db.models import (
     SENTINEL_MODEL_HASH,
     ArtifactProvenanceLink,
-    Collection,
-    CollectionPermission,
     CollectionRole,
     FileType,
     Model,
@@ -37,10 +35,15 @@ from app.db.models import (
     ModelTagLink,
     ProvenanceCapture,
     Tag,
-    User,
 )
 from app.services import model_views
-from tests.factories import build_collection, build_file, build_model, build_user
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    build_user,
+    grant_collection_role,
+)
 
 FIRST_CAPTURE_AT = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
 SECOND_CAPTURE_AT = FIRST_CAPTURE_AT + timedelta(days=7)
@@ -292,8 +295,10 @@ class TestExportPayload:
     def test_exports_only_models_in_collections_the_user_can_view(
         self, db_session: Session
     ):
-        member = User(username="export-member", hashed_password="x")
-        visible = Collection(name="Visible", slug="visible", path="visible")
+        member = build_user(db_session, "export-member")
+        visible = build_collection(
+            db_session, name="Visible", slug="visible", path="visible"
+        )
         hidden = build_collection(
             db_session, name="Hidden", slug="hidden", path="hidden"
         )
@@ -302,11 +307,7 @@ class TestExportPayload:
         db_session.refresh(member)
         db_session.refresh(visible)
         db_session.refresh(hidden)
-        db_session.add(
-            CollectionPermission(
-                user_id=member.id, collection_id=visible.id, role=CollectionRole.VIEW
-            )
-        )
+        grant_collection_role(db_session, member, visible, CollectionRole.VIEW)
         allowed = build_model(db_session, "Allowed")
         allowed.collection_id = visible.id
         denied = build_model(db_session, "Denied")
@@ -321,7 +322,7 @@ class TestExportPayload:
     def test_exports_nothing_for_a_user_granted_no_collection(
         self, db_session: Session
     ):
-        member = User(username="export-outsider", hashed_password="x")
+        member = build_user(db_session, "export-outsider")
         db_session.add(member)
         db_session.commit()
         db_session.refresh(member)

@@ -25,8 +25,8 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.db.models import SystemConfig, User
 from app.services import runtime_config
-from app.services.auth import hash_password
 from app.services.setup_token import current_setup_token
+from tests.factories import build_user
 
 USERNAME = "admin"
 PASSWORD = "Password123"
@@ -130,8 +130,7 @@ class TestSetupStatus:
     def test_counts_existing_users(
         self, client: TestClient, db_session: Session
     ) -> None:
-        db_session.add(User(username="legacy", hashed_password=hash_password(PASSWORD)))
-        db_session.commit()
+        build_user(db_session, "legacy")
 
         assert client.get("/api/v1/setup/status").json()["user_count"] == 1
 
@@ -255,10 +254,7 @@ class TestCompleteSetup:
     def test_refuses_when_a_user_already_exists(
         self, client: TestClient, db_session: Session
     ) -> None:
-        db_session.add(
-            User(username="legacy-admin", hashed_password=hash_password(PASSWORD))
-        )
-        db_session.commit()
+        build_user(db_session, "legacy-admin")
 
         response = _complete(client)
 

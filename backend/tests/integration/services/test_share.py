@@ -22,30 +22,30 @@ from sqlmodel import Session, select
 from app.core.time import ensure_utc, utcnow
 from app.db.models import File, FileType, Model, ShareLink
 from app.services import share
+from tests.factories import build_file, build_model
 
 
 def _model(db_session: Session, slug: str, **fields) -> Model:
-    row = Model(name=slug.title(), slug=slug, hash=f"{slug:h<64}"[:64], **fields)
-    db_session.add(row)
-    db_session.commit()
+    row = build_model(
+        db_session, name=slug.title(), slug=slug, hash=f"{slug:h<64}"[:64], **fields
+    )
     db_session.refresh(row)
     return row
 
 
 def _gcode(db_session: Session, model: Model, name: str, **fields) -> File:
     used = len(db_session.exec(select(File).where(File.model_id == model.id)).all())
-    row = File(
-        model_id=model.id,
+    row = build_file(
+        db_session,
+        model,
         path=f"{name}",
-        original_filename=name,
+        filename=name,
         file_type=FileType.GCODE,
         version=used + 1,  # (model_id, version) is unique
         size_bytes=10,
         sha256=f"{name:a<64}"[:64],
         **fields,
     )
-    db_session.add(row)
-    db_session.commit()
     db_session.refresh(row)
     return row
 

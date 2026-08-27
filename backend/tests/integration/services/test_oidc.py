@@ -39,6 +39,9 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.db.models import RefreshToken, User
 from app.services import oidc
+from tests.factories import (
+    build_user,
+)
 
 
 def _enable_oidc() -> None:
@@ -691,11 +694,12 @@ class TestProvisionUser:
         self, db_session: Session
     ) -> None:
         _enable_oidc()
-        existing = User(
-            username="deactivated",
+        existing = build_user(
+            db_session,
+            "deactivated",
+            active=False,
+            password_hash="!oidc:x",
             email="deactivated@example.test",
-            hashed_password="!oidc:x",
-            is_active=False,
             oidc_issuer=_overlay["oidc_issuer_url"],
             oidc_subject="deactivated-subject",
             oidc_managed=True,
@@ -718,12 +722,11 @@ class TestProvisionUser:
         db_session: Session,
     ) -> None:
         _enable_oidc()
-        existing = User(
-            username="returning",
+        existing = build_user(
+            db_session,
+            "returning",
+            password_hash="!oidc:x",
             email="old@example.test",
-            hashed_password="!oidc:x",
-            is_active=True,
-            is_superuser=False,
             oidc_issuer=_overlay["oidc_issuer_url"],
             oidc_subject="returning-subject",
             oidc_managed=True,
@@ -948,11 +951,11 @@ class TestOidc:
         db_session: Session,
     ) -> None:
         _enable_oidc()
-        local = User(
-            username="julia",
+        local = build_user(
+            db_session,
+            "julia",
+            password_hash="local-password-hash",
             email="local@example.test",
-            hashed_password="local-password-hash",
-            is_active=True,
         )
         db_session.add(local)
         db_session.commit()

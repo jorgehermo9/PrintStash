@@ -34,7 +34,12 @@ from app.db.models import (
 from app.services.printer_hub import PrinterHub
 from app.services.printer_jobs import dispatch_next, reconcile_stranded_dispatches
 from app.services.printer_provider import build_provider_registry, get_provider_client
-from tests.factories import a_gcode_artifact, build_print_job, build_printer
+from tests.factories import (
+    a_gcode_artifact,
+    build_print_job,
+    build_printer,
+    printer_config,
+)
 from tests.fakes.mock_printer import create_app
 from tests.fakes.server import start_server
 
@@ -141,8 +146,8 @@ async def test_two_printers_dispatch_and_complete_via_real_api(
     running_a = start_server(app_a)
     running_b = start_server(app_b)
     try:
-        printer_a = Printer(
-            name="Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY
+        printer_a = printer_config(
+            "Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY
         )
         printer_b = build_printer(
             e2e_db,
@@ -230,8 +235,8 @@ async def test_drain_mode_blocks_routing_via_api(api, superuser_headers, e2e_db)
     )
     running = start_server(app_available)
     try:
-        draining = Printer(
-            name="Draining",
+        draining = printer_config(
+            "Draining",
             moonraker_url="http://unreachable-draining.invalid",
             status=PrinterStatus.READY,
         )
@@ -377,8 +382,8 @@ class TestPrinter:
         self, api, superuser_headers, e2e_db
     ):
         printers = [
-            Printer(
-                name=name,
+            printer_config(
+                name,
                 moonraker_url=f"http://{name.lower()}.invalid",
                 status=PrinterStatus.READY,
                 group="material-farm",

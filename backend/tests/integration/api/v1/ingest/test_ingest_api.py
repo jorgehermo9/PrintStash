@@ -36,7 +36,6 @@ from app.core.config import _overlay
 from app.core.time import utcnow
 from app.db.models import (
     BackgroundJob,
-    CollectionPermission,
     CollectionRole,
     FilamentProfile,
     File,
@@ -56,6 +55,7 @@ from tests.factories import (
     bearer,
     build_collection,
     build_user,
+    grant_collection_role,
 )
 from tests.integration.api.v1._ingest_assertions import (
     assert_file_created,
@@ -508,12 +508,7 @@ class TestIngestModel:
         collection = build_collection(
             db_session, name="Brackets", slug="brackets", path="brackets"
         )
-        db_session.add(
-            CollectionPermission(
-                user_id=user.id, collection_id=collection.id, role=CollectionRole.EDIT
-            )
-        )
-        db_session.commit()
+        grant_collection_role(db_session, user, collection, CollectionRole.EDIT)
 
         payload = completed_job(
             client,

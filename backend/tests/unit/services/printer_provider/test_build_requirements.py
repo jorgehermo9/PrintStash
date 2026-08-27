@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.db.models import Printer, PrinterProvider
+from app.db.models import PrinterProvider
 from app.services.printer_provider import (
     ElegooCentauriProvider,
     MoonrakerProvider,
@@ -29,16 +29,19 @@ from app.services.printer_provider import (
     ProviderError,
     PrusaLinkProvider,
 )
+from tests.factories import printer_config
 
 
 class TestMoonrakerBuild:
     def test_builds_from_a_url(self) -> None:
-        printer = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
+        printer = printer_config(
+            "Ender", credentials=False, moonraker_url="http://10.0.0.1:7125"
+        )
 
         assert MoonrakerProvider.build(printer) is not None
 
     def test_refuses_a_printer_with_no_url(self) -> None:
-        printer = Printer(name="Ender", moonraker_url="")
+        printer = printer_config("Ender", credentials=False, moonraker_url="")
 
         with pytest.raises(ProviderError, match="provider_credentials_missing"):
             MoonrakerProvider.build(printer)
@@ -46,8 +49,9 @@ class TestMoonrakerBuild:
 
 class TestPrusaLinkBuild:
     def test_builds_in_digest_mode_with_a_username_and_password(self) -> None:
-        printer = Printer(
-            name="MK4",
+        printer = printer_config(
+            "MK4",
+            credentials=False,
             provider=PrinterProvider.PRUSALINK,
             moonraker_url="",
             prusalink_url="http://10.0.0.2",
@@ -59,8 +63,9 @@ class TestPrusaLinkBuild:
         assert PrusaLinkProvider.build(printer) is not None
 
     def test_builds_in_api_key_mode_with_a_key(self) -> None:
-        printer = Printer(
-            name="MK4",
+        printer = printer_config(
+            "MK4",
+            credentials=False,
             provider=PrinterProvider.PRUSALINK,
             moonraker_url="",
             prusalink_url="http://10.0.0.2",
@@ -71,8 +76,9 @@ class TestPrusaLinkBuild:
         assert PrusaLinkProvider.build(printer) is not None
 
     def test_refuses_a_printer_with_no_url(self) -> None:
-        printer = Printer(
-            name="MK4",
+        printer = printer_config(
+            "MK4",
+            credentials=False,
             provider=PrinterProvider.PRUSALINK,
             moonraker_url="",
             prusalink_auth_mode="digest",
@@ -82,8 +88,9 @@ class TestPrusaLinkBuild:
             PrusaLinkProvider.build(printer)
 
     def test_refuses_digest_mode_with_no_username(self) -> None:
-        printer = Printer(
-            name="MK4",
+        printer = printer_config(
+            "MK4",
+            credentials=False,
             provider=PrinterProvider.PRUSALINK,
             moonraker_url="",
             prusalink_url="http://10.0.0.2",
@@ -97,8 +104,9 @@ class TestPrusaLinkBuild:
             PrusaLinkProvider.build(printer)
 
     def test_refuses_api_key_mode_with_no_key(self) -> None:
-        printer = Printer(
-            name="MK4",
+        printer = printer_config(
+            "MK4",
+            credentials=False,
             provider=PrinterProvider.PRUSALINK,
             moonraker_url="",
             prusalink_url="http://10.0.0.2",
@@ -111,8 +119,9 @@ class TestPrusaLinkBuild:
 
 class TestOctoPrintBuild:
     def test_builds_from_a_url_and_key(self) -> None:
-        printer = Printer(
-            name="Octo",
+        printer = printer_config(
+            "Octo",
+            credentials=False,
             provider=PrinterProvider.OCTOPRINT,
             moonraker_url="",
             octoprint_url="http://10.0.0.3",
@@ -130,8 +139,9 @@ class TestOctoPrintBuild:
             "octoprint_api_key": "key",
         }
         fields[missing] = ""
-        printer = Printer(
-            name="Octo",
+        printer = printer_config(
+            "Octo",
+            credentials=False,
             provider=PrinterProvider.OCTOPRINT,
             moonraker_url="",
             **fields,
@@ -143,8 +153,9 @@ class TestOctoPrintBuild:
 
 class TestElegooCentauriBuild:
     def test_builds_the_first_generation_from_a_host(self) -> None:
-        printer = Printer(
-            name="Centauri",
+        printer = printer_config(
+            "Centauri",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             moonraker_url="",
             provider_variant="elegoo_centauri_carbon",
@@ -154,8 +165,9 @@ class TestElegooCentauriBuild:
         assert ElegooCentauriProvider.build(printer) is not None
 
     def test_builds_the_second_generation_with_an_access_code(self) -> None:
-        printer = Printer(
-            name="Centauri 2",
+        printer = printer_config(
+            "Centauri 2",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             moonraker_url="",
             provider_variant="elegoo_centauri_carbon_2",
@@ -166,8 +178,9 @@ class TestElegooCentauriBuild:
         assert ElegooCentauriProvider.build(printer) is not None
 
     def test_refuses_a_printer_with_no_host(self) -> None:
-        printer = Printer(
-            name="Centauri",
+        printer = printer_config(
+            "Centauri",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             moonraker_url="",
             provider_variant="elegoo_centauri_carbon",
@@ -177,8 +190,9 @@ class TestElegooCentauriBuild:
             ElegooCentauriProvider.build(printer)
 
     def test_refuses_a_variant_it_does_not_support(self) -> None:
-        printer = Printer(
-            name="Centauri X",
+        printer = printer_config(
+            "Centauri X",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             moonraker_url="",
             provider_variant="elegoo_centauri_future",
@@ -191,8 +205,9 @@ class TestElegooCentauriBuild:
             ElegooCentauriProvider.build(printer)
 
     def test_refuses_the_second_generation_with_no_access_code(self) -> None:
-        printer = Printer(
-            name="Centauri 2",
+        printer = printer_config(
+            "Centauri 2",
+            credentials=False,
             provider=PrinterProvider.ELEGOO_CENTAURI,
             moonraker_url="",
             provider_variant="elegoo_centauri_carbon_2",

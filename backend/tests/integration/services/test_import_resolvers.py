@@ -36,7 +36,6 @@ from app.db.models import (
     InboxItemState,
     InboxSourceKind,
     ProviderConnection,
-    User,
 )
 from app.db.session import SessionFactory, SQLiteSessionFactory
 from app.services import import_resolvers, provider_connections
@@ -46,6 +45,7 @@ from app.services.capture_provider_connections import (
     ProviderIdentity,
     ProviderModelMetadata,
 )
+from tests.factories import build_user
 
 
 class _Factory:
@@ -166,9 +166,7 @@ class TestProviderMetadataCache:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import_resolvers._provider_metadata_cache.clear()
-        user = User(username="cache-owner", hashed_password="x")
-        db_session.add(user)
-        db_session.flush()
+        user = build_user(db_session, "cache-owner")
         assert user.id is not None
         connection = ProviderConnection(
             user_id=user.id,
@@ -227,9 +225,7 @@ class TestProviderMetadataCache:
         db_session: Session,
     ) -> None:
         import_resolvers._provider_metadata_cache.clear()
-        user = User(username="cache-lifecycle", hashed_password="x")
-        db_session.add(user)
-        db_session.flush()
+        user = build_user(db_session, "cache-lifecycle")
         assert user.id is not None
         key = (user.id, "cults", "widget")
         import_resolvers._provider_metadata_cache[key] = (
@@ -508,9 +504,7 @@ class TestConnectedManifest:
     def test_mmf_signed_url_is_transient_not_in_persisted_inbox_manifest(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        user = User(username="mmf-manifest", hashed_password="x")
-        db_session.add(user)
-        db_session.flush()
+        user = build_user(db_session, "mmf-manifest")
         assert user.id is not None
         manifest = {
             "schema_version": 2,

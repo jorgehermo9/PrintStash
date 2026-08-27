@@ -32,7 +32,7 @@ from app.db.models import (
     InboxItemState,
     Model,
 )
-from tests.factories import build_model
+from tests.factories import build_file, build_model
 
 
 class TestUpdateItem:
@@ -402,12 +402,12 @@ class TestDismissItem:
             hash="d" * 64,
             source_url="https://makerworld.com/en/models/1234-widget",
         )
-        artifact = File(
-            model_id=model.id,
+        artifact = build_file(
+            db_session,
+            model,
             path="imported/widget.stl",
-            original_filename="widget.stl",
+            filename="widget.stl",
             file_type=FileType.STL,
-            version=1,
             size_bytes=4,
             sha256="e" * 64,
         )

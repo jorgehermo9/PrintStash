@@ -43,7 +43,10 @@ from app.schemas.ingest import IngestJobStatus
 from app.services import runtime_config
 from app.services.auth import create_access_token
 from app.services.jobs import JobRegistry, safe_error, safe_item
-from tests.factories import build_user
+from tests.factories import (
+    build_user,
+    user_config,
+)
 
 
 class TestJobUpdate:
@@ -209,9 +212,9 @@ class TestListForUser:
         assert {job.job_id for job in listed} == {"active", "done-0", "done-1"}
 
     def test_owns_helper_permissions(self) -> None:
-        owner = User(id=1, username="owner", hashed_password="x", is_superuser=False)
-        other = User(id=2, username="other", hashed_password="x", is_superuser=False)
-        admin = User(id=3, username="admin", hashed_password="x", is_superuser=True)
+        owner = user_config("owner", id=1)
+        other = user_config("other", id=2)
+        admin = user_config("admin", id=3, superuser=True)
         assert ingest_module._owns(None, other) is True
         assert ingest_module._owns(1, owner) is True
         assert ingest_module._owns(1, other) is False

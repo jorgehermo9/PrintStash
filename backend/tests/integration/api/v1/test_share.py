@@ -26,7 +26,6 @@ from sqlmodel import Session
 
 from app.core.time import utcnow
 from app.db.models import (
-    CollectionPermission,
     CollectionRole,
     File,
     FileRevisionStatus,
@@ -35,15 +34,18 @@ from app.db.models import (
     User,
 )
 from app.services.storage_backend import get_backend
-from tests.factories import build_collection, build_file
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    grant_collection_role,
+)
 
 
 def _make_model(
     db_session: Session, *, name="M", slug="m", hash_="h" * 64, **fields: Any
 ) -> Model:
-    model = Model(name=name, slug=slug, hash=hash_, **fields)
-    db_session.add(model)
-    db_session.commit()
+    model = build_model(db_session, name=name, slug=slug, hash=hash_, **fields)
     db_session.refresh(model)
     return model
 
@@ -465,14 +467,7 @@ class TestCreateShare:
             db_session, slug="team-model", hash_="b3" * 32, collection_id=collection.id
         )
         viewer: User = make_user("viewer-only")
-        db_session.add(
-            CollectionPermission(
-                user_id=viewer.id,
-                collection_id=collection.id,
-                role=CollectionRole.VIEW,
-            )
-        )
-        db_session.commit()
+        grant_collection_role(db_session, viewer, collection, CollectionRole.VIEW)
 
         response = client.post(
             f"/api/v1/models/{model.id}/shares",
@@ -573,14 +568,7 @@ class TestRevokeShare:
         )
         created = _create_share(client, auth_headers, model.id)
         viewer: User = make_user("revoke-viewer")
-        db_session.add(
-            CollectionPermission(
-                user_id=viewer.id,
-                collection_id=collection.id,
-                role=CollectionRole.VIEW,
-            )
-        )
-        db_session.commit()
+        grant_collection_role(db_session, viewer, collection, CollectionRole.VIEW)
 
         response = client.delete(
             f"/api/v1/shares/{created['id']}", headers=headers_for(viewer)

@@ -26,10 +26,12 @@ from app.db.models import (
     Model,
     Printer,
     PrinterFile,
-    PrintJob,
     PrintJobState,
 )
-from tests.factories import build_printer
+from tests.factories import (
+    build_print_job,
+    build_printer,
+)
 
 
 @pytest.fixture
@@ -112,16 +114,13 @@ class TestListModelPrintJobs:
         printer: Printer,
     ) -> None:
         row = make_file(model)
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=row.id,
-                model_id=model.id,
-                remote_filename="file-1.gcode",
-                state=PrintJobState.COMPLETED,
-            )
+        build_print_job(
+            db_session,
+            row,
+            printer=printer,
+            remote_filename="file-1.gcode",
+            state=PrintJobState.COMPLETED,
         )
-        db_session.commit()
 
         response = client.get(
             f"/api/v1/models/{model.id}/print-jobs", headers=auth_headers
@@ -142,16 +141,13 @@ class TestListModelPrintJobs:
         row = make_file(model)
         row.revision_label = "PETG baseline"
         db_session.add(row)
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=row.id,
-                model_id=model.id,
-                remote_filename="file-1.gcode",
-                state=PrintJobState.COMPLETED,
-            )
+        build_print_job(
+            db_session,
+            row,
+            printer=printer,
+            remote_filename="file-1.gcode",
+            state=PrintJobState.COMPLETED,
         )
-        db_session.commit()
 
         listed = client.get(
             f"/api/v1/models/{model.id}/print-jobs", headers=auth_headers
@@ -174,16 +170,13 @@ class TestListModelPrintJobs:
         db_session.add(
             Metadata(file_id=row.id, slicer_name="OrcaSlicer", material_type="PETG")
         )
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=row.id,
-                model_id=model.id,
-                remote_filename="file-1.gcode",
-                state=PrintJobState.COMPLETED,
-            )
+        build_print_job(
+            db_session,
+            row,
+            printer=printer,
+            remote_filename="file-1.gcode",
+            state=PrintJobState.COMPLETED,
         )
-        db_session.commit()
 
         listed = client.get(
             f"/api/v1/models/{model.id}/print-jobs", headers=auth_headers
@@ -421,29 +414,22 @@ class TestArtifactOutcomes:
         make_file,
     ) -> None:
         gcode = make_file(model)
-        db_session.add_all(
-            [
-                PrintJob(
-                    model_id=model.id,
-                    file_id=gcode.id,
-                    remote_filename=gcode.original_filename,
-                    state=PrintJobState.COMPLETED,
-                    source="manual",
-                    actual_duration_s=100,
-                    filament_g_effective=12.5,
-                    cost=1.25,
-                ),
-                PrintJob(
-                    model_id=model.id,
-                    file_id=gcode.id,
-                    remote_filename=gcode.original_filename,
-                    state=PrintJobState.FAILED,
-                    source="manual",
-                    actual_duration_s=50,
-                ),
-            ]
+        build_print_job(
+            db_session,
+            gcode,
+            state=PrintJobState.COMPLETED,
+            source="manual",
+            actual_duration_s=100,
+            filament_g_effective=12.5,
+            cost=1.25,
         )
-        db_session.commit()
+        build_print_job(
+            db_session,
+            gcode,
+            state=PrintJobState.FAILED,
+            source="manual",
+            actual_duration_s=50,
+        )
 
         response = client.get(
             f"/api/v1/models/{model.id}/artifact-outcomes?file_id={gcode.id}",

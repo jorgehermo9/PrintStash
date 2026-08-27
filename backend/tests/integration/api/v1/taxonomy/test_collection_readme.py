@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.core.config import _overlay
-from app.db.models import CollectionPermission, CollectionRole, User
+from app.db.models import CollectionRole, User
 from app.services import taxonomy
-from tests.factories import bearer, build_user
+from tests.factories import bearer, build_user, grant_collection_role
 
 # 1x1 transparent PNG.
 _PNG = bytes.fromhex(
@@ -20,8 +20,7 @@ _PNG = bytes.fromhex(
 
 
 def _grant(session: Session, user: User, cid: int, role: CollectionRole) -> None:
-    session.add(CollectionPermission(user_id=user.id, collection_id=cid, role=role))
-    session.commit()
+    grant_collection_role(session, user, cid, role)
 
 
 def test_readme_roundtrip_and_image_lifecycle(

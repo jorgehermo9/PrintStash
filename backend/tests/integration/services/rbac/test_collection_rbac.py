@@ -31,14 +31,20 @@ from sqlmodel import Session, select
 from app.db.models import (
     CollectionPermission,
     CollectionRole,
-    File,
     FileType,
     Model,
     PrinterFile,
     User,
 )
 from app.services import rbac, taxonomy
-from tests.factories import bearer, build_file, build_model, build_printer, build_user
+from tests.factories import (
+    bearer,
+    build_file,
+    build_model,
+    build_printer,
+    build_user,
+    grant_collection_role,
+)
 
 
 def _grant(
@@ -47,14 +53,7 @@ def _grant(
     collection_id: int,
     role: CollectionRole,
 ) -> None:
-    session.add(
-        CollectionPermission(
-            user_id=user.id,
-            collection_id=collection_id,
-            role=role,
-        )
-    )
-    session.commit()
+    grant_collection_role(session, user, collection_id, role)
 
 
 def _model(session: Session, name: str, collection_id: int | None) -> Model:
@@ -212,12 +211,12 @@ class TestRequireCollectionRole:
         assert collection is not None
         _grant(db_session, user, collection.id, CollectionRole.VIEW)
         model = _model(db_session, "Visible Printed Model", collection.id)
-        file_row = File(
-            model_id=model.id,
+        file_row = build_file(
+            db_session,
+            model,
             path="/tmp/visible.gcode",
-            original_filename="visible.gcode",
+            filename="visible.gcode",
             file_type=FileType.GCODE,
-            version=1,
             size_bytes=1,
             sha256="p" * 64,
         )

@@ -30,7 +30,13 @@ from app.services.printer_provider import (
     build_provider_registry,
     get_provider_client,
 )
-from tests.factories import build_file, build_model, build_print_job, build_printer
+from tests.factories import (
+    build_file,
+    build_model,
+    build_print_job,
+    build_printer,
+    printer_config,
+)
 from tests.fakes.mock_prusalink import create_app
 from tests.fakes.server import start_server
 
@@ -183,8 +189,8 @@ def test_invalid_credentials_raise_authentication_error(
     )
     running = start_server(app)
     try:
-        printer = Printer(
-            name="Bad creds",
+        printer = printer_config(
+            "Bad creds",
             provider=PrinterProvider.PRUSALINK,
             prusalink_url=running.base_url,
             prusalink_auth_mode=auth_mode,

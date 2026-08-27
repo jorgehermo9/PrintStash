@@ -20,7 +20,12 @@ from sqlmodel import Session
 
 from app.db.models import FilamentProfile, File, FileType, Metadata, PrintJob
 from app.services import print_results, spoolman
-from tests.factories import build_file, build_model, build_print_job
+from tests.factories import (
+    build_file,
+    build_model,
+    build_print_job,
+    print_job_config,
+)
 
 
 def _seed_file(db_session: Session, *, sha: str) -> File:
@@ -55,12 +60,8 @@ class TestResolveCompletionCost:
         )
         db_session.commit()
 
-        job = PrintJob(
-            file_id=f.id,
-            model_id=f.model_id,
-            remote_filename="x",
-            filament_used_g=50.0,
-            actual_duration_s=600,
+        job = print_job_config(
+            f, remote_filename="x", filament_used_g=50.0, actual_duration_s=600
         )
         grams, cost = print_results.resolve_completion_cost(db_session, job)
         assert (grams, cost) == (50.0, 1.0)
@@ -86,7 +87,7 @@ class TestResolveCompletionCost:
         )
         db_session.commit()
 
-        job = PrintJob(file_id=f.id, model_id=f.model_id, remote_filename="x")
+        job = print_job_config(f, remote_filename="x")
         grams, cost = print_results.resolve_completion_cost(db_session, job)
         assert (grams, cost) == (30.0, 0.6)
 
@@ -102,7 +103,7 @@ class TestResolveCompletionCost:
         )
         db_session.commit()
 
-        job = PrintJob(file_id=f.id, model_id=f.model_id, remote_filename="x")
+        job = print_job_config(f, remote_filename="x")
         _, cost = print_results.resolve_completion_cost(db_session, job)
         assert cost == 3.5
 
@@ -131,12 +132,8 @@ class TestResolveCompletionCost:
         )
         db_session.commit()
 
-        job = PrintJob(
-            file_id=f.id,
-            model_id=f.model_id,
-            remote_filename="x",
-            filament_used_g=100.0,
-            spool_filament_id=7,
+        job = print_job_config(
+            f, remote_filename="x", filament_used_g=100.0, spool_filament_id=7
         )
         grams, cost = print_results.resolve_completion_cost(db_session, job)
         # 100g @ 50/kg via the exact spool profile, not the fuzzy 20/kg match.
@@ -223,11 +220,8 @@ class TestMarkKnownGoodIfEligible:
 class TestRecordSpoolUsage:
     def _job(self, db_session: Session, **overrides) -> PrintJob:
         row = _seed_file(db_session, sha=overrides.pop("sha", "e"))
-        job = PrintJob(
-            model_id=row.model_id,
-            file_id=row.id,
-            remote_filename=row.original_filename,
-            **{"spool_id": 5, "filament_used_g": 12.0, **overrides},
+        job = print_job_config(
+            row, **{"spool_id": 5, "filament_used_g": 12.0, **overrides}
         )
         db_session.add(job)
         db_session.commit()

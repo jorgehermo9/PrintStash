@@ -40,7 +40,7 @@ FACTORY_OWNED_MODELS = {
     "User": "build_user",
     "Model": "build_model",
     "File": "build_file",
-    "Printer": "build_printer",
+    "Printer": "build_printer (or printer_config for an unsaved row)",
     "Collection": "build_collection",
     "PrintJob": "build_print_job",
     "CollectionPermission": "grant_collection_role",
@@ -62,15 +62,15 @@ BUILDER_NAME = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# The ratchet.
+# The remaining ratchet.
 #
-# These files still build rows inline; the migration to `tests/factories/` is
-# in progress. **This list may only ever shrink.** A new file cannot be added to
-# it — `test_the_pending_list_has_no_stale_entries` fails if a listed file has
-# already been cleaned up, so the count here is the real remaining debt rather
-# than a number somebody forgot to update.
+# `PENDING_INLINE_CONSTRUCTION` is gone: every test file now builds its rows
+# through `tests/factories/`, so that rule is absolute rather than aspirational.
+# This one is the last of the pair — a handful of local builder *names* still
+# shadow a factory, and each one removed narrows the gap. **The list may only
+# ever shrink.**
 #
-# Migrating one is usually mechanical: delete its local builder, call the
+# Migrating one is usually mechanical: delete the local builder, call the
 # factory, and make any state the local default was hiding explicit at the call
 # site. See .agents/skills/create-tests/references/fixtures.md
 # ---------------------------------------------------------------------------
@@ -83,82 +83,6 @@ PENDING_DUPLICATE_BUILDERS = {
     "_model",
     "_printer",
     "_source",
-}
-
-PENDING_INLINE_CONSTRUCTION = {
-    "tests/contract/services/test_elegoo_centauri.py",
-    "tests/contract/services/test_octoprint.py",
-    "tests/contract/services/test_prusalink.py",
-    "tests/e2e/test_fleet.py",
-    "tests/e2e/test_library_transfer.py",
-    "tests/e2e/test_printer_rbac.py",
-    "tests/integration/api/v1/inbox/test_lifecycle.py",
-    "tests/integration/api/v1/ingest/test_import_progress.py",
-    "tests/integration/api/v1/ingest/test_ingest_api.py",
-    "tests/integration/api/v1/models/test_listing.py",
-    "tests/integration/api/v1/models/test_print_jobs.py",
-    "tests/integration/api/v1/models/test_print_stats.py",
-    "tests/integration/api/v1/models/test_provenance.py",
-    "tests/integration/api/v1/models/test_star.py",
-    "tests/integration/api/v1/printers/test_config.py",
-    "tests/integration/api/v1/printers/test_control.py",
-    "tests/integration/api/v1/printers/test_files.py",
-    "tests/integration/api/v1/printers/test_rbac.py",
-    "tests/integration/api/v1/printers/test_status.py",
-    "tests/integration/api/v1/printers/test_websocket.py",
-    "tests/integration/api/v1/taxonomy/test_collection_readme.py",
-    "tests/integration/api/v1/taxonomy/test_taxonomy_api.py",
-    "tests/integration/api/v1/test_config.py",
-    "tests/integration/api/v1/test_documents.py",
-    "tests/integration/api/v1/test_fleet.py",
-    "tests/integration/api/v1/test_health.py",
-    "tests/integration/api/v1/test_setup.py",
-    "tests/integration/api/v1/test_share.py",
-    "tests/integration/core/metrics/test_r2_ops.py",
-    "tests/integration/core/test_secrets.py",
-    "tests/integration/core/test_security.py",
-    "tests/integration/db/migrations/test_migrations.py",
-    "tests/integration/main/test_main_lifespan.py",
-    "tests/integration/postgres/test_contracts.py",
-    "tests/integration/services/fleet/test_material_aware_fleet.py",
-    "tests/integration/services/ingestion/test_ingestion_atomicity.py",
-    "tests/integration/services/model_views/test_export_payload.py",
-    "tests/integration/services/model_views/test_listing.py",
-    "tests/integration/services/model_views/test_model_views_n_plus_one.py",
-    "tests/integration/services/model_views/test_service_helpers.py",
-    "tests/integration/services/model_views/test_structured_filters.py",
-    "tests/integration/services/provider_connections/test_cults.py",
-    "tests/integration/services/provider_connections/test_mmf_tokens.py",
-    "tests/integration/services/provider_connections/test_oauth.py",
-    "tests/integration/services/provider_connections/test_pairing.py",
-    "tests/integration/services/rbac/test_collection_rbac.py",
-    "tests/integration/services/rbac/test_rbac_sql.py",
-    "tests/integration/services/runtime_config/test_runtime_config.py",
-    "tests/integration/services/test_audit.py",
-    "tests/integration/services/test_auth.py",
-    "tests/integration/services/test_backup.py",
-    "tests/integration/services/test_import_resolvers.py",
-    "tests/integration/services/test_job_import.py",
-    "tests/integration/services/test_jobs.py",
-    "tests/integration/services/test_library_transfer.py",
-    "tests/integration/services/test_oidc.py",
-    "tests/integration/services/test_print_results.py",
-    "tests/integration/services/test_printer_hub.py",
-    "tests/integration/services/test_printer_jobs.py",
-    "tests/integration/services/test_provenance.py",
-    "tests/integration/services/test_share.py",
-    "tests/integration/services/test_source_covers.py",
-    "tests/integration/services/test_spoolman.py",
-    "tests/integration/services/test_vault_audit.py",
-    "tests/integration/services/trash/test_external_trash_corner_cases.py",
-    "tests/integration/services/trash/test_gc.py",
-    "tests/integration/services/trash/test_hard_delete.py",
-    "tests/integration/services/trash/test_purge_claims.py",
-    "tests/integration/services/trash/test_trash_remote_backend.py",
-    "tests/unit/services/bambu_adapter/test_bambu_adapter.py",
-    "tests/unit/services/bambu_adapter/test_printer_provider.py",
-    "tests/unit/services/printer_provider/test_build_requirements.py",
-    "tests/unit/services/printer_provider/test_provider_conformance.py",
 }
 
 
@@ -218,13 +142,21 @@ def test_no_test_module_imports_another_test_module(module: Path) -> None:
 
 @pytest.mark.parametrize("module", _test_modules(), ids=_relative)
 def test_rows_are_built_through_the_factories(module: Path) -> None:
+    """No test file builds a factory-owned row by hand. Every file, no exemptions.
+
+    This used to carry a per-file exemption list while the migration ran; it does
+    not any more, and that is the point of keeping the docstring here. The reason
+    the rule is absolute is that an inline row fails *silently*: `deleted_at=`
+    instead of `trashed=` produces a row every read path filters out, and a
+    printer missing three of its provider's four credential fields inserts
+    happily and then fails somewhere unrelated. Neither looks like a setup bug.
+
+    If a file genuinely cannot use a builder, the answer is a factory that covers
+    its case — `printer_config` and the `detached_*` helpers exist because of
+    exactly that — or an entry in `CONSTRUCTION_ALLOWED` with a reason.
+    """
     if _is_allowed(module):
         pytest.skip("this file legitimately constructs rows directly")
-    if _relative(module) in PENDING_INLINE_CONSTRUCTION:
-        pytest.xfail(
-            "not migrated to the factories yet; see PENDING_INLINE_CONSTRUCTION"
-        )
-
     tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
     offenders: set[str] = set()
     for node in ast.walk(tree):
@@ -305,7 +237,7 @@ def test_the_duplicate_builder_list_has_no_stale_entries() -> None:
 # single invariant that happens to need the word. Both are worth reducing, and
 # neither is worth a mechanical split — that produces duplicated setup and
 # assertions in the wrong test. So the count is capped and may only fall.
-MAX_CONJUNCTION_NAMES = 305
+MAX_CONJUNCTION_NAMES = 295
 
 
 def test_no_new_test_names_join_two_behaviours() -> None:
@@ -337,19 +269,3 @@ def test_no_new_test_names_join_two_behaviours() -> None:
             f"{len(offenders)} names now, cap is {MAX_CONJUNCTION_NAMES}. Lower "
             "MAX_CONJUNCTION_NAMES to match so the cap keeps meaning something."
         )
-
-
-def test_the_pending_list_has_no_stale_entries() -> None:
-    """A migrated file must be removed from the ratchet in the same commit.
-
-    Without this the list would only ever be appended to, and its length would
-    stop meaning anything. It is also the nudge that makes the next migration
-    cheap: the failure names the exact line to delete.
-    """
-    known = {_relative(module) for module in _test_modules()}
-    missing = sorted(PENDING_INLINE_CONSTRUCTION - known)
-
-    assert not missing, (
-        f"these files no longer exist: {missing}. Remove them from "
-        "PENDING_INLINE_CONSTRUCTION."
-    )

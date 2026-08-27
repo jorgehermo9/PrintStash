@@ -26,7 +26,6 @@ from app.db.models import (
     OwnedStorageObject,
     StagingLease,
     StorageDeleteIntent,
-    User,
 )
 from app.db.session import SQLiteSessionFactory, _set_sqlite_pragmas
 from app.services import inbox, source_covers, staging_leases, trash
@@ -38,7 +37,7 @@ from app.services.storage_backend import (
     get_backend,
 )
 from app.services.storage_ownership import record_creation
-from tests.factories import build_model
+from tests.factories import build_model, build_user
 
 
 def _png(color: str = "navy") -> bytes:
@@ -463,9 +462,7 @@ class TestPut:
         factory = SQLiteSessionFactory(engine)
         data = _png()
         with Session(engine) as setup:
-            owner = User(username="finish-owner", hashed_password="hash")
-            setup.add(owner)
-            setup.flush()
+            owner = build_user(setup, "finish-owner")
             model = build_model(
                 setup,
                 name="finish-model",

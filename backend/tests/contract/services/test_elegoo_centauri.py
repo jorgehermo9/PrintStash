@@ -7,7 +7,7 @@ import asyncio
 import pycentauri.client as pycentauri_client
 import pytest
 
-from app.db.models import Printer, PrinterProvider
+from app.db.models import PrinterProvider
 from app.services.elegoo_centauri import ElegooCentauriClient
 from app.services.printer_provider import (
     ElegooCentauriProvider,
@@ -15,6 +15,7 @@ from app.services.printer_provider import (
     build_provider_registry,
     get_provider_client,
 )
+from tests.factories import printer_config
 from tests.fakes.mock_centauri import make_connector, start_cc1_server
 from tests.fakes.print_sim import PrintSim
 
@@ -88,8 +89,8 @@ def test_carbon2_missing_access_code_rejected_at_build() -> None:
     # This guard lives in ElegooCentauriProvider.build() (Printer-row level),
     # not the client — a Carbon 2 printer row saved without an access code
     # must never reach the network.
-    printer = Printer(
-        name="Carbon 2",
+    printer = printer_config(
+        "Carbon 2",
         provider=PrinterProvider.ELEGOO_CENTAURI,
         provider_variant="elegoo_centauri_carbon_2",
         elegoo_centauri_host="192.0.2.10",

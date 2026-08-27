@@ -13,7 +13,6 @@ from sqlmodel import select
 from app.db.models import (
     MaterialSlotState,
     MaterialSource,
-    Printer,
     PrinterMaterialSlot,
     PrinterProvider,
     PrinterStatus,
@@ -919,16 +918,14 @@ class TestPrinterHubSyncActiveJob:
         factory = get_session_factory()
         hub = PrinterHub(InProcessBus(), session_factory=factory)
         with get_session_factory().session() as session:
-            session.add(
-                Printer(
-                    name="Concurrent Bambu",
-                    provider=PrinterProvider.BAMBU_LAN,
-                    bambu_host="192.0.2.10",
-                    bambu_serial="TEST-SERIAL",
-                    bambu_access_code="test-code",
-                )
+            build_printer(
+                session,
+                "Concurrent Bambu",
+                provider=PrinterProvider.BAMBU_LAN,
+                bambu_host="192.0.2.10",
+                bambu_serial="TEST-SERIAL",
+                bambu_access_code="test-code",
             )
-            session.commit()
 
         reports = [
             {

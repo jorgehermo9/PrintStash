@@ -28,6 +28,7 @@ from sqlmodel import Session, select
 from app.core.time import ensure_utc, utcnow
 from app.db.models import BrowserDevice, BrowserPairingCode, User
 from app.services import provider_connections as service
+from tests.factories import build_user
 
 DEVICE_CAP = 10
 MAX_ATTEMPTS = 5
@@ -35,9 +36,7 @@ MAX_ATTEMPTS = 5
 
 @pytest.fixture
 def user(db_session: Session) -> User:
-    row = User(username="pairing-service", hashed_password="x")
-    db_session.add(row)
-    db_session.commit()
+    row = build_user(db_session, "pairing-service")
     db_session.refresh(row)
     assert row.id is not None
     return row
@@ -250,9 +249,7 @@ class TestClaimPairingCode:
     def test_consumes_a_code_once_when_two_claims_race(self, file_engine) -> None:
         engine = file_engine("pairing-race")
         with Session(engine) as seed:
-            owner = User(username="pair-race", hashed_password="x")
-            seed.add(owner)
-            seed.flush()
+            owner = build_user(seed, "pair-race")
             assert owner.id is not None
             raw, _ = service.create_pairing_code(seed, owner.id)
             seed.commit()
@@ -268,9 +265,7 @@ class TestClaimPairingCode:
     ) -> None:
         engine = file_engine("pairing-cap-race")
         with Session(engine) as seed:
-            owner = User(username="pair-cap-race", hashed_password="x")
-            seed.add(owner)
-            seed.flush()
+            owner = build_user(seed, "pair-cap-race")
             assert owner.id is not None
             user_id = owner.id
             _fill_devices(seed, user_id, DEVICE_CAP - 1)
@@ -295,9 +290,7 @@ class TestClaimPairingCode:
     ) -> None:
         engine = file_engine("pairing-same-name-race")
         with Session(engine) as seed:
-            owner = User(username="pair-same-name-race", hashed_password="x")
-            seed.add(owner)
-            seed.flush()
+            owner = build_user(seed, "pair-same-name-race")
             assert owner.id is not None
             user_id = owner.id
             first, _ = service.create_pairing_code(seed, user_id)

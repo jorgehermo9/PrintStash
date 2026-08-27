@@ -21,20 +21,20 @@ from datetime import datetime, timezone
 import pytest
 from sqlmodel import Session
 
-from app.db.models import FileType, Metadata, Model, PrintJob, PrintJobState, User
+from app.db.models import FileType, Metadata, Model, PrintJobState, User
 from app.schemas.models import ModelFilters, ModelSort
 from app.services import model_views as mv
-from tests.factories import build_file, build_model
+from tests.factories import (
+    build_file,
+    build_model,
+    build_print_job,
+    build_user,
+)
 
 
 @pytest.fixture
 def superuser(db_session: Session) -> User:
-    user = User(
-        username="lister",
-        hashed_password="x",
-        is_active=True,
-        is_superuser=True,
-    )
+    user = build_user(db_session, "lister", superuser=True)
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -155,18 +155,14 @@ def test_cursor_pages_apply_every_metric_sort_globally(
             )
         )
         for state, duration, cost, finished_at in jobs:
-            db_session.add(
-                PrintJob(
-                    model_id=model.id,
-                    file_id=artifact.id,
-                    remote_filename=artifact.original_filename,
-                    state=state,
-                    actual_duration_s=duration,
-                    cost=cost,
-                    finished_at=finished_at,
-                )
+            build_print_job(
+                db_session,
+                artifact,
+                state=state,
+                actual_duration_s=duration,
+                cost=cost,
+                finished_at=finished_at,
             )
-        db_session.commit()
         ids_by_name[name] = model.id
 
     expected = {
@@ -312,29 +308,24 @@ class TestListItems:
             sha256="f" * 64,
         )
         finished = datetime(2026, 2, 1, tzinfo=timezone.utc)
-        db_session.add_all(
-            [
-                PrintJob(
-                    model_id=model.id,
-                    file_id=artifact.id,
-                    remote_filename="outcome.gcode",
-                    state=PrintJobState.COMPLETED,
-                    actual_duration_s=120,
-                    cost=1.25,
-                    finished_at=finished,
-                ),
-                PrintJob(
-                    model_id=model.id,
-                    file_id=artifact.id,
-                    remote_filename="outcome.gcode",
-                    state=PrintJobState.FAILED,
-                    actual_duration_s=60,
-                    cost=0.25,
-                    finished_at=finished,
-                ),
-            ]
+        build_print_job(
+            db_session,
+            artifact,
+            remote_filename="outcome.gcode",
+            state=PrintJobState.COMPLETED,
+            actual_duration_s=120,
+            cost=1.25,
+            finished_at=finished,
         )
-        db_session.commit()
+        build_print_job(
+            db_session,
+            artifact,
+            remote_filename="outcome.gcode",
+            state=PrintJobState.FAILED,
+            actual_duration_s=60,
+            cost=0.25,
+            finished_at=finished,
+        )
 
         item = next(
             row

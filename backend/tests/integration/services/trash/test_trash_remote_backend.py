@@ -22,7 +22,7 @@ from app.db.models import File, FileType, Model
 from app.services import trash
 from app.services.storage_backend import LocalStorageBackend
 from app.services.storage_ownership import UnsafeStorageDeleteError
-from tests.factories import build_model
+from tests.factories import build_file, build_model
 
 
 class _RecordingRemoteBackend(LocalStorageBackend):
@@ -61,20 +61,16 @@ def _add_model(session: Session, slug: str) -> Model:
 
 
 def _add_file(session: Session, model: Model, path: str, **kw) -> File:
-    f = File(
-        model_id=model.id,
+    return build_file(
+        session,
+        model,
         path=path,
-        original_filename=Path(path).name,
+        filename=Path(path).name,
         file_type=FileType.GCODE,
-        version=kw.pop("version", 1),
         size_bytes=1,
         sha256=kw.pop("sha256", path.ljust(64, "0")[:64]),
         **kw,
     )
-    session.add(f)
-    session.commit()
-    session.refresh(f)
-    return f
 
 
 def test_hard_delete_on_remote_backend_respects_blob_ownership(
@@ -88,7 +84,7 @@ def test_hard_delete_on_remote_backend_respects_blob_ownership(
     nas_path = "/mnt/nas/3d/part.gcode"
     vault_file = _add_file(db_session, model, vault_key, sha256="a" * 64)
     ext_file = _add_file(
-        db_session, model, nas_path, version=2, sha256="b" * 64, is_external=True
+        db_session, model, nas_path, version=2, sha256="b" * 64, external=True
     )
 
     with pytest.raises(UnsafeStorageDeleteError):

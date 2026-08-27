@@ -20,12 +20,12 @@ from fastapi import HTTPException
 from sqlmodel import Session
 
 from app.core.security import get_current_user, require_auth
-from app.db.models import User
+from tests.factories import user_config
 
 
 class TestRequireAuth:
     def test_require_auth_rejects_authenticated_user_without_write_scope(self) -> None:
-        user = User(username="reader", hashed_password="unused", is_active=True)
+        user = user_config("reader")
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(require_auth(user, {"scope": "read"}))

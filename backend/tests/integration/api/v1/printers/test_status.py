@@ -16,15 +16,9 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.db.models import (
-    Collection,
-    CollectionPermission,
     CollectionRole,
-    File,
     FileType,
-    Model,
-    Printer,
     PrinterStatus,
-    PrintJob,
     PrintJobState,
     User,
 )
@@ -35,6 +29,8 @@ from tests.factories import (
     build_model,
     build_print_job,
     build_printer,
+    grant_collection_role,
+    printer_config,
 )
 from tests.integration.api.v1.printers._helpers import user_headers
 
@@ -112,7 +108,9 @@ class TestPrinterJobs:
         viewer = db_session.exec(
             select(User).where(User.username == "job-viewer")
         ).one()
-        allowed = Collection(name="Allowed", slug="allowed", path="allowed")
+        allowed = build_collection(
+            db_session, name="Allowed", slug="allowed", path="allowed"
+        )
         denied = build_collection(
             db_session, name="Denied", slug="denied", path="denied"
         )
@@ -120,20 +118,16 @@ class TestPrinterJobs:
         db_session.commit()
         db_session.refresh(allowed)
         db_session.refresh(denied)
-        db_session.add(
-            CollectionPermission(
-                user_id=viewer.id,
-                collection_id=allowed.id,
-                role=CollectionRole.VIEW,
-            )
-        )
-        allowed_model = Model(
+        grant_collection_role(db_session, viewer, allowed, CollectionRole.VIEW)
+        allowed_model = build_model(
+            db_session,
             name="Allowed job model",
             slug="allowed-job-model",
             hash="7" * 64,
             collection_id=allowed.id,
         )
-        denied_model = Model(
+        denied_model = build_model(
+            db_session,
             name="Denied job model",
             slug="denied-job-model",
             hash="8" * 64,
@@ -146,12 +140,12 @@ class TestPrinterJobs:
         db_session.commit()
         db_session.refresh(allowed_model)
         db_session.refresh(denied_model)
-        allowed_file = File(
-            model_id=allowed_model.id,
+        allowed_file = build_file(
+            db_session,
+            allowed_model,
             path="/data/allowed-job.gcode",
-            original_filename="allowed-job.gcode",
+            filename="allowed-job.gcode",
             file_type=FileType.GCODE,
-            version=1,
             size_bytes=100,
             sha256="9" * 64,
         )
@@ -170,25 +164,20 @@ class TestPrinterJobs:
         db_session.refresh(allowed_file)
         db_session.refresh(denied_file)
         db_session.refresh(printer)
-        db_session.add_all(
-            [
-                PrintJob(
-                    printer_id=printer.id,
-                    file_id=allowed_file.id,
-                    model_id=allowed_model.id,
-                    remote_filename="allowed.gcode",
-                    state=PrintJobState.COMPLETED,
-                ),
-                PrintJob(
-                    printer_id=printer.id,
-                    file_id=denied_file.id,
-                    model_id=denied_model.id,
-                    remote_filename="denied.gcode",
-                    state=PrintJobState.COMPLETED,
-                ),
-            ]
+        build_print_job(
+            db_session,
+            allowed_file,
+            printer=printer,
+            remote_filename="allowed.gcode",
+            state=PrintJobState.COMPLETED,
         )
-        db_session.commit()
+        build_print_job(
+            db_session,
+            denied_file,
+            printer=printer,
+            remote_filename="denied.gcode",
+            state=PrintJobState.COMPLETED,
+        )
 
         resp = client.get(f"/api/v1/printers/{printer.id}/jobs", headers=headers)
 
@@ -256,7 +245,7 @@ class TestPrinterDiagnostics:
     ):
         from app.core.time import utcnow
 
-        p = Printer(name="Gone", moonraker_url="http://gone.local")
+        p = printer_config("Gone", moonraker_url="http://gone.local")
         p.deleted_at = utcnow()
         db_session.add(p)
         db_session.commit()

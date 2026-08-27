@@ -27,6 +27,7 @@ from app.services.printer_provider import (
     get_provider_client,
     provider_diagnostic_summary,
 )
+from tests.factories import printer_config
 
 # Credentials that make each provider buildable. A new provider must add its
 # row here — an entry missing from this map fails test_every_provider_is_covered.
@@ -75,7 +76,7 @@ REGISTRY = build_provider_registry()
 
 def _printer(provider: PrinterProvider, **overrides) -> Printer:
     fields = {**FULL_CREDENTIALS.get(provider, {}), **overrides}
-    return Printer(name="test", provider=provider, **fields)
+    return printer_config("test", provider=provider, **fields)
 
 
 def _build(provider: PrinterProvider):
@@ -96,7 +97,8 @@ class TestProviderConformance:
     def test_missing_credentials_are_rejected(self, provider):
         with pytest.raises(ProviderError) as exc:
             get_provider_client(
-                Printer(name="empty", provider=provider), registry=REGISTRY
+                printer_config("empty", provider=provider, credentials=False),
+                registry=REGISTRY,
             )
         assert exc.value.code == "provider_credentials_missing"
 

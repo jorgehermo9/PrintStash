@@ -37,11 +37,17 @@ from app.services.storage_utils import (
     all_owned_blob_keys,
     ownership_snapshot,
 )
-from tests.factories import build_collection, build_model
+from tests.factories import (
+    build_collection,
+    build_model,
+    build_user,
+    detached_collection,
+    detached_file,
+)
 
 
 def _make_user(session: Session, username: str, *, admin: bool = True) -> User:
-    user = User(username=username, hashed_password="x", is_superuser=admin)
+    user = build_user(session, username, superuser=admin)
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -75,7 +81,7 @@ def _make_file(session: Session, model: Model, **overrides) -> File:
         sha256="a" * 64,
     )
     defaults.update(overrides)
-    row = File(**defaults)
+    row = detached_file(**defaults)
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -1472,11 +1478,10 @@ class TestOwnershipSnapshot:
     ) -> None:
         model = _make_model(db_session, "no-id-file")
         _make_file(db_session, model, path="persisted.stl")
-        unpersisted = File(
+        unpersisted = detached_file(
             model_id=model.id,
             path="ghost.stl",
             original_filename="ghost.stl",
-            file_type=FileType.STL,
         )
         assert unpersisted.id is None
         _patch_exec_injecting_unpersisted_row(
@@ -1563,7 +1568,7 @@ class TestOwnershipSnapshot:
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         build_collection(db_session, name="real-col", slug="real-col", path="real-col")
-        unpersisted = Collection(
+        unpersisted = detached_collection(
             name="ghost-col",
             slug="ghost-col",
             path="ghost-col",

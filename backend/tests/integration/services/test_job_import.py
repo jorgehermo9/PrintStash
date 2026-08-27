@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 
 from app.db.models import File, FileType, Printer, PrintJob, PrintJobState
 from app.services import job_import
-from tests.factories import build_file, build_model, build_printer
+from tests.factories import build_file, build_model, build_print_job, build_printer
 
 _seed_counter = 0
 
@@ -62,16 +62,13 @@ def _run_import(
 def test_import_dedups_case_insensitively(db_session: Session):
     f = _seed_model_and_file(db_session, filename="Benchy.gcode")
     p = _seed_printer(db_session)
-    db_session.add(
-        PrintJob(
-            printer_id=p.id,
-            file_id=f.id,
-            model_id=f.model_id,
-            remote_filename="Benchy.gcode",
-            state=PrintJobState.COMPLETED,
-        )
+    build_print_job(
+        db_session,
+        f,
+        printer=p,
+        remote_filename="Benchy.gcode",
+        state=PrintJobState.COMPLETED,
     )
-    db_session.commit()
 
     results = _run_import(
         db_session,

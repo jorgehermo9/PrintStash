@@ -20,6 +20,7 @@ from sqlmodel import Session
 
 from app.core.time import utcnow
 from app.db.models import Model
+from tests.factories import build_model
 
 OUTLINER_FIELDS = {"id", "name", "collection", "collection_id"}
 PRINTER_FILTERS = [
@@ -34,16 +35,13 @@ def make_model(db_session: Session):
 
     def build(name: str, **overrides) -> Model:
         made["n"] += 1
-        row = Model(
+        return build_model(
+            db_session,
             name=name,
             slug=f"listing-{made['n']}",
             hash=f"{made['n']:064d}",
             **overrides,
         )
-        db_session.add(row)
-        db_session.commit()
-        db_session.refresh(row)
-        return row
 
     return build
 

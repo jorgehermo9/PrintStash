@@ -22,10 +22,10 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import _overlay
-from app.db.models import CollectionPermission, CollectionRole, Document, User
+from app.db.models import CollectionRole, Document, User
 from app.services import taxonomy
 from app.services.storage_backend import get_backend
-from tests.factories import bearer, build_user
+from tests.factories import bearer, build_user, grant_collection_role
 
 _PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
@@ -46,10 +46,7 @@ def document_storage(tmp_path: Path) -> Path:
 def _grant(
     session: Session, user: User, collection_id: int, role: CollectionRole
 ) -> None:
-    session.add(
-        CollectionPermission(user_id=user.id, collection_id=collection_id, role=role)
-    )
-    session.commit()
+    grant_collection_role(session, user, collection_id, role)
 
 
 @pytest.fixture

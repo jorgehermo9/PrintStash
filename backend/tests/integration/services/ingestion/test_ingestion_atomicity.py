@@ -24,13 +24,16 @@ from app.db.models import (
     Model,
     ModelProvenanceField,
     ProvenanceCapture,
-    User,
 )
 from app.db.session import SQLiteSessionFactory, _set_sqlite_pragmas
 from app.services import ingestion, provenance, thumbnail
 from app.services.jobs import registry
 from app.services.storage_backend import get_backend
-from tests.factories import build_file, build_model
+from tests.factories import (
+    build_file,
+    build_model,
+    build_user,
+)
 
 
 @pytest.fixture
@@ -220,8 +223,7 @@ def test_concurrent_same_hash_upload_dedups_instead_of_crashing(
         # Runs after resolve_or_create_model's SELECT found nothing and before
         # its INSERT lands — exactly the window the race lives in.
         with get_session_factory().session() as other:
-            other.add(Model(name="Winner", slug="winner", hash=dedup_hash))
-            other.commit()
+            build_model(other, name="Winner", slug="winner", hash=dedup_hash)
         return real_ensure(base_slug, exists)
 
     monkeypatch.setattr(ingestion.storage, "ensure_unique_slug", _insert_the_winner)
@@ -318,12 +320,8 @@ class TestProvenance:
         """A reusable blob still records a newer source snapshot before terminal dedupe."""
         staged = _staged(tmp_path)
         blob_hash = hashlib.sha256(staged.read_bytes()).hexdigest()
-        actor = User(
-            username="capture-owner", hashed_password="not-used", is_superuser=True
-        )
+        actor = build_user(db_session, "capture-owner", superuser=True)
         model = build_model(db_session, name="Bracket", slug="bracket", hash=blob_hash)
-        db_session.add_all([actor, model])
-        db_session.commit()
         db_session.refresh(actor)
         db_session.refresh(model)
         assert model.id is not None

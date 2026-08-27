@@ -24,13 +24,10 @@ from sqlmodel import Session, create_engine, select
 from app.db.migrate import run_migrations
 from app.db.models import (
     ArtifactProvenanceLink,
-    Collection,
-    CollectionPermission,
     CollectionRole,
     File,
     FileType,
     ModelProvenanceSource,
-    Printer,
     PrinterPermission,
     PrinterRole,
     ProvenanceCapture,
@@ -42,7 +39,15 @@ from app.services import provenance
 from app.services.auth import create_refresh_token, rotate_refresh_token
 from app.services.printer_rbac import effective_printer_role
 from app.services.rbac import effective_collection_role
-from tests.factories import build_file, build_model, build_printer
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    build_printer,
+    build_user,
+    grant_collection_role,
+    printer_config,
+)
 from tests.paths import ALEMBIC_INI
 
 _POSTGRES_URL = os.getenv("PRINTSTASH_TEST_POSTGRES_URL")
@@ -99,8 +104,8 @@ def test_fresh_bootstrap_is_at_head_with_partial_default_index(postgres_engine) 
 
 def test_postgres_crud_enums_rbac_and_default_uniqueness(postgres_engine) -> None:
     with Session(postgres_engine) as session:
-        user = User(username="pg-user", hashed_password="not-used")
-        collection = Collection(name="Parts", slug="parts", path="parts")
+        user = build_user(session, "pg-user")
+        collection = build_collection(session, name="Parts", slug="parts", path="parts")
         printer = build_printer(session, name="PG printer", is_default=True)
         session.add_all([user, collection, printer])
         session.commit()
@@ -108,13 +113,7 @@ def test_postgres_crud_enums_rbac_and_default_uniqueness(postgres_engine) -> Non
         session.refresh(collection)
         session.refresh(printer)
 
-        session.add(
-            CollectionPermission(
-                user_id=user.id,
-                collection_id=collection.id,
-                role=CollectionRole.EDIT,
-            )
-        )
+        grant_collection_role(session, user, collection, CollectionRole.EDIT)
         session.add(
             PrinterPermission(
                 user_id=user.id,
@@ -130,7 +129,7 @@ def test_postgres_crud_enums_rbac_and_default_uniqueness(postgres_engine) -> Non
         )
         assert effective_printer_role(session, user, printer.id) == PrinterRole.PRINT
 
-        session.add(Printer(name="Conflicting default", is_default=True))
+        session.add(printer_config("Conflicting default", is_default=True))
         with pytest.raises(IntegrityError):
             session.commit()
 
@@ -215,9 +214,7 @@ class TestProvenance:
                 )
                 # This write occurs *after* the raced savepoints.  It proves that
                 # retrying a unique insert did not abort the outer transaction.
-                session.add(
-                    User(username=f"pg-provenance-outer-{index}", hashed_password="x")
-                )
+                build_user(session, f"pg-provenance-outer-{index}")
                 session.commit()
                 assert link.id is not None
                 return link.id
@@ -260,7 +257,7 @@ class TestRefresh:
         self, postgres_engine
     ) -> None:
         with Session(postgres_engine) as session:
-            user = User(username="pg-refresh", hashed_password="not-used")
+            user = build_user(session, "pg-refresh")
             session.add(user)
             session.commit()
             session.refresh(user)

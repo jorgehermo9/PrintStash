@@ -25,10 +25,11 @@ from sqlmodel import Session
 from app.core import secrets as secrets_mod
 from app.core.config import _overlay
 from app.db.models import NotificationChannel, NotificationTarget, Printer, SystemConfig
+from tests.factories import printer_config
 
 
 def test_credentials_are_encrypted_in_database(db_session: Session) -> None:
-    printer = Printer(name="Encrypted printer", api_key="moonraker-secret")
+    printer = printer_config("Encrypted printer", api_key="moonraker-secret")
     config = SystemConfig(
         id=1,
         s3_access_key="storage-user",

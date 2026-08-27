@@ -39,10 +39,10 @@ from sqlmodel import Session, select
 
 from app.core.time import utcnow
 from app.db.models import (
-    CollectionPermission,
     CollectionRole,
     FileType,
     Model,
+    OperatorGateState,
     Printer,
     PrinterPermission,
     PrinterRole,
@@ -59,10 +59,16 @@ from tests.factories import (
     a_gcode_artifact,
     build_collection,
     build_file,
+    build_material_requirement,
+    build_material_slot,
+    build_metadata,
     build_model,
     build_print_job,
     build_printer,
+    build_printer_tool,
     build_user,
+    grant_collection_role,
+    printer_config,
 )
 
 
@@ -239,19 +245,16 @@ class TestCreateQueueJobRouting:
             status=PrinterStatus.READY,
         )
         artifact = a_gcode_artifact(db_session, "Queue cube")
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=artifact.id,
-                model_id=artifact.model_id,
-                remote_filename="absorbed.gcode",
-                state=PrintJobState.PRINTING,
-                source="external",
-                dedupe_absorbed_at=utcnow(),
-                dedupe_survivor_id=1,
-            )
+        build_print_job(
+            db_session,
+            artifact,
+            printer=printer,
+            remote_filename="absorbed.gcode",
+            state=PrintJobState.PRINTING,
+            source="external",
+            dedupe_absorbed_at=utcnow(),
+            dedupe_survivor_id=1,
         )
-        db_session.commit()
 
         from app.services.fleet import _active_counts, build_routing_snapshot
 
@@ -394,17 +397,14 @@ class TestListQueueJobs:
         )
         artifact = a_gcode_artifact(db_session, "Queue cube")
         for index in range(12):
-            db_session.add(
-                PrintJob(
-                    printer_id=printer.id,
-                    file_id=artifact.id,
-                    model_id=artifact.model_id,
-                    remote_filename=f"history-{index}.gcode",
-                    state=PrintJobState.COMPLETED,
-                    finished_at=utcnow() + timedelta(seconds=index),
-                )
+            build_print_job(
+                db_session,
+                artifact,
+                printer=printer,
+                remote_filename=f"history-{index}.gcode",
+                state=PrintJobState.COMPLETED,
+                finished_at=utcnow() + timedelta(seconds=index),
             )
-        db_session.commit()
         queued = client.post(
             "/api/v1/fleet/queue",
             headers=auth_headers,
@@ -430,8 +430,8 @@ class TestListQueueJobs:
         client: TestClient,
         db_session: Session,
     ) -> None:
-        visible = Printer(name="Visible", moonraker_url="http://visible")
-        hidden = Printer(name="Hidden", moonraker_url="http://hidden")
+        visible = printer_config("Visible", moonraker_url="http://visible")
+        hidden = printer_config("Hidden", moonraker_url="http://hidden")
         user = build_user(
             db_session, username="queue-viewer", password="Password123", active=True
         )
@@ -451,17 +451,14 @@ class TestListQueueJobs:
         artifact = a_gcode_artifact(db_session, "Queue cube")
         now = utcnow()
         for index, printer in enumerate((hidden, visible, hidden, visible)):
-            db_session.add(
-                PrintJob(
-                    printer_id=printer.id,
-                    file_id=artifact.id,
-                    model_id=artifact.model_id,
-                    remote_filename=f"rbac-{index}.gcode",
-                    state=PrintJobState.COMPLETED,
-                    finished_at=now + timedelta(seconds=index),
-                )
+            build_print_job(
+                db_session,
+                artifact,
+                printer=printer,
+                remote_filename=f"rbac-{index}.gcode",
+                state=PrintJobState.COMPLETED,
+                finished_at=now + timedelta(seconds=index),
             )
-        db_session.commit()
         token = create_access_token(
             user.id,
             user.username,
@@ -650,18 +647,15 @@ class TestQueueScheduler:
         )
         artifact = a_gcode_artifact(db_session, "Queue cube")
         for index in range(120):
-            db_session.add(
-                PrintJob(
-                    printer_id=printer.id,
-                    file_id=artifact.id,
-                    model_id=artifact.model_id,
-                    remote_filename=f"batch-{index}.gcode",
-                    state=PrintJobState.QUEUED,
-                    routing_strategy=RoutingStrategy.MANUAL,
-                    queue_position=index + 1,
-                )
+            build_print_job(
+                db_session,
+                artifact,
+                printer=printer,
+                remote_filename=f"batch-{index}.gcode",
+                state=PrintJobState.QUEUED,
+                routing_strategy=RoutingStrategy.MANUAL,
+                queue_position=index + 1,
             )
-        db_session.commit()
         from app.services.printer_jobs import _claim_next_sync
 
         statements: list[str] = []
@@ -940,6 +934,29 @@ class TestCheckCompatibility:
         assert response.status_code == 404, response.text
         assert response.json()["detail"] == "printer_not_found"
 
+    def test_reports_a_compatible_verdict_for_the_printers_it_was_given(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        printer = _fleet_printer(db_session, "Compatibility ready")
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        build_metadata(
+            db_session, artifact, material_type="PLA", nozzle_diameter_mm=0.4
+        )
+        build_material_requirement(db_session, artifact, material_type="PLA")
+        build_printer_tool(db_session, printer)
+        build_material_slot(db_session, printer, material_type="PLA")
+
+        response = client.post(
+            "/api/v1/fleet/compatibility",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "printer_ids": [printer.id]},
+        )
+
+        # The endpoint the operator's "where can I print this?" picker calls, so
+        # a verdict that never reaches the response is the same as no feature.
+        assert response.status_code == 200, response.text
+        assert response.json()["printers"][0]["verdict"] == "compatible"
+
 
 class TestCreateBatch:
     """`POST /fleet/batches` — queue N copies of one file across the fleet."""
@@ -1053,6 +1070,21 @@ class TestCreateBatch:
 
         assert response.status_code == 401, response.text
 
+    def test_queues_one_job_per_requested_copy(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        _fleet_printer(db_session, "Batch target")
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+
+        response = client.post(
+            "/api/v1/fleet/batches",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "quantity": 2, "strategy": "least_busy"},
+        )
+
+        assert response.status_code == 201, response.text
+        assert len(response.json()["jobs"]) == 2
+
 
 class TestCreateQueueJob:
     def test_create_queue_job_403_for_non_superuser_non_manual_strategy(
@@ -1106,12 +1138,7 @@ class TestCreateQueueJob:
         member = db_session.exec(
             select(User).where(User.username == "manual-member")
         ).one()
-        db_session.add(
-            CollectionPermission(
-                user_id=member.id, collection_id=collection.id, role=CollectionRole.EDIT
-            )
-        )
-        db_session.commit()
+        grant_collection_role(db_session, member, collection, CollectionRole.EDIT)
 
         resp = client.post(
             "/api/v1/fleet/queue",
@@ -1303,8 +1330,8 @@ class TestPatchQueueJob:
     def test_patch_queue_job_strategy_change_reroutes(
         self, client: TestClient, auth_headers: dict[str, str], db_session: Session
     ) -> None:
-        first = Printer(
-            name="RerouteA",
+        first = printer_config(
+            "RerouteA",
             moonraker_url="http://reroute-a",
             status=PrinterStatus.READY,
         )
@@ -1978,3 +2005,59 @@ class TestDelete:
         )
         assert resp.status_code == 404
         assert resp.json()["detail"] == "maintenance_log_not_found"
+
+
+class TestOperatorDecision:
+    """`POST /fleet/queue/{job_id}/operator-decision` — the human between jobs."""
+
+    def test_releases_a_gate_the_operator_has_cleared(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        printer = _fleet_printer(db_session, "Release target")
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        job = build_print_job(
+            db_session,
+            artifact,
+            printer=printer,
+            remote_filename="release.gcode",
+            state=PrintJobState.COMPLETED,
+            operator_gate_state=OperatorGateState.PENDING,
+        )
+
+        response = client.post(
+            f"/api/v1/fleet/queue/{job.id}/operator-decision",
+            headers=auth_headers,
+            json={"action": "release"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["operator_gate_state"] == "released"
+
+    def test_refuses_to_answer_the_same_gate_twice(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        printer = _fleet_printer(db_session, "Release target")
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        job = build_print_job(
+            db_session,
+            artifact,
+            printer=printer,
+            remote_filename="release.gcode",
+            state=PrintJobState.COMPLETED,
+            operator_gate_state=OperatorGateState.PENDING,
+        )
+        client.post(
+            f"/api/v1/fleet/queue/{job.id}/operator-decision",
+            headers=auth_headers,
+            json={"action": "release"},
+        )
+
+        response = client.post(
+            f"/api/v1/fleet/queue/{job.id}/operator-decision",
+            headers=auth_headers,
+            json={"action": "release"},
+        )
+
+        # A double-click, or two operators disagreeing. Letting the second answer
+        # win would silently undo a hold somebody made deliberately.
+        assert response.status_code == 409, response.text

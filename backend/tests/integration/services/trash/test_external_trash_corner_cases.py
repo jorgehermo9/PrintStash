@@ -29,7 +29,7 @@ from app.services.ingestion import ingest_orca_gcode
 from app.services.storage_backend import get_backend
 from app.services.storage_deletion import process_storage_delete_intents
 from tests._env import use_local_storage
-from tests.factories import build_external_library
+from tests.factories import build_external_library, build_model
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
@@ -172,11 +172,13 @@ class TestModel:
         from app.db.models import ModelTagLink, Tag
 
         uid = uuid.uuid4().hex
-        model = Model(
-            name=f"Tagged {uid[:6]}", slug=f"tagged-{uid[:8]}", hash=(uid * 2)[:64]
+        model = build_model(
+            db_session,
+            name=f"Tagged {uid[:6]}",
+            slug=f"tagged-{uid[:8]}",
+            hash=(uid * 2)[:64],
         )
         tag = Tag(name=f"tag-{uid[:6]}", slug=f"tag-{uid[:6]}")
-        db_session.add(model)
         db_session.add(tag)
         db_session.commit()
         db_session.refresh(model)

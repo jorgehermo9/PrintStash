@@ -22,11 +22,12 @@ from sqlmodel import SQLModel, create_engine
 
 from app.core.config import _overlay
 from app.core.time import utcnow
-from app.db.models import File, PrintJob, PrintJobState
+from app.db.models import File, PrintJobState
 from app.db.session import SQLiteSessionFactory, override_session_factory
 from app.schemas.provenance import CaptureManifestV2
 from app.services import provenance, storage_backend
 from app.services.setup_token import current_setup_token
+from tests.factories import print_job_config
 from tests.paths import FIXTURES_DIR
 
 FIXTURE = FIXTURES_DIR / "real_orca_ender3_benchy.gcode"
@@ -119,7 +120,7 @@ async def test_export_from_instance_a_import_into_instance_b_preserves_everythin
     # test) exactly like test_e2e_notifications.py does for a terminal job.
     detail = (await api.get(f"/api/v1/models/{model_id}", headers=headers_a)).json()
     file_id = detail["files"][0]["id"]
-    job = PrintJob(
+    job = print_job_config(
         model_id=model_id,
         file_id=file_id,
         remote_filename="transfer-benchy.gcode",

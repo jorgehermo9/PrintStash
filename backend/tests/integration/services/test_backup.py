@@ -33,16 +33,20 @@ from app.db.models import (
     SENTINEL_MODEL_HASH,
     Document,
     DocumentKind,
-    File,
     FileType,
     Model,
     OwnedStorageObject,
-    PrintJob,
     PrintJobState,
 )
 from app.services.auth import create_access_token
 from app.services.storage_backend import get_backend
-from tests.factories import build_file, build_model, build_printer, build_user
+from tests.factories import (
+    build_file,
+    build_model,
+    build_print_job,
+    build_printer,
+    build_user,
+)
 from tests.integration._backup_harness import BackupEnv, seed_model_with_blob
 
 
@@ -347,18 +351,16 @@ class TestCreateBackup:
         external.write_bytes(b"user-owned")
         with backup_env.new_session() as session:
             model = build_model(session, name="Linked", slug="linked", hash="c" * 64)
-            session.add(
-                File(
-                    model_id=model.id,
-                    path=str(external),
-                    original_filename=external.name,
-                    file_type=FileType.STL,
-                    is_external=True,
-                    size_bytes=external.stat().st_size,
-                    sha256="d" * 64,
-                )
+            build_file(
+                session,
+                model,
+                path=str(external),
+                filename=external.name,
+                file_type=FileType.STL,
+                external=True,
+                size_bytes=external.stat().st_size,
+                sha256="d" * 64,
             )
-            session.commit()
 
         meta = backup.create_backup()
 
@@ -392,17 +394,14 @@ class TestCreateBackup:
             printer = build_printer(session, name="External history")
             session.refresh(sentinel_file)
             session.refresh(printer)
-            session.add(
-                PrintJob(
-                    printer_id=printer.id,
-                    file_id=sentinel_file.id,
-                    model_id=sentinel_model.id,
-                    remote_filename="external.gcode",
-                    source="external",
-                    state=PrintJobState.COMPLETED,
-                )
+            build_print_job(
+                session,
+                sentinel_file,
+                printer=printer,
+                remote_filename="external.gcode",
+                source="external",
+                state=PrintJobState.COMPLETED,
             )
-            session.commit()
 
         meta = backup.create_backup()
 

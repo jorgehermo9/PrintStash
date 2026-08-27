@@ -14,12 +14,10 @@ from app.db.models import (
     ExternalLibrary,
     ExternalLibraryScanStatus,
     FileType,
-    PrintJob,
-    PrintJobState,
 )
 from app.services import external_library
 from app.services.jobs import JobRegistry
-from tests.factories import build_file, build_model
+from tests.factories import build_file, build_model, build_print_job
 
 # --- Item 1: richer /health output --------------------------------------------
 
@@ -69,17 +67,12 @@ def test_metrics_exposes_fleet_queue_and_scheduler_state(
         size_bytes=1,
         sha256="d" * 64,
     )
-    db_session.add(
-        PrintJob(
-            printer_id=None,
-            file_id=artifact.id,
-            model_id=model.id,
-            remote_filename="blocked.gcode",
-            state=PrintJobState.QUEUED,
-            blocked_reason="no_eligible_printer",
-        )
+    build_print_job(
+        db_session,
+        artifact,
+        remote_filename="blocked.gcode",
+        blocked_reason="no_eligible_printer",
     )
-    db_session.commit()
 
     body = client.get("/metrics").text
 

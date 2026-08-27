@@ -38,6 +38,52 @@ from app.db.models import (
 from tests.factories._support import nth, reject_aliases, save, unique_hash
 
 
+def detached_model(**overrides: Any) -> Model:
+    """A `Model` that is deliberately never attached to a session.
+
+    Two things need one. A purge claim must refuse a row that was never
+    persisted, and the stale-write tests need a *second* object carrying an
+    existing row's primary key so the claim sees a version it did not read.
+    Both are states the application can reach and neither may be saved, so
+    `build_model` is the wrong tool and the shape still belongs here.
+
+    See `detached_file` and `detached_collection` for the same idea on the other
+    two tables: the pattern is "the row's *absence* from the database is what the
+    test asserts on", which is why these exist beside the builders rather than
+    being spelled inline.
+    """
+    overrides.setdefault("name", "Detached")
+    overrides.setdefault("slug", "detached")
+    overrides.setdefault("hash", "0" * 64)
+    return Model(**overrides)
+
+
+def detached_file(**overrides: Any) -> File:
+    """A `File` that is deliberately never attached to a session.
+
+    Several guards exist precisely to refuse an artifact with no id — a hard
+    delete cannot reason about bytes it has no row for, and the vault audit must
+    not credit ownership to something that was never written. A saved row cannot
+    reach those branches at all.
+    """
+    overrides.setdefault("model_id", 1)
+    overrides.setdefault("original_filename", "detached.stl")
+    overrides.setdefault("path", "detached/detached.stl")
+    overrides.setdefault("file_type", FileType.STL)
+    overrides.setdefault("version", 1)
+    overrides.setdefault("size_bytes", 1)
+    overrides.setdefault("sha256", "0" * 64)
+    return File(**overrides)
+
+
+def detached_collection(**overrides: Any) -> Collection:
+    """A `Collection` that is deliberately never attached to a session."""
+    overrides.setdefault("name", "Detached")
+    overrides.setdefault("slug", "detached")
+    overrides.setdefault("path", "detached")
+    return Collection(**overrides)
+
+
 def build_model(
     session: Session,
     name: str = "Bracket",

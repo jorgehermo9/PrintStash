@@ -25,19 +25,23 @@ from sqlmodel import Session
 
 from app.core.time import utcnow
 from app.db.models import (
-    Collection,
     Document,
     DocumentKind,
-    File,
     FileType,
     InboxItem,
     InboxItemState,
     InboxSourceKind,
     Model,
-    User,
 )
 from app.services import trash
-from tests.factories import build_model, build_stored_file
+from tests.factories import (
+    build_model,
+    build_stored_file,
+    build_user,
+    detached_collection,
+    detached_file,
+    detached_model,
+)
 
 
 class TestHardDeleteFile:
@@ -158,13 +162,9 @@ class TestHardDeleteFile:
     def test_does_nothing_for_an_artifact_that_was_never_persisted(
         self, db_session: Session
     ) -> None:
-        unsaved = File(
-            model_id=1,
+        unsaved = detached_file(
             path="never/written.stl",
             original_filename="written.stl",
-            file_type=FileType.STL,
-            version=1,
-            size_bytes=1,
             sha256="sha-unsaved",
         )
 
@@ -215,7 +215,7 @@ class TestHardDeleteCollection:
         self, db_session: Session
     ) -> None:
         trash.hard_delete_collection(
-            db_session, Collection(name="unsaved", slug="unsaved", path="unsaved")
+            db_session, detached_collection(name="unsaved", slug="unsaved")
         )
 
 
@@ -224,7 +224,7 @@ class TestHardDeleteModel:
         self, db_session: Session, storage
     ) -> None:
         model = build_model(db_session, "imported")
-        owner = User(username="importer", hashed_password="x")
+        owner = build_user(db_session, "importer")
         db_session.add(owner)
         db_session.commit()
         db_session.refresh(owner)
@@ -251,7 +251,8 @@ class TestHardDeleteModel:
         self, db_session: Session
     ) -> None:
         trash.hard_delete_model(
-            db_session, Model(name="unsaved", slug="unsaved", hash="hash-unsaved")
+            db_session,
+            detached_model(name="unsaved", slug="unsaved", hash="hash-unsaved"),
         )
 
 
