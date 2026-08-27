@@ -395,3 +395,31 @@ tests too; `uv run pyright` covers `app/`. Type your helpers
 (`-> dict[str, str]`), keep `from __future__ import annotations` at the top,
 and import inside a test body only when the import has side effects the
 docstring explains.
+
+## One trap worth knowing: `SQLModel.metadata` is shared, mutable state
+
+Not a rule, a scar. `app/db/models.py` has a foreign-key cycle (`files.model_id ->
+models.id`, `models.thumbnail_file_id -> files.id`). SQLAlchemy breaks it per
+dialect, and on one that supports `ALTER TABLE ... ADD CONSTRAINT` it lifts those
+constraints out of `CREATE TABLE` and sets `ForeignKeyConstraint._create_rule` to
+stop them rendering inline.
+
+That attribute lives on the **metadata**, not the engine. So one `create_all`
+against PostgreSQL changes what every later `create_all` in the process emits — and
+SQLite, which cannot ALTER, just loses the constraints. `files` goes from three
+inline foreign keys to none.
+
+It surfaced as a flake with no plausible cause: `tests/e2e` green on its own,
+`tests/e2e tests/integration/postgres` failing two runs in five, always the same
+backup-restore test, always `OrphanSchemaError`. Nothing was wrong with either test,
+and which tests shared an xdist worker decided whether it happened.
+
+The general shape, which will happen again with something else: **a test that
+configures a process-wide singleton has to put it back.** The engine, the session
+factory, the storage backend and the rate limiters are all handled by autouse
+fixtures in `tests/conftest.py` for exactly this reason; `SQLModel.metadata` was the
+one nobody had noticed was in that category. When you add a test that touches a real
+PostgreSQL, a real container, or anything else the rest of the suite shares, ask what
+it leaves behind — and if the answer is "nothing", prove it with a `tests/repo/`
+tripwire rather than a comment. `tests/repo/test_schema_ddl.py` is that tripwire for
+this one.

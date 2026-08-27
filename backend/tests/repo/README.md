@@ -8,6 +8,11 @@ change nobody's feature test would.
 - **`test_forbidden_imports.py`** — the import boundaries. `printstash_core` must not
   import `app`, and the layering below that must hold.
 - **`test_ci_workflows.py`** — the CI config still runs what it claims to.
+- **`test_schema_ddl.py`** — the models still render every foreign key they declare
+  on SQLite. `create_all` against an ALTER-capable dialect suppresses the two tables'
+  cycle-breaking constraints *on the shared metadata*, permanently and process-wide,
+  so a later SQLite `create_all` loses them. This is the tripwire; the leak and the
+  fixture that undoes it are in `tests/integration/postgres/conftest.py`.
 - **`test_coverage_floors.py`** — coverage did not rot, anywhere. The aggregate
   ratcheted in both directions, a floor every module clears on its own, and a capped
   debt list for the ones that do not yet. Reads `coverage.json`, so it carries the
