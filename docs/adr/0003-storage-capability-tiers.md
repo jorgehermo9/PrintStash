@@ -331,7 +331,7 @@ that catalogue rather than a configuration surface of its own.
 ```
 StorageProvider          product vocabulary — what the operator picks
       |                  (local, s3, nextcloud, webdav, sftp, azure_blob, gcs)
-      |  ProviderSpec: typed config model + UI metadata + expected tier
+      |  a ProviderConfig subclass: typed fields + ClassVar metadata
       v
 TransportSpec            how we actually talk to it
       |                  (NATIVE_LOCAL | NATIVE_S3 | OPENDAL(scheme, root, options))
@@ -339,10 +339,10 @@ TransportSpec            how we actually talk to it
 StorageBackend           the existing ABC — unchanged
 ```
 
-The catalogue is the single source of truth for **five** consumers that
-currently drift apart: environment variable names, the ADR-0002 runtime
-overlay, the Settings form, the documentation table, and the tier badge. One
-declaration feeds all of them.
+The catalogue is the single source of truth for **six** consumers that currently
+drift apart: environment variable names, the ADR-0002 runtime overlay, the
+Settings form, the documentation table, the tier badge, and
+`docs/storage-providers.md`. One declaration feeds all of them.
 
 #### The provider model
 
@@ -541,24 +541,130 @@ Two open design questions the catalogue phase must settle:
   knowledge from the operator, as Nextcloud does; otherwise it is a docs
   paragraph pointing at the generic provider, not a catalogue row.
 
-#### The registry
+#### The registry is a discriminated union, not a dict
+
+A `Mapping[StorageProvider, ProviderSpec]` looks natural and is the wrong shape:
+its value type has to be erased to `ProviderSpec[Any]` for the map to be
+heterogeneous, nothing ties a spec to the config class it validates, and the type
+checker cannot tell you when a provider is unhandled.
+
+So the catalogue **is** a discriminated union, and each provider carries its own
+metadata as `ClassVar`s:
 
 ```python
-@dataclass(frozen=True)
-class ProviderSpec:
-    model: type[ProviderConfig]
-    label: str                  # "Nextcloud"
-    blurb: str                  # one line for the settings card
-    expected_tier: StorageTier  # what the docs claim before we probe
-    docs_anchor: str
+class ProviderConfig(BaseModel, ABC):
+    """One provider's typed, user-facing settings."""
 
-PROVIDERS: Mapping[StorageProvider, ProviderSpec] = {...}
+    provider: ClassVar[StorageProvider]
+    label: ClassVar[str]
+    blurb: ClassVar[str]
+    category: ClassVar[ProviderCategory]
+    expected_tier: ClassVar[StorageTier]
+    docs_anchor: ClassVar[str]
+
+    @abstractmethod
+    def transport(self) -> TransportSpec: ...
+
+
+class NextcloudConfig(ProviderConfig):
+    provider = StorageProvider.NEXTCLOUD
+    label = "Nextcloud"
+    category = ProviderCategory.WEBDAV
+    expected_tier = StorageTier.UNGUARDED
+    ...
+
+    kind: Literal[StorageProvider.NEXTCLOUD] = StorageProvider.NEXTCLOUD
+    server_url: HttpUrl
+    app_password: SecretStr
+    ...
+
+
+AnyProviderConfig = Annotated[
+    LocalConfig | S3Config | R2Config | NextcloudConfig | WebdavConfig | SftpConfig
+    | AzureBlobConfig | GcsConfig,
+    Field(discriminator="kind"),
+]
+PROVIDER_CONFIG = TypeAdapter(AnyProviderConfig)
 ```
 
-`expected_tier` is what documentation and the picker show *before* a backend is
-bound; the probe in decision 2 produces the real one at `ensure_setup()`. When
-they disagree, the probe wins and the difference is logged — that mismatch is
-how we learn upstream changed something.
+Three things this buys that the dict cannot:
+
+1. **Parsing returns a concrete type.**
+   `PROVIDER_CONFIG.validate_python(raw)` is statically a union member, not a
+   `ProviderConfig` base or a `dict`. Callers narrow with `match` and never cast.
+2. **Exhaustiveness is checked.** `match config: case NextcloudConfig(): …` makes
+   pyright flag an unhandled provider at check time. A dict keyed by enum can
+   only fail at runtime with a `KeyError`.
+3. **Metadata cannot drift from its config**, because it lives on the same class.
+   The `repo/` test that would have asserted "every enum member has a spec"
+   becomes structurally unnecessary.
+
+`ProviderCategory` is the picker's grouping from decision 10, declared once here
+rather than in the frontend.
+
+#### Where generics do and do not earn their place
+
+Generics are worth it exactly where a function must not be handed a mismatched
+pair:
+
+```python
+C = TypeVar("C", bound=ProviderConfig)
+
+def bind(config: C, backend: StorageBackend) -> BoundStorage[C]: ...
+```
+
+They are **not** worth it on `StorageBackend`, which never sees a config after
+construction, nor on `TransportSpec`, which is a concrete product type that
+deliberately forgets which provider produced it (decision 7's whole point). A
+generic `TransportSpec[C]` would re-introduce the coupling the seam exists to
+remove.
+
+#### `dict[str, Any]` appears in exactly one place
+
+Persistence needs a scalar column because SQL has no sum types — but **nothing
+above the persistence edge sees an untyped mapping.** The conversion is confined
+to a `TypeDecorator`, which is the pattern this codebase already uses for
+`EncryptedText`:
+
+```python
+class ProviderConfigJSON(TypeDecorator[ProviderConfig]):
+    """Typed at the boundary: the union is recovered on load, once."""
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return value.model_dump_json(exclude=_secret_fields(type(value)))
+
+    def process_result_value(self, value, dialect):
+        return PROVIDER_CONFIG.validate_json(value)
+```
+
+`SystemConfig.storage_provider_config` is typed `ProviderConfigJSON`, so
+attribute access yields `AnyProviderConfig`, not a dict. Service code, the API
+layer, and `create_backend` all work in typed values; the JSON text exists only
+between `process_bind_param` and the disk.
+
+#### Secret-ness is expressed by the type
+
+`_secret_fields()` above is derived by inspecting which annotations are
+`SecretStr` — no parallel flag list to forget:
+
+```python
+def _secret_fields(model: type[ProviderConfig]) -> set[str]:
+    return {name for name, f in model.model_fields.items()
+            if f.annotation is SecretStr}
+```
+
+One declaration then drives three behaviours: the field is stored in the
+`EncryptedText` column rather than the plaintext one, the API descriptor reports
+`secret: true`, and the form renders it masked and write-only. Two `repo/`
+invariants keep that honest:
+
+- every `StorageProvider` member appears in `AnyProviderConfig` (the one thing
+  the union cannot enforce structurally);
+- no field whose name matches `/password|secret|token|credential|key/` is
+  annotated as anything other than `SecretStr` — a lint against a credential
+  silently landing in the plaintext column.
 
 #### Configuration surface
 
@@ -576,10 +682,10 @@ second declaration. **No `VAULT_OPENDAL_*` variable exists**, and neither does a
 scheme or an options blob.
 
 Persistence follows the `SystemConfig` pattern already used for OIDC: a
-`storage_provider` column, a `storage_provider_config` JSON column for
-non-secret fields, and a `storage_provider_secrets` column typed
-`EncryptedText` for the `SecretStr` ones — validated through the provider's own
-model on both read and write. The existing `data_dir` / `s3_*` columns stay
+`storage_provider` column, a `storage_provider_config` column typed
+`ProviderConfigJSON` (so attribute access yields the discriminated union, never a
+dict), and a `storage_provider_secrets` column typed `EncryptedText` holding only
+the `SecretStr` fields. The existing `data_dir` / `s3_*` columns stay
 exactly as they are, so no self-hoster's stored configuration is rewritten.
 
 The Settings form is **generated** from the selected provider's model — field
@@ -769,7 +875,8 @@ Documentation lands in five places, each with a distinct audience:
 | `.env.example` | first-time setup | the new variables, commented |
 
 The per-provider table in `docs/storage-providers.md` is **generated from
-`PROVIDERS`**, with a `repo/` test asserting the document matches the registry —
+`AnyProviderConfig`**, with a `repo/` test asserting the document matches the
+union —
 the same anti-drift pattern as `test_openapi_contract.py` and
 `test_ci_workflows.py`. That makes documentation the **sixth** consumer of the one
 declaration, and the only one a human could otherwise forget to update.
@@ -970,9 +1077,12 @@ work it authorises carries these obligations:
   warning-table row. Provider registry: every `StorageProvider` has a spec, every
   spec's model round-trips through the config/secrets columns, and every
   `transport()` produces a non-empty root.
-- `repo/` — every `StorageProvider` member appears in `PROVIDERS`, and
-  `docs/storage-providers.md` matches the registry, so a new storage provider
-  cannot ship without its spec, docs section, and expected tier.
+- `repo/` — every `StorageProvider` member appears in `AnyProviderConfig`; no
+  field named like a credential is annotated as anything but `SecretStr`; and
+  `docs/storage-providers.md` matches the union, so a new storage provider cannot
+  ship without its docs section and expected tier.
+- `unit/` — a round trip through `ProviderConfigJSON` returns the same concrete
+  subclass, and secret fields are absent from the plaintext column's payload.
 - `integration/` — `GET /api/v1/storage/providers` returns a field descriptor per
   provider, never returns a secret's value, and rejects a write to an unverified
   provider without the flag.
