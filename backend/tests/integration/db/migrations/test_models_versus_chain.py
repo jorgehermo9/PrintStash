@@ -151,40 +151,15 @@ class TestForeignKeyParity:
         )
 
 
-# `_orphan_schema_issues` reports 136 differences between a chain-built SQLite
-# database and the models, in these categories. Pinning the strings would be 136
-# lines of noise nobody reads; pinning the counts catches new drift and stays
-# legible.
+# The migrated schema and the models are structurally identical: zero differences by
+# `_orphan_schema_issues`, the app's own comparator. `eb8435c9400e` closed the
+# foreign keys and `6acea2a5e555` closed the rest — 212 operations over 31 tables,
+# covering column types, server defaults, indexes and unique constraints.
 #
-# The categories are not equally interesting:
-#
-# * `different foreign` / `add_fk` / `remove_fk` — the eighteen constraints
-#   `TestForeignKeyParity` above names individually. These change behaviour.
-# * `different unique` / `different nullable` / `missing index` — shape differences
-#   that can change behaviour, mostly unique *constraints* where the models declare
-#   unique *indexes*.
-# * `different type` / `different default` — enum columns stored as plain text, and
-#   Python-side defaults the migrations never wrote as server defaults. Almost
-#   certainly harmless: SQLAlchemy applies the default on insert either way, and
-#   nothing reads these columns without going through the models. Counted, not
-#   ignored, because "almost certainly" is not a guarantee and a *new* one might not
-#   be harmless.
-# * `unexpected index` / `unexpected constraint` — schema the migrations created and
-#   the models do not declare, so an upgraded installation carries it and a fresh one
-#   does not.
-#
-# Two-sided: a category that grows is fresh drift; one that shrinks is progress that
-# has to be recorded here.
-STRUCTURAL_DIFFERENCE_COUNTS = {
-    "different default": 53,
-    "different type": 27,
-    "unexpected index": 15,
-    "unexpected constraint": 10,
-    "different index": 8,
-    "different unique": 8,
-    "missing index": 8,
-    "different nullable": 2,
-}
+# Kept as a mapping rather than a bare `assert not issues` so that a category which
+# reappears says which one it is, and so that recording a *deliberate* future
+# divergence has an obvious home. It should stay empty.
+STRUCTURAL_DIFFERENCE_COUNTS: dict[str, int] = {}
 
 
 def _category(issue: str) -> str:
@@ -204,10 +179,11 @@ class TestStructuralParity:
     and server defaults from Alembic autogenerate, plus explicit checks on primary
     and foreign keys, unique and check constraints, and partial-index predicates.
 
-    Its verdict on the schema a self-hoster upgraded into is that it is **not**
-    current. That has a consequence worth knowing before relying on it in support:
-    the orphan-rescue path in `run_migrations` can only ever adopt a database built
-    by `create_all`, never one built by the chain.
+    Its verdict is now that the two are the same, which is what makes the
+    orphan-rescue path in `run_migrations` usable at all: it adopts an unversioned
+    database only when the schema matches the models exactly, and until the
+    convergence migrations that was true of a `create_all` database and of no
+    upgraded one.
     """
 
     def test_the_migrated_schema_differs_from_the_models_only_as_recorded(

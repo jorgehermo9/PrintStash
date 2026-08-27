@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 
-from sqlalchemy import Connection
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-
-from alembic import context
+from sqlalchemy import Connection, engine_from_config, pool
 from sqlmodel import SQLModel
 
+from alembic import context
 from app.core.config import settings
 from app.db import models  # noqa: F401
 from app.db.url import normalize_database_url
@@ -30,6 +27,24 @@ if config.config_file_name is not None:
 target_metadata = SQLModel.metadata
 
 
+def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool:
+    """Render SQLModel's own column types as plain SQLAlchemy ones.
+
+    Autogenerate reaches for the type object it found on the model, which for a
+    `str` field is `sqlmodel.sql.sqltypes.AutoString`. Two problems with letting that
+    into a migration file: the generated script does not import `sqlmodel`, so it
+    fails at `NameError: name 'sqlmodel' is not defined`; and a migration is a
+    historical record that should not depend on the ORM layer's internals, which are
+    free to move.
+
+    `AutoString` is `sa.String` with a length, so rendering it as one loses nothing.
+    """
+    if type_ == "type" and type(obj).__module__.startswith("sqlmodel"):
+        length = getattr(obj, "length", None)
+        return f"sa.String(length={length})" if length else "sa.String()"
+    return False
+
+
 def _is_sqlite_url(url: str) -> bool:
     return url.startswith("sqlite")
 
@@ -43,6 +58,7 @@ def _configure_context(
         "target_metadata": target_metadata,
         "compare_type": True,
         "compare_server_default": True,
+        "render_item": _render_item,
         "render_as_batch": (
             connection.dialect.name == "sqlite"
             if connection

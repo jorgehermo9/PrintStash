@@ -14,8 +14,23 @@ Generate it:
 cd backend && uv run alembic revision --autogenerate -m "add durable capture slots"
 ```
 
-Then read the result, delete what it got wrong, and keep the rest. Hand-writing is
-how this repo ended up with two different schemas at the same `head`.
+Then **read the result before keeping it**. Autogenerate produces a draft, and two
+things are routinely wrong with it:
+
+- **It offers everything it noticed, not what you meant.** The first run of the
+  convergence work emitted 890 lines and 242 operations because the two schemas had
+  drifted. When that *is* the change, keep it all; when you meant to add one
+  constraint, delete the rest. Either way it is a decision, not a formality.
+- **It can emit code that does not run.** It reaches for the type object on the model,
+  which for a `str` field is `sqlmodel.sql.sqltypes.AutoString`, and does not import
+  it — the script dies at `NameError: name 'sqlmodel' is not defined`. `env.py` now
+  passes a `render_item` hook that renders those as `sa.String`, which is what they
+  are, and keeps a historical record free of the ORM layer's internals.
+  `tests/integration/db/migrations/test_schema_convergence_migration.py` fails if one
+  slips through.
+
+Hand-writing the whole thing is how this repo ended up with two different schemas at
+the same `head`.
 
 `alembic/env.py` passes `render_as_batch=True` for SQLite, which makes autogenerate
 wrap operations in `with op.batch_alter_table(...)`. That is a **rendering** flag: it
@@ -155,6 +170,14 @@ database shape was missing a foreign key the models declare:
 | reflection + `create_foreign_key("fk_files_deleted_by_users")` | 2 foreign keys — the missing one stayed missing |
 | `copy_from=<literal Table with all three>` | 3 foreign keys — the table converged to the definition |
 
+**But `copy_from` is not the tool for converging a whole schema.** It would mean
+hand-writing a literal `Table` for every affected table — 31 of them here, each a
+chance to omit a column and have the rebuild silently drop it. Autogenerate naming
+every difference as an explicit operation reaches the same end state and is
+reviewable line by line, which is why `6acea2a5e555` uses it. The proof of
+correctness is not the mechanism; it is that
+`migrate._orphan_schema_issues()` returns `[]` afterwards.
+
 So pick by intent:
 
 - **Reflection** when you are changing one thing and want everything else preserved
@@ -162,11 +185,11 @@ So pick by intent:
   `eb8435c9400e_add_missing_audit_foreign_keys` uses: it adds eighteen foreign keys
   and deliberately does *not* sweep up the enum-representation and server-default
   differences autogenerate also offered.
-- **`copy_from`** when you want the table to *become* a known shape — converging a
-  divergence, or when reflection cannot see something (an odd server default, a check
-  constraint an older SQLAlchemy misses). Define the `Table` **literally in the
-  migration file**, never imported from the models: a migration is pinned to a
-  revision, and the models will move on without it.
+- **`copy_from`** for *one* table that must become a known shape, or when reflection
+  cannot see something (an odd server default, a check constraint an older SQLAlchemy
+  misses). Define the `Table` **literally in the migration file**, never imported from
+  the models: a migration is pinned to a revision, and the models will move on
+  without it.
 
 `copy_from` is a per-call argument. There is no Alembic setting that turns it on
 globally, and the 78 existing `batch_alter_table` calls in this chain all use
@@ -223,25 +246,43 @@ The recurring temptation is to skip step 4–5 for one dialect because it is awk
 That is the whole bug: `if not is_sqlite:` is cheap to write and produces two
 products.
 
-## Two schemas exist. Know which one you are looking at
+## Two paths to `head`, one schema
 
 `run_migrations` has three branches:
 
 | State | What runs | Result |
 | --- | --- | --- |
-| No tables | `create_all` from the models, then `stamp head` | every constraint the models declare |
-| Has `alembic_version` | `upgrade head` — pending migrations only | whatever the chain built, minus what SQLite could not ALTER |
+| No tables | `create_all` from the models, then `stamp head` | the models' schema |
+| Has `alembic_version` | `upgrade head` — pending migrations only | the models' schema |
 | Tables, no version | adopt only if the schema matches the models exactly | fails closed otherwise |
 
-A fresh installation therefore **never replays the chain**, and an upgraded one never
-runs `create_all`. The two disagree — 136 structural differences on SQLite today —
-and `tests/integration/db/migrations/test_models_versus_chain.py` pins the gap so it
-cannot widen unnoticed. Its consequence for support: the orphan-rescue branch can
-only ever adopt a `create_all` database, never a genuinely upgraded one.
+A fresh installation therefore **never replays the chain** and an upgraded one never
+runs `create_all` — but as of `eb8435c9400e` and `6acea2a5e555` they arrive at the
+same place. `_orphan_schema_issues` on a chain-built database returns `[]`.
 
-PostgreSQL is unaffected. The chain's baseline cannot bootstrap a Postgres database
-at all, which is why the fresh path is `create_all`, so every Postgres installation
-has the full set.
+It did not used to. The two disagreed in 136 ways, and the third branch above is what
+made that expensive: it adopts an unversioned database only when the schema matches
+the models exactly, so the rescue path worked on a `create_all` database and on no
+upgraded one — useless for exactly the installations most likely to need it.
+
+`tests/integration/db/migrations/test_models_versus_chain.py` holds it there:
+`KNOWN_MISSING_IN_CHAIN` and `STRUCTURAL_DIFFERENCE_COUNTS` are both empty, and both
+are two-sided, so a migration that changes the schema in a way `create_all` does not
+fails immediately rather than in three months.
+
+**Which direction to converge, when they disagree.** Toward the models, because
+`create_all` is what every new installation runs — the models are the definition, and
+the chain is a way of catching up to them. Converging the other way (writing the
+chain's shape into the models) is occasionally right, and `vault_audit_findings.run_id`
+was one: the chain had `ondelete="CASCADE"` from the day the table existed and the
+models never did, so the models were the ones lagging. Decide per difference, and say
+which way you went.
+
+The convergence dropped 53 server defaults the chain had, because the models declare
+Python-side defaults instead. That is not a downgrade — no `create_all` installation
+ever had them — but it does mean a raw `INSERT` omitting a NOT NULL column now fails
+everywhere rather than only on fresh installs. If a server default is wanted, add it
+to the *model* and let both paths get it.
 
 ## Deleting a row means knowing its children
 

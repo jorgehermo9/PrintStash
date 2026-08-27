@@ -974,7 +974,14 @@ class TestUpgrade:
         assert "revision_notes" in files_columns
         assert "is_recommended" in files_columns
         assert files_columns["is_recommended"]["nullable"] is False
-        assert files_columns["is_recommended"]["default"] is not None
+        # No server default, deliberately. This asserted `is not None` until the
+        # convergence migration, and it was asserting the *chain's* shape: the models
+        # declare a Python-side `default=False`, so no installation built by
+        # `create_all` has ever had a server default here. The convergence dropped it
+        # on the migrated schema too, which makes the two agree rather than making
+        # either worse — an insert that omits the column already failed on a fresh
+        # install.
+        assert files_columns["is_recommended"]["default"] is None
         model_columns = {col["name"]: col for col in inspector.get_columns("models")}
         assert "next_file_version" in model_columns
         file_indexes = {
