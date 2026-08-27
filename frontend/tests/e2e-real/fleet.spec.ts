@@ -1,3 +1,11 @@
+/**
+ * A queued print reaching a real printer and coming back.
+ *
+ * This is the only test that exercises the whole chain end to end: an emulated Moonraker
+ * comes online, the queue routes a job to it, the job dispatches, and the printer drains.
+ * Every link in that chain is tested in isolation elsewhere; this one proves they are
+ * actually connected, which is the failure no unit test can see.
+ */
 import { test, expect } from "./helpers";
 import { modelCard, uploadGcodeModel } from "./util";
 

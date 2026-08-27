@@ -1,3 +1,11 @@
+/**
+ * Finding a model in a library that has grown too big to scroll.
+ *
+ * Search, filter, and the empty state — the three outcomes of looking for something. The
+ * empty state is a real assertion rather than an afterthought: a search that silently
+ * renders nothing looks identical to one that is still loading, and a user cannot tell
+ * whether their model is missing or the page is broken.
+ */
 import { test, expect } from "./helpers";
 import { modelCard, uploadGcodeModel, uploadModel } from "./util";
 

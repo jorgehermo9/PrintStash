@@ -1,3 +1,11 @@
+/**
+ * Putting two G-code revisions side by side.
+ *
+ * Comparing revisions is how somebody decides which one to print, so the view has to
+ * surface what actually *differs* — a comparison that renders both columns identically
+ * when the layer heights differ is worse than no comparison, because it answers the
+ * question wrongly rather than not at all.
+ */
 import { test, expect } from "./helpers";
 import { modelCard } from "./util";
 

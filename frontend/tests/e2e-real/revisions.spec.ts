@@ -1,3 +1,11 @@
+/**
+ * The recommended G-code revision, through the UI that sets it.
+ *
+ * A model with G-code has exactly one recommended revision, and this is the flow where
+ * that invariant is most easily broken: the first upload is auto-recommended, marking
+ * another demotes it, and a status change must not quietly move it. All four steps run in
+ * one pass because it is the transitions, not the states, that go wrong.
+ */
 import { test, expect } from "./helpers";
 import { modelCard, uploadGcodeModel } from "./util";
 

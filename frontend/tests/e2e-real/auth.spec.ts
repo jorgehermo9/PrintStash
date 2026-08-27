@@ -1,3 +1,12 @@
+/**
+ * Getting into a real deployment, and being kept out of one.
+ *
+ * These three run against the real backend because auth is the one flow a mocked API
+ * cannot prove anything about: the token has to be minted by the server, stored by the
+ * browser, and honoured on the next request. A wrong password must fail *at the server*,
+ * not at a client-side check, and a revoked API key must stop working immediately —
+ * `revoked` in a list somewhere is not the same as `refused` on the wire.
+ */
 import { test, expect, ADMIN } from "./helpers";
 
 test("sign in through the real login form", async ({ page }) => {

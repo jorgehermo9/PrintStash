@@ -1,3 +1,10 @@
+/**
+ * The bits that make this installable rather than just a website.
+ *
+ * A manifest and a service worker are inert files until a browser parses them, and a
+ * mistake in either fails silently: the install prompt simply never appears, or an old
+ * worker keeps serving a stale build. Only a real browser can tell us they took.
+ */
 import { test, expect } from "@playwright/test";
 import type { Server } from "node:http";
 

@@ -1,3 +1,11 @@
+/**
+ * Taking the whole library somewhere else and bringing it back.
+ *
+ * The portable archive is the self-hoster's escape hatch, and the only test that means
+ * anything is the round trip: export, import, and find the library intact. An export that
+ * writes a plausible-looking zip nothing can read is the failure this catches, and it is
+ * one nobody discovers until they need it.
+ */
 import { readFileSync } from "node:fs";
 
 import { test, expect } from "./helpers";

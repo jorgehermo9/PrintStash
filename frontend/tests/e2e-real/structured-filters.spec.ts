@@ -1,3 +1,11 @@
+/**
+ * A filter that lives in the URL rather than in component state.
+ *
+ * Filters are URL-restorable so a user can share or bookmark a view, which means the
+ * round trip is the contract: applying a filter writes the URL, loading that URL restores
+ * the filter, and clearing it removes both. A filter that only lives in state looks
+ * identical until somebody reloads.
+ */
 import { test, expect } from "./helpers";
 import { modelCard, uploadGcodeModel, uploadModel } from "./util";
 

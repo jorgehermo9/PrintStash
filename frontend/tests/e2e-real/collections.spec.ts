@@ -1,3 +1,11 @@
+/**
+ * Building and dismantling the folder tree the whole library is organised by.
+ *
+ * A collection is a path, and every model under it carries that path, so deleting one is
+ * never just deleting a row. The recursive delete is here because it is the one action
+ * that can take a shelf of somebody's library with it, and the flow that guards it lives
+ * in the UI rather than the API.
+ */
 import { test, expect } from "./helpers";
 import { createCollectionViaVault, uploadModel } from "./util";
 

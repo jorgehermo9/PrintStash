@@ -1,3 +1,12 @@
+/**
+ * Getting files into the library through the browser.
+ *
+ * Three shapes that fail differently: a mesh-only model (the mesh must land as the
+ * source, not as an attachment), a bulk upload (three jobs must all reach a terminal
+ * state and every thumbnail must actually load), and an upload into a chosen collection.
+ * The bulk case is the one that catches a queue that reports success while a render is
+ * still missing.
+ */
 import { test, expect } from "./helpers";
 import { createCollectionViaVault, modelCard, uploadModel } from "./util";
 

@@ -1,3 +1,10 @@
+/**
+ * Registering a machine and taking it out of the fleet.
+ *
+ * The smallest possible round trip, and the one every other printer test depends on: if
+ * adding a printer through the form does not produce a row the app can then remove, no
+ * amount of control-endpoint coverage matters.
+ */
 import { test, expect } from "./helpers";
 
 // Adds a real Moonraker printer record (it will sit offline — no hardware — but

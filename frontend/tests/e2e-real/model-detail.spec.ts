@@ -1,3 +1,11 @@
+/**
+ * The model page: its history, its tags, and getting its files back out.
+ *
+ * The tag editor is the interesting one — Cancel must discard and Save must persist, and
+ * a form that saves on Cancel silently rewrites somebody's library. The download test is
+ * here because it goes through the browser's own save machinery, which nothing below this
+ * tier can exercise.
+ */
 import { test, expect } from "./helpers";
 import { modelCard, uploadGcodeModel } from "./util";
 

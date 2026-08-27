@@ -1,3 +1,12 @@
+/**
+ * Applying one action to many models from the grid toolbar.
+ *
+ * A batch is the operation a user runs on forty selected cards without watching it, so
+ * what matters here is that the whole thing lands or none of it does. The last test is
+ * the important one: a viewer-role user's batch delete is rejected by the backend's
+ * preflight and the model is **still there** afterwards — a half-applied batch would
+ * leave a library in a state nobody asked for and no way to tell which half went.
+ */
 import { test, expect, authBundleFor, authedContext } from "./helpers";
 import { createCollectionViaVault, modelCard, uploadModel } from "./util";
 

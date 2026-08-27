@@ -1,3 +1,10 @@
+/**
+ * The display choices a user makes once and expects to keep.
+ *
+ * Metadata visibility and card metric slots are stored per user and read on every grid
+ * render, so the failure mode is quiet: the setting appears to save, and comes back
+ * wrong after a reload. Every case here therefore reloads the page before asserting.
+ */
 import { test, expect } from "./helpers";
 
 test("model metadata visibility toggle persists across reload", async ({ page }) => {

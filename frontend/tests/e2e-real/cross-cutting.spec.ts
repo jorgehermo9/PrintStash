@@ -1,3 +1,11 @@
+/**
+ * The things every page depends on: the theme, the version, and no console errors.
+ *
+ * These are the checks that catch a breakage nobody's feature test would: a theme that
+ * does not survive a reload, a deployment reporting the wrong version, or a route that
+ * renders but throws on the way. The last one is deliberately broad — an uncaught error
+ * on any core route is a bug somewhere, and this is the only test that will see it.
+ */
 import { test, expect } from "./helpers";
 
 test("theme toggle flips and persists across reload", async ({ page }) => {

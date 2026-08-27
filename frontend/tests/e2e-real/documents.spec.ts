@@ -1,3 +1,11 @@
+/**
+ * Notes and manuals living beside the models they belong to.
+ *
+ * Documents are the one part of the library that is edited in place rather than uploaded,
+ * so the round trip — write, save, reload, read back — is the whole contract. The PDF
+ * case is here because rendering one goes through pdf.js in the browser, which no unit
+ * test can stand in for.
+ */
 import { test, expect, type Page } from "./helpers";
 import { createCollectionViaVault } from "./util";
 

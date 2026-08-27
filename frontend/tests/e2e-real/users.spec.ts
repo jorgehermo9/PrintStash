@@ -1,3 +1,11 @@
+/**
+ * Administering the people who share a deployment.
+ *
+ * Promote, disable, reset — the three acts that change what somebody else can do. They
+ * run against the real backend because each is enforced server-side and the UI only
+ * reflects it; a disabled user who can still sign in is the failure mode, and it is
+ * invisible from the admin screen.
+ */
 import { test, expect, authBundleFor } from "./helpers";
 
 test("admin can promote, disable, and reset a user", async ({ page }) => {

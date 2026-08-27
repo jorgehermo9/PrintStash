@@ -1,3 +1,10 @@
+/**
+ * Deleting a tag that models are actually using.
+ *
+ * The confirmation step is the point. Removing a tag from the system removes it from
+ * every model that carries it, which is not what "delete" looks like from a single model's
+ * edit form — so the flow asks first, and this test is what keeps it asking.
+ */
 import { test, expect } from "./helpers";
 import { clickModelAction, modelCard, uploadModel } from "./util";
 

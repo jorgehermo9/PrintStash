@@ -1,3 +1,10 @@
+/**
+ * Connecting the deployment to a Spoolman instance.
+ *
+ * An integration toggle with a URL behind it has a specific failure mode: it saves,
+ * looks right, and comes back empty or enabled-with-no-address after a reload. This runs
+ * the full enable → save → reload → disable cycle for exactly that reason.
+ */
 import { test, expect } from "./helpers";
 
 // Spoolman integration settings (new in 0.8.0). Drives the real config endpoints

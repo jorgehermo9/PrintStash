@@ -1,3 +1,11 @@
+/**
+ * The whole life of a model, on the real backend.
+ *
+ * Upload → real ingestion → edit → trash → restore → purge, in one pass. Each step is
+ * covered in isolation elsewhere; what this proves is that the states connect: a trashed
+ * model really is invisible and really does come back, and a purge really is the end.
+ * Deletion being recoverable is the promise the trash makes, and this is where it is kept.
+ */
 import { test, expect } from "./helpers";
 import { clickModelAction } from "./util";
 

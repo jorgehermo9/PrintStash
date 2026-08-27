@@ -1,3 +1,11 @@
+/**
+ * Configuring OIDC, and the secret that must never come back out.
+ *
+ * The client secret is written once and never returned by the API, so the settings form
+ * has to handle "unchanged" without ever displaying it — a form that round-trips the
+ * secret shows a credential to anyone who can open the page. The login button appearing
+ * is the proof the configuration actually took effect.
+ */
 import { test, expect } from "./helpers";
 
 // SSO / OIDC (0.11.0): a superuser can configure OIDC without a real IdP —

@@ -1,3 +1,11 @@
+/**
+ * What a non-admin user can actually see and do.
+ *
+ * Permissions are enforced in the backend and *reflected* in the UI, and the two can
+ * disagree in both directions: a grid showing a collection the server would refuse, or an
+ * edit button that does nothing. These tests drive the real UI against real grants, which
+ * is the only place that disagreement shows up.
+ */
 import { test, expect, authBundleFor, authedContext } from "./helpers";
 import {
   clickModelAction,

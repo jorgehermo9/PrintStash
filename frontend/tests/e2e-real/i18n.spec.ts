@@ -1,3 +1,10 @@
+/**
+ * Switching the interface language, and having it stay switched.
+ *
+ * A language choice is stored per user and applied before the first render, so the two
+ * ways it breaks are both invisible in a unit test: strings that were never translated,
+ * and a choice that does not survive a reload. This checks both in one pass.
+ */
 import { test, expect } from "./helpers";
 
 // i18n (0.11.0): switching the locale translates the app's chrome — the

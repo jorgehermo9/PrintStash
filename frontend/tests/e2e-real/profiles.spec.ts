@@ -1,3 +1,10 @@
+/**
+ * Filament and printer presets — the values every cost estimate is computed from.
+ *
+ * A preset is edited once and read by every print afterwards, so an edit that appears to
+ * save and does not is a whole library of wrong numbers. Both flows here therefore create,
+ * edit, and delete rather than stopping at the first green tick.
+ */
 import { type Locator } from "@playwright/test";
 import { test, expect } from "./helpers";
 

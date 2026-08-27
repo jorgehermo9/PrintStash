@@ -1,3 +1,11 @@
+/**
+ * Public share links, and what they do and do not allow.
+ *
+ * A share link is the only unauthenticated way into the library, so the two things that
+ * matter are that view-only really cannot download, and that revoking one **breaks the
+ * page immediately**. A revoked link that keeps working is the failure that cannot be
+ * undone after the fact.
+ */
 import { test, expect } from "./helpers";
 import { clickModelAction, modelCard, uploadGcodeModel } from "./util";
 

@@ -1,3 +1,11 @@
+/**
+ * Saving a set of filters, and getting exactly those filters back.
+ *
+ * A saved view is a URL, so applying one has to restore the **canonical** URL rather than
+ * an equivalent-looking one — otherwise the next save round-trips something different
+ * from what the user is looking at. Favourites are here for the same reason: starring is
+ * a filter, and it has to narrow the same grid.
+ */
 import { test, expect } from "./helpers";
 import { modelCard, uploadModel } from "./util";
 

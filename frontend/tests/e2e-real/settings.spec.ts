@@ -1,3 +1,12 @@
+/**
+ * The settings surface, which is where a deployment is actually operated from.
+ *
+ * Eleven flows that have nothing in common except that an operator does them from one
+ * page and each writes something durable: an API key that must work then stop working,
+ * a currency every price is rendered in, an export that has to be a real file, a backup,
+ * a notification channel, and the trash purge. Each is asserted after a reload or against
+ * the artefact it produced, because "the toast appeared" is not evidence anything saved.
+ */
 import { test, expect } from "./helpers";
 import { clickModelAction, modelCard, uploadGcodeModel } from "./util";
 

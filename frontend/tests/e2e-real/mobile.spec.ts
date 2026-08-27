@@ -1,3 +1,10 @@
+/**
+ * The bottom navigation a phone gets instead of the sidebar.
+ *
+ * Mobile has a different navigation tree, not a narrower one, so its destinations have to
+ * be reachable and its overflow sheet has to expose the rest. A desktop test cannot see
+ * any of this, because the components are not rendered at all above the breakpoint.
+ */
 import { test, expect } from "./helpers";
 
 // Mobile rework (new in 0.8.0): the bottom navigation bar + "More" sheet, shown

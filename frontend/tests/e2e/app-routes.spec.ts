@@ -1,3 +1,17 @@
+/**
+ * Every route rendering against a mocked API, with the design rules that hold across them.
+ *
+ * This is the fast suite: no backend, no database, so what it can prove is not "the data
+ * is right" but "the page is *there* and behaves". That turns out to be most of the
+ * regressions — a route that 404s after a router change, a nested path that stops marking
+ * its parent active, a dialog that no longer fits, a sidebar width that forgets itself, a
+ * stagger animation that ignores `prefers-reduced-motion`, a menu that renders under the
+ * surface next to it.
+ *
+ * None of those show up in a unit test, because each is a property of the whole page
+ * assembled, and none of them need a real server to see. The specs that *do* need real
+ * data live in `tests/e2e-real/`.
+ */
 import { test, expect, type Page } from "@playwright/test";
 import type { Server } from "node:http";
 
