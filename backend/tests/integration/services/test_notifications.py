@@ -99,14 +99,17 @@ def _allow_public_urls():
 # --------------------------------------------------------------------------- #
 
 
-def test_backoff_schedule_then_exhaustion():
-    assert [notifications.next_retry_delay(a) for a in (1, 2, 3, 4)] == [
-        30,
-        120,
-        600,
-        1800,
-    ]
-    assert notifications.next_retry_delay(5) is None
+class TestNextRetryDelay:
+    """The backoff schedule, and the attempt at which a delivery gives up."""
+
+    def test_backoff_schedule_then_exhaustion(self):
+        assert [notifications.next_retry_delay(a) for a in (1, 2, 3, 4)] == [
+            30,
+            120,
+            600,
+            1800,
+        ]
+        assert notifications.next_retry_delay(5) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -114,74 +117,77 @@ def test_backoff_schedule_then_exhaustion():
 # --------------------------------------------------------------------------- #
 
 
-def test_enqueue_noop_when_master_switch_off(db_session):
-    _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    n = notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-    assert n == 0
-    assert _deliveries(db_session) == []
+class TestEnqueueForEvent:
+    """Which channels an event reaches, and which it must not."""
 
-
-def test_enqueue_one_per_matching_channel(db_session):
-    set_notifications_enabled(db_session, True)
-    _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE], name="a")
-    _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE], name="b")
-    _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED], name="other")
-    n = notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=7
-    )
-    db_session.commit()
-    assert n == 2  # only the two offline-subscribed channels
-    assert len(_deliveries(db_session)) == 2
-
-
-def test_enqueue_skips_disabled_channel(db_session):
-    set_notifications_enabled(db_session, True)
-    _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE], enabled=False)
-    n = notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-    assert n == 0
-
-
-def test_enqueue_respects_printer_scope(db_session):
-    set_notifications_enabled(db_session, True)
-    _channel(
-        db_session,
-        events=[NotificationEventType.PRINTER_OFFLINE],
-        printer_ids=[5],
-        name="scoped",
-    )
-    assert (
-        notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=9
+    def test_enqueue_one_per_matching_channel(self, db_session):
+        set_notifications_enabled(db_session, True)
+        _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE], name="a")
+        _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE], name="b")
+        _channel(
+            db_session, events=[NotificationEventType.PRINT_COMPLETED], name="other"
         )
-        == 0
-    )
-    assert (
-        notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=5
+        n = notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=7
         )
-        == 1
-    )
+        db_session.commit()
+        assert n == 2  # only the two offline-subscribed channels
+        assert len(_deliveries(db_session)) == 2
 
-
-def test_enqueue_empty_scope_means_all_printers(db_session):
-    set_notifications_enabled(db_session, True)
-    _channel(
-        db_session,
-        events=[NotificationEventType.PRINTER_OFFLINE],
-        printer_ids=[],  # empty list == no restriction
-    )
-    assert (
-        notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=123
+    def test_enqueue_noop_when_master_switch_off(self, db_session):
+        _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        n = notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
         )
-        == 1
-    )
+        db_session.commit()
+        assert n == 0
+        assert _deliveries(db_session) == []
+
+    def test_enqueue_skips_disabled_channel(self, db_session):
+        set_notifications_enabled(db_session, True)
+        _channel(
+            db_session, events=[NotificationEventType.PRINTER_OFFLINE], enabled=False
+        )
+        n = notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+        assert n == 0
+
+    def test_enqueue_respects_printer_scope(self, db_session):
+        set_notifications_enabled(db_session, True)
+        _channel(
+            db_session,
+            events=[NotificationEventType.PRINTER_OFFLINE],
+            printer_ids=[5],
+            name="scoped",
+        )
+        assert (
+            notifications.enqueue_for_event(
+                db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=9
+            )
+            == 0
+        )
+        assert (
+            notifications.enqueue_for_event(
+                db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=5
+            )
+            == 1
+        )
+
+    def test_enqueue_empty_scope_means_all_printers(self, db_session):
+        set_notifications_enabled(db_session, True)
+        _channel(
+            db_session,
+            events=[NotificationEventType.PRINTER_OFFLINE],
+            printer_ids=[],  # empty list == no restriction
+        )
+        assert (
+            notifications.enqueue_for_event(
+                db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=123
+            )
+            == 1
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -189,292 +195,67 @@ def test_enqueue_empty_scope_means_all_printers(db_session):
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.asyncio
-async def test_dispatch_success_marks_sent_and_channel_status(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-
-    with patch.object(
-        notifications, "_client_for", new=_client_factory(_http_returning(204))
-    ):
-        attempted = await notifications.dispatch_due()
-    assert attempted == 1
-
-    db_session.expire_all()
-    delivery = _deliveries(db_session, ch.id)[0]
-    assert delivery.status == NotificationDeliveryStatus.SENT
-    assert delivery.attempts == 1
-    db_session.refresh(ch)
-    assert ch.last_status == "sent"
-    assert ch.last_delivered_at is not None
-
-
-@pytest.mark.asyncio
-async def test_dispatch_http_error_retries_with_backoff(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-
-    with patch.object(
-        notifications, "_client_for", new=_client_factory(_http_returning(500, "boom"))
-    ):
-        await notifications.dispatch_due()
-
-    db_session.expire_all()
-    delivery = _deliveries(db_session, ch.id)[0]
-    assert delivery.status == NotificationDeliveryStatus.PENDING  # will retry
-    assert delivery.attempts == 1
-    assert "HTTP 500" in (delivery.last_error or "")
-    assert delivery.next_retry_at > delivery.created_at  # backed off
-
-
-@pytest.mark.asyncio
-async def test_dispatch_marks_failed_after_exhausting_retries(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-    delivery_id = _deliveries(db_session, ch.id)[0].id
-
-    # Force the delivery to its last allowed attempt, then fail once more.
-    delivery = db_session.get(NotificationDelivery, delivery_id)
-    delivery.attempts = notifications._MAX_ATTEMPTS - 1
-    db_session.add(delivery)
-    db_session.commit()
-
-    with patch.object(
-        notifications, "_client_for", new=_client_factory(_http_returning(500))
-    ):
-        await notifications.dispatch_due()
-
-    db_session.expire_all()
-    delivery = db_session.get(NotificationDelivery, delivery_id)
-    assert delivery.status == NotificationDeliveryStatus.FAILED
-
-
-@pytest.mark.asyncio
-async def test_dispatch_render_error_fails_without_network(db_session):
-    set_notifications_enabled(db_session, True)
-    # Telegram channel missing chat_id -> RenderError, no HTTP call.
-    ch = _channel(
-        db_session,
-        events=[NotificationEventType.PRINTER_OFFLINE],
-        target=NotificationTarget.TELEGRAM,
-        config={"bot_token": "t"},
-    )
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-
-    client = _http_returning(200)
-    with patch.object(notifications, "_client_for", new=_client_factory(client)):
-        await notifications.dispatch_due()
-    client.request.assert_not_called()
-
-    db_session.expire_all()
-    delivery = _deliveries(db_session, ch.id)[0]
-    assert delivery.status == NotificationDeliveryStatus.FAILED
-
-
-@pytest.mark.asyncio
-async def test_dispatch_blocks_non_public_url(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-
-    client = _http_returning(204)
-    # Override the autouse allow-fixture: this URL is "not public".
-    with (
-        patch.object(notifications, "_client_for", new=_client_factory(client)),
-        patch.object(
-            notifications,
-            "resolve_public_target",
-            side_effect=UnsafeUrlError("url_target_not_public"),
-        ),
-    ):
-        await notifications.dispatch_due()
-    client.request.assert_not_called()  # never left the process
-
-    db_session.expire_all()
-    delivery = _deliveries(db_session, ch.id)[0]
-    assert delivery.status == NotificationDeliveryStatus.FAILED  # permanent
-    assert "not a public host" in (delivery.last_error or "")
-
-
-@pytest.mark.asyncio
-async def test_dispatch_honors_retry_after_without_spending_attempt(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-
-    client = _http_returning(429, "slow down", headers={"Retry-After": "120"})
-    with patch.object(notifications, "_client_for", new=_client_factory(client)):
-        await notifications.dispatch_due()
-
-    db_session.expire_all()
-    d = _deliveries(db_session, ch.id)[0]
-    assert d.status == NotificationDeliveryStatus.PENDING
-    assert d.attempts == 0  # rate-limit did NOT consume the retry budget
-    # Rescheduled roughly Retry-After seconds out.
-    assert d.next_retry_at > d.created_at
-
-
-@pytest.mark.asyncio
-async def test_idempotency_key_header_sent(db_session):
-    set_notifications_enabled(db_session, True)
-    _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-
-    client = _http_returning(204)
-    with patch.object(notifications, "_client_for", new=_client_factory(client)):
-        await notifications.dispatch_due()
-
-    headers = client.request.call_args.kwargs["headers"]
-    assert headers["Idempotency-Key"].startswith("printstash-delivery-")
-    assert "X-PrintStash-Delivery-Id" in headers
-
-
-@pytest.mark.asyncio
-async def test_channel_auto_disabled_after_threshold(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    # One short of the threshold; a single terminal failure should trip it.
-    ch.consecutive_failures = notifications._CIRCUIT_BREAKER_THRESHOLD - 1
-    db_session.add(ch)
-    db_session.commit()
-
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-    d = _deliveries(db_session, ch.id)[0]
-    d.attempts = notifications._MAX_ATTEMPTS - 1  # next failure is terminal
-    db_session.add(d)
-    db_session.commit()
-
-    client = _http_returning(500)
-    with patch.object(notifications, "_client_for", new=_client_factory(client)):
-        await notifications.dispatch_due()
-
-    db_session.refresh(ch)
-    assert ch.consecutive_failures >= notifications._CIRCUIT_BREAKER_THRESHOLD
-    assert ch.enabled is False
-    assert "auto-disabled" in (ch.last_error or "")
-
-
-@pytest.mark.asyncio
-async def test_success_resets_consecutive_failures(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    ch.consecutive_failures = 3
-    db_session.add(ch)
-    db_session.commit()
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-
-    with patch.object(
-        notifications, "_client_for", new=_client_factory(_http_returning(204))
-    ):
-        await notifications.dispatch_due()
-
-    db_session.refresh(ch)
-    assert ch.consecutive_failures == 0
-
-
-@pytest.mark.asyncio
-async def test_stuck_sending_is_reclaimed(db_session):
-    set_notifications_enabled(db_session, True)
-    ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-    notifications.enqueue_for_event(
-        db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
-    )
-    db_session.commit()
-    d = _deliveries(db_session, ch.id)[0]
-    # Simulate a dispatcher that died mid-send long ago.
-    from datetime import timedelta
-
-    from app.core.time import utcnow
-
-    d.status = NotificationDeliveryStatus.SENDING
-    d.updated_at = utcnow() - timedelta(
-        seconds=notifications._STUCK_SENDING_SECONDS + 60
-    )
-    db_session.add(d)
-    db_session.commit()
-
-    with patch.object(
-        notifications, "_client_for", new=_client_factory(_http_returning(204))
-    ):
-        attempted = await notifications.dispatch_due()
-
-    assert attempted == 1  # reclaimed and delivered
-    db_session.refresh(d)
-    assert d.status == NotificationDeliveryStatus.SENT
-
-
 # --------------------------------------------------------------------------- #
 # hub edge-triggers
 # --------------------------------------------------------------------------- #
 
 
-def test_offline_edge_fires_once_per_transition(db_session, hub):
-    set_notifications_enabled(db_session, True)
-    p = build_printer(
-        db_session, name="Ender", moonraker_url="http://x", status=PrinterStatus.READY
-    )
-    _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+class TestEventEdges:
+    """An event fires on the transition, not on every poll that still sees it."""
 
-    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
-    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)  # no re-fire
-    db_session.expire_all()
-    assert len(_deliveries(db_session)) == 1
+    def test_offline_edge_fires_once_per_transition(self, db_session, hub):
+        set_notifications_enabled(db_session, True)
+        p = build_printer(
+            db_session,
+            name="Ender",
+            moonraker_url="http://x",
+            status=PrinterStatus.READY,
+        )
+        _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
 
-    # Recover then drop again -> a second, distinct event.
-    hub._mark_status_db(p.id, PrinterStatus.READY, None)
-    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
-    db_session.expire_all()
-    assert len(_deliveries(db_session)) == 2
+        hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
+        hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)  # no re-fire
+        db_session.expire_all()
+        assert len(_deliveries(db_session)) == 1
 
+        # Recover then drop again -> a second, distinct event.
+        hub._mark_status_db(p.id, PrinterStatus.READY, None)
+        hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
+        db_session.expire_all()
+        assert len(_deliveries(db_session)) == 2
 
-def test_print_completed_fires_once_and_is_idempotent(db_session, hub):
-    set_notifications_enabled(db_session, True)
-    p = build_printer(
-        db_session,
-        name="Ender",
-        moonraker_url="http://x",
-        status=PrinterStatus.PRINTING,
-    )
-    _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
+    def test_offline_not_fired_from_unknown(self, db_session, hub):
+        set_notifications_enabled(db_session, True)
+        p = build_printer(
+            db_session,
+            name="Ender",
+            moonraker_url="http://x",
+            status=PrinterStatus.UNKNOWN,
+        )
+        _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
 
-    stats = {"total_duration": 3600, "filament_used": 1000, "filename": "x.gcode"}
-    hub._sync_active_job_db(p.id, "complete", "x.gcode", 1.0, stats)
-    hub._sync_active_job_db(p.id, "complete", "x.gcode", 1.0, stats)  # idempotent
-    db_session.expire_all()
-    deliveries = _deliveries(db_session)
-    assert len(deliveries) == 1
-    assert deliveries[0].event_type == NotificationEventType.PRINT_COMPLETED
-    assert deliveries[0].print_job_id is not None
+        hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
+        db_session.expire_all()
+        assert _deliveries(db_session) == []
+
+    def test_print_completed_fires_once_and_is_idempotent(self, db_session, hub):
+        set_notifications_enabled(db_session, True)
+        p = build_printer(
+            db_session,
+            name="Ender",
+            moonraker_url="http://x",
+            status=PrinterStatus.PRINTING,
+        )
+        _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
+
+        stats = {"total_duration": 3600, "filament_used": 1000, "filename": "x.gcode"}
+        hub._sync_active_job_db(p.id, "complete", "x.gcode", 1.0, stats)
+        hub._sync_active_job_db(p.id, "complete", "x.gcode", 1.0, stats)  # idempotent
+        db_session.expire_all()
+        deliveries = _deliveries(db_session)
+        assert len(deliveries) == 1
+        assert deliveries[0].event_type == NotificationEventType.PRINT_COMPLETED
+        assert deliveries[0].print_job_id is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -492,18 +273,6 @@ def test_print_completed_fires_once_and_is_idempotent(db_session, hub):
 # send_test — error branches (channel-not-found, corrupt config, render error,
 # blocked host, non-2xx response, network exception)
 # --------------------------------------------------------------------------- #
-
-
-def test_offline_not_fired_from_unknown(db_session, hub):
-    set_notifications_enabled(db_session, True)
-    p = build_printer(
-        db_session, name="Ender", moonraker_url="http://x", status=PrinterStatus.UNKNOWN
-    )
-    _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
-
-    hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
-    db_session.expire_all()
-    assert _deliveries(db_session) == []
 
 
 class TestClientFor:
@@ -637,6 +406,244 @@ class TestDispatchDue:
     @pytest.mark.asyncio
     async def test_dispatch_due_returns_zero_when_nothing_claimed(self, db_session):
         assert await notifications.dispatch_due() == 0
+
+    @pytest.mark.asyncio
+    async def test_dispatch_success_marks_sent_and_channel_status(self, db_session):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+
+        with patch.object(
+            notifications, "_client_for", new=_client_factory(_http_returning(204))
+        ):
+            attempted = await notifications.dispatch_due()
+        assert attempted == 1
+
+        db_session.expire_all()
+        delivery = _deliveries(db_session, ch.id)[0]
+        assert delivery.status == NotificationDeliveryStatus.SENT
+        assert delivery.attempts == 1
+        db_session.refresh(ch)
+        assert ch.last_status == "sent"
+        assert ch.last_delivered_at is not None
+
+    @pytest.mark.asyncio
+    async def test_idempotency_key_header_sent(self, db_session):
+        set_notifications_enabled(db_session, True)
+        _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+
+        client = _http_returning(204)
+        with patch.object(notifications, "_client_for", new=_client_factory(client)):
+            await notifications.dispatch_due()
+
+        headers = client.request.call_args.kwargs["headers"]
+        assert headers["Idempotency-Key"].startswith("printstash-delivery-")
+        assert "X-PrintStash-Delivery-Id" in headers
+
+    @pytest.mark.asyncio
+    async def test_dispatch_http_error_retries_with_backoff(self, db_session):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+
+        with patch.object(
+            notifications,
+            "_client_for",
+            new=_client_factory(_http_returning(500, "boom")),
+        ):
+            await notifications.dispatch_due()
+
+        db_session.expire_all()
+        delivery = _deliveries(db_session, ch.id)[0]
+        assert delivery.status == NotificationDeliveryStatus.PENDING  # will retry
+        assert delivery.attempts == 1
+        assert "HTTP 500" in (delivery.last_error or "")
+        assert delivery.next_retry_at > delivery.created_at  # backed off
+
+    @pytest.mark.asyncio
+    async def test_dispatch_honors_retry_after_without_spending_attempt(
+        self, db_session
+    ):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+
+        client = _http_returning(429, "slow down", headers={"Retry-After": "120"})
+        with patch.object(notifications, "_client_for", new=_client_factory(client)):
+            await notifications.dispatch_due()
+
+        db_session.expire_all()
+        d = _deliveries(db_session, ch.id)[0]
+        assert d.status == NotificationDeliveryStatus.PENDING
+        assert d.attempts == 0  # rate-limit did NOT consume the retry budget
+        # Rescheduled roughly Retry-After seconds out.
+        assert d.next_retry_at > d.created_at
+
+    @pytest.mark.asyncio
+    async def test_dispatch_marks_failed_after_exhausting_retries(self, db_session):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+        delivery_id = _deliveries(db_session, ch.id)[0].id
+
+        # Force the delivery to its last allowed attempt, then fail once more.
+        delivery = db_session.get(NotificationDelivery, delivery_id)
+        delivery.attempts = notifications._MAX_ATTEMPTS - 1
+        db_session.add(delivery)
+        db_session.commit()
+
+        with patch.object(
+            notifications, "_client_for", new=_client_factory(_http_returning(500))
+        ):
+            await notifications.dispatch_due()
+
+        db_session.expire_all()
+        delivery = db_session.get(NotificationDelivery, delivery_id)
+        assert delivery.status == NotificationDeliveryStatus.FAILED
+
+    @pytest.mark.asyncio
+    async def test_dispatch_render_error_fails_without_network(self, db_session):
+        set_notifications_enabled(db_session, True)
+        # Telegram channel missing chat_id -> RenderError, no HTTP call.
+        ch = _channel(
+            db_session,
+            events=[NotificationEventType.PRINTER_OFFLINE],
+            target=NotificationTarget.TELEGRAM,
+            config={"bot_token": "t"},
+        )
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+
+        client = _http_returning(200)
+        with patch.object(notifications, "_client_for", new=_client_factory(client)):
+            await notifications.dispatch_due()
+        client.request.assert_not_called()
+
+        db_session.expire_all()
+        delivery = _deliveries(db_session, ch.id)[0]
+        assert delivery.status == NotificationDeliveryStatus.FAILED
+
+    @pytest.mark.asyncio
+    async def test_dispatch_blocks_non_public_url(self, db_session):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+
+        client = _http_returning(204)
+        # Override the autouse allow-fixture: this URL is "not public".
+        with (
+            patch.object(notifications, "_client_for", new=_client_factory(client)),
+            patch.object(
+                notifications,
+                "resolve_public_target",
+                side_effect=UnsafeUrlError("url_target_not_public"),
+            ),
+        ):
+            await notifications.dispatch_due()
+        client.request.assert_not_called()  # never left the process
+
+        db_session.expire_all()
+        delivery = _deliveries(db_session, ch.id)[0]
+        assert delivery.status == NotificationDeliveryStatus.FAILED  # permanent
+        assert "not a public host" in (delivery.last_error or "")
+
+    @pytest.mark.asyncio
+    async def test_success_resets_consecutive_failures(self, db_session):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        ch.consecutive_failures = 3
+        db_session.add(ch)
+        db_session.commit()
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+
+        with patch.object(
+            notifications, "_client_for", new=_client_factory(_http_returning(204))
+        ):
+            await notifications.dispatch_due()
+
+        db_session.refresh(ch)
+        assert ch.consecutive_failures == 0
+
+    @pytest.mark.asyncio
+    async def test_channel_auto_disabled_after_threshold(self, db_session):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        # One short of the threshold; a single terminal failure should trip it.
+        ch.consecutive_failures = notifications._CIRCUIT_BREAKER_THRESHOLD - 1
+        db_session.add(ch)
+        db_session.commit()
+
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+        d = _deliveries(db_session, ch.id)[0]
+        d.attempts = notifications._MAX_ATTEMPTS - 1  # next failure is terminal
+        db_session.add(d)
+        db_session.commit()
+
+        client = _http_returning(500)
+        with patch.object(notifications, "_client_for", new=_client_factory(client)):
+            await notifications.dispatch_due()
+
+        db_session.refresh(ch)
+        assert ch.consecutive_failures >= notifications._CIRCUIT_BREAKER_THRESHOLD
+        assert ch.enabled is False
+        assert "auto-disabled" in (ch.last_error or "")
+
+    @pytest.mark.asyncio
+    async def test_stuck_sending_is_reclaimed(self, db_session):
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
+        notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+        )
+        db_session.commit()
+        d = _deliveries(db_session, ch.id)[0]
+        # Simulate a dispatcher that died mid-send long ago.
+        from datetime import timedelta
+
+        from app.core.time import utcnow
+
+        d.status = NotificationDeliveryStatus.SENDING
+        d.updated_at = utcnow() - timedelta(
+            seconds=notifications._STUCK_SENDING_SECONDS + 60
+        )
+        db_session.add(d)
+        db_session.commit()
+
+        with patch.object(
+            notifications, "_client_for", new=_client_factory(_http_returning(204))
+        ):
+            attempted = await notifications.dispatch_due()
+
+        assert attempted == 1  # reclaimed and delivered
+        db_session.refresh(d)
+        assert d.status == NotificationDeliveryStatus.SENT
 
 
 class TestRunDispatcherLoop:

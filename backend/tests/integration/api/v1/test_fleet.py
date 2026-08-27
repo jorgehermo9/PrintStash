@@ -74,783 +74,779 @@ def _unused_provider_builder(_printer: Printer) -> PrinterProviderClient:
     raise AssertionError("provider construction should not be reached")
 
 
-def test_admin_can_enqueue_and_list_least_busy_job(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Farm A",
-        moonraker_url="http://farm-a.local",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
+class TestCreateQueueJobRouting:
+    """Where a queued job lands when the caller does not name a printer."""
 
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    )
+    def test_admin_can_enqueue_and_list_least_busy_job(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Farm A",
+            moonraker_url="http://farm-a.local",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
 
-    assert queued.status_code == 201
-    assert queued.json()["state"] == "queued"
-    assert queued.json()["printer_id"] == printer.id
-    assert queued.json()["routing_strategy"] == "least_busy"
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        )
 
-    response = client.get("/api/v1/fleet/queue", headers=auth_headers)
-    assert response.status_code == 200
-    assert [job["id"] for job in response.json()] == [queued.json()["id"]]
+        assert queued.status_code == 201
+        assert queued.json()["state"] == "queued"
+        assert queued.json()["printer_id"] == printer.id
+        assert queued.json()["routing_strategy"] == "least_busy"
 
+        response = client.get("/api/v1/fleet/queue", headers=auth_headers)
+        assert response.status_code == 200
+        assert [job["id"] for job in response.json()] == [queued.json()["id"]]
 
-def test_default_routing_and_soft_drain_are_visible(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    # Built in this order because the *first* printer registered becomes the
-    # fleet default, which is what this test asserts moves.
-    first = build_printer(
-        db_session,
-        name="First",
-        moonraker_url="http://first",
-        status=PrinterStatus.READY,
-    )
-    second = build_printer(
-        db_session,
-        name="Second",
-        moonraker_url="http://second",
-        status=PrinterStatus.READY,
-    )
+    def test_default_routing_and_soft_drain_are_visible(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        # Built in this order because the *first* printer registered becomes the
+        # fleet default, which is what this test asserts moves.
+        first = build_printer(
+            db_session,
+            name="First",
+            moonraker_url="http://first",
+            status=PrinterStatus.READY,
+        )
+        second = build_printer(
+            db_session,
+            name="Second",
+            moonraker_url="http://second",
+            status=PrinterStatus.READY,
+        )
 
-    configured = client.patch(
-        f"/api/v1/fleet/printers/{first.id}/routing",
-        headers=auth_headers,
-        json={"is_default": True, "drain_mode": True, "drain_reason": "Service"},
-    )
-    assert configured.status_code == 200
-    assert configured.json()["is_default"] is True
-    assert configured.json()["drain_mode"] is True
+        configured = client.patch(
+            f"/api/v1/fleet/printers/{first.id}/routing",
+            headers=auth_headers,
+            json={"is_default": True, "drain_mode": True, "drain_reason": "Service"},
+        )
+        assert configured.status_code == 200
+        assert configured.json()["is_default"] is True
+        assert configured.json()["drain_mode"] is True
 
-    client.patch(
-        f"/api/v1/fleet/printers/{second.id}/routing",
-        headers=auth_headers,
-        json={"is_default": True},
-    )
-    printers = client.get("/api/v1/printers", headers=auth_headers).json()
-    assert {row["id"] for row in printers if row["is_default"]} == {second.id}
+        client.patch(
+            f"/api/v1/fleet/printers/{second.id}/routing",
+            headers=auth_headers,
+            json={"is_default": True},
+        )
+        printers = client.get("/api/v1/printers", headers=auth_headers).json()
+        assert {row["id"] for row in printers if row["is_default"]} == {second.id}
 
-    client.patch(
-        f"/api/v1/fleet/printers/{second.id}/routing",
-        headers=auth_headers,
-        json={"drain_mode": True, "drain_reason": "Nozzle"},
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "default"},
-    )
-    assert queued.status_code == 201
-    assert queued.json()["printer_id"] == second.id
-    assert queued.json()["blocked_reason"] == "default_printer_unavailable"
+        client.patch(
+            f"/api/v1/fleet/printers/{second.id}/routing",
+            headers=auth_headers,
+            json={"drain_mode": True, "drain_reason": "Nozzle"},
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "default"},
+        )
+        assert queued.status_code == 201
+        assert queued.json()["printer_id"] == second.id
+        assert queued.json()["blocked_reason"] == "default_printer_unavailable"
 
+    def test_active_maintenance_blocks_routing_and_log_is_recorded(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Maintained",
+            moonraker_url="http://maintained",
+            status=PrinterStatus.READY,
+        )
+        now = utcnow()
 
-def test_active_maintenance_blocks_routing_and_log_is_recorded(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Maintained",
-        moonraker_url="http://maintained",
-        status=PrinterStatus.READY,
-    )
-    now = utcnow()
+        window = client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+            json={
+                "starts_at": (now - timedelta(minutes=5)).isoformat(),
+                "ends_at": (now + timedelta(minutes=30)).isoformat(),
+                "reason": "Nozzle replacement",
+            },
+        )
+        assert window.status_code == 201
 
-    window = client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=auth_headers,
-        json={
-            "starts_at": (now - timedelta(minutes=5)).isoformat(),
-            "ends_at": (now + timedelta(minutes=30)).isoformat(),
-            "reason": "Nozzle replacement",
-        },
-    )
-    assert window.status_code == 201
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        )
+        assert queued.status_code == 201
+        assert queued.json()["printer_id"] is None
+        assert queued.json()["blocked_reason"] == "no_eligible_printer"
 
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    )
-    assert queued.status_code == 201
-    assert queued.json()["printer_id"] is None
-    assert queued.json()["blocked_reason"] == "no_eligible_printer"
-
-    logged = client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-log",
-        headers=auth_headers,
-        json={"category": "nozzle", "note": "Installed 0.4 mm hardened nozzle"},
-    )
-    assert logged.status_code == 201
-    history = client.get(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-log",
-        headers=auth_headers,
-    )
-    assert history.status_code == 200
-    assert history.json()[0]["note"] == "Installed 0.4 mm hardened nozzle"
-    log_id = history.json()[0]["id"]
-    edited = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-log/{log_id}",
-        headers=auth_headers,
-        json={"note": "Installed and calibrated 0.4 mm hardened nozzle"},
-    )
-    assert edited.status_code == 200
-    assert "calibrated" in edited.json()["note"]
-    assert (
-        client.delete(
+        logged = client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-log",
+            headers=auth_headers,
+            json={"category": "nozzle", "note": "Installed 0.4 mm hardened nozzle"},
+        )
+        assert logged.status_code == 201
+        history = client.get(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-log",
+            headers=auth_headers,
+        )
+        assert history.status_code == 200
+        assert history.json()[0]["note"] == "Installed 0.4 mm hardened nozzle"
+        log_id = history.json()[0]["id"]
+        edited = client.patch(
             f"/api/v1/fleet/printers/{printer.id}/maintenance-log/{log_id}",
             headers=auth_headers,
-        ).status_code
-        == 204
-    )
-    assert (
-        client.delete(
-            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/{window.json()['id']}",
+            json={"note": "Installed and calibrated 0.4 mm hardened nozzle"},
+        )
+        assert edited.status_code == 200
+        assert "calibrated" in edited.json()["note"]
+        assert (
+            client.delete(
+                f"/api/v1/fleet/printers/{printer.id}/maintenance-log/{log_id}",
+                headers=auth_headers,
+            ).status_code
+            == 204
+        )
+        assert (
+            client.delete(
+                f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/{window.json()['id']}",
+                headers=auth_headers,
+            ).status_code
+            == 204
+        )
+
+    def test_absorbed_jobs_are_excluded_from_routing_counts(
+        self, db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Count scope",
+            moonraker_url="http://count-scope",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        db_session.add(
+            PrintJob(
+                printer_id=printer.id,
+                file_id=artifact.id,
+                model_id=artifact.model_id,
+                remote_filename="absorbed.gcode",
+                state=PrintJobState.PRINTING,
+                source="external",
+                dedupe_absorbed_at=utcnow(),
+                dedupe_survivor_id=1,
+            )
+        )
+        db_session.commit()
+
+        from app.services.fleet import _active_counts, build_routing_snapshot
+
+        assert build_routing_snapshot(db_session).active_counts == {}
+        assert _active_counts(db_session) == {}
+
+    def test_enqueue_404_for_missing_file(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.post(
+            "/api/v1/fleet/queue",
             headers=auth_headers,
-        ).status_code
-        == 204
-    )
+            json={"file_id": 99999, "strategy": "least_busy"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "file_not_found"
+
+    def test_enqueue_400_for_non_gcode_file(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        model = build_model(
+            db_session, name="Not gcode", slug="not-gcode", hash="c" * 64
+        )
+        stl = build_file(
+            db_session,
+            model,
+            path="queue/cube.stl",
+            filename="cube.stl",
+            file_type=FileType.STL,
+            version=1,
+            size_bytes=10,
+            sha256="d" * 64,
+        )
+
+        resp = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": stl.id, "strategy": "least_busy"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "file_not_gcode"
+
+    def test_enqueue_rejects_binary_gcode(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        model = build_model(
+            db_session, name="Binary gcode", slug="binary-gcode", hash="e" * 64
+        )
+        bgcode = build_file(
+            db_session,
+            model,
+            path="queue/cube.bgcode",
+            filename="cube.bgcode",
+            file_type=FileType.GCODE,
+            version=1,
+            size_bytes=10,
+            sha256="f" * 64,
+        )
+
+        resp = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": bgcode.id, "strategy": "least_busy"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "binary_gcode_not_printable"
 
 
-def test_queued_jobs_can_be_reordered_and_deleted(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    build_printer(
-        db_session,
-        name="Queue",
-        moonraker_url="http://queue",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    first = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-    second = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
+class TestListQueueJobs:
+    """Reading and reordering the queue."""
 
-    moved = client.patch(
-        f"/api/v1/fleet/queue/{second['id']}",
-        headers=auth_headers,
-        json={"queue_position": 1},
-    )
-    assert moved.status_code == 200
-    queue = client.get("/api/v1/fleet/queue", headers=auth_headers).json()
-    assert [row["id"] for row in queue[:2]] == [second["id"], first["id"]]
+    def test_queued_jobs_can_be_reordered_and_deleted(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Queue",
+            moonraker_url="http://queue",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        first = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+        second = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
 
-    changed_lane = client.patch(
-        f"/api/v1/fleet/queue/{first['id']}",
-        headers=auth_headers,
-        json={"priority": "rush"},
-    )
-    assert changed_lane.status_code == 200
-    assert changed_lane.json()["queue_position"] == 1
-    returned_to_lane = client.patch(
-        f"/api/v1/fleet/queue/{first['id']}",
-        headers=auth_headers,
-        json={"priority": "normal"},
-    )
-    assert returned_to_lane.status_code == 200
-    assert returned_to_lane.json()["queue_position"] == 2
+        moved = client.patch(
+            f"/api/v1/fleet/queue/{second['id']}",
+            headers=auth_headers,
+            json={"queue_position": 1},
+        )
+        assert moved.status_code == 200
+        queue = client.get("/api/v1/fleet/queue", headers=auth_headers).json()
+        assert [row["id"] for row in queue[:2]] == [second["id"], first["id"]]
 
-    deleted = client.delete(f"/api/v1/fleet/queue/{first['id']}", headers=auth_headers)
-    assert deleted.status_code == 200
-    assert deleted.json()["state"] == "cancelled"
-    queue = client.get("/api/v1/fleet/queue", headers=auth_headers).json()
-    assert first["id"] not in {row["id"] for row in queue}
-    assert queue[0]["queue_position"] == 1
+        changed_lane = client.patch(
+            f"/api/v1/fleet/queue/{first['id']}",
+            headers=auth_headers,
+            json={"priority": "rush"},
+        )
+        assert changed_lane.status_code == 200
+        assert changed_lane.json()["queue_position"] == 1
+        returned_to_lane = client.patch(
+            f"/api/v1/fleet/queue/{first['id']}",
+            headers=auth_headers,
+            json={"priority": "normal"},
+        )
+        assert returned_to_lane.status_code == 200
+        assert returned_to_lane.json()["queue_position"] == 2
+
+        deleted = client.delete(
+            f"/api/v1/fleet/queue/{first['id']}", headers=auth_headers
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["state"] == "cancelled"
+        queue = client.get("/api/v1/fleet/queue", headers=auth_headers).json()
+        assert first["id"] not in {row["id"] for row in queue}
+        assert queue[0]["queue_position"] == 1
+
+    def test_queue_history_is_bounded_and_pageable(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="History",
+            moonraker_url="http://history",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        for index in range(12):
+            db_session.add(
+                PrintJob(
+                    printer_id=printer.id,
+                    file_id=artifact.id,
+                    model_id=artifact.model_id,
+                    remote_filename=f"history-{index}.gcode",
+                    state=PrintJobState.COMPLETED,
+                    finished_at=utcnow() + timedelta(seconds=index),
+                )
+            )
+        db_session.commit()
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+
+        response = client.get(
+            "/api/v1/fleet/queue?history_limit=3&history_offset=3",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body[0]["id"] == queued["id"]
+        assert [row["remote_filename"] for row in body[1:]] == [
+            "history-8.gcode",
+            "history-7.gcode",
+            "history-6.gcode",
+        ]
+
+    def test_queue_history_applies_rbac_before_pagination(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ) -> None:
+        visible = Printer(name="Visible", moonraker_url="http://visible")
+        hidden = Printer(name="Hidden", moonraker_url="http://hidden")
+        user = build_user(
+            db_session, username="queue-viewer", password="Password123", active=True
+        )
+        db_session.add(visible)
+        db_session.add(hidden)
+        db_session.commit()
+        db_session.refresh(visible)
+        db_session.refresh(hidden)
+        db_session.refresh(user)
+        db_session.add(
+            PrinterPermission(
+                user_id=user.id,
+                printer_id=visible.id,
+                role=PrinterRole.VIEW,
+            )
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        now = utcnow()
+        for index, printer in enumerate((hidden, visible, hidden, visible)):
+            db_session.add(
+                PrintJob(
+                    printer_id=printer.id,
+                    file_id=artifact.id,
+                    model_id=artifact.model_id,
+                    remote_filename=f"rbac-{index}.gcode",
+                    state=PrintJobState.COMPLETED,
+                    finished_at=now + timedelta(seconds=index),
+                )
+            )
+        db_session.commit()
+        token = create_access_token(
+            user.id,
+            user.username,
+            scope="write",
+            auth_version=user.auth_version,
+        )
+
+        response = client.get(
+            "/api/v1/fleet/queue?history_limit=2",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        assert [row["remote_filename"] for row in response.json()] == [
+            "rbac-3.gcode",
+            "rbac-1.gcode",
+        ]
 
 
-def test_scheduler_dispatches_queued_job_once(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-    tmp_path: Path,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Dispatch",
-        moonraker_url="http://dispatch",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
+class TestQueueScheduler:
+    """The loop that actually sends a queued job to a printer."""
 
-    class Backend:
-        def exists(self, _key: str) -> bool:
-            return True
+    def test_scheduler_dispatches_queued_job_once(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        tmp_path: Path,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Dispatch",
+            moonraker_url="http://dispatch",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
 
-        def download_to_path(self, _key: str, target: Path) -> Path:
-            target.write_text("G28\n")
-            return target
+        class Backend:
+            def exists(self, _key: str) -> bool:
+                return True
 
-    provider = AsyncMock()
-    from app.services.printer_provider import capabilities_for_provider
+            def download_to_path(self, _key: str, target: Path) -> Path:
+                target.write_text("G28\n")
+                return target
 
-    provider.capabilities = capabilities_for_provider(printer.provider)
-    with (
-        patch("app.services.printer_jobs.get_backend", return_value=Backend()),
-    ):
+        provider = AsyncMock()
+        from app.services.printer_provider import capabilities_for_provider
+
+        provider.capabilities = capabilities_for_provider(printer.provider)
+        with (
+            patch("app.services.printer_jobs.get_backend", return_value=Backend()),
+        ):
+            from app.services.printer_jobs import dispatch_next
+
+            assert (
+                asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]
+            )
+            assert asyncio.run(dispatch_next(_provider_builder(provider))) is None
+
+        job = client.get("/api/v1/fleet/queue", headers=auth_headers).json()[0]
+        assert job["state"] == "started"
+        assert job["dispatch_attempts"] == 1
+        provider.upload.assert_awaited_once()
+        provider.start.assert_awaited_once()
+
+    def test_scheduler_rechecks_drain_before_dispatch(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Drain",
+            moonraker_url="http://drain",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        ).json()
+        client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/routing",
+            headers=auth_headers,
+            json={"drain_mode": True, "drain_reason": "Cooling down"},
+        )
+
         from app.services.printer_jobs import dispatch_next
 
-        assert asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]
-        assert asyncio.run(dispatch_next(_provider_builder(provider))) is None
-
-    job = client.get("/api/v1/fleet/queue", headers=auth_headers).json()[0]
-    assert job["state"] == "started"
-    assert job["dispatch_attempts"] == 1
-    provider.upload.assert_awaited_once()
-    provider.start.assert_awaited_once()
-
-
-def test_scheduler_rechecks_drain_before_dispatch(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Drain",
-        moonraker_url="http://drain",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "manual", "printer_id": printer.id},
-    ).json()
-    client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/routing",
-        headers=auth_headers,
-        json={"drain_mode": True, "drain_reason": "Cooling down"},
-    )
-
-    from app.services.printer_jobs import dispatch_next
-
-    assert asyncio.run(dispatch_next(_unused_provider_builder)) is None
-    job = next(
-        row
-        for row in client.get("/api/v1/fleet/queue", headers=auth_headers).json()
-        if row["id"] == queued["id"]
-    )
-    assert job["state"] == "queued"
-    assert job["blocked_reason"] == "printer_unavailable"
-
-
-def test_scheduler_candidate_batch_has_a_fixed_query_budget(
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Offline batch",
-        moonraker_url="http://offline-batch",
-        status=PrinterStatus.OFFLINE,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    for index in range(120):
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=artifact.id,
-                model_id=artifact.model_id,
-                remote_filename=f"batch-{index}.gcode",
-                state=PrintJobState.QUEUED,
-                routing_strategy=RoutingStrategy.MANUAL,
-                queue_position=index + 1,
-            )
+        assert asyncio.run(dispatch_next(_unused_provider_builder)) is None
+        job = next(
+            row
+            for row in client.get("/api/v1/fleet/queue", headers=auth_headers).json()
+            if row["id"] == queued["id"]
         )
-    db_session.commit()
-    from app.services.printer_jobs import _claim_next_sync
+        assert job["state"] == "queued"
+        assert job["blocked_reason"] == "printer_unavailable"
 
-    statements: list[str] = []
-    measured_thread = threading.get_ident()
+    def test_dispatched_job_reuses_same_row_through_completion(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Lifecycle",
+            moonraker_url="http://lifecycle",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
 
-    def _record(*args) -> None:  # noqa: ANN002
-        # The engine is process-wide in the suite. Ignore unrelated provider
-        # pollers that may still be finishing a worker-thread transaction.
-        if threading.get_ident() == measured_thread:
-            statements.append(args[2])
+        class Backend:
+            def exists(self, _key: str) -> bool:
+                return True
 
-    engine = db_session.get_bind()
-    event.listen(engine, "before_cursor_execute", _record)
-    try:
+            def download_to_path(self, _key: str, target: Path) -> Path:
+                target.write_text("G28\n")
+                return target
+
+        provider = AsyncMock()
+        from app.services.printer_hub import PrinterHub
+        from app.services.printer_jobs import dispatch_next
+        from app.services.printer_provider import capabilities_for_provider
+
+        provider.capabilities = capabilities_for_provider(printer.provider)
+        with (
+            patch("app.services.printer_jobs.get_backend", return_value=Backend()),
+        ):
+            assert (
+                asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]
+            )
+
+        hub = PrinterHub()
+        hub._sync_active_job_db(  # noqa: SLF001 - lifecycle integration seam
+            printer.id,
+            "printing",
+            queued["remote_filename"],
+            0.5,
+            {},
+        )
+        hub._sync_active_job_db(  # noqa: SLF001 - lifecycle integration seam
+            printer.id,
+            "complete",
+            queued["remote_filename"],
+            1.0,
+            {"total_duration": 120},
+        )
+
+        db_session.expire_all()
+        rows = db_session.exec(
+            select(PrintJob).where(
+                PrintJob.remote_filename == queued["remote_filename"]
+            )
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].id == queued["id"]
+        assert rows[0].state == PrintJobState.COMPLETED
+        assert rows[0].actual_duration_s == 120
+
+    def test_scheduler_candidate_batch_has_a_fixed_query_budget(
+        self,
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Offline batch",
+            moonraker_url="http://offline-batch",
+            status=PrinterStatus.OFFLINE,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        for index in range(120):
+            db_session.add(
+                PrintJob(
+                    printer_id=printer.id,
+                    file_id=artifact.id,
+                    model_id=artifact.model_id,
+                    remote_filename=f"batch-{index}.gcode",
+                    state=PrintJobState.QUEUED,
+                    routing_strategy=RoutingStrategy.MANUAL,
+                    queue_position=index + 1,
+                )
+            )
+        db_session.commit()
+        from app.services.printer_jobs import _claim_next_sync
+
+        statements: list[str] = []
+        measured_thread = threading.get_ident()
+
+        def _record(*args) -> None:  # noqa: ANN002
+            # The engine is process-wide in the suite. Ignore unrelated provider
+            # pollers that may still be finishing a worker-thread transaction.
+            if threading.get_ident() == measured_thread:
+                statements.append(args[2])
+
+        engine = db_session.get_bind()
+        event.listen(engine, "before_cursor_execute", _record)
+        try:
+            assert _claim_next_sync() is None
+        finally:
+            event.remove(engine, "before_cursor_execute", _record)
+
+        db_session.expire_all()
+        blocked = db_session.exec(
+            select(PrintJob).where(PrintJob.blocked_reason == "printer_unavailable")
+        ).all()
+        assert len(blocked) == 100
+        assert len(statements) <= 14
+
+        # Previously blocked rows sort after untouched rows, so later ticks cannot
+        # starve candidates beyond the bounded first page.
         assert _claim_next_sync() is None
-    finally:
-        event.remove(engine, "before_cursor_execute", _record)
-
-    db_session.expire_all()
-    blocked = db_session.exec(
-        select(PrintJob).where(PrintJob.blocked_reason == "printer_unavailable")
-    ).all()
-    assert len(blocked) == 100
-    assert len(statements) <= 14
-
-    # Previously blocked rows sort after untouched rows, so later ticks cannot
-    # starve candidates beyond the bounded first page.
-    assert _claim_next_sync() is None
-    db_session.expire_all()
-    assert (
-        len(
-            db_session.exec(
-                select(PrintJob).where(PrintJob.blocked_reason == "printer_unavailable")
-            ).all()
+        db_session.expire_all()
+        assert (
+            len(
+                db_session.exec(
+                    select(PrintJob).where(
+                        PrintJob.blocked_reason == "printer_unavailable"
+                    )
+                ).all()
+            )
+            == 120
         )
-        == 120
-    )
 
+    def test_dispatch_sql_does_not_block_the_event_loop(self, monkeypatch) -> None:
+        from app.services import printer_jobs
 
-def test_dispatch_sql_does_not_block_the_event_loop(monkeypatch) -> None:
-    from app.services import printer_jobs
+        def _slow_claim() -> None:
+            time.sleep(0.2)
+            return None
 
-    def _slow_claim() -> None:
-        time.sleep(0.2)
-        return None
+        monkeypatch.setattr(printer_jobs, "_claim_next_sync", _slow_claim)
 
-    monkeypatch.setattr(printer_jobs, "_claim_next_sync", _slow_claim)
+        async def _run() -> None:
+            dispatch = asyncio.create_task(
+                printer_jobs.dispatch_next(_unused_provider_builder)
+            )
+            started = time.monotonic()
+            await asyncio.sleep(0.02)
+            assert time.monotonic() - started < 0.1
+            assert await dispatch is None
 
-    async def _run() -> None:
-        dispatch = asyncio.create_task(
-            printer_jobs.dispatch_next(_unused_provider_builder)
+        asyncio.run(_run())
+
+    def test_failed_dispatch_can_be_retried(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Retry",
+            moonraker_url="http://retry",
+            status=PrinterStatus.READY,
         )
-        started = time.monotonic()
-        await asyncio.sleep(0.02)
-        assert time.monotonic() - started < 0.1
-        assert await dispatch is None
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+        from app.services.printer_jobs import dispatch_next
 
-    asyncio.run(_run())
-
-
-def test_absorbed_jobs_are_excluded_from_routing_counts(db_session: Session) -> None:
-    printer = build_printer(
-        db_session,
-        name="Count scope",
-        moonraker_url="http://count-scope",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    db_session.add(
-        PrintJob(
-            printer_id=printer.id,
-            file_id=artifact.id,
-            model_id=artifact.model_id,
-            remote_filename="absorbed.gcode",
-            state=PrintJobState.PRINTING,
-            source="external",
-            dedupe_absorbed_at=utcnow(),
-            dedupe_survivor_id=1,
-        )
-    )
-    db_session.commit()
-
-    from app.services.fleet import _active_counts, build_routing_snapshot
-
-    assert build_routing_snapshot(db_session).active_counts == {}
-    assert _active_counts(db_session) == {}
-
-
-def test_failed_dispatch_can_be_retried(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    build_printer(
-        db_session,
-        name="Retry",
-        moonraker_url="http://retry",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-    from app.services.printer_jobs import dispatch_next
-
-    assert asyncio.run(dispatch_next(_unused_provider_builder)) == queued["id"]
-    retried = client.post(
-        f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
-    )
-
-    assert retried.status_code == 200
-    assert retried.json()["state"] == "queued"
-    assert retried.json()["error"] is None
-    assert retried.json()["retryable"] is False
-
-
-def test_ambiguous_live_dispatch_cannot_be_retried_automatically(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    build_printer(
-        db_session,
-        name="Ambiguous live dispatch",
-        moonraker_url="http://retry",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-    from app.services.printer_jobs import DispatchOutcomeUnknownError, dispatch_next
-
-    with patch(
-        "app.services.printer_jobs._dispatch_claimed",
-        AsyncMock(side_effect=DispatchOutcomeUnknownError()),
-    ):
         assert asyncio.run(dispatch_next(_unused_provider_builder)) == queued["id"]
-
-    db_session.expire_all()
-    failed = db_session.get(PrintJob, queued["id"])
-    assert failed is not None
-    assert failed.error == "dispatch_outcome_unknown"
-    assert failed.retryable is False
-    retry = client.post(
-        f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
-    )
-    assert retry.status_code == 400
-    assert retry.json()["detail"] == "queue_job_not_retryable"
-
-
-def test_restart_reconciles_stranded_dispatch(db_session: Session) -> None:
-    printer = build_printer(
-        db_session,
-        name="Restart",
-        moonraker_url="http://restart",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = build_print_job(
-        db_session,
-        artifact,
-        printer_id=printer.id,
-        remote_filename="restart.gcode",
-        state=PrintJobState.UPLOADING,
-        dispatch_claimed_at=utcnow(),
-    )
-
-    from app.services.printer_jobs import reconcile_stranded_dispatches
-
-    assert reconcile_stranded_dispatches() == 1
-    db_session.expire_all()
-    restored = db_session.get(PrintJob, job.id)
-    assert restored is not None
-    assert restored.state == PrintJobState.FAILED
-    assert restored.error == "dispatch_outcome_unknown"
-    assert restored.retryable is False
-
-
-def test_ambiguous_restart_cannot_be_retried_automatically(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Ambiguous",
-        moonraker_url="http://ambiguous",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = build_print_job(
-        db_session,
-        artifact,
-        printer_id=printer.id,
-        remote_filename="ambiguous.gcode",
-        state=PrintJobState.UPLOADING,
-        dispatch_claimed_at=utcnow(),
-    )
-
-    from app.services.printer_jobs import reconcile_stranded_dispatches
-
-    reconcile_stranded_dispatches()
-    response = client.post(f"/api/v1/fleet/queue/{job.id}/retry", headers=auth_headers)
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "queue_job_not_retryable"
-
-
-def test_dispatched_job_reuses_same_row_through_completion(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Lifecycle",
-        moonraker_url="http://lifecycle",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-
-    class Backend:
-        def exists(self, _key: str) -> bool:
-            return True
-
-        def download_to_path(self, _key: str, target: Path) -> Path:
-            target.write_text("G28\n")
-            return target
-
-    provider = AsyncMock()
-    from app.services.printer_hub import PrinterHub
-    from app.services.printer_jobs import dispatch_next
-    from app.services.printer_provider import capabilities_for_provider
-
-    provider.capabilities = capabilities_for_provider(printer.provider)
-    with (
-        patch("app.services.printer_jobs.get_backend", return_value=Backend()),
-    ):
-        assert asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]
-
-    hub = PrinterHub()
-    hub._sync_active_job_db(  # noqa: SLF001 - lifecycle integration seam
-        printer.id,
-        "printing",
-        queued["remote_filename"],
-        0.5,
-        {},
-    )
-    hub._sync_active_job_db(  # noqa: SLF001 - lifecycle integration seam
-        printer.id,
-        "complete",
-        queued["remote_filename"],
-        1.0,
-        {"total_duration": 120},
-    )
-
-    db_session.expire_all()
-    rows = db_session.exec(
-        select(PrintJob).where(PrintJob.remote_filename == queued["remote_filename"])
-    ).all()
-    assert len(rows) == 1
-    assert rows[0].id == queued["id"]
-    assert rows[0].state == PrintJobState.COMPLETED
-    assert rows[0].actual_duration_s == 120
-
-
-def test_queue_history_is_bounded_and_pageable(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="History",
-        moonraker_url="http://history",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    for index in range(12):
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=artifact.id,
-                model_id=artifact.model_id,
-                remote_filename=f"history-{index}.gcode",
-                state=PrintJobState.COMPLETED,
-                finished_at=utcnow() + timedelta(seconds=index),
-            )
+        retried = client.post(
+            f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
         )
-    db_session.commit()
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
 
-    response = client.get(
-        "/api/v1/fleet/queue?history_limit=3&history_offset=3",
-        headers=auth_headers,
-    )
+        assert retried.status_code == 200
+        assert retried.json()["state"] == "queued"
+        assert retried.json()["error"] is None
+        assert retried.json()["retryable"] is False
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body[0]["id"] == queued["id"]
-    assert [row["remote_filename"] for row in body[1:]] == [
-        "history-8.gcode",
-        "history-7.gcode",
-        "history-6.gcode",
-    ]
-
-
-def test_queue_history_applies_rbac_before_pagination(
-    client: TestClient,
-    db_session: Session,
-) -> None:
-    visible = Printer(name="Visible", moonraker_url="http://visible")
-    hidden = Printer(name="Hidden", moonraker_url="http://hidden")
-    user = build_user(
-        db_session, username="queue-viewer", password="Password123", active=True
-    )
-    db_session.add(visible)
-    db_session.add(hidden)
-    db_session.commit()
-    db_session.refresh(visible)
-    db_session.refresh(hidden)
-    db_session.refresh(user)
-    db_session.add(
-        PrinterPermission(
-            user_id=user.id,
-            printer_id=visible.id,
-            role=PrinterRole.VIEW,
+    def test_ambiguous_live_dispatch_cannot_be_retried_automatically(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Ambiguous live dispatch",
+            moonraker_url="http://retry",
+            status=PrinterStatus.READY,
         )
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    now = utcnow()
-    for index, printer in enumerate((hidden, visible, hidden, visible)):
-        db_session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=artifact.id,
-                model_id=artifact.model_id,
-                remote_filename=f"rbac-{index}.gcode",
-                state=PrintJobState.COMPLETED,
-                finished_at=now + timedelta(seconds=index),
-            )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+        from app.services.printer_jobs import DispatchOutcomeUnknownError, dispatch_next
+
+        with patch(
+            "app.services.printer_jobs._dispatch_claimed",
+            AsyncMock(side_effect=DispatchOutcomeUnknownError()),
+        ):
+            assert asyncio.run(dispatch_next(_unused_provider_builder)) == queued["id"]
+
+        db_session.expire_all()
+        failed = db_session.get(PrintJob, queued["id"])
+        assert failed is not None
+        assert failed.error == "dispatch_outcome_unknown"
+        assert failed.retryable is False
+        retry = client.post(
+            f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
         )
-    db_session.commit()
-    token = create_access_token(
-        user.id,
-        user.username,
-        scope="write",
-        auth_version=user.auth_version,
-    )
+        assert retry.status_code == 400
+        assert retry.json()["detail"] == "queue_job_not_retryable"
 
-    response = client.get(
-        "/api/v1/fleet/queue?history_limit=2",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    def test_restart_reconciles_stranded_dispatch(self, db_session: Session) -> None:
+        printer = build_printer(
+            db_session,
+            name="Restart",
+            moonraker_url="http://restart",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        job = build_print_job(
+            db_session,
+            artifact,
+            printer_id=printer.id,
+            remote_filename="restart.gcode",
+            state=PrintJobState.UPLOADING,
+            dispatch_claimed_at=utcnow(),
+        )
 
-    assert response.status_code == 200
-    assert [row["remote_filename"] for row in response.json()] == [
-        "rbac-3.gcode",
-        "rbac-1.gcode",
-    ]
+        from app.services.printer_jobs import reconcile_stranded_dispatches
 
+        assert reconcile_stranded_dispatches() == 1
+        db_session.expire_all()
+        restored = db_session.get(PrintJob, job.id)
+        assert restored is not None
+        assert restored.state == PrintJobState.FAILED
+        assert restored.error == "dispatch_outcome_unknown"
+        assert restored.retryable is False
 
-def test_enqueue_404_for_missing_file(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": 99999, "strategy": "least_busy"},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "file_not_found"
+    def test_ambiguous_restart_cannot_be_retried_automatically(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Ambiguous",
+            moonraker_url="http://ambiguous",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        job = build_print_job(
+            db_session,
+            artifact,
+            printer_id=printer.id,
+            remote_filename="ambiguous.gcode",
+            state=PrintJobState.UPLOADING,
+            dispatch_claimed_at=utcnow(),
+        )
 
+        from app.services.printer_jobs import reconcile_stranded_dispatches
 
-def test_enqueue_400_for_non_gcode_file(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = build_model(db_session, name="Not gcode", slug="not-gcode", hash="c" * 64)
-    stl = build_file(
-        db_session,
-        model,
-        path="queue/cube.stl",
-        filename="cube.stl",
-        file_type=FileType.STL,
-        version=1,
-        size_bytes=10,
-        sha256="d" * 64,
-    )
+        reconcile_stranded_dispatches()
+        response = client.post(
+            f"/api/v1/fleet/queue/{job.id}/retry", headers=auth_headers
+        )
 
-    resp = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": stl.id, "strategy": "least_busy"},
-    )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "file_not_gcode"
-
-
-def test_enqueue_rejects_binary_gcode(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = build_model(
-        db_session, name="Binary gcode", slug="binary-gcode", hash="e" * 64
-    )
-    bgcode = build_file(
-        db_session,
-        model,
-        path="queue/cube.bgcode",
-        filename="cube.bgcode",
-        file_type=FileType.GCODE,
-        version=1,
-        size_bytes=10,
-        sha256="f" * 64,
-    )
-
-    resp = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": bgcode.id, "strategy": "least_busy"},
-    )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "binary_gcode_not_printable"
-
-
-def test_list_maintenance_windows_returns_created_window(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="WindowList",
-        moonraker_url="http://window-list",
-        status=PrinterStatus.READY,
-    )
-    now = utcnow()
-    created = client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=auth_headers,
-        json={
-            "starts_at": now.isoformat(),
-            "ends_at": (now + timedelta(minutes=30)).isoformat(),
-            "reason": "Cleaning",
-        },
-    )
-    assert created.status_code == 201
-
-    listed = client.get(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=auth_headers,
-    )
-    assert listed.status_code == 200
-    assert len(listed.json()) == 1
-    assert listed.json()[0]["reason"] == "Cleaning"
+        assert response.status_code == 400
+        assert response.json()["detail"] == "queue_job_not_retryable"
 
 
 def _user_headers(
@@ -1493,6 +1489,35 @@ class TestGetMaintenanceWindows:
         )
         assert resp.status_code == 404
         assert resp.json()["detail"] == "printer_not_found"
+
+    def test_list_maintenance_windows_returns_created_window(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="WindowList",
+            moonraker_url="http://window-list",
+            status=PrinterStatus.READY,
+        )
+        now = utcnow()
+        created = client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+            json={
+                "starts_at": now.isoformat(),
+                "ends_at": (now + timedelta(minutes=30)).isoformat(),
+                "reason": "Cleaning",
+            },
+        )
+        assert created.status_code == 201
+
+        listed = client.get(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+        )
+        assert listed.status_code == 200
+        assert len(listed.json()) == 1
+        assert listed.json()[0]["reason"] == "Cleaning"
 
 
 class TestPostMaintenanceWindow:

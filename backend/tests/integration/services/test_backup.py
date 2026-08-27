@@ -93,221 +93,9 @@ def _auth_headers(env: BackupEnv) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def test_backup_excludes_user_owned_external_artifacts(backup_env: BackupEnv):
-    external = backup_env.root / "nas" / "linked.stl"
-    external.parent.mkdir()
-    external.write_bytes(b"user-owned")
-    with backup_env.new_session() as session:
-        model = build_model(session, name="Linked", slug="linked", hash="c" * 64)
-        session.add(
-            File(
-                model_id=model.id,
-                path=str(external),
-                original_filename=external.name,
-                file_type=FileType.STL,
-                is_external=True,
-                size_bytes=external.stat().st_size,
-                sha256="d" * 64,
-            )
-        )
-        session.commit()
-
-    meta = backup.create_backup()
-
-    assert meta.file_count == 0
-
-
-def test_backup_ignores_external_job_sentinel_but_keeps_vault_artifact(
-    backup_env: BackupEnv,
-):
-    """The /dev/null placeholder is not a blob, while real vault files remain."""
-    _model_id, vault_key = seed_model_with_blob(
-        backup_env, name="Vault artifact", content=b"real vault bytes"
-    )
-    with backup_env.new_session() as session:
-        sentinel_model = build_model(
-            session, name="__external__", slug="__external__", hash=SENTINEL_MODEL_HASH
-        )
-        sentinel_file = build_file(
-            session,
-            sentinel_model,
-            path="/dev/null",
-            filename="__external__",
-            file_type=FileType.GCODE,
-            version=1,
-            size_bytes=0,
-            sha256=SENTINEL_FILE_HASH,
-        )
-        printer = build_printer(session, name="External history")
-        session.refresh(sentinel_file)
-        session.refresh(printer)
-        session.add(
-            PrintJob(
-                printer_id=printer.id,
-                file_id=sentinel_file.id,
-                model_id=sentinel_model.id,
-                remote_filename="external.gcode",
-                source="external",
-                state=PrintJobState.COMPLETED,
-            )
-        )
-        session.commit()
-
-    meta = backup.create_backup()
-
-    assert meta.file_count == 1
-    with tarfile.open(meta.path, mode="r:gz") as archive:
-        manifest = archive.extractfile("manifest.json")
-        assert manifest is not None
-        entries = json.loads(manifest.read())["files"]
-    assert [entry["key"] for entry in entries] == [vault_key]
-
-
-def test_backup_appears_in_list_and_get(backup_env: BackupEnv):
-    seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-
-    listed = backup.list_backups()
-    assert any(m.id == meta.id for m in listed)
-
-    fetched = backup.get_backup(meta.id)
-    assert fetched is not None
-    assert fetched.id == meta.id
-    assert fetched.file_count == 1
-
-
-def test_download_backup_archive_endpoint(client: TestClient, backup_env: BackupEnv):
-    seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-
-    resp = client.get(
-        f"/api/v1/backups/{meta.id}/download",
-        headers=_auth_headers(backup_env),
-    )
-
-    assert resp.status_code == 200, resp.text
-    assert resp.content.startswith(b"\x1f\x8b")
-    assert Path(meta.path).name in resp.headers["content-disposition"]
-
-
 # ---------------------------------------------------------------------------
 # Restore round trip
 # ---------------------------------------------------------------------------
-
-
-def test_restore_recovers_database_rows(backup_env: BackupEnv):
-    _, key = seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
-    meta = backup.create_backup()
-
-    # Disaster: wipe every model row.
-    with backup_env.new_session() as session:
-        for m in session.exec(select(Model)).all():
-            session.delete(m)
-        session.commit()
-    backup_env.engine.dispose()
-
-    assert _read_model_names(backup_env) == []
-    Path(key).unlink()
-
-    backup.restore_backup(meta.id)
-
-    assert "Widget" in _read_model_names(backup_env)
-    with backup_env.new_session() as session:
-        owned = session.exec(
-            select(OwnedStorageObject).where(OwnedStorageObject.key == key)
-        ).one()
-        receipt = storage_backend.CreationReceipt(
-            key=owned.key,
-            size=owned.size_bytes,
-            token=owned.token,
-            backend=owned.backend,
-            namespace=owned.namespace,
-            etag=owned.etag,
-            device=owned.device,
-            inode=owned.inode,
-            ctime_ns=owned.ctime_ns,
-        )
-        assert get_backend().creation_matches(receipt)
-
-
-def test_restore_replaces_live_wal_state_without_replay(backup_env: BackupEnv):
-    _, key = seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
-    meta = backup.create_backup()
-
-    # Keep a WAL connection open with a committed post-backup change. A raw
-    # overwrite of the main DB file lets this WAL replay over the restored DB.
-    live = sqlite3.connect(backup_env.db_file)
-    try:
-        assert live.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
-        live.execute(
-            "UPDATE models SET name = 'Post Backup State' WHERE name = 'Widget'"
-        )
-        live.commit()
-        assert live.execute("SELECT name FROM models").fetchone() == (
-            "Post Backup State",
-        )
-        assert Path(f"{backup_env.db_file}-wal").exists()
-        Path(key).unlink()
-
-        backup.restore_backup(meta.id)
-
-        assert live.execute("SELECT name FROM models").fetchone() == ("Widget",)
-        assert _read_model_names(backup_env) == ["Widget"]
-    finally:
-        live.close()
-
-
-def test_restore_recovers_blob_bytes(backup_env: BackupEnv):
-    content = b"solid widget\nendsolid\n"
-    _model_id, key = seed_model_with_blob(backup_env, name="Widget", content=content)
-    meta = backup.create_backup()
-
-    # Disaster: delete the stored blob.
-    Path(key).unlink()
-    assert not Path(key).exists()
-
-    result = backup.restore_backup(meta.id)
-
-    assert result["restored_files"] == 1
-    # The blob the database references must be back, byte-for-byte.
-    assert Path(key).exists(), "restored blob is missing at its storage key"
-    assert Path(key).read_bytes() == content
-
-
-def test_download_then_restore_endpoint_round_trip(
-    client: TestClient, backup_env: BackupEnv
-):
-    content = b"solid endpoint widget\nendsolid\n"
-    _model_id, key = seed_model_with_blob(
-        backup_env, name="Endpoint Widget", content=content
-    )
-    headers = _auth_headers(backup_env)
-
-    create = client.post("/api/v1/backups", headers=headers)
-    assert create.status_code == 202, create.text
-    backup_id = create.json()["backup_id"]
-
-    download = client.get(f"/api/v1/backups/{backup_id}/download", headers=headers)
-    assert download.status_code == 200, download.text
-    assert download.content.startswith(b"\x1f\x8b")
-    assert f"{backup_id}.tar.gz" in download.headers["content-disposition"]
-
-    # Disaster: remove both catalog row and stored bytes, then restore via API.
-    with backup_env.new_session() as session:
-        for m in session.exec(select(Model).where(Model.name == "Endpoint Widget")):
-            session.delete(m)
-        session.commit()
-    Path(key).unlink()
-
-    assert "Endpoint Widget" not in _read_model_names(backup_env)
-    assert not Path(key).exists()
-
-    restore = client.post(f"/api/v1/backups/{backup_id}/restore", headers=headers)
-    assert restore.status_code == 200, restore.text
-    assert restore.json() == {"backup_id": backup_id, "restored_files": 1}
-
-    assert "Endpoint Widget" in _read_model_names(backup_env)
-    assert Path(key).read_bytes() == content
 
 
 # ---------------------------------------------------------------------------
@@ -322,309 +110,14 @@ def test_download_then_restore_endpoint_round_trip(
 # ---------------------------------------------------------------------------
 
 
-def test_backup_writes_audit_row(backup_env: BackupEnv):
-    from app.db.models import AuditLog
-
-    backup.create_backup()
-
-    with backup_env.new_session() as session:
-        rows = session.exec(
-            select(AuditLog).where(AuditLog.action == "backup.create")
-        ).all()
-    assert len(rows) == 1
-    assert rows[0].resource_type == "backup"
-
-
-def test_restore_writes_complete_row_on_success(backup_env: BackupEnv):
-    from app.db.models import AuditLog
-
-    _, key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-    Path(key).unlink()
-
-    backup.restore_backup(meta.id)
-
-    # restore.start was written before the DB swap and lives only in the
-    # pre-restore database, which no longer exists after a successful
-    # restore — restore.complete is the persisted, post-swap signal.
-    with backup_env.new_session() as session:
-        rows = session.exec(
-            select(AuditLog).where(AuditLog.action == "restore.complete")
-        ).all()
-    assert len(rows) == 1
-    assert rows[0].resource_type == "backup"
-
-
-def test_failed_restore_writes_failed_row(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-):
-    from app.db.models import AuditLog
-
-    seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError("simulated failure mid-restore")
-
-    monkeypatch.setattr(backup, "_download_backup_to_local", _boom)
-
-    with pytest.raises(RuntimeError):
-        backup.restore_backup(meta.id)
-
-    with backup_env.new_session() as session:
-        actions = {row.action for row in session.exec(select(AuditLog)).all()}
-    assert "restore.failed" in actions
-
-
-def test_restore_collision_preserves_files_and_database(backup_env: BackupEnv):
-    _, first_key = seed_model_with_blob(
-        backup_env, name="First", content=b"backup-first"
-    )
-    _, second_key = seed_model_with_blob(
-        backup_env, name="Second", content=b"backup-second"
-    )
-    meta = backup.create_backup()
-
-    Path(first_key).write_bytes(b"current-first")
-    Path(second_key).write_bytes(b"current-second")
-    with backup_env.new_session() as session:
-        session.exec(
-            select(Model).where(Model.name == "First")
-        ).one().name = "Current First"
-        session.commit()
-
-    with pytest.raises(backup.RestoreConflictError, match="destination_exists"):
-        backup.restore_backup(meta.id)
-
-    assert Path(first_key).read_bytes() == b"current-first"
-    assert Path(second_key).read_bytes() == b"current-second"
-    assert "Current First" in _read_model_names(backup_env)
-
-
-def test_failed_blob_restore_removes_only_receipted_partial_creates(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-):
-    _, first_key = seed_model_with_blob(
-        backup_env, name="First", content=b"backup-first"
-    )
-    _, second_key = seed_model_with_blob(
-        backup_env, name="Second", content=b"backup-second"
-    )
-    meta = backup.create_backup()
-    Path(first_key).unlink()
-    Path(second_key).unlink()
-
-    backend = get_backend()
-    real_create = backend.create_stream
-    writes = 0
-
-    def fail_second_write(source, key: str):
-        nonlocal writes
-        writes += 1
-        if writes == 2:
-            raise OSError("simulated second blob failure")
-        return real_create(source, key)
-
-    monkeypatch.setattr(backend, "create_stream", fail_second_write)
-
-    with pytest.raises(OSError, match="second blob failure"):
-        backup.restore_backup(meta.id)
-
-    assert not Path(first_key).exists()
-    assert not Path(second_key).exists()
-
-
 # ---------------------------------------------------------------------------
 # Restore gate (item 11: quiesce background loops during restore)
 # ---------------------------------------------------------------------------
 
 
-def test_restore_rejected_while_job_running(backup_env: BackupEnv):
-    from app.services.jobs import registry
-
-    model_id, _key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-
-    job_id = registry.create()
-    registry.update(job_id, state="running")
-    try:
-        with pytest.raises(backup.RestoreConflictError):
-            backup.restore_backup(meta.id)
-    finally:
-        registry.update(job_id, state="completed")
-
-    assert not backup.restore_in_progress()
-    with backup_env.new_session() as session:
-        assert session.get(Model, model_id) is not None
-
-
-def test_gc_skips_during_restore(backup_env: BackupEnv):
-    from app.services import trash
-
-    # A trashed row past retention would normally be purged.
-    with backup_env.new_session() as session:
-        from datetime import timedelta
-
-        from app.core.time import utcnow
-        from app.db.models import Tag
-
-        session.add(
-            Tag(name="stale", slug="stale", deleted_at=utcnow() - timedelta(days=999))
-        )
-        session.commit()
-
-    backup._restore_gate.set()
-    try:
-        result = trash.gc_soft_deleted()
-    finally:
-        backup._restore_gate.clear()
-
-    assert result == {"rows": 0, "orphan_blobs": 0}
-    with backup_env.new_session() as session:
-        assert session.exec(select(Tag)).first() is not None
-
-
-def test_restore_maintenance_waits_for_admitted_mutation(backup_env: BackupEnv):
-    assert backup.begin_mutating_operation() is True
-    maintenance_ready = threading.Event()
-    release_maintenance = threading.Event()
-
-    def enter_maintenance() -> None:
-        backup._begin_restore_maintenance()
-        maintenance_ready.set()
-        release_maintenance.wait(timeout=5)
-        backup._end_restore_maintenance()
-
-    thread = threading.Thread(target=enter_maintenance)
-    thread.start()
-    try:
-        for _ in range(100):
-            if backup.restore_in_progress():
-                break
-            time.sleep(0.01)
-        assert backup.restore_in_progress() is True
-        assert maintenance_ready.is_set() is False
-
-        backup.end_mutating_operation()
-        assert maintenance_ready.wait(timeout=5) is True
-    finally:
-        release_maintenance.set()
-        thread.join(timeout=5)
-        if backup.restore_in_progress():
-            backup._end_restore_maintenance()
-
-
-def test_mutating_request_is_rejected_during_restore(
-    client: TestClient, backup_env: BackupEnv
-):
-    headers = _auth_headers(backup_env)
-    backup._restore_gate.set()
-    try:
-        response = client.post("/api/v1/backups", headers=headers)
-    finally:
-        backup._restore_gate.clear()
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "restore_in_progress"}
-
-
-def test_backup_id_round_trips_despite_timestamped_name(backup_env: BackupEnv):
-    """The archive name embeds a hyphenated timestamp before the id; the id
-    derived on list/get must still equal the one create_backup returned
-    (regression for the rsplit-based id extraction)."""
-    seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-
-    # id is the trailing 12-hex token, not a timestamp fragment.
-    assert len(meta.id) == 12
-    assert all(c in "0123456789abcdef" for c in meta.id)
-    assert f"-{meta.id}.tar.gz" in Path(meta.path).name
-
-    fetched = backup.get_backup(meta.id)
-    assert fetched is not None and fetched.id == meta.id
-
-
-def test_purge_keeps_fresh_removes_old(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-):
-    from datetime import timedelta
-
-    from app.core.time import utcnow
-
-    # An old backup: pin create_backup's clock 60 days into the past.
-    monkeypatch.setattr(backup, "utcnow", lambda: utcnow() - timedelta(days=60))
-    old = backup.create_backup()
-
-    # A fresh backup at the real clock.
-    monkeypatch.setattr(backup, "utcnow", utcnow)
-    fresh = backup.create_backup()
-
-    removed = backup.purge_old_backups(retain_days=30)
-
-    assert removed == 1
-    remaining = {m.id for m in backup.list_backups()}
-    assert old.id not in remaining
-    assert fresh.id in remaining
-
-
 # ---------------------------------------------------------------------------
 # Corrupted / invalid archives (local — no S3 endpoint needed)
 # ---------------------------------------------------------------------------
-
-
-def test_restore_skips_directory_entries_under_files_prefix(
-    backup_env: BackupEnv,
-):
-    """A directory entry under files/ (tar.extractfile returns None for it)
-    must be skipped, not crash the restore or count as a restored file."""
-    import gzip
-    import io
-    import tarfile
-
-    content = b"solid widget\n"
-    _model_id, key = seed_model_with_blob(backup_env, name="Widget", content=content)
-    meta = backup.create_backup()
-    archive = Path(meta.path)
-
-    # Rewrite the archive with an extra directory entry under files/.
-    entries: list[tuple[tarfile.TarInfo, bytes | None]] = []
-    with gzip.open(archive, "rb") as gz, tarfile.open(fileobj=gz, mode="r:") as tar:
-        for member in tar.getmembers():
-            data = tar.extractfile(member).read() if member.isfile() else None
-            entries.append((member, data))
-
-    updated_archive = io.BytesIO()
-    with (
-        gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz,
-        tarfile.open(fileobj=gz, mode="w:") as tar,
-    ):
-        for member, data in entries:
-            if data is not None:
-                tar.addfile(member, io.BytesIO(data))
-            else:
-                tar.addfile(member)
-        dir_info = tarfile.TarInfo(name="files/empty-subdir")
-        dir_info.type = tarfile.DIRTYPE
-        tar.addfile(dir_info)
-    from app.services.storage_ownership import replace_owned_bytes
-
-    with backup_env.new_session() as session:
-        replace_owned_bytes(
-            session,
-            storage_backend.LocalStorageBackend(),
-            str(archive),
-            updated_archive.getvalue(),
-            object_kind="backup",
-        )
-        session.commit()
-
-    Path(key).unlink()
-
-    result = backup.restore_backup(meta.id)
-
-    # Only the real blob counts as restored; the directory entry is skipped.
-    assert result["restored_files"] == 1
-    assert Path(key).read_bytes() == content
 
 
 # ---------------------------------------------------------------------------
@@ -633,57 +126,6 @@ def test_restore_skips_directory_entries_under_files_prefix(
 # _read_manifest / _restore_key_map / restore_backup (all local-only, no
 # S3 endpoint needed).
 # ---------------------------------------------------------------------------
-
-
-def test_restore_skips_unreadable_files_member(backup_env: BackupEnv):
-    """A files/ tar member that isn't a regular file (e.g. a directory entry)
-    must be skipped during restore, not crash it or count toward
-    restored_files."""
-    import gzip
-    import io
-    import tarfile
-
-    content = b"solid widget\n"
-    _, key = seed_model_with_blob(backup_env, name="Widget", content=content)
-    meta = backup.create_backup()
-    archive = Path(meta.path)
-
-    entries: list[tuple[tarfile.TarInfo, bytes | None]] = []
-    with gzip.open(archive, "rb") as gz, tarfile.open(fileobj=gz, mode="r:") as tar:
-        for member in tar.getmembers():
-            data = tar.extractfile(member).read() if member.isfile() else None
-            entries.append((member, data))
-
-    updated_archive = io.BytesIO()
-    with (
-        gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz,
-        tarfile.open(fileobj=gz, mode="w:") as tar,
-    ):
-        for member, data in entries:
-            if data is not None:
-                tar.addfile(member, io.BytesIO(data))
-            else:
-                tar.addfile(member)
-        dir_info = tarfile.TarInfo(name="files/subdir")
-        dir_info.type = tarfile.DIRTYPE
-        tar.addfile(dir_info)
-    from app.services.storage_ownership import replace_owned_bytes
-
-    with backup_env.new_session() as session:
-        replace_owned_bytes(
-            session,
-            storage_backend.LocalStorageBackend(),
-            str(archive),
-            updated_archive.getvalue(),
-            object_kind="backup",
-        )
-        session.commit()
-
-    Path(key).unlink()
-
-    result = backup.restore_backup(meta.id)
-
-    assert result["restored_files"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -736,27 +178,6 @@ def backup_s3_env(backup_env: BackupEnv) -> Iterator[BackupEnv]:
             "backup_s3_secret_key",
         ):
             _overlay.pop(field, None)
-
-
-@requires_s3
-def test_restore_downloads_s3_only_backup_before_restoring(backup_s3_env: BackupEnv):
-    _model_id, key = seed_model_with_blob(
-        backup_s3_env, name="Widget", content=b"solid widget\n"
-    )
-    meta = backup.create_backup()
-    # Simulate the data-loss case that restore is allowed to repair. Restoring
-    # over a live destination must remain a conflict, even when the archive is
-    # downloaded from S3.
-    Path(key).unlink()
-    Path(meta.path).unlink()
-
-    result = backup.restore_backup(meta.id)
-
-    assert result["backup_id"] == meta.id
-    assert _read_model_names(backup_s3_env) == ["Widget"]
-    assert Path(key).read_bytes() == b"solid widget\n"
-    # _download_backup_to_local must have pulled a fresh local copy.
-    assert Path(meta.path).exists()
 
 
 # The router's own branches (404/409/500/501, auth) moved to
@@ -920,6 +341,107 @@ class TestCreateBackup:
         head = s3.head_object(Bucket=backup.settings.backup_s3_bucket, Key=key)
         assert head["ContentLength"] == meta.size_bytes
 
+    def test_backup_excludes_user_owned_external_artifacts(self, backup_env: BackupEnv):
+        external = backup_env.root / "nas" / "linked.stl"
+        external.parent.mkdir()
+        external.write_bytes(b"user-owned")
+        with backup_env.new_session() as session:
+            model = build_model(session, name="Linked", slug="linked", hash="c" * 64)
+            session.add(
+                File(
+                    model_id=model.id,
+                    path=str(external),
+                    original_filename=external.name,
+                    file_type=FileType.STL,
+                    is_external=True,
+                    size_bytes=external.stat().st_size,
+                    sha256="d" * 64,
+                )
+            )
+            session.commit()
+
+        meta = backup.create_backup()
+
+        assert meta.file_count == 0
+
+    def test_backup_ignores_external_job_sentinel_but_keeps_vault_artifact(
+        self,
+        backup_env: BackupEnv,
+    ):
+        """The /dev/null placeholder is not a blob, while real vault files remain."""
+        _model_id, vault_key = seed_model_with_blob(
+            backup_env, name="Vault artifact", content=b"real vault bytes"
+        )
+        with backup_env.new_session() as session:
+            sentinel_model = build_model(
+                session,
+                name="__external__",
+                slug="__external__",
+                hash=SENTINEL_MODEL_HASH,
+            )
+            sentinel_file = build_file(
+                session,
+                sentinel_model,
+                path="/dev/null",
+                filename="__external__",
+                file_type=FileType.GCODE,
+                version=1,
+                size_bytes=0,
+                sha256=SENTINEL_FILE_HASH,
+            )
+            printer = build_printer(session, name="External history")
+            session.refresh(sentinel_file)
+            session.refresh(printer)
+            session.add(
+                PrintJob(
+                    printer_id=printer.id,
+                    file_id=sentinel_file.id,
+                    model_id=sentinel_model.id,
+                    remote_filename="external.gcode",
+                    source="external",
+                    state=PrintJobState.COMPLETED,
+                )
+            )
+            session.commit()
+
+        meta = backup.create_backup()
+
+        assert meta.file_count == 1
+        with tarfile.open(meta.path, mode="r:gz") as archive:
+            manifest = archive.extractfile("manifest.json")
+            assert manifest is not None
+            entries = json.loads(manifest.read())["files"]
+        assert [entry["key"] for entry in entries] == [vault_key]
+
+    def test_backup_writes_audit_row(self, backup_env: BackupEnv):
+        from app.db.models import AuditLog
+
+        backup.create_backup()
+
+        with backup_env.new_session() as session:
+            rows = session.exec(
+                select(AuditLog).where(AuditLog.action == "backup.create")
+            ).all()
+        assert len(rows) == 1
+        assert rows[0].resource_type == "backup"
+
+    def test_backup_id_round_trips_despite_timestamped_name(
+        self, backup_env: BackupEnv
+    ):
+        """The archive name embeds a hyphenated timestamp before the id; the id
+        derived on list/get must still equal the one create_backup returned
+        (regression for the rsplit-based id extraction)."""
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+
+        # id is the trailing 12-hex token, not a timestamp fragment.
+        assert len(meta.id) == 12
+        assert all(c in "0123456789abcdef" for c in meta.id)
+        assert f"-{meta.id}.tar.gz" in Path(meta.path).name
+
+        fetched = backup.get_backup(meta.id)
+        assert fetched is not None and fetched.id == meta.id
+
 
 class TestListLocalBackups:
     def test_list_local_backups_empty_when_dir_missing(self, backup_env: BackupEnv):
@@ -1035,6 +557,18 @@ class TestListBackups:
         assert found is not None
         assert found.location == "s3"
         assert found.file_count == meta.file_count
+
+    def test_backup_appears_in_list_and_get(self, backup_env: BackupEnv):
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+
+        listed = backup.list_backups()
+        assert any(m.id == meta.id for m in listed)
+
+        fetched = backup.get_backup(meta.id)
+        assert fetched is not None
+        assert fetched.id == meta.id
+        assert fetched.file_count == 1
 
 
 class TestReadManifest:
@@ -1201,6 +735,78 @@ class TestDownloadBackupToLocal:
         with pytest.raises(FileNotFoundError):
             backup._download_backup_to_local(meta)
 
+    def test_download_backup_archive_endpoint(
+        self, client: TestClient, backup_env: BackupEnv
+    ):
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+
+        resp = client.get(
+            f"/api/v1/backups/{meta.id}/download",
+            headers=_auth_headers(backup_env),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.content.startswith(b"\x1f\x8b")
+        assert Path(meta.path).name in resp.headers["content-disposition"]
+
+    def test_download_then_restore_endpoint_round_trip(
+        self, client: TestClient, backup_env: BackupEnv
+    ):
+        content = b"solid endpoint widget\nendsolid\n"
+        _model_id, key = seed_model_with_blob(
+            backup_env, name="Endpoint Widget", content=content
+        )
+        headers = _auth_headers(backup_env)
+
+        create = client.post("/api/v1/backups", headers=headers)
+        assert create.status_code == 202, create.text
+        backup_id = create.json()["backup_id"]
+
+        download = client.get(f"/api/v1/backups/{backup_id}/download", headers=headers)
+        assert download.status_code == 200, download.text
+        assert download.content.startswith(b"\x1f\x8b")
+        assert f"{backup_id}.tar.gz" in download.headers["content-disposition"]
+
+        # Disaster: remove both catalog row and stored bytes, then restore via API.
+        with backup_env.new_session() as session:
+            for m in session.exec(select(Model).where(Model.name == "Endpoint Widget")):
+                session.delete(m)
+            session.commit()
+        Path(key).unlink()
+
+        assert "Endpoint Widget" not in _read_model_names(backup_env)
+        assert not Path(key).exists()
+
+        restore = client.post(f"/api/v1/backups/{backup_id}/restore", headers=headers)
+        assert restore.status_code == 200, restore.text
+        assert restore.json() == {"backup_id": backup_id, "restored_files": 1}
+
+        assert "Endpoint Widget" in _read_model_names(backup_env)
+        assert Path(key).read_bytes() == content
+
+    @requires_s3
+    def test_restore_downloads_s3_only_backup_before_restoring(
+        self, backup_s3_env: BackupEnv
+    ):
+        _model_id, key = seed_model_with_blob(
+            backup_s3_env, name="Widget", content=b"solid widget\n"
+        )
+        meta = backup.create_backup()
+        # Simulate the data-loss case that restore is allowed to repair. Restoring
+        # over a live destination must remain a conflict, even when the archive is
+        # downloaded from S3.
+        Path(key).unlink()
+        Path(meta.path).unlink()
+
+        result = backup.restore_backup(meta.id)
+
+        assert result["backup_id"] == meta.id
+        assert _read_model_names(backup_s3_env) == ["Widget"]
+        assert Path(key).read_bytes() == b"solid widget\n"
+        # _download_backup_to_local must have pulled a fresh local copy.
+        assert Path(meta.path).exists()
+
 
 class TestHasMember:
     def test_has_member_false_for_missing_entry(self, backup_env: BackupEnv):
@@ -1284,6 +890,385 @@ class TestRestoreDatabase:
         with pytest.raises(RuntimeError, match="cannot restore to non-file database"):
             backup._restore_database(b"irrelevant")
 
+    def test_restore_recovers_database_rows(self, backup_env: BackupEnv):
+        _, key = seed_model_with_blob(
+            backup_env, name="Widget", content=b"solid widget\n"
+        )
+        meta = backup.create_backup()
+
+        # Disaster: wipe every model row.
+        with backup_env.new_session() as session:
+            for m in session.exec(select(Model)).all():
+                session.delete(m)
+            session.commit()
+        backup_env.engine.dispose()
+
+        assert _read_model_names(backup_env) == []
+        Path(key).unlink()
+
+        backup.restore_backup(meta.id)
+
+        assert "Widget" in _read_model_names(backup_env)
+        with backup_env.new_session() as session:
+            owned = session.exec(
+                select(OwnedStorageObject).where(OwnedStorageObject.key == key)
+            ).one()
+            receipt = storage_backend.CreationReceipt(
+                key=owned.key,
+                size=owned.size_bytes,
+                token=owned.token,
+                backend=owned.backend,
+                namespace=owned.namespace,
+                etag=owned.etag,
+                device=owned.device,
+                inode=owned.inode,
+                ctime_ns=owned.ctime_ns,
+            )
+            assert get_backend().creation_matches(receipt)
+
+    def test_restore_replaces_live_wal_state_without_replay(
+        self, backup_env: BackupEnv
+    ):
+        _, key = seed_model_with_blob(
+            backup_env, name="Widget", content=b"solid widget\n"
+        )
+        meta = backup.create_backup()
+
+        # Keep a WAL connection open with a committed post-backup change. A raw
+        # overwrite of the main DB file lets this WAL replay over the restored DB.
+        live = sqlite3.connect(backup_env.db_file)
+        try:
+            assert live.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+            live.execute(
+                "UPDATE models SET name = 'Post Backup State' WHERE name = 'Widget'"
+            )
+            live.commit()
+            assert live.execute("SELECT name FROM models").fetchone() == (
+                "Post Backup State",
+            )
+            assert Path(f"{backup_env.db_file}-wal").exists()
+            Path(key).unlink()
+
+            backup.restore_backup(meta.id)
+
+            assert live.execute("SELECT name FROM models").fetchone() == ("Widget",)
+            assert _read_model_names(backup_env) == ["Widget"]
+        finally:
+            live.close()
+
+    def test_restore_recovers_blob_bytes(self, backup_env: BackupEnv):
+        content = b"solid widget\nendsolid\n"
+        _model_id, key = seed_model_with_blob(
+            backup_env, name="Widget", content=content
+        )
+        meta = backup.create_backup()
+
+        # Disaster: delete the stored blob.
+        Path(key).unlink()
+        assert not Path(key).exists()
+
+        result = backup.restore_backup(meta.id)
+
+        assert result["restored_files"] == 1
+        # The blob the database references must be back, byte-for-byte.
+        assert Path(key).exists(), "restored blob is missing at its storage key"
+        assert Path(key).read_bytes() == content
+
+    def test_restore_writes_complete_row_on_success(self, backup_env: BackupEnv):
+        from app.db.models import AuditLog
+
+        _, key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+        Path(key).unlink()
+
+        backup.restore_backup(meta.id)
+
+        # restore.start was written before the DB swap and lives only in the
+        # pre-restore database, which no longer exists after a successful
+        # restore — restore.complete is the persisted, post-swap signal.
+        with backup_env.new_session() as session:
+            rows = session.exec(
+                select(AuditLog).where(AuditLog.action == "restore.complete")
+            ).all()
+        assert len(rows) == 1
+        assert rows[0].resource_type == "backup"
+
+    def test_failed_restore_writes_failed_row(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ):
+        from app.db.models import AuditLog
+
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated failure mid-restore")
+
+        monkeypatch.setattr(backup, "_download_backup_to_local", _boom)
+
+        with pytest.raises(RuntimeError):
+            backup.restore_backup(meta.id)
+
+        with backup_env.new_session() as session:
+            actions = {row.action for row in session.exec(select(AuditLog)).all()}
+        assert "restore.failed" in actions
+
+    def test_restore_collision_preserves_files_and_database(
+        self, backup_env: BackupEnv
+    ):
+        _, first_key = seed_model_with_blob(
+            backup_env, name="First", content=b"backup-first"
+        )
+        _, second_key = seed_model_with_blob(
+            backup_env, name="Second", content=b"backup-second"
+        )
+        meta = backup.create_backup()
+
+        Path(first_key).write_bytes(b"current-first")
+        Path(second_key).write_bytes(b"current-second")
+        with backup_env.new_session() as session:
+            session.exec(
+                select(Model).where(Model.name == "First")
+            ).one().name = "Current First"
+            session.commit()
+
+        with pytest.raises(backup.RestoreConflictError, match="destination_exists"):
+            backup.restore_backup(meta.id)
+
+        assert Path(first_key).read_bytes() == b"current-first"
+        assert Path(second_key).read_bytes() == b"current-second"
+        assert "Current First" in _read_model_names(backup_env)
+
+    def test_failed_blob_restore_removes_only_receipted_partial_creates(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ):
+        _, first_key = seed_model_with_blob(
+            backup_env, name="First", content=b"backup-first"
+        )
+        _, second_key = seed_model_with_blob(
+            backup_env, name="Second", content=b"backup-second"
+        )
+        meta = backup.create_backup()
+        Path(first_key).unlink()
+        Path(second_key).unlink()
+
+        backend = get_backend()
+        real_create = backend.create_stream
+        writes = 0
+
+        def fail_second_write(source, key: str):
+            nonlocal writes
+            writes += 1
+            if writes == 2:
+                raise OSError("simulated second blob failure")
+            return real_create(source, key)
+
+        monkeypatch.setattr(backend, "create_stream", fail_second_write)
+
+        with pytest.raises(OSError, match="second blob failure"):
+            backup.restore_backup(meta.id)
+
+        assert not Path(first_key).exists()
+        assert not Path(second_key).exists()
+
+    def test_restore_skips_directory_entries_under_files_prefix(
+        self,
+        backup_env: BackupEnv,
+    ):
+        """A directory entry under files/ (tar.extractfile returns None for it)
+        must be skipped, not crash the restore or count as a restored file."""
+        import gzip
+        import io
+        import tarfile
+
+        content = b"solid widget\n"
+        _model_id, key = seed_model_with_blob(
+            backup_env, name="Widget", content=content
+        )
+        meta = backup.create_backup()
+        archive = Path(meta.path)
+
+        # Rewrite the archive with an extra directory entry under files/.
+        entries: list[tuple[tarfile.TarInfo, bytes | None]] = []
+        with gzip.open(archive, "rb") as gz, tarfile.open(fileobj=gz, mode="r:") as tar:
+            for member in tar.getmembers():
+                data = tar.extractfile(member).read() if member.isfile() else None
+                entries.append((member, data))
+
+        updated_archive = io.BytesIO()
+        with (
+            gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz,
+            tarfile.open(fileobj=gz, mode="w:") as tar,
+        ):
+            for member, data in entries:
+                if data is not None:
+                    tar.addfile(member, io.BytesIO(data))
+                else:
+                    tar.addfile(member)
+            dir_info = tarfile.TarInfo(name="files/empty-subdir")
+            dir_info.type = tarfile.DIRTYPE
+            tar.addfile(dir_info)
+        from app.services.storage_ownership import replace_owned_bytes
+
+        with backup_env.new_session() as session:
+            replace_owned_bytes(
+                session,
+                storage_backend.LocalStorageBackend(),
+                str(archive),
+                updated_archive.getvalue(),
+                object_kind="backup",
+            )
+            session.commit()
+
+        Path(key).unlink()
+
+        result = backup.restore_backup(meta.id)
+
+        # Only the real blob counts as restored; the directory entry is skipped.
+        assert result["restored_files"] == 1
+        assert Path(key).read_bytes() == content
+
+    def test_restore_skips_unreadable_files_member(self, backup_env: BackupEnv):
+        """A files/ tar member that isn't a regular file (e.g. a directory entry)
+        must be skipped during restore, not crash it or count toward
+        restored_files."""
+        import gzip
+        import io
+        import tarfile
+
+        content = b"solid widget\n"
+        _, key = seed_model_with_blob(backup_env, name="Widget", content=content)
+        meta = backup.create_backup()
+        archive = Path(meta.path)
+
+        entries: list[tuple[tarfile.TarInfo, bytes | None]] = []
+        with gzip.open(archive, "rb") as gz, tarfile.open(fileobj=gz, mode="r:") as tar:
+            for member in tar.getmembers():
+                data = tar.extractfile(member).read() if member.isfile() else None
+                entries.append((member, data))
+
+        updated_archive = io.BytesIO()
+        with (
+            gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz,
+            tarfile.open(fileobj=gz, mode="w:") as tar,
+        ):
+            for member, data in entries:
+                if data is not None:
+                    tar.addfile(member, io.BytesIO(data))
+                else:
+                    tar.addfile(member)
+            dir_info = tarfile.TarInfo(name="files/subdir")
+            dir_info.type = tarfile.DIRTYPE
+            tar.addfile(dir_info)
+        from app.services.storage_ownership import replace_owned_bytes
+
+        with backup_env.new_session() as session:
+            replace_owned_bytes(
+                session,
+                storage_backend.LocalStorageBackend(),
+                str(archive),
+                updated_archive.getvalue(),
+                object_kind="backup",
+            )
+            session.commit()
+
+        Path(key).unlink()
+
+        result = backup.restore_backup(meta.id)
+
+        assert result["restored_files"] == 1
+
+    def test_restore_rejected_while_job_running(self, backup_env: BackupEnv):
+        from app.services.jobs import registry
+
+        model_id, _key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+
+        job_id = registry.create()
+        registry.update(job_id, state="running")
+        try:
+            with pytest.raises(backup.RestoreConflictError):
+                backup.restore_backup(meta.id)
+        finally:
+            registry.update(job_id, state="completed")
+
+        assert not backup.restore_in_progress()
+        with backup_env.new_session() as session:
+            assert session.get(Model, model_id) is not None
+
+    def test_restore_maintenance_waits_for_admitted_mutation(
+        self, backup_env: BackupEnv
+    ):
+        assert backup.begin_mutating_operation() is True
+        maintenance_ready = threading.Event()
+        release_maintenance = threading.Event()
+
+        def enter_maintenance() -> None:
+            backup._begin_restore_maintenance()
+            maintenance_ready.set()
+            release_maintenance.wait(timeout=5)
+            backup._end_restore_maintenance()
+
+        thread = threading.Thread(target=enter_maintenance)
+        thread.start()
+        try:
+            for _ in range(100):
+                if backup.restore_in_progress():
+                    break
+                time.sleep(0.01)
+            assert backup.restore_in_progress() is True
+            assert maintenance_ready.is_set() is False
+
+            backup.end_mutating_operation()
+            assert maintenance_ready.wait(timeout=5) is True
+        finally:
+            release_maintenance.set()
+            thread.join(timeout=5)
+            if backup.restore_in_progress():
+                backup._end_restore_maintenance()
+
+    def test_mutating_request_is_rejected_during_restore(
+        self, client: TestClient, backup_env: BackupEnv
+    ):
+        headers = _auth_headers(backup_env)
+        backup._restore_gate.set()
+        try:
+            response = client.post("/api/v1/backups", headers=headers)
+        finally:
+            backup._restore_gate.clear()
+
+        assert response.status_code == 503
+        assert response.json() == {"detail": "restore_in_progress"}
+
+    def test_gc_skips_during_restore(self, backup_env: BackupEnv):
+        from app.services import trash
+
+        # A trashed row past retention would normally be purged.
+        with backup_env.new_session() as session:
+            from datetime import timedelta
+
+            from app.core.time import utcnow
+            from app.db.models import Tag
+
+            session.add(
+                Tag(
+                    name="stale",
+                    slug="stale",
+                    deleted_at=utcnow() - timedelta(days=999),
+                )
+            )
+            session.commit()
+
+        backup._restore_gate.set()
+        try:
+            result = trash.gc_soft_deleted()
+        finally:
+            backup._restore_gate.clear()
+
+        assert result == {"rows": 0, "orphan_blobs": 0}
+        with backup_env.new_session() as session:
+            assert session.exec(select(Tag)).first() is not None
+
 
 class TestPurgeOldBackups:
     def test_purge_old_backups_noop_when_retention_non_positive(
@@ -1336,6 +1321,28 @@ class TestPurgeOldBackups:
 
         assert removed == 0
         assert "badc0ffeeb00" in {m.id for m in backup.list_backups()}
+
+    def test_purge_keeps_fresh_removes_old(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ):
+        from datetime import timedelta
+
+        from app.core.time import utcnow
+
+        # An old backup: pin create_backup's clock 60 days into the past.
+        monkeypatch.setattr(backup, "utcnow", lambda: utcnow() - timedelta(days=60))
+        old = backup.create_backup()
+
+        # A fresh backup at the real clock.
+        monkeypatch.setattr(backup, "utcnow", utcnow)
+        fresh = backup.create_backup()
+
+        removed = backup.purge_old_backups(retain_days=30)
+
+        assert removed == 1
+        remaining = {m.id for m in backup.list_backups()}
+        assert old.id not in remaining
+        assert fresh.id in remaining
 
 
 class TestDocument:
