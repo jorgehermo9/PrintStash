@@ -47,17 +47,42 @@ three months. `tests/repo/test_migration_patterns.py` now fails on that shape.
 
 ### The four rules
 
-1. **Autogenerate, then edit.** Never author DDL operations from scratch.
-2. **Never edit, delete or re-parent a merged migration.** Self-hosters have already
-   run it. Fix it forward with a new one. (AGENTS.md hard rule 1.)
+1. **Autogenerate the DDL; edit the file freely.** These are not in tension, because
+   they are about different things.
+
+   *Never author a DDL operation from scratch* — `op.create_foreign_key`,
+   `op.alter_column`, `op.create_index`. Autogenerate knows the dialect's limits and
+   this repo's `render_as_batch` setting; a human typing the same call does not, which
+   is the entire history in the section above.
+
+   *Always edit what it generated*, before committing it:
+
+   - **Delete what is not your change.** Autogenerate offers every difference it
+     noticed, which on a drifted schema was 890 lines. Keep the operations your change
+     is about. (When the change *is* convergence, keep them all — `6acea2a5e555` kept
+     all 212.)
+   - **Write the docstring.** The generated one is the `-m` message. Say what the
+     migration is for and what it assumes; a migration is read years later by someone
+     debugging an upgrade.
+   - **Add the data work.** Autogenerate compares schemas and knows nothing about
+     rows. Repair steps, backfills, and the verification below are always hand-added.
+
+2. **Never touch a migration that has been merged.** Self-hosters have run it; editing
+   it changes nothing for them and desynchronises everyone else. Fix it forward with a
+   new revision. (AGENTS.md hard rule 1.) This is why the 78 reflection-based
+   `batch_alter_table` calls in the chain stay as they are.
+
 3. **Never guard a constraint operation on the dialect.** `if not is_sqlite:` around
-   `op.create_foreign_key` produces a schema that differs by installation, silently.
-   Branching per dialect is fine; *skipping the operation* is not.
-4. **Every migration ships with a test** that runs it. There are five such files for
-   66 migrations, so this is a rule for new work rather than a description of the
-   chain: the ones that have tests are the ones that repaired data or rebuilt a
-   table, which is the right priority. A migration that only adds a nullable column
-   is covered by the parity tests below.
+   `op.create_foreign_key` produces a schema that differs by installation, silently —
+   it cost this repo 136 structural differences and four production bugs. Branching per
+   dialect is fine and sometimes necessary; *skipping the operation* is not. Use
+   `op.batch_alter_table`. `tests/repo/test_migration_patterns.py` enforces it.
+
+4. **Every migration ships with a test** that runs it. Seven files for 67 migrations, so
+   this is a rule for new work rather than a description of the chain — the ones that
+   have tests are the ones that repaired data or rebuilt a table, which is the right
+   priority. A migration that only adds a nullable column is covered by the parity
+   tests below.
 
 ### SQLite cannot ALTER a constraint. Batch mode rebuilds the table
 
