@@ -15,18 +15,14 @@ from app.db.models import (
     ProviderOAuthState,
     User,
 )
-from app.services.auth import hash_password
+from tests.factories import build_user
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
 
 
 def test_user_hard_delete_cascades_provider_and_pairing_rows(
     db_session: Session,
 ) -> None:
-    user = User(
-        username="provider-cascade", hashed_password=hash_password("Password123")
-    )
-    db_session.add(user)
-    db_session.flush()
+    user = build_user(db_session, username="provider-cascade", password="Password123")
     db_session.add_all(
         [
             ProviderConnection(user_id=user.id, provider=CaptureProvider.CULTS),

@@ -18,9 +18,9 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.db.models import (
-    Printer,
     PrinterStatus,
 )
+from tests.factories import build_printer
 
 
 class TestListPrinters:
@@ -32,10 +32,16 @@ class TestListPrinters:
     def test_list_with_printer(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        # `status` is named because this test asserts the *model* default, not a
+        # usable printer. `build_printer` defaults to READY, since an offline
+        # printer is skipped by dispatch and a test that forgets it ends up
+        # asserting against an empty fleet.
+        build_printer(
+            db_session,
+            name="Ender 3",
+            moonraker_url="http://10.0.0.1:7125",
+            status=PrinterStatus.UNKNOWN,
+        )
 
         resp = client.get("/api/v1/printers", headers=auth_headers)
         assert resp.status_code == 200
@@ -116,10 +122,9 @@ class TestGetPrinter:
     def test_get_returns_printer(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.get(f"/api/v1/printers/{p.id}", headers=auth_headers)
         assert resp.status_code == 200
@@ -135,10 +140,9 @@ class TestGetPrinter:
     ):
         from app.core.time import utcnow
 
-        p = Printer(name="Gone", moonraker_url="http://gone.local:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Gone", moonraker_url="http://gone.local:7125"
+        )
         p.deleted_at = utcnow()
         db_session.add(p)
         db_session.commit()
@@ -151,19 +155,17 @@ class TestGetPrinter:
 
 class TestUpdatePrinter:
     def test_update_requires_auth(self, client: TestClient, db_session: Session):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.patch(f"/api/v1/printers/{p.id}", json={"name": "Ender 3 Pro"})
         assert resp.status_code == 401
 
     def test_update_name(self, client: TestClient, auth_headers, db_session: Session):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.patch(
             f"/api/v1/printers/{p.id}",
@@ -184,15 +186,13 @@ class TestUpdatePrinter:
     def test_update_manual_model_name_overrides_display(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Neptune",
             moonraker_url="http://10.0.0.1:7125",
             provider_variant="elegoo_neptune4",
             detected_model="Elegoo Neptune 4 family",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         resp = client.patch(
             f"/api/v1/printers/{p.id}",
@@ -270,10 +270,7 @@ class TestUpdatePrinter:
         payload,
         expected_detail,
     ):
-        p = Printer(name="X", moonraker_url="http://x.local:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(db_session, name="X", moonraker_url="http://x.local:7125")
 
         resp = client.patch(
             f"/api/v1/printers/{p.id}", json=payload, headers=auth_headers
@@ -284,10 +281,7 @@ class TestUpdatePrinter:
     def test_update_sets_all_optional_fields(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="X", moonraker_url="http://x.local:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(db_session, name="X", moonraker_url="http://x.local:7125")
 
         payload = {
             "provider": "moonraker",
@@ -337,10 +331,9 @@ class TestUpdatePrinter:
     def test_records_the_provider_material_sync_switch(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Sync", moonraker_url="http://sync.local:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Sync", moonraker_url="http://sync.local:7125"
+        )
 
         response = client.patch(
             f"/api/v1/printers/{p.id}",
@@ -355,10 +348,9 @@ class TestUpdatePrinter:
     def test_records_the_operator_release_switch(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Release", moonraker_url="http://release.local:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Release", moonraker_url="http://release.local:7125"
+        )
 
         response = client.patch(
             f"/api/v1/printers/{p.id}",
@@ -373,10 +365,9 @@ class TestUpdatePrinter:
 
 class TestDeletePrinter:
     def test_delete_requires_auth(self, client: TestClient, db_session: Session):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.delete(f"/api/v1/printers/{p.id}")
         assert resp.status_code == 401
@@ -384,10 +375,9 @@ class TestDeletePrinter:
     def test_delete_removes_printer(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.delete(f"/api/v1/printers/{p.id}", headers=auth_headers)
         assert resp.status_code == 204
@@ -404,12 +394,18 @@ class TestGroupFilter:
     def test_filter_by_group(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p1 = Printer(name="Prusa", moonraker_url="http://10.0.0.1:7125", group="garage")
-        p2 = Printer(
-            name="Ender", moonraker_url="http://10.0.0.2:7125", group="workshop"
+        build_printer(
+            db_session,
+            name="Prusa",
+            moonraker_url="http://10.0.0.1:7125",
+            group="garage",
         )
-        db_session.add_all([p1, p2])
-        db_session.commit()
+        build_printer(
+            db_session,
+            name="Ender",
+            moonraker_url="http://10.0.0.2:7125",
+            group="workshop",
+        )
 
         resp = client.get("/api/v1/printers", headers=auth_headers)
         assert len(resp.json()) == 2
@@ -437,10 +433,9 @@ class TestGroupFilter:
         assert resp.json()["group"] == "garage"
 
     def test_update_group(self, client: TestClient, auth_headers, db_session: Session):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.patch(
             f"/api/v1/printers/{p.id}",

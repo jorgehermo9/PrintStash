@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, patch
 
 from sqlmodel import Session, select
 
-from app.db.models import File, FileType, Model, Printer, PrintJob, PrintJobState
+from app.db.models import File, FileType, Printer, PrintJob, PrintJobState
 from app.services import job_import
+from tests.factories import build_file, build_model, build_printer
 
 _seed_counter = 0
 
@@ -16,31 +17,28 @@ _seed_counter = 0
 def _seed_model_and_file(db_session: Session, filename: str = "Benchy.gcode") -> File:
     global _seed_counter
     _seed_counter += 1
-    m = Model(name="Model", slug=f"model-{_seed_counter}", hash=f"{_seed_counter:064x}")
-    db_session.add(m)
-    db_session.commit()
-    db_session.refresh(m)
+    m = build_model(
+        db_session,
+        name="Model",
+        slug=f"model-{_seed_counter}",
+        hash=f"{_seed_counter:064x}",
+    )
 
-    f = File(
-        model_id=m.id,
+    f = build_file(
+        db_session,
+        m,
         path="/data/benchy.gcode",
-        original_filename=filename,
+        filename=filename,
         file_type=FileType.GCODE,
         version=1,
         size_bytes=100,
         sha256="c" * 64,
     )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
     return f
 
 
 def _seed_printer(db_session: Session) -> Printer:
-    p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(p)
-    db_session.commit()
-    db_session.refresh(p)
+    p = build_printer(db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125")
     return p
 
 

@@ -16,33 +16,29 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.db.models import (
-    File,
     FileType,
-    Model,
     Printer,
     PrinterProvider,
-    PrintJob,
     PrintJobState,
 )
 from app.services.printer_provider import ProviderError
+from tests.factories import build_file, build_model, build_print_job, build_printer
 
 
 class TestPrinterControl:
     def test_pause_requires_auth(self, client: TestClient, db_session: Session):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         resp = client.post(f"/api/v1/printers/{p.id}/pause")
         assert resp.status_code == 401
 
     def test_pause_sends_to_moonraker(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.pause",
@@ -57,10 +53,9 @@ class TestPrinterControl:
     def test_resume_sends_to_moonraker(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.resume",
@@ -74,10 +69,9 @@ class TestPrinterControl:
     def test_cancel_sends_to_moonraker(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.cancel",
@@ -91,41 +85,31 @@ class TestPrinterControl:
     def test_cancel_marks_active_job_cancelled_without_polling_transition(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="OctoPrint",
             provider="octoprint",
             octoprint_url="http://octo",
             octoprint_api_key="key",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
-        model = Model(name="Cancel", slug="cancel-job", hash="c" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        file = File(
-            model_id=model.id,
+        model = build_model(db_session, name="Cancel", slug="cancel-job", hash="c" * 64)
+        file = build_file(
+            db_session,
+            model,
             path="/data/cube.gcode",
-            original_filename="cube.gcode",
+            filename="cube.gcode",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=10,
             sha256="d" * 64,
         )
-        db_session.add(file)
-        db_session.commit()
-        db_session.refresh(file)
-        job = PrintJob(
+        job = build_print_job(
+            db_session,
+            file,
             printer_id=p.id,
-            file_id=file.id,
-            model_id=model.id,
             remote_filename="cube.gcode",
             state=PrintJobState.PRINTING,
         )
-        db_session.add(job)
-        db_session.commit()
-        db_session.refresh(job)
 
         with patch(
             "app.services.printer_provider.OctoPrintProvider.cancel",
@@ -142,10 +126,9 @@ class TestPrinterControl:
     def test_set_temperature_builds_gcode(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.run_gcode",
@@ -163,10 +146,9 @@ class TestPrinterControl:
     def test_home_subset_axes_builds_gcode(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.run_gcode",
@@ -184,10 +166,9 @@ class TestPrinterControl:
     def test_emergency_stop_calls_provider(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.emergency_stop",
@@ -203,7 +184,8 @@ class TestPrinterControl:
     def test_set_temperature_rejected_for_bambu(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider=PrinterProvider.BAMBU_LAN,
             moonraker_url="",
@@ -211,9 +193,6 @@ class TestPrinterControl:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         resp = client.post(
             f"/api/v1/printers/{p.id}/temperature",
@@ -225,10 +204,9 @@ class TestPrinterControl:
     def test_pause_provider_error_502(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.pause",
@@ -242,10 +220,9 @@ class TestPrinterControl:
     def test_resume_generic_exception_502(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.resume",
@@ -276,10 +253,9 @@ class TestPrinterControl:
     def test_home_provider_error_502(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.run_gcode",
@@ -295,10 +271,9 @@ class TestPrinterControl:
     def test_temperature_generic_exception_502(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.run_gcode",
@@ -316,10 +291,9 @@ class TestPrinterControl:
     def test_emergency_stop_provider_error_502(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.emergency_stop",
@@ -335,10 +309,9 @@ class TestPrinterControl:
     def test_emergency_stop_generic_exception_502(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.emergency_stop",
@@ -358,10 +331,9 @@ class TestPrinterControl:
 
         from app.services.printer_provider import MoonrakerProvider
 
-        p = Printer(name="No pause", moonraker_url="http://10.0.0.9:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="No pause", moonraker_url="http://10.0.0.9:7125"
+        )
         no_pause = replace(MoonrakerProvider.capabilities, supported=frozenset())
 
         with patch.object(MoonrakerProvider, "capabilities", no_pause):
@@ -378,10 +350,9 @@ class TestPrinterControl:
     ):
         from app.core.time import utcnow
 
-        p = Printer(name="Deleted", moonraker_url="http://10.0.0.8:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Deleted", moonraker_url="http://10.0.0.8:7125"
+        )
         p.deleted_at = utcnow()
         db_session.add(p)
         db_session.commit()

@@ -24,6 +24,7 @@ from app.db.models import (
     PrinterRole,
     User,
 )
+from tests.factories import build_printer
 from tests.integration.api.v1.printers._helpers import grant_printer, user_headers
 
 
@@ -36,7 +37,9 @@ class TestPrinterRbac:
             moonraker_url="http://shared.local:7125",
             api_key="secret",
         )
-        hidden = Printer(name="Private", moonraker_url="http://private.local:7125")
+        hidden = build_printer(
+            db_session, name="Private", moonraker_url="http://private.local:7125"
+        )
         db_session.add_all([visible, hidden])
         db_session.commit()
         db_session.refresh(visible)
@@ -65,10 +68,9 @@ class TestPrinterRbac:
         auth_headers: dict[str, str],
         db_session: Session,
     ) -> None:
-        printer = Printer(name="Shared", moonraker_url="http://shared.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Shared", moonraker_url="http://shared.local:7125"
+        )
         operator_headers = user_headers(db_session, "operator")
         user = db_session.exec(select(User).where(User.username == "operator")).one()
 
@@ -101,10 +103,9 @@ class TestPrinterRbac:
     def test_view_role_cannot_control_printer(
         self, client: TestClient, db_session: Session
     ) -> None:
-        printer = Printer(name="Shared", moonraker_url="http://shared.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Shared", moonraker_url="http://shared.local:7125"
+        )
         headers = user_headers(db_session, "viewer-control")
         grant_printer(db_session, "viewer-control", printer, PrinterRole.VIEW)
 
@@ -116,10 +117,9 @@ class TestPrinterRbac:
     def test_print_role_passes_printer_gate_but_not_control_gate(
         self, client: TestClient, db_session: Session
     ) -> None:
-        printer = Printer(name="Shared", moonraker_url="http://shared.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Shared", moonraker_url="http://shared.local:7125"
+        )
         headers = user_headers(db_session, "print-only")
         grant_printer(db_session, "print-only", printer, PrinterRole.PRINT)
 
@@ -139,10 +139,9 @@ class TestPrinterRbac:
     def test_control_role_can_pause_printer(
         self, client: TestClient, db_session: Session
     ) -> None:
-        printer = Printer(name="Shared", moonraker_url="http://shared.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Shared", moonraker_url="http://shared.local:7125"
+        )
         headers = user_headers(db_session, "controller")
         grant_printer(db_session, "controller", printer, PrinterRole.CONTROL)
 
@@ -186,14 +185,12 @@ class TestPrinterRbac:
         db_session: Session,
         connection_update: dict[str, str],
     ) -> None:
-        printer = Printer(
+        printer = build_printer(
+            db_session,
             name="Shared",
             moonraker_url="http://printer.local:7125",
             api_key="original-secret",
         )
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
         headers = user_headers(db_session, "delegated-admin")
         grant_printer(db_session, "delegated-admin", printer, PrinterRole.ADMIN)
 
@@ -212,10 +209,9 @@ class TestPrinterRbac:
     def test_printer_admin_can_still_change_non_connection_metadata(
         self, client: TestClient, db_session: Session
     ) -> None:
-        printer = Printer(name="Shared", moonraker_url="http://printer.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Shared", moonraker_url="http://printer.local:7125"
+        )
         headers = user_headers(db_session, "metadata-admin")
         grant_printer(db_session, "metadata-admin", printer, PrinterRole.ADMIN)
 
@@ -236,10 +232,9 @@ class TestPrinterPermissions:
     def test_lists_who_has_a_role_on_the_printer(
         self, client: TestClient, db_session: Session, auth_headers
     ) -> None:
-        printer = Printer(name="Shared", moonraker_url="http://shared.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Shared", moonraker_url="http://shared.local:7125"
+        )
         user_headers(db_session, "listed-operator")
         user = db_session.exec(
             select(User).where(User.username == "listed-operator")
@@ -262,10 +257,9 @@ class TestPrinterPermissions:
     def test_lists_nobody_for_a_printer_nobody_was_granted(
         self, client: TestClient, db_session: Session, auth_headers
     ) -> None:
-        printer = Printer(name="Private", moonraker_url="http://private.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Private", moonraker_url="http://private.local:7125"
+        )
 
         response = client.get(
             f"/api/v1/printers/{printer.id}/permissions", headers=auth_headers
@@ -276,10 +270,9 @@ class TestPrinterPermissions:
     def test_changes_a_role_that_is_already_granted(
         self, client: TestClient, db_session: Session, auth_headers
     ) -> None:
-        printer = Printer(name="Regraded", moonraker_url="http://regraded.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Regraded", moonraker_url="http://regraded.local:7125"
+        )
         user_headers(db_session, "regraded-user")
         user = db_session.exec(
             select(User).where(User.username == "regraded-user")
@@ -303,10 +296,9 @@ class TestPrinterPermissions:
     def test_refuses_to_grant_a_role_to_a_user_who_does_not_exist(
         self, client: TestClient, db_session: Session, auth_headers
     ) -> None:
-        printer = Printer(name="Ghost grant", moonraker_url="http://ghost.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Ghost grant", moonraker_url="http://ghost.local:7125"
+        )
 
         response = client.put(
             f"/api/v1/printers/{printer.id}/permissions/999999",
@@ -320,10 +312,9 @@ class TestPrinterPermissions:
     def test_refuses_to_revoke_a_role_that_was_never_granted(
         self, client: TestClient, db_session: Session, auth_headers
     ) -> None:
-        printer = Printer(name="Never granted", moonraker_url="http://never.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Never granted", moonraker_url="http://never.local:7125"
+        )
         user_headers(db_session, "ungranted-user")
         user = db_session.exec(
             select(User).where(User.username == "ungranted-user")
@@ -340,10 +331,9 @@ class TestPrinterPermissions:
     def test_rejects_a_non_superuser_listing_permissions(
         self, client: TestClient, db_session: Session
     ) -> None:
-        printer = Printer(name="Guarded", moonraker_url="http://guarded.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Guarded", moonraker_url="http://guarded.local:7125"
+        )
         headers = user_headers(db_session, "permission-peeker")
         grant_printer(db_session, "permission-peeker", printer, PrinterRole.ADMIN)
 
@@ -358,10 +348,9 @@ class TestPrinterPermissions:
     def test_rejects_an_unauthenticated_caller(
         self, client: TestClient, db_session: Session
     ) -> None:
-        printer = Printer(name="Anonymous", moonraker_url="http://anon.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Anonymous", moonraker_url="http://anon.local:7125"
+        )
 
         assert (
             client.get(f"/api/v1/printers/{printer.id}/permissions").status_code == 401

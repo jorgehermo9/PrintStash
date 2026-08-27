@@ -19,7 +19,6 @@ from app.db.models import (
     PrinterProvider,
     PrinterStatus,
     PrinterTool,
-    PrintJob,
     PrintJobState,
     RoutingStrategy,
     User,
@@ -37,7 +36,7 @@ from app.schemas.materials import (
     MaterialToolWrite,
 )
 from app.services import fleet, materials
-from tests.factories import a_gcode_artifact, build_user
+from tests.factories import a_gcode_artifact, build_print_job, build_printer, build_user
 
 
 def test_material_and_fleet_schema_validation_edges() -> None:
@@ -87,14 +86,12 @@ def test_manual_material_state_drives_compatibility_and_confirmation(
     db_session: Session,
 ) -> None:
     user = build_user(db_session, "material-operator", superuser=True)
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Material aware",
         moonraker_url="http://material-aware",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = _requirements(db_session, material="PLA")
 
     state = materials.replace_manual_state(
@@ -240,26 +237,22 @@ def test_batch_creation_is_atomic_and_spreads_least_busy_copies(
 
 def test_operator_hold_resolves_gate_and_enables_drain(db_session: Session) -> None:
     user = build_user(db_session, "material-operator", superuser=True)
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Release gate",
         moonraker_url="http://release-gate",
         status=PrinterStatus.READY,
         operator_release_required=True,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="gate.gcode",
         state=PrintJobState.COMPLETED,
         operator_gate_state=OperatorGateState.PENDING,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     decided = fleet.operator_decision(db_session, int(job.id), "hold", user)
 
@@ -277,8 +270,8 @@ def test_material_routing_prefers_compatible_then_unknown_and_color_is_advisory(
     unknown = Printer(
         name="Unknown", moonraker_url="http://unknown", status=PrinterStatus.READY
     )
-    abs_printer = Printer(
-        name="ABS", moonraker_url="http://abs", status=PrinterStatus.READY
+    abs_printer = build_printer(
+        db_session, name="ABS", moonraker_url="http://abs", status=PrinterStatus.READY
     )
     db_session.add_all([pla, unknown, abs_printer])
     db_session.commit()
@@ -371,13 +364,12 @@ def test_material_routing_prefers_compatible_then_unknown_and_color_is_advisory(
 def test_provider_material_state_is_unknown_offline_and_recovers_on_reconnect(
     db_session: Session,
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Telemetry",
         moonraker_url="http://telemetry",
         status=PrinterStatus.OFFLINE,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = _requirements(db_session, material="PLA", nozzle=0.4)
     db_session.add(
         PrinterMaterialSlot(
@@ -428,13 +420,12 @@ def test_provider_material_state_is_unknown_offline_and_recovers_on_reconnect(
 def test_unresolved_tracked_spool_is_unknown_not_a_proven_mismatch(
     db_session: Session,
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Unresolved spool",
         moonraker_url="http://unresolved",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = _requirements(db_session, material="PLA", nozzle=0.4)
     db_session.add(
         PrinterMaterialSlot(
@@ -479,7 +470,8 @@ def test_manual_material_state_validation_and_provider_precedence(
             db_session, 999_999, ManualMaterialStateUpdate(), user
         )
 
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Validation",
         provider=PrinterProvider.BAMBU_LAN,
         host="192.0.2.60",
@@ -487,9 +479,6 @@ def test_manual_material_state_validation_and_provider_precedence(
         access_code="code",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     assert fleet._active_maintenance(db_session, int(printer.id)) is False
     original_version = printer.updated_at
 
@@ -571,14 +560,12 @@ def test_compatibility_unknown_inputs_multitool_mapping_and_report(
     db_session: Session,
 ) -> None:
     user = build_user(db_session, "material-operator", superuser=True)
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Compatibility edges",
         moonraker_url="http://compatibility-edges",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     no_requirements = a_gcode_artifact(db_session, "Queue cube")
     assert materials.compatibility_for_printer(
         db_session, int(no_requirements.id), int(printer.id)
@@ -660,14 +647,12 @@ def test_material_state_compatibility_batch_and_release_apis(
     db_session: Session,
 ) -> None:
     user = db_session.exec(select(User).where(User.username == "test-writer")).one()
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="API material",
         moonraker_url="http://api-material",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = _requirements(db_session, material="PLA", nozzle=0.4)
 
     state = client.get(
@@ -740,18 +725,15 @@ def test_material_state_compatibility_batch_and_release_apis(
     assert batch.status_code == 201
     assert len(batch.json()["jobs"]) == 2
 
-    gate = PrintJob(
+    gate = build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="release.gcode",
         state=PrintJobState.COMPLETED,
         operator_gate_state=OperatorGateState.PENDING,
         requested_by=user.id,
     )
-    db_session.add(gate)
-    db_session.commit()
-    db_session.refresh(gate)
     released = client.post(
         f"/api/v1/fleet/queue/{gate.id}/operator-decision",
         headers=auth_headers,
@@ -769,15 +751,13 @@ def test_material_state_compatibility_batch_and_release_apis(
 
 def test_batch_queue_and_operator_edge_paths(db_session: Session) -> None:
     user = build_user(db_session, "material-operator", superuser=True)
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Fleet edges",
         moonraker_url="http://fleet-edges",
         status=PrinterStatus.READY,
         group="room-a",
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
 
     for payload, code in (
@@ -865,16 +845,13 @@ def test_batch_queue_and_operator_edge_paths(db_session: Session) -> None:
         fleet.operator_decision(db_session, 999_999, "release", user)
     with pytest.raises(fleet.FleetError, match="operator_decision_not_pending"):
         fleet.operator_decision(db_session, int(first.id), "release", user)
-    gate = PrintJob(
-        file_id=artifact.id,
-        model_id=artifact.model_id,
+    gate = build_print_job(
+        db_session,
+        artifact,
         remote_filename="unassigned.gcode",
         state=PrintJobState.COMPLETED,
         operator_gate_state=OperatorGateState.PENDING,
     )
-    db_session.add(gate)
-    db_session.commit()
-    db_session.refresh(gate)
     with pytest.raises(fleet.FleetError, match="printer_not_found"):
         fleet.operator_decision(db_session, int(gate.id), "release", user)
     gate.printer_id = printer.id
@@ -889,14 +866,12 @@ def test_batch_queue_and_operator_edge_paths(db_session: Session) -> None:
 def test_tracking_spool_is_resolved_only_when_unambiguous(
     db_session: Session,
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Tracking",
         moonraker_url="http://tracking",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = _requirements(db_session, material="PLA", nozzle=0.4)
     for slot_key, material, spool_id in (
         ("matching", "PLA", 7),

@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.setup_token import current_setup_token
+from tests.factories import build_user
 
 
 @pytest.mark.asyncio
@@ -95,19 +96,12 @@ async def test_setup_login_refresh_apikey_and_rbac(api, tmp_path, e2e_db):
 
 @pytest.mark.asyncio
 async def test_non_superuser_is_denied_admin_routes(api, e2e_db):
-    from app.db.models import User
-    from app.services.auth import create_access_token, hash_password
+    from app.services.auth import create_access_token
 
     # Seed a plain (non-superuser) writer.
-    user = User(
-        username="writer",
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=False,
+    user = build_user(
+        e2e_db, username="writer", password="Password123", active=True, superuser=False
     )
-    e2e_db.add(user)
-    e2e_db.commit()
-    e2e_db.refresh(user)
     token = create_access_token(user.id, user.username, scope="write")
     headers = {"Authorization": f"Bearer {token}"}
 

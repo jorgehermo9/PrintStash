@@ -42,7 +42,6 @@ from app.db.models import (
     InboxItemResult,
     InboxItemResultState,
     InboxItemState,
-    Model,
     ModelProvenanceSource,
     ModelSourceCover,
     StagingLease,
@@ -52,11 +51,11 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.schemas.inbox import CaptureUploadSlotsCreate, InboxImportRequest
 from app.services import inbox
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import create_access_token
 from app.services.source_covers import SourceCoverWrite
 from app.services.storage_backend import CreationReceipt
 from app.services.storage_deletion import process_storage_delete_intents
-from tests.factories import build_user
+from tests.factories import build_model, build_user
 
 
 @pytest.fixture(autouse=True)
@@ -85,15 +84,9 @@ def _capture_source(
 
 
 def _headers(session: Session, username: str, *, admin: bool = False) -> dict[str, str]:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=admin,
+    user = build_user(
+        session, username=username, password="Password123", active=True, superuser=admin
     )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
     return {
         "Authorization": f"Bearer {create_access_token(user.id, user.username, scope='admin' if admin else 'write')}"
     }
@@ -759,13 +752,12 @@ def test_capture_cover_attaches_before_raw_slot_receipt_is_released(
     inbox.upload_capture_slot(
         db_session, cover_slot, stream=BytesIO(cover_bytes), media_type="image/png"
     )
-    model = Model(
+    model = build_model(
+        db_session,
         name="Cover import",
         slug=f"cover-import-{uuid.uuid4().hex}",
         hash=uuid.uuid4().hex * 2,
     )
-    db_session.add(model)
-    db_session.flush()
     source = ModelProvenanceSource(
         model_id=model.id,
         provider="makerworld",

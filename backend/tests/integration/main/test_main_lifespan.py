@@ -29,18 +29,17 @@ from app.db.models import (
     InboxItem,
     InboxItemState,
     InboxSourceKind,
-    Model,
     ModelProvenanceSource,
     OwnedStorageObject,
-    Printer,
     PrinterProvider,
     PrinterStatus,
     StagingLease,
     User,
 )
 from app.services import storage_backend
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import create_access_token
 from app.services.realtime import InProcessBus
+from tests.factories import build_model, build_printer, build_user
 
 
 @pytest.fixture
@@ -71,15 +70,13 @@ def test_lifespan_starts_background_tasks_and_shuts_down_cleanly(
 ) -> None:
     from app.main import app
 
-    user = User(
+    user = build_user(
+        db_session,
         username="lifespan-admin",
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=True,
+        password="Password123",
+        active=True,
+        superuser=True,
     )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
     token = create_access_token(user.id, user.username, scope="admin")
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -163,13 +160,12 @@ def test_storage_composition_recovers_cover_published_before_restart_binding(
     from app.services import source_covers, storage_backend
     from app.services.storage_backend import LocalStorageBackend, get_backend
 
-    model = Model(
+    model = build_model(
+        db_session,
         name="Startup recovery model",
         slug="startup-recovery-model",
         hash="a" * 64,
     )
-    db_session.add(model)
-    db_session.flush()
     source = ModelProvenanceSource(
         model_id=model.id,
         provider="test",
@@ -468,14 +464,13 @@ async def test_bind_audit_context_ignores_non_numeric_token_sub(
 
 
 def test_refresh_printer_gauge_populates_from_db(db_session) -> None:
-    printer = Printer(
+    build_printer(
+        db_session,
         name="Gauge Printer",
         moonraker_url="http://gauge.local:7125",
         provider=PrinterProvider.MOONRAKER,
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
 
     app_main._refresh_printer_gauge()
 

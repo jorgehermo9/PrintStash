@@ -19,7 +19,7 @@ from app.db.models import (
 from app.db.scopes import live
 from app.services import rbac, taxonomy
 from app.services.rbac import ROLE_ORDER, role_allows
-from tests.factories import build_user
+from tests.factories import build_collection, build_user
 
 
 def _oracle(
@@ -167,7 +167,9 @@ def test_like_metacharacters_in_path_do_not_widen_the_grant(
     """
     granted = Collection(name="a_b", slug="a_b", path="a_b")
     sibling_child = Collection(name="inner", slug="inner", path="axb/inner")
-    granted_child = Collection(name="inner", slug="inner", path="a_b/inner")
+    granted_child = build_collection(
+        db_session, name="inner", slug="inner", path="a_b/inner"
+    )
     db_session.add_all([granted, sibling_child, granted_child])
     db_session.commit()
     for c in (granted, sibling_child, granted_child):

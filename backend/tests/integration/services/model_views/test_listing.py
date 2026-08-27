@@ -21,9 +21,10 @@ from datetime import datetime, timezone
 import pytest
 from sqlmodel import Session
 
-from app.db.models import File, FileType, Metadata, Model, PrintJob, PrintJobState, User
+from app.db.models import FileType, Metadata, Model, PrintJob, PrintJobState, User
 from app.schemas.models import ModelFilters, ModelSort
 from app.services import model_views as mv
+from tests.factories import build_file, build_model
 
 
 @pytest.fixture
@@ -43,15 +44,13 @@ def superuser(db_session: Session) -> User:
 def _make_models(db_session: Session, *, count: int, ts: datetime) -> list[int]:
     ids: list[int] = []
     for i in range(count):
-        m = Model(
+        m = build_model(
+            db_session,
             name=f"Model {i:02d}",
             slug=f"model-{i:02d}",
             hash=f"{i:064d}",
             updated_at=ts,
         )
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
         ids.append(m.id)
     return ids
 
@@ -106,10 +105,7 @@ def test_list_items_order_is_stable_and_id_tiebroken(
 def test_list_items_search_is_case_insensitive(
     db_session: Session, superuser: User
 ) -> None:
-    m = Model(name="Articulated Dragon", slug="dragon", hash="d" * 64)
-    db_session.add(m)
-    db_session.commit()
-    db_session.refresh(m)
+    m = build_model(db_session, name="Articulated Dragon", slug="dragon", hash="d" * 64)
 
     for query in ("dragon", "DRAGON", "Dragon", "drAGon"):
         found = {item.id for item in mv.list_items(db_session, superuser, q=query)}
@@ -144,21 +140,16 @@ def test_list_items_excludes_external_sentinel(
 def test_list_items_includes_daily_workflow_print_outcomes(
     db_session: Session, superuser: User
 ) -> None:
-    model = Model(name="Outcome", slug="outcome", hash="o" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
-    artifact = File(
-        model_id=model.id,
+    model = build_model(db_session, name="Outcome", slug="outcome", hash="o" * 64)
+    artifact = build_file(
+        db_session,
+        model,
         path="outcome.gcode",
-        original_filename="outcome.gcode",
+        filename="outcome.gcode",
         file_type=FileType.GCODE,
         size_bytes=10,
         sha256="f" * 64,
     )
-    db_session.add(artifact)
-    db_session.commit()
-    db_session.refresh(artifact)
     finished = datetime(2026, 2, 1, tzinfo=timezone.utc)
     db_session.add_all(
         [
@@ -228,14 +219,9 @@ def test_cursor_page_name_sort_is_global_complete_and_unique(
 ) -> None:
     created: dict[int, str] = {}
     for index, name in enumerate(["Zulu", "alpha", "Echo", "bravo", "Delta"]):
-        model = Model(
-            name=name,
-            slug=f"cursor-{index}",
-            hash=f"c{index:063d}",
+        model = build_model(
+            db_session, name=name, slug=f"cursor-{index}", hash=f"c{index:063d}"
         )
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
         created[model.id] = name
 
     ids, total = _cursor_page_ids(
@@ -270,21 +256,18 @@ def test_cursor_pages_apply_every_metric_sort_globally(
     ]
     ids_by_name: dict[str, int] = {}
     for index, (name, filament, estimate, jobs) in enumerate(specs):
-        model = Model(name=name, slug=f"metric-{name.lower()}", hash=f"d{index:063d}")
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        artifact = File(
-            model_id=model.id,
+        model = build_model(
+            db_session, name=name, slug=f"metric-{name.lower()}", hash=f"d{index:063d}"
+        )
+        artifact = build_file(
+            db_session,
+            model,
             path=f"{name}.gcode",
-            original_filename=f"{name}.gcode",
+            filename=f"{name}.gcode",
             file_type=FileType.GCODE,
             size_bytes=10,
             sha256=f"e{index:063d}",
         )
-        db_session.add(artifact)
-        db_session.commit()
-        db_session.refresh(artifact)
         db_session.add(
             Metadata(
                 file_id=artifact.id,
@@ -371,15 +354,13 @@ def test_list_trashed_pagination_is_complete_and_unique(
     tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     created: set[int] = set()
     for i in range(20):
-        m = Model(
+        m = build_model(
+            db_session,
             name=f"Trashed {i:02d}",
             slug=f"trashed-{i:02d}",
             hash=f"{i + 1000:064d}",
             deleted_at=tied,
         )
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
         created.add(m.id)
 
     seen = _paginate_ids(

@@ -16,7 +16,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.db.models import FilamentProfile, File, FileType, Metadata, Model
+from app.db.models import FilamentProfile, FileType, Metadata, Model
+from tests.factories import build_file, build_model
 
 GRAMS = 10
 COST_PER_KG = 20
@@ -28,22 +29,19 @@ def gcode_with_metadata(db_session: Session):
     """A model with one G-code file whose metadata you choose."""
 
     def build(name: str, **metadata: Any) -> Model:
-        model = Model(name=name, slug=name.lower(), hash=f"{name:a<64}"[:64])
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        gcode = File(
-            model_id=model.id,
+        model = build_model(
+            db_session, name=name, slug=name.lower(), hash=f"{name:a<64}"[:64]
+        )
+        gcode = build_file(
+            db_session,
+            model,
             path=f"{name.lower()}.gcode",
-            original_filename=f"{name.lower()}.gcode",
+            filename=f"{name.lower()}.gcode",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=123,
             sha256=f"{name:b<64}"[:64],
         )
-        db_session.add(gcode)
-        db_session.commit()
-        db_session.refresh(gcode)
         db_session.add(Metadata(file_id=gcode.id, **metadata))
         db_session.commit()
         return model

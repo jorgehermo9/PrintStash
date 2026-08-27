@@ -18,16 +18,16 @@ from app.db.models import (
     Printer,
 )
 from app.services.printer_provider import ProviderError
+from tests.factories import build_printer
 
 
 class TestPrinterConfig:
     def test_moonraker_config_returns_server_and_klipper_config(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with (
             patch(
@@ -67,7 +67,8 @@ class TestPrinterConfig:
     def test_config_unsupported_for_bambu(
         self, client: TestClient, db_session: Session, auth_headers
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -75,9 +76,6 @@ class TestPrinterConfig:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         resp = client.get(f"/api/v1/printers/{p.id}/config", headers=auth_headers)
 
@@ -101,10 +99,9 @@ class TestPrinterConfig:
     def test_config_provider_error_502(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.server_info",
@@ -119,12 +116,10 @@ class TestPrinterConfig:
         self, client: TestClient, auth_headers, db_session: Session
     ) -> None:
         from app.core.time import utcnow
-        from app.db.models import Printer
 
-        printer = Printer(name="Gone", moonraker_url="http://gone.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Gone", moonraker_url="http://gone.local:7125"
+        )
         printer.deleted_at = utcnow()
         db_session.add(printer)
         db_session.commit()

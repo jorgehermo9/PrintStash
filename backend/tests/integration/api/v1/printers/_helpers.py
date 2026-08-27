@@ -11,7 +11,8 @@ from __future__ import annotations
 from sqlmodel import Session, select
 
 from app.db.models import Printer, PrinterPermission, PrinterRole, User
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import create_access_token
+from tests.factories import build_user
 
 
 def user_headers(
@@ -22,15 +23,13 @@ def user_headers(
     scope: str = "write",
 ) -> dict[str, str]:
     """Create a user and return bearer headers for it."""
-    user = User(
+    user = build_user(
+        db_session,
         username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=is_superuser,
+        password="Password123",
+        active=True,
+        superuser=is_superuser,
     )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
     token = create_access_token(user.id, user.username, scope=scope)
     return {"Authorization": f"Bearer {token}"}
 

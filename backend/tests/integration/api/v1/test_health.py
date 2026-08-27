@@ -39,6 +39,7 @@ from app.db.models import (
     PrintJob,
     PrintJobState,
 )
+from tests.factories import build_model
 from tests.integration.conftest import UserHeaders
 
 SPOOLMAN_URL = "http://spoolman.local:7912"
@@ -56,10 +57,9 @@ def _printer(name: str = "Ender", **overrides: Any) -> Printer:
 
 
 def _model_with_file(db_session: Session, name: str) -> Model:
-    model = Model(name=name, slug=name.lower(), hash=f"{name.lower():x<64}"[:64])
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
+    model = build_model(
+        db_session, name=name, slug=name.lower(), hash=f"{name.lower():x<64}"[:64]
+    )
     db_session.add(
         File(
             model_id=model.id,

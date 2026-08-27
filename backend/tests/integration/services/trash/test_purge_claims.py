@@ -31,6 +31,7 @@ from app.db.models import (
 )
 from app.services import trash
 from app.services.storage_ownership import UnsafeStorageDeleteError
+from tests.factories import build_model
 
 
 @pytest.fixture
@@ -39,15 +40,13 @@ def trashed(db_session: Session):
 
     def build() -> Model:
         made["n"] += 1
-        row = Model(
+        row = build_model(
+            db_session,
             name=f"Doomed {made['n']}",
             slug=f"doomed-{made['n']}",
             hash=f"{made['n']:064d}",
             deleted_at=utcnow(),
         )
-        db_session.add(row)
-        db_session.commit()
-        db_session.refresh(row)
         return row
 
     return build
@@ -114,10 +113,7 @@ class TestRestoreModel:
         assert model.deleted_by is None
 
     def test_does_nothing_to_a_live_model(self, db_session: Session) -> None:
-        model = Model(name="Live", slug="live-restore", hash="a" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(db_session, name="Live", slug="live-restore", hash="a" * 64)
         before = model.updated_at
 
         trash.restore_model(db_session, model)

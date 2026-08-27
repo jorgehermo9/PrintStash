@@ -8,8 +8,9 @@ from pathlib import Path
 import pytest
 
 from app.core.time import utcnow
-from app.db.models import File, FileType, Model
+from app.db.models import FileType
 from app.services.storage_backend import get_backend
+from tests.factories import build_file, build_model
 
 
 @pytest.mark.asyncio
@@ -18,30 +19,27 @@ async def test_trash_reports_size_and_purges_matching_pre_ledger_artifact(
 ) -> None:
     backend = get_backend()
     content = b"pre-ledger artifact bytes"
-    model = Model(
+    model = build_model(
+        e2e_db,
         name="Legacy bracket",
         slug="legacy-bracket",
         hash=hashlib.sha256(b"legacy model").hexdigest(),
         deleted_at=utcnow(),
     )
-    e2e_db.add(model)
-    e2e_db.commit()
-    e2e_db.refresh(model)
     key = backend.blob_key(model.slug, 1, "bracket.stl")
     path = Path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)  # simulates bytes written before the ledger existed
-    artifact = File(
-        model_id=model.id,
+    build_file(
+        e2e_db,
+        model,
         path=key,
-        original_filename="bracket.stl",
+        filename="bracket.stl",
         file_type=FileType.STL,
         version=1,
         size_bytes=len(content),
         sha256=hashlib.sha256(content).hexdigest(),
     )
-    e2e_db.add(artifact)
-    e2e_db.commit()
 
     trash = (await api.get("/api/v1/models/trash", headers=superuser_headers)).json()
     assert trash[0]["size_bytes"] == len(content)

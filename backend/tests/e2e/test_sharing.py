@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import pytest
 
+from tests.factories import build_model
+
 
 def _seed_model(session) -> int:
-    from app.db.models import Model
 
-    model = Model(name="Shared Bracket", slug="shared-bracket", hash="c" * 64)
-    session.add(model)
-    session.commit()
-    session.refresh(model)
+    model = build_model(
+        session, name="Shared Bracket", slug="shared-bracket", hash="c" * 64
+    )
     return model.id
 
 

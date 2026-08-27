@@ -22,6 +22,7 @@ from app.db.models import File, FileType, Model
 from app.services import trash
 from app.services.storage_backend import LocalStorageBackend
 from app.services.storage_ownership import UnsafeStorageDeleteError
+from tests.factories import build_model
 
 
 class _RecordingRemoteBackend(LocalStorageBackend):
@@ -55,10 +56,7 @@ class _WalkRecordingBackend(_RecordingRemoteBackend):
 
 
 def _add_model(session: Session, slug: str) -> Model:
-    m = Model(name=slug, slug=slug, hash=slug.ljust(64, "0"))
-    session.add(m)
-    session.commit()
-    session.refresh(m)
+    m = build_model(session, name=slug, slug=slug, hash=slug.ljust(64, "0"))
     return m
 
 

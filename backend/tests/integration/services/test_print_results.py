@@ -18,27 +18,23 @@ from __future__ import annotations
 
 from sqlmodel import Session
 
-from app.db.models import FilamentProfile, File, FileType, Metadata, Model, PrintJob
+from app.db.models import FilamentProfile, File, FileType, Metadata, PrintJob
 from app.services import print_results, spoolman
+from tests.factories import build_file, build_model, build_print_job
 
 
 def _seed_file(db_session: Session, *, sha: str) -> File:
-    m = Model(name="M", slug=f"m-{sha}", hash=sha * 64)
-    db_session.add(m)
-    db_session.commit()
-    db_session.refresh(m)
-    f = File(
-        model_id=m.id,
+    m = build_model(db_session, name="M", slug=f"m-{sha}", hash=sha * 64)
+    f = build_file(
+        db_session,
+        m,
         path=f"/data/{sha}.gcode",
-        original_filename=f"{sha}.gcode",
+        filename=f"{sha}.gcode",
         file_type=FileType.GCODE,
         version=1,
         size_bytes=1,
         sha256=sha * 64,
     )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
     return f
 
 
@@ -368,14 +364,7 @@ class TestResolveCompletionCostWithoutMetadata:
         self, db_session: Session
     ) -> None:
         row = _seed_file(db_session, sha="A")
-        job = PrintJob(
-            model_id=row.model_id,
-            file_id=row.id,
-            remote_filename=row.original_filename,
-        )
-        db_session.add(job)
-        db_session.commit()
-        db_session.refresh(job)
+        job = build_print_job(db_session, row, remote_filename=row.original_filename)
 
         grams, cost = print_results.resolve_completion_cost(db_session, job)
 

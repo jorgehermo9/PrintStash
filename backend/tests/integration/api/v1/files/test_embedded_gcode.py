@@ -21,8 +21,9 @@ import pytest_asyncio
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.db.models import File, FileType, Model
+from app.db.models import File, FileType
 from app.services.storage_backend import get_backend
+from tests.factories import build_file, build_model
 
 pytestmark = pytest.mark.asyncio
 
@@ -58,25 +59,22 @@ def three_mf(db_session: Session, tmp_path: Path):
         directory = tmp_path / f"artifact-{made['n']}"
         directory.mkdir(parents=True, exist_ok=True)
         slug = f"preview-{file_type.value}-{made['n']}"
-        model = Model(name=slug, slug=slug, hash=(slug.encode().hex() * 64)[:64])
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(
+            db_session, name=slug, slug=slug, hash=(slug.encode().hex() * 64)[:64]
+        )
         path = directory / f"{slug}.3mf"
         if content is not None:
             path.write_bytes(content)
-        artifact = File(
-            model_id=model.id,
+        artifact = build_file(
+            db_session,
+            model,
             path=str(path),
-            original_filename=path.name,
+            filename=path.name,
             file_type=file_type,
             version=1,
             size_bytes=len(content or b""),
             sha256="a" * 64,
         )
-        db_session.add(artifact)
-        db_session.commit()
-        db_session.refresh(artifact)
         db_session.close()
         return artifact
 

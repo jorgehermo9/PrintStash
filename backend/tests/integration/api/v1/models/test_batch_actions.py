@@ -34,6 +34,7 @@ from app.db.models import (
     Tag,
 )
 from app.services import taxonomy
+from tests.factories import build_file, build_model
 
 MAX_BATCH = 500
 
@@ -51,15 +52,13 @@ def collection_named(db_session: Session):
 @pytest.fixture
 def model_in(db_session: Session):
     def build(name: str, collection_id: int | None) -> Model:
-        row = Model(
+        row = build_model(
+            db_session,
             name=name,
             slug=name.lower().replace(" ", "-"),
             hash=hashlib.sha256(name.encode()).hexdigest(),
             collection_id=collection_id,
         )
-        db_session.add(row)
-        db_session.commit()
-        db_session.refresh(row)
         return row
 
     return build
@@ -68,19 +67,17 @@ def model_in(db_session: Session):
 @pytest.fixture
 def revision(db_session: Session):
     def build(model: Model, version: int, label: str | None = None) -> File:
-        row = File(
-            model_id=model.id,
+        row = build_file(
+            db_session,
+            model,
             path=f"/tmp/{model.id}-{version}.gcode",
-            original_filename=f"rev-{version}.gcode",
+            filename=f"rev-{version}.gcode",
             file_type=FileType.GCODE,
             version=version,
             size_bytes=10,
             sha256=f"{model.id:032x}{version:032x}"[-64:],
             revision_label=label,
         )
-        db_session.add(row)
-        db_session.commit()
-        db_session.refresh(row)
         return row
 
     return build
@@ -541,18 +538,16 @@ class TestBatchRevisionLabels:
         self, client: TestClient, db_session: Session, auth_headers, model_in
     ) -> None:
         model = model_in("Mesh holder", None)
-        mesh = File(
-            model_id=model.id,
+        mesh = build_file(
+            db_session,
+            model,
             path="/tmp/mesh.stl",
-            original_filename="mesh.stl",
+            filename="mesh.stl",
             file_type=FileType.STL,
             version=1,
             size_bytes=10,
             sha256="f" * 64,
         )
-        db_session.add(mesh)
-        db_session.commit()
-        db_session.refresh(mesh)
 
         response = client.patch(
             "/api/v1/models/batch/revision-labels",

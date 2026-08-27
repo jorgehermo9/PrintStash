@@ -20,7 +20,13 @@ from app.db.models import AuditLog, Collection, File, FileType, Model, Tag, User
 from app.schemas.auth import UserUpdate
 from app.services.audit import install_audit_listeners
 from app.services.auth import create_access_token
-from tests.factories import build_user
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    build_printer,
+    build_user,
+)
 
 
 def _headers(user: User) -> dict[str, str]:
@@ -463,10 +469,7 @@ class TestAdminDeleteResource:
         self, client: TestClient, db_session: Session
     ) -> None:
         admin = build_user(db_session, "admin-m", superuser=True)
-        col = Collection(name="Hard", slug="hard", path="hard")
-        db_session.add(col)
-        db_session.commit()
-        db_session.refresh(col)
+        col = build_collection(db_session, name="Hard", slug="hard", path="hard")
 
         col_id = col.id
         resp = client.delete(
@@ -493,22 +496,17 @@ class TestAdminDeleteResource:
         db_session.commit()
         assert backend.exists(key)
 
-        model = Model(name="host", slug="host", hash="9" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(db_session, name="host", slug="host", hash="9" * 64)
 
-        file_row = File(
-            model_id=model.id,
+        file_row = build_file(
+            db_session,
+            model,
             path=key,
-            original_filename="f.bin",
+            filename="f.bin",
             file_type=FileType.STL,
             size_bytes=5,
             sha256="0" * 64,
         )
-        db_session.add(file_row)
-        db_session.commit()
-        db_session.refresh(file_row)
 
         file_id = file_row.id
         resp = client.delete(
@@ -527,22 +525,17 @@ class TestAdminDeleteResource:
         original = b"user-owned-nas-bytes"
         nas_path.write_bytes(original)
 
-        model = Model(name="linked", slug="linked", hash="8" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        file_row = File(
-            model_id=model.id,
+        model = build_model(db_session, name="linked", slug="linked", hash="8" * 64)
+        file_row = build_file(
+            db_session,
+            model,
             path=str(nas_path),
-            original_filename=nas_path.name,
+            filename=nas_path.name,
             file_type=FileType.STL,
             size_bytes=len(original),
             sha256="1" * 64,
-            is_external=True,
+            external=True,
         )
-        db_session.add(file_row)
-        db_session.commit()
-        db_session.refresh(file_row)
         file_id = file_row.id
 
         response = client.delete(
@@ -580,10 +573,9 @@ class TestAdminDeleteResource:
         self, client: TestClient, db_session: Session
     ) -> None:
         admin = build_user(db_session, "admin-model-hard", superuser=True)
-        model = Model(name="Doomed", slug="doomed-admin", hash="c" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(
+            db_session, name="Doomed", slug="doomed-admin", hash="c" * 64
+        )
         model_id = model.id
 
         response = client.delete(
@@ -600,10 +592,9 @@ class TestAdminDeleteResource:
         from app.db.models import Printer
 
         admin = build_user(db_session, "admin-printer-hard", superuser=True)
-        printer = Printer(name="Retired", moonraker_url="http://retired.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Retired", moonraker_url="http://retired.local:7125"
+        )
         printer_id = printer.id
 
         response = client.delete(
@@ -621,10 +612,9 @@ class TestAdminDeleteResource:
         from app.services.storage_ownership import UnsafeStorageDeleteError
 
         admin = build_user(db_session, "admin-unproven", superuser=True)
-        model = Model(name="Unowned", slug="unowned-admin", hash="b" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(
+            db_session, name="Unowned", slug="unowned-admin", hash="b" * 64
+        )
         model_id = model.id
 
         def unproven(*_args: object, **_kwargs: object):
@@ -646,10 +636,9 @@ class TestAdminDeleteResource:
         from app.services.storage_ownership import UnsafeStorageDeleteError
 
         admin = build_user(db_session, "admin-unproven-kept", superuser=True)
-        model = Model(name="Unowned kept", slug="unowned-kept", hash="a" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(
+            db_session, name="Unowned kept", slug="unowned-kept", hash="a" * 64
+        )
         model_id = model.id
 
         def unproven(session, row):

@@ -14,7 +14,7 @@ from sqlmodel import Session
 from app.core.config import _overlay
 from app.db.models import User
 from app.services import model_views
-from app.services.auth import hash_password
+from tests.factories import build_user
 
 
 @pytest.fixture(autouse=True)
@@ -33,15 +33,9 @@ def _clear_cache(tmp_path: Path):
 
 @pytest.fixture
 def admin(db_session: Session) -> User:
-    user = User(
-        username="dash",
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=True,
+    user = build_user(
+        db_session, username="dash", password="Password123", active=True, superuser=True
     )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
     return user
 
 

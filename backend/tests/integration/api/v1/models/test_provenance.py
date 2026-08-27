@@ -36,6 +36,7 @@ from app.db.models import (
     ModelSourceCover,
     ProvenanceCapture,
 )
+from tests.factories import build_collection, build_model
 
 SECRET_IN_SNAPSHOT = "must-not-be-returned"
 
@@ -48,10 +49,12 @@ def _png(color: str = "navy") -> bytes:
 
 @pytest.fixture
 def model(db_session: Session) -> Model:
-    row = Model(name="Bracket", slug=f"bracket-{uuid.uuid4().hex[:8]}", hash="a" * 64)
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
+    row = build_model(
+        db_session,
+        name="Bracket",
+        slug=f"bracket-{uuid.uuid4().hex[:8]}",
+        hash="a" * 64,
+    )
     return row
 
 
@@ -123,10 +126,9 @@ def viewer(db_session: Session, model: Model, make_user, headers_for):
     def grant(username: str, role: CollectionRole) -> dict[str, str]:
         collection = db_session.exec(select(Collection)).first()
         if collection is None:
-            collection = Collection(name="Shelf", slug="shelf", path="shelf")
-            db_session.add(collection)
-            db_session.commit()
-            db_session.refresh(collection)
+            collection = build_collection(
+                db_session, name="Shelf", slug="shelf", path="shelf"
+            )
         target = db_session.get(Model, model.id)
         assert target is not None
         target.collection_id = collection.id

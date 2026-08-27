@@ -28,13 +28,11 @@ from app.services.storage_ownership import (
     UnsafeStorageDeleteError,
     record_creation,
 )
+from tests.factories import build_file, build_model
 
 
 def _model(session: Session) -> Model:
-    row = Model(name="Bracket", slug="bracket", hash="a" * 64)
-    session.add(row)
-    session.commit()
-    session.refresh(row)
+    row = build_model(session, name="Bracket", slug="bracket", hash="a" * 64)
     # The shared SQLite fixture predates provenance tables; clear any rows
     # whose reused in-memory model id survived its legacy teardown list.
     # The legacy fixture's teardown did not know the new dependent tables.
@@ -454,16 +452,15 @@ def test_portable_attach_keeps_existing_capture_and_local_override(
     db_session: Session,
 ) -> None:
     model = _model(db_session)
-    artifact = File(
-        model_id=model.id,
+    artifact = build_file(
+        db_session,
+        model,
         path="provenance/existing.stl",
-        original_filename="existing.stl",
+        filename="existing.stl",
         file_type=FileType.STL,
         size_bytes=1,
         sha256="c" * 64,
     )
-    db_session.add(artifact)
-    db_session.flush()
     original = provenance.upsert_capture(
         db_session, model_id=model.id, manifest=_capture(title="Original")
     )
@@ -621,14 +618,15 @@ def test_live_reuse_trash_restore_and_hard_delete_follow_provenance_lifecycle(
         hashed_password="not-used",
         is_superuser=True,
     )
-    artifact = File(
-        model_id=model.id,
+    artifact = build_file(
+        db_session,
+        model,
         path="external/provenance-part.stl",
-        original_filename="part.stl",
+        filename="part.stl",
         file_type=FileType.STL,
         size_bytes=1,
         sha256="d" * 64,
-        is_external=True,
+        external=True,
     )
     db_session.add_all([actor, artifact])
     db_session.commit()

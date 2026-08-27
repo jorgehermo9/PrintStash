@@ -20,11 +20,11 @@ from app.db.models import (
     NotificationDeliveryStatus,
     NotificationEventType,
     NotificationTarget,
-    Printer,
     PrinterStatus,
 )
 from app.services import notifications
 from app.services.runtime_config import set_notifications_enabled
+from tests.factories import build_printer
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -542,10 +542,9 @@ async def test_run_dispatcher_loop_survives_tick_error(db_session):
 
 def test_offline_edge_fires_once_per_transition(db_session, hub):
     set_notifications_enabled(db_session, True)
-    p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.READY)
-    db_session.add(p)
-    db_session.commit()
-    db_session.refresh(p)
+    p = build_printer(
+        db_session, name="Ender", moonraker_url="http://x", status=PrinterStatus.READY
+    )
     _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
 
     hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)
@@ -562,10 +561,12 @@ def test_offline_edge_fires_once_per_transition(db_session, hub):
 
 def test_print_completed_fires_once_and_is_idempotent(db_session, hub):
     set_notifications_enabled(db_session, True)
-    p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.PRINTING)
-    db_session.add(p)
-    db_session.commit()
-    db_session.refresh(p)
+    p = build_printer(
+        db_session,
+        name="Ender",
+        moonraker_url="http://x",
+        status=PrinterStatus.PRINTING,
+    )
     _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
 
     stats = {"total_duration": 3600, "filament_used": 1000, "filename": "x.gcode"}
@@ -580,10 +581,12 @@ def test_print_completed_fires_once_and_is_idempotent(db_session, hub):
 
 def test_cancelled_emits_distinct_event(db_session, hub):
     set_notifications_enabled(db_session, True)
-    p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.PRINTING)
-    db_session.add(p)
-    db_session.commit()
-    db_session.refresh(p)
+    p = build_printer(
+        db_session,
+        name="Ender",
+        moonraker_url="http://x",
+        status=PrinterStatus.PRINTING,
+    )
     # Channel only wants completions, not cancellations -> nothing enqueued.
     _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
 
@@ -938,10 +941,9 @@ def test_record_channel_test_noop_when_channel_missing():
 
 def test_offline_not_fired_from_unknown(db_session, hub):
     set_notifications_enabled(db_session, True)
-    p = Printer(name="Ender", moonraker_url="http://x", status=PrinterStatus.UNKNOWN)
-    db_session.add(p)
-    db_session.commit()
-    db_session.refresh(p)
+    p = build_printer(
+        db_session, name="Ender", moonraker_url="http://x", status=PrinterStatus.UNKNOWN
+    )
     _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
 
     hub._mark_status_db(p.id, PrinterStatus.OFFLINE, None)

@@ -15,9 +15,7 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 from app.db.models import (
-    File,
     FileType,
-    Model,
     Printer,
     PrinterProvider,
     PrintJob,
@@ -26,6 +24,7 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.services.printer_hub import PrinterHub
 from app.services.printer_provider import build_provider_registry, get_provider_client
+from tests.factories import build_file, build_model, build_print_job, build_printer
 from tests.fakes.mock_octoprint import create_app
 from tests.fakes.server import start_server
 
@@ -45,44 +44,34 @@ REGISTRY = build_provider_registry()
 
 
 def _seed(db_session: Session, base_url: str) -> tuple[int, int]:
-    model = Model(name="Mock", slug="mock-octo-model", hash="o" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
+    model = build_model(db_session, name="Mock", slug="mock-octo-model", hash="o" * 64)
 
-    f = File(
-        model_id=model.id,
+    f = build_file(
+        db_session,
+        model,
         path="/data/demo.gcode",
-        original_filename=REMOTE,
+        filename=REMOTE,
         file_type=FileType.GCODE,
         version=1,
         size_bytes=100,
         sha256="p" * 64,
     )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
 
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Mock OctoPrint",
         provider=PrinterProvider.OCTOPRINT,
         octoprint_url=base_url,
         octoprint_api_key=API_KEY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        f,
         printer_id=printer.id,
-        file_id=f.id,
-        model_id=model.id,
         remote_filename=REMOTE,
         state=PrintJobState.STARTED,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     return printer.id, job.id
 

@@ -24,36 +24,30 @@ from app.db.models import (
     File,
     FileType,
     Model,
-    Printer,
     PrinterFile,
     PrintJob,
     PrintJobState,
     User,
 )
 from app.services.printer_provider import ProviderError
+from tests.factories import build_collection, build_file, build_model, build_printer
 from tests.integration.api.v1.printers._helpers import grant_printer, user_headers
 
 
 class TestPrinterFiles:
     def _setup_file(self, db_session: Session):
-        from app.db.models import File, Model
 
-        m = Model(name="Bracket", slug="bracket", hash="b" * 64)
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
-        f = File(
-            model_id=m.id,
+        m = build_model(db_session, name="Bracket", slug="bracket", hash="b" * 64)
+        f = build_file(
+            db_session,
+            m,
             path="/data/bracket.gcode",
-            original_filename="bracket.gcode",
+            filename="bracket.gcode",
             file_type="gcode",
             version=1,
             size_bytes=100,
             sha256="c" * 64,
         )
-        db_session.add(f)
-        db_session.commit()
-        db_session.refresh(f)
         return m, f
 
     def test_list_printer_files_returns_matched_and_external(
@@ -62,10 +56,9 @@ class TestPrinterFiles:
         from app.db.models import PrinterFile
 
         m, f = self._setup_file(db_session)
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.add(
             PrinterFile(
                 printer_id=p.id,
@@ -101,10 +94,9 @@ class TestPrinterFiles:
     def test_sync_printer_files_requires_auth(
         self, client: TestClient, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.post(f"/api/v1/printers/{p.id}/files/sync")
         assert resp.status_code == 401
@@ -113,10 +105,9 @@ class TestPrinterFiles:
         self, client: TestClient, auth_headers, db_session: Session
     ):
         _, f = self._setup_file(db_session)
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         with patch(
             "app.services.printer_provider.MoonrakerProvider.list_files",
             new_callable=AsyncMock,
@@ -134,10 +125,9 @@ class TestPrinterFiles:
     def test_sync_printer_files_deletes_remote_files_missing_from_provider(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.add(
             PrinterFile(
                 printer_id=p.id,
@@ -174,10 +164,9 @@ class TestPrinterFiles:
     def test_delete_printer_file_removes_remote_and_resyncs_inventory(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         deleted = PrinterFile(
             printer_id=p.id,
             remote_filename="deleted.gcode",
@@ -220,7 +209,8 @@ class TestPrinterFiles:
     def test_sync_unsupported_provider(
         self, client: TestClient, db_session: Session, auth_headers
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -228,9 +218,6 @@ class TestPrinterFiles:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
         resp = client.post(f"/api/v1/printers/{p.id}/files/sync", headers=auth_headers)
         assert resp.status_code == 409
         assert resp.json()["detail"] == "operation_not_supported_for_provider"
@@ -241,7 +228,9 @@ class TestPrinterFiles:
         headers = user_headers(db_session, "viewer")
         viewer = db_session.exec(select(User).where(User.username == "viewer")).one()
         allowed = Collection(name="Allowed", slug="allowed", path="allowed")
-        denied = Collection(name="Denied", slug="denied", path="denied")
+        denied = build_collection(
+            db_session, name="Denied", slug="denied", path="denied"
+        )
         db_session.add_all([allowed, denied])
         db_session.commit()
         db_session.refresh(allowed)
@@ -259,7 +248,8 @@ class TestPrinterFiles:
             hash="1" * 64,
             collection_id=allowed.id,
         )
-        denied_model = Model(
+        denied_model = build_model(
+            db_session,
             name="Denied model",
             slug="denied-model",
             hash="2" * 64,
@@ -287,7 +277,9 @@ class TestPrinterFiles:
             size_bytes=100,
             sha256="4" * 64,
         )
-        printer = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
+        printer = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.add_all([allowed_file, denied_file, printer])
         db_session.commit()
         db_session.refresh(allowed_file)
@@ -325,19 +317,16 @@ class TestPrinterFiles:
         self, client: TestClient, db_session: Session
     ):
         headers = user_headers(db_session, "editor")
-        collection = Collection(name="Private", slug="private", path="private")
-        db_session.add(collection)
-        db_session.commit()
-        db_session.refresh(collection)
-        model = Model(
+        collection = build_collection(
+            db_session, name="Private", slug="private", path="private"
+        )
+        model = build_model(
+            db_session,
             name="Private model",
             slug="private-model",
             hash="5" * 64,
             collection_id=collection.id,
         )
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
         file_row = File(
             model_id=model.id,
             path="/data/private.gcode",
@@ -347,7 +336,9 @@ class TestPrinterFiles:
             size_bytes=100,
             sha256="6" * 64,
         )
-        printer = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
+        printer = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.add_all([file_row, printer])
         db_session.commit()
         db_session.refresh(file_row)
@@ -368,10 +359,9 @@ class TestPrinterFiles:
         from app.db.models import PrinterFile
 
         m, f = self._setup_file(db_session)
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.add(
             PrinterFile(
                 printer_id=p.id,
@@ -406,10 +396,9 @@ class TestPrinterFiles:
     ):
         from app.db.models import SENTINEL_FILE_HASH, File, PrinterFile
 
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.add(
             PrinterFile(
                 printer_id=p.id,
@@ -441,7 +430,8 @@ class TestPrinterFiles:
     def test_start_bambu_provider(
         self, client: TestClient, db_session: Session, auth_headers
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -449,9 +439,6 @@ class TestPrinterFiles:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         with patch(
             "app.services.printer_provider.BambuLanProvider.start",
@@ -469,10 +456,9 @@ class TestPrinterFiles:
     def test_sync_provider_error_sets_last_error(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.list_files",
@@ -490,7 +476,8 @@ class TestPrinterFiles:
     def test_delete_file_unsupported_provider_409(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -498,9 +485,6 @@ class TestPrinterFiles:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         resp = client.delete(f"/api/v1/printers/{p.id}/files/1", headers=auth_headers)
         assert resp.status_code == 409
@@ -509,10 +493,9 @@ class TestPrinterFiles:
     def test_delete_file_404_unknown_printer_file(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.delete(
             f"/api/v1/printers/{p.id}/files/99999", headers=auth_headers
@@ -523,10 +506,9 @@ class TestPrinterFiles:
     def test_delete_file_provider_error_sets_last_error(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         row = PrinterFile(
             printer_id=p.id, remote_filename="stuck.gcode", matched_by="external"
         )
@@ -550,10 +532,9 @@ class TestPrinterFiles:
     def test_delete_file_falls_back_to_cached_list_when_resync_fails(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         deleted = PrinterFile(
             printer_id=p.id, remote_filename="deleted.gcode", matched_by="external"
         )
@@ -593,41 +574,34 @@ class TestPrinterFiles:
         has no access to.
         """
         from app.db.models import (
-            Collection,
-            File,
             FileType,
-            Model,
-            Printer,
             PrinterFile,
             PrinterRole,
         )
 
-        private = Collection(name="Private", slug="private-files", path="private-files")
-        db_session.add(private)
-        db_session.commit()
-        db_session.refresh(private)
-        model = Model(
-            name="Secret", slug="secret-model", hash="7" * 64, collection_id=private.id
+        private = build_collection(
+            db_session, name="Private", slug="private-files", path="private-files"
         )
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        artifact = File(
-            model_id=model.id,
+        model = build_model(
+            db_session,
+            name="Secret",
+            slug="secret-model",
+            hash="7" * 64,
+            collection_id=private.id,
+        )
+        artifact = build_file(
+            db_session,
+            model,
             path="secret.gcode",
-            original_filename="secret.gcode",
+            filename="secret.gcode",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=10,
             sha256="8" * 64,
         )
-        db_session.add(artifact)
-        db_session.commit()
-        db_session.refresh(artifact)
-        printer = Printer(name="Shared fleet", moonraker_url="http://fleet.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Shared fleet", moonraker_url="http://fleet.local:7125"
+        )
         db_session.add(
             PrinterFile(
                 printer_id=printer.id,
@@ -655,34 +629,27 @@ class TestPrinterFiles:
     ) -> None:
         from app.core.time import utcnow
         from app.db.models import (
-            File,
             FileType,
-            Model,
-            Printer,
             PrinterFile,
             PrinterRole,
         )
 
-        model = Model(name="Trashed host", slug="trashed-host", hash="6" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        artifact = File(
-            model_id=model.id,
+        model = build_model(
+            db_session, name="Trashed host", slug="trashed-host", hash="6" * 64
+        )
+        artifact = build_file(
+            db_session,
+            model,
             path="trashed.gcode",
-            original_filename="trashed.gcode",
+            filename="trashed.gcode",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=10,
             sha256="5" * 64,
         )
-        db_session.add(artifact)
-        db_session.commit()
-        db_session.refresh(artifact)
-        printer = Printer(name="Fleet", moonraker_url="http://fleet2.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Fleet", moonraker_url="http://fleet2.local:7125"
+        )
         db_session.add(
             PrinterFile(
                 printer_id=printer.id,
@@ -711,25 +678,23 @@ class TestStartPrinterFile:
     def test_start_with_explicit_file_id_creates_vault_job(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        from app.db.models import File, Model
 
-        m = Model(name="Explicit", slug="explicit-file", hash="e" * 64)
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
-        f = File(
-            model_id=m.id,
+        m = build_model(
+            db_session, name="Explicit", slug="explicit-file", hash="e" * 64
+        )
+        f = build_file(
+            db_session,
+            m,
             path="/data/explicit.gcode",
-            original_filename="explicit.gcode",
+            filename="explicit.gcode",
             file_type="gcode",
             version=1,
             size_bytes=10,
             sha256="f" * 64,
         )
-        db_session.add(f)
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.refresh(f)
         db_session.refresh(p)
 
@@ -751,25 +716,23 @@ class TestStartPrinterFile:
     def test_start_with_explicit_file_id_rejects_non_gcode(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        from app.db.models import File, Model
 
-        m = Model(name="NonGcode", slug="non-gcode-start", hash="g" * 64)
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
-        f = File(
-            model_id=m.id,
+        m = build_model(
+            db_session, name="NonGcode", slug="non-gcode-start", hash="g" * 64
+        )
+        f = build_file(
+            db_session,
+            m,
             path="/data/model.stl",
-            original_filename="model.stl",
+            filename="model.stl",
             file_type="stl",
             version=1,
             size_bytes=10,
             sha256="h" * 64,
         )
-        db_session.add(f)
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.refresh(f)
         db_session.refresh(p)
 
@@ -785,10 +748,9 @@ class TestStartPrinterFile:
         self, client: TestClient, db_session: Session
     ):
         headers = user_headers(db_session, "start-editor")
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.post(
             f"/api/v1/printers/{p.id}/start",
@@ -801,10 +763,9 @@ class TestStartPrinterFile:
     def test_start_provider_error_marks_job_failed(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.start",
@@ -824,10 +785,9 @@ class TestStartPrinterFile:
     def test_start_generic_exception_marks_job_failed(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         with patch(
             "app.services.printer_provider.MoonrakerProvider.start",
@@ -848,13 +808,11 @@ class TestStartPrinterFile:
     ) -> None:
         from dataclasses import replace
 
-        from app.db.models import Printer
         from app.services.printer_provider import MoonrakerProvider
 
-        printer = Printer(name="No start", moonraker_url="http://nostart.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="No start", moonraker_url="http://nostart.local:7125"
+        )
         no_start = replace(MoonrakerProvider.capabilities, supported=frozenset())
 
         with patch.object(MoonrakerProvider, "capabilities", no_start):

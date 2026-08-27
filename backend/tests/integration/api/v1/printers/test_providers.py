@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 from app.db.models import (
     Printer,
 )
+from tests.factories import build_file, build_model, build_printer
 
 
 class TestBambuPrinter:
@@ -57,27 +58,22 @@ class TestBambuPrinter:
     def test_bambu_send_uploads_when_ready(
         self, client: TestClient, db_session: Session, auth_headers, tmp_path
     ):
-        from app.db.models import File, Model
 
-        m = Model(name="Model", slug="model-bambu", hash="x" * 64)
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
+        m = build_model(db_session, name="Model", slug="model-bambu", hash="x" * 64)
 
-        f = File(
-            model_id=m.id,
+        f = build_file(
+            db_session,
+            m,
             path="/data/model.gcode",
-            original_filename="model.gcode",
+            filename="model.gcode",
             file_type="gcode",
             version=1,
             size_bytes=100,
             sha256="y" * 64,
         )
-        db_session.add(f)
-        db_session.commit()
-        db_session.refresh(f)
 
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -85,9 +81,6 @@ class TestBambuPrinter:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         local = tmp_path / "model.gcode"
         local.write_text("G28\n")
@@ -126,7 +119,8 @@ class TestBambuPrinter:
     def test_bambu_send_rejects_busy_printer(
         self, client: TestClient, db_session: Session, auth_headers
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -134,9 +128,6 @@ class TestBambuPrinter:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
         with patch(
             "app.services.printer_provider.BambuLanProvider.query_status",
             new_callable=AsyncMock,
@@ -155,30 +146,23 @@ class TestBambuPrinter:
     ):
         # A .bgcode file is indexed (file_type "gcode") for its metadata, but
         # Moonraker/Klipper can't print binary G-code — the send must 400.
-        from app.db.models import File, Model
 
-        m = Model(name="Model", slug="model-bgcode", hash="b" * 64)
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
+        m = build_model(db_session, name="Model", slug="model-bgcode", hash="b" * 64)
 
-        f = File(
-            model_id=m.id,
+        f = build_file(
+            db_session,
+            m,
             path="/data/model.bgcode",
-            original_filename="model.bgcode",
+            filename="model.bgcode",
             file_type="gcode",
             version=1,
             size_bytes=100,
             sha256="z" * 64,
         )
-        db_session.add(f)
-        db_session.commit()
-        db_session.refresh(f)
 
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.post(
             f"/api/v1/printers/{p.id}/send",
@@ -191,7 +175,8 @@ class TestBambuPrinter:
     def test_bambu_pause_calls_provider(
         self, client: TestClient, db_session: Session, auth_headers
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -199,9 +184,6 @@ class TestBambuPrinter:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
         with patch(
             "app.services.printer_provider.BambuLanProvider.pause",
             new_callable=AsyncMock,
@@ -214,7 +196,8 @@ class TestBambuPrinter:
     def test_bambu_diagnostics_reports_beta_capabilities(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -222,9 +205,6 @@ class TestBambuPrinter:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         with patch(
             "app.services.printer_provider.BambuLanProvider.query_status",
@@ -251,7 +231,8 @@ class TestBambuPrinter:
     def test_diagnostics_timeout_returns_check_failure(
         self, client: TestClient, auth_headers, db_session: Session, monkeypatch
     ):
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bambu",
             provider="bambu_lan",
             moonraker_url="",
@@ -259,9 +240,6 @@ class TestBambuPrinter:
             bambu_serial="SN123",
             bambu_access_code="access",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
         monkeypatch.setattr(
             "app.api.v1.printers._DIAGNOSTIC_CHECK_TIMEOUT_SECONDS", 0.01
         )

@@ -26,7 +26,13 @@ from app.services import printer_hub as printer_hub_module
 from app.services.printer_hub import PrinterHub
 from app.services.realtime import InProcessBus
 from app.services.spoolman import SpoolmanError
-from tests.factories import a_gcode_artifact
+from tests.factories import (
+    a_gcode_artifact,
+    build_file,
+    build_model,
+    build_print_job,
+    build_printer,
+)
 
 
 def test_hub_uses_its_injected_session_factory(
@@ -51,16 +57,14 @@ def test_hub_uses_its_injected_session_factory(
 def test_provider_material_state_sync_creates_updates_and_removes_rows(
     hub: PrinterHub, db_session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="AMS",
         provider=PrinterProvider.BAMBU_LAN,
         host="192.0.2.50",
         serial="TEST-SERIAL",
         access_code="test-code",
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     assert printer.id is not None
 
     hub._sync_material_state_db(
@@ -250,17 +254,14 @@ def test_external_capture_failure_paths_are_persistent(
     hub: PrinterHub, db_session
 ) -> None:
     artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = PrintJob(
-        file_id=artifact.id,
-        model_id=artifact.model_id,
+    job = build_print_job(
+        db_session,
+        artifact,
         remote_filename="external.gcode",
         source="external",
         state=PrintJobState.PRINTING,
         artifact_evidence="capture_pending",
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
     assert job.id is not None
 
     with patch.object(
@@ -354,10 +355,7 @@ class TestPrinterHubLifecycle:
         assert hub.stop_events == {}
 
     def test_add_printer_creates_task(self, hub, db_session):
-        p = Printer(name="Test", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(db_session, name="Test", moonraker_url="http://10.0.0.1:7125")
 
         async def _run():
             await hub.add_printer(p.id)
@@ -368,10 +366,7 @@ class TestPrinterHubLifecycle:
         assert p.id not in hub.tasks
 
     def test_remove_printer_cleans_up(self, hub, db_session):
-        p = Printer(name="Test", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(db_session, name="Test", moonraker_url="http://10.0.0.1:7125")
 
         async def _add():
             await hub.add_printer(p.id)
@@ -388,10 +383,7 @@ class TestPrinterHubLifecycle:
         assert p.id not in hub.snapshots
 
     def test_add_printer_is_idempotent(self, hub, db_session):
-        p = Printer(name="Test", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(db_session, name="Test", moonraker_url="http://10.0.0.1:7125")
 
         async def _add():
             await hub.add_printer(p.id)
@@ -404,10 +396,7 @@ class TestPrinterHubLifecycle:
     def test_run_printer_marks_offline_on_initial_query_failure(self, hub, db_session):
         from unittest.mock import patch
 
-        p = Printer(name="Test", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(db_session, name="Test", moonraker_url="http://10.0.0.1:7125")
         stop = asyncio.Event()
 
         class FakeClient:
@@ -443,10 +432,9 @@ class TestPrinterHubChaosReconnect:
     ):
         from unittest.mock import patch
 
-        p = Printer(name="Chaos", moonraker_url="http://10.0.0.5:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Chaos", moonraker_url="http://10.0.0.5:7125"
+        )
         stop = asyncio.Event()
 
         printing_status = {
@@ -501,10 +489,7 @@ class TestPrinterHubChaosReconnect:
 
 class TestPrinterHubMarkStatus:
     def test_mark_status_updates_db(self, hub, db_session):
-        p = Printer(name="Test", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(db_session, name="Test", moonraker_url="http://10.0.0.1:7125")
         pid = p.id
 
         asyncio.run(hub._mark_status(pid, PrinterStatus.PRINTING, error="nozzle clog"))
@@ -512,12 +497,12 @@ class TestPrinterHubMarkStatus:
         assert p.status == PrinterStatus.PRINTING
 
     def test_mark_status_clears_error(self, hub, db_session):
-        p = Printer(
-            name="Test", moonraker_url="http://10.0.0.1:7125", last_error="old error"
+        p = build_printer(
+            db_session,
+            name="Test",
+            moonraker_url="http://10.0.0.1:7125",
+            last_error="old error",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
         pid = p.id
 
         asyncio.run(hub._mark_status(pid, PrinterStatus.READY, error=None))
@@ -666,41 +651,31 @@ class TestPrinterHubSyncActiveJob:
         assert calls == 1
 
     def _setup_job(self, db_session):
-        from app.db.models import File, Model
 
-        m = Model(name="SyncTest", slug="sync-test", hash="m" * 64)
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
+        m = build_model(db_session, name="SyncTest", slug="sync-test", hash="m" * 64)
 
-        f = File(
-            model_id=m.id,
+        f = build_file(
+            db_session,
+            m,
             path="/data/sync.gcode",
-            original_filename="sync.gcode",
+            filename="sync.gcode",
             file_type="gcode",
             version=1,
             size_bytes=100,
             sha256="n" * 64,
         )
-        db_session.add(f)
-        db_session.commit()
-        db_session.refresh(f)
 
-        p = Printer(name="SyncTest", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="SyncTest", moonraker_url="http://10.0.0.1:7125"
+        )
 
-        job = PrintJob(
+        job = build_print_job(
+            db_session,
+            f,
             printer_id=p.id,
-            file_id=f.id,
-            model_id=m.id,
             remote_filename="sync.gcode",
             state=PrintJobState.STARTED,
         )
-        db_session.add(job)
-        db_session.commit()
-        db_session.refresh(job)
         return p.id, job
 
     def test_sync_updates_state_and_progress(self, hub, db_session):
@@ -959,16 +934,14 @@ class TestPrinterHubSyncActiveJob:
     def test_identityless_bambu_report_does_not_merge_typed_external_job(
         self, hub, db_session
     ):
-        printer = Printer(
+        printer = build_printer(
+            db_session,
             name="Bambu identity guard",
             provider=PrinterProvider.BAMBU_LAN,
             bambu_host="192.0.2.11",
             bambu_serial="TEST-SERIAL-IDENTITY",
             bambu_access_code="test-code",
         )
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
         assert printer.id is not None
 
         hub._sync_active_job_db(

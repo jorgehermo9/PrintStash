@@ -19,19 +19,17 @@ import pytest
 from sqlmodel import select
 
 from app.db.models import (
-    File,
     FileType,
-    Model,
     NotificationDelivery,
     NotificationDeliveryStatus,
     NotificationEventType,
-    Printer,
     PrinterProvider,
     PrinterStatus,
     PrintJob,
     PrintJobState,
 )
 from app.services import notifications
+from tests.factories import build_file, build_model, build_print_job, build_printer
 
 NOTIF_BASE = "/api/v1/notifications"
 COMPLETED = NotificationEventType.PRINT_COMPLETED.value
@@ -56,46 +54,36 @@ def _seed_completed_job(
     session, *, filename: str, printer_name: str
 ) -> tuple[int, PrintJob]:
     """Insert a printer + model + file + a COMPLETED PrintJob; return (printer_id, job)."""
-    printer = Printer(
+    printer = build_printer(
+        session,
         name=printer_name,
         provider=PrinterProvider.MOONRAKER,
         status=PrinterStatus.READY,
     )
-    session.add(printer)
-    session.commit()
-    session.refresh(printer)
 
-    model = Model(name="Benchy", slug="benchy", hash="a" * 64)
-    session.add(model)
-    session.commit()
-    session.refresh(model)
-    file = File(
-        model_id=model.id,
+    model = build_model(session, name="Benchy", slug="benchy", hash="a" * 64)
+    file = build_file(
+        session,
+        model,
         path="/tmp/benchy.gcode",
-        original_filename=filename,
+        filename=filename,
         file_type=FileType.GCODE,
         version=1,
         size_bytes=1234,
         sha256="b" * 64,
     )
-    session.add(file)
-    session.commit()
-    session.refresh(file)
 
-    job = PrintJob(
+    job = build_print_job(
+        session,
+        file,
         printer_id=printer.id,
         printer_name=printer.name,
-        file_id=file.id,
-        model_id=model.id,
         remote_filename=filename,
         state=PrintJobState.COMPLETED,
         progress=1.0,
         actual_duration_s=3661,
         filament_used_g=12.3,
     )
-    session.add(job)
-    session.commit()
-    session.refresh(job)
     return printer.id, job
 
 

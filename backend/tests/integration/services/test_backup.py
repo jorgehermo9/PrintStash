@@ -37,13 +37,12 @@ from app.db.models import (
     FileType,
     Model,
     OwnedStorageObject,
-    Printer,
     PrintJob,
     PrintJobState,
-    User,
 )
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import create_access_token
 from app.services.storage_backend import get_backend
+from tests.factories import build_file, build_model, build_printer, build_user
 from tests.integration._backup_harness import BackupEnv, seed_model_with_blob
 
 
@@ -78,15 +77,13 @@ def _read_model_names(env: BackupEnv) -> list[str]:
 
 def _auth_headers(env: BackupEnv) -> dict[str, str]:
     with env.new_session() as session:
-        user = User(
+        user = build_user(
+            session,
             username="backup-admin",
-            hashed_password=hash_password("Password123"),
-            is_active=True,
-            is_superuser=True,
+            password="Password123",
+            active=True,
+            superuser=True,
         )
-        session.add(user)
-        session.commit()
-        session.refresh(user)
         token = create_access_token(user.id, user.username, scope="admin")
     return {"Authorization": f"Bearer {token}"}
 
@@ -175,9 +172,7 @@ def test_backup_excludes_user_owned_external_artifacts(backup_env: BackupEnv):
     external.parent.mkdir()
     external.write_bytes(b"user-owned")
     with backup_env.new_session() as session:
-        model = Model(name="Linked", slug="linked", hash="c" * 64)
-        session.add(model)
-        session.commit()
+        model = build_model(session, name="Linked", slug="linked", hash="c" * 64)
         session.add(
             File(
                 model_id=model.id,
@@ -204,27 +199,20 @@ def test_backup_ignores_external_job_sentinel_but_keeps_vault_artifact(
         backup_env, name="Vault artifact", content=b"real vault bytes"
     )
     with backup_env.new_session() as session:
-        sentinel_model = Model(
-            name="__external__",
-            slug="__external__",
-            hash=SENTINEL_MODEL_HASH,
+        sentinel_model = build_model(
+            session, name="__external__", slug="__external__", hash=SENTINEL_MODEL_HASH
         )
-        session.add(sentinel_model)
-        session.commit()
-        session.refresh(sentinel_model)
-        sentinel_file = File(
-            model_id=sentinel_model.id,
+        sentinel_file = build_file(
+            session,
+            sentinel_model,
             path="/dev/null",
-            original_filename="__external__",
+            filename="__external__",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=0,
             sha256=SENTINEL_FILE_HASH,
         )
-        session.add(sentinel_file)
-        printer = Printer(name="External history")
-        session.add(printer)
-        session.commit()
+        printer = build_printer(session, name="External history")
         session.refresh(sentinel_file)
         session.refresh(printer)
         session.add(

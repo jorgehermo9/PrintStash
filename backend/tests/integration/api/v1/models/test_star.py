@@ -14,14 +14,12 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.db.models import Collection, CollectionPermission, CollectionRole, Model, User
+from tests.factories import build_collection, build_model
 
 
 @pytest.fixture
 def collection(db_session: Session) -> Collection:
-    row = Collection(name="Shared", slug="shared", path="shared")
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
+    row = build_collection(db_session, name="Shared", slug="shared", path="shared")
     return row
 
 
@@ -44,12 +42,13 @@ def viewer(db_session: Session, make_user, headers_for, collection: Collection):
 
 @pytest.fixture
 def model(db_session: Session, collection: Collection) -> Model:
-    row = Model(
-        name="Starred", slug="starred", hash="1" * 64, collection_id=collection.id
+    row = build_model(
+        db_session,
+        name="Starred",
+        slug="starred",
+        hash="1" * 64,
+        collection_id=collection.id,
     )
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
     return row
 
 
@@ -88,19 +87,16 @@ class TestStarModel:
         self, client: TestClient, db_session: Session, user_headers
     ) -> None:
         headers = user_headers("no-access")
-        private = Collection(name="Private", slug="private", path="private")
-        db_session.add(private)
-        db_session.commit()
-        db_session.refresh(private)
-        hidden = Model(
+        private = build_collection(
+            db_session, name="Private", slug="private", path="private"
+        )
+        hidden = build_model(
+            db_session,
             name="Private model",
             slug="private-model",
             hash="3" * 64,
             collection_id=private.id,
         )
-        db_session.add(hidden)
-        db_session.commit()
-        db_session.refresh(hidden)
 
         response = client.put(f"/api/v1/models/{hidden.id}/star", headers=headers)
 

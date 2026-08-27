@@ -12,7 +12,8 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.db.models import Collection, InboxItemState
+from app.db.models import InboxItemState
+from tests.factories import build_collection
 
 
 class TestBatchItems:
@@ -26,12 +27,9 @@ class TestBatchItems:
     ) -> None:
         owner = make_user("batch-collection", superuser=True)
         row = make_item(owner)
-        collection = Collection(
-            name="Batch target", slug="batch-target", path="batch-target"
+        collection = build_collection(
+            db_session, name="Batch target", slug="batch-target", path="batch-target"
         )
-        db_session.add(collection)
-        db_session.commit()
-        db_session.refresh(collection)
 
         response = client.post(
             "/api/v1/inbox/batch",

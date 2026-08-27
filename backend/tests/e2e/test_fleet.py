@@ -34,7 +34,7 @@ from app.db.models import (
 from app.services.printer_hub import PrinterHub
 from app.services.printer_jobs import dispatch_next, reconcile_stranded_dispatches
 from app.services.printer_provider import build_provider_registry, get_provider_client
-from tests.factories import a_gcode_artifact
+from tests.factories import a_gcode_artifact, build_print_job, build_printer
 from tests.fakes.mock_printer import create_app
 from tests.fakes.server import start_server
 
@@ -73,14 +73,12 @@ async def _wait_job_state(
 async def test_queue_jobs_can_be_edited_reordered_and_deleted_via_real_api(
     api, superuser_headers, e2e_db
 ):
-    printer = Printer(
+    printer = build_printer(
+        e2e_db,
         name="Queue editor",
         moonraker_url="http://queue-editor.invalid",
         status=PrinterStatus.READY,
     )
-    e2e_db.add(printer)
-    e2e_db.commit()
-    e2e_db.refresh(printer)
     artifact = a_gcode_artifact(e2e_db, "queue-edit")
 
     first = (
@@ -146,11 +144,13 @@ async def test_two_printers_dispatch_and_complete_via_real_api(
         printer_a = Printer(
             name="Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY
         )
-        printer_b = Printer(
-            name="Emu B", moonraker_url=running_b.base_url, status=PrinterStatus.READY
+        printer_b = build_printer(
+            e2e_db,
+            name="Emu B",
+            moonraker_url=running_b.base_url,
+            status=PrinterStatus.READY,
         )
         e2e_db.add(printer_a)
-        e2e_db.add(printer_b)
         e2e_db.commit()
         e2e_db.refresh(printer_a)
         e2e_db.refresh(printer_b)
@@ -334,11 +334,13 @@ async def test_drain_mode_blocks_routing_via_api(api, superuser_headers, e2e_db)
             moonraker_url="http://unreachable-draining.invalid",
             status=PrinterStatus.READY,
         )
-        available = Printer(
-            name="Available", moonraker_url=running.base_url, status=PrinterStatus.READY
+        available = build_printer(
+            e2e_db,
+            name="Available",
+            moonraker_url=running.base_url,
+            status=PrinterStatus.READY,
         )
         e2e_db.add(draining)
-        e2e_db.add(available)
         e2e_db.commit()
         e2e_db.refresh(draining)
         e2e_db.refresh(available)
@@ -381,14 +383,12 @@ async def test_drain_mode_blocks_routing_via_api(api, superuser_headers, e2e_db)
 async def test_maintenance_window_blocks_manual_routing_via_api(
     api, superuser_headers, e2e_db
 ):
-    printer = Printer(
+    printer = build_printer(
+        e2e_db,
         name="Under maintenance",
         moonraker_url="http://unreachable-maint.invalid",
         status=PrinterStatus.READY,
     )
-    e2e_db.add(printer)
-    e2e_db.commit()
-    e2e_db.refresh(printer)
 
     now = utcnow()
     window = await api.post(
@@ -436,27 +436,22 @@ async def test_maintenance_window_blocks_manual_routing_via_api(
 async def test_restart_reconciles_stranded_dispatch_and_blocks_retry(
     api, superuser_headers, e2e_db
 ):
-    printer = Printer(
+    printer = build_printer(
+        e2e_db,
         name="Restart",
         moonraker_url="http://restart.invalid",
         status=PrinterStatus.READY,
     )
-    e2e_db.add(printer)
-    e2e_db.commit()
-    e2e_db.refresh(printer)
     artifact = a_gcode_artifact(e2e_db, "restartjob")
 
-    job = PrintJob(
+    job = build_print_job(
+        e2e_db,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="restart.gcode",
         state=PrintJobState.UPLOADING,
         dispatch_claimed_at=utcnow(),
     )
-    e2e_db.add(job)
-    e2e_db.commit()
-    e2e_db.refresh(job)
 
     # Simulate the app restarting mid-dispatch: the reconciler runs at boot.
     assert reconcile_stranded_dispatches() == 1

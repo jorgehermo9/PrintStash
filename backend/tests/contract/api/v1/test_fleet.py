@@ -26,7 +26,7 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.services.printer_hub import PrinterHub
 from app.services.printer_provider import build_provider_registry, get_provider_client
-from tests.factories import a_gcode_artifact
+from tests.factories import a_gcode_artifact, build_printer
 from tests.fakes.mock_printer import create_app
 from tests.fakes.server import start_server
 
@@ -108,17 +108,18 @@ def test_dispatch_to_two_emulated_printers_both_complete(
     running_a = start_server(app_a)
     running_b = start_server(app_b)
     try:
-        printer_a = Printer(
-            name="Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY
+        printer_a = build_printer(
+            db_session,
+            name="Emu A",
+            moonraker_url=running_a.base_url,
+            status=PrinterStatus.READY,
         )
-        printer_b = Printer(
-            name="Emu B", moonraker_url=running_b.base_url, status=PrinterStatus.READY
+        printer_b = build_printer(
+            db_session,
+            name="Emu B",
+            moonraker_url=running_b.base_url,
+            status=PrinterStatus.READY,
         )
-        db_session.add(printer_a)
-        db_session.add(printer_b)
-        db_session.commit()
-        db_session.refresh(printer_a)
-        db_session.refresh(printer_b)
 
         artifact_1 = a_gcode_artifact(db_session, "fleetcube1")
         artifact_2 = a_gcode_artifact(db_session, "fleetcube2")
@@ -193,23 +194,20 @@ def test_draining_printer_is_skipped_by_least_busy_routing(
     )
     running_available = start_server(app_available)
     try:
-        draining = Printer(
+        build_printer(
+            db_session,
             name="Draining",
             moonraker_url="http://unreachable-draining.invalid",
             status=PrinterStatus.READY,
             drain_mode=True,
             drain_reason="Maintenance",
         )
-        available = Printer(
+        available = build_printer(
+            db_session,
             name="Available",
             moonraker_url=running_available.base_url,
             status=PrinterStatus.READY,
         )
-        db_session.add(draining)
-        db_session.add(available)
-        db_session.commit()
-        db_session.refresh(draining)
-        db_session.refresh(available)
 
         artifact = a_gcode_artifact(db_session, "drainjob")
         queued = client.post(

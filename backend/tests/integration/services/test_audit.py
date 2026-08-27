@@ -9,19 +9,17 @@ from app.db.models import (
     AuditLog,
     File,
     FileType,
-    Model,
     ModelProvenanceSource,
     ProvenanceCapture,
 )
 from app.services.audit import _diff_for_obj, install_audit_listeners
+from tests.factories import build_model
 
 
 def test_provenance_audit_diff_redacts_snapshot_and_remote_identifiers(
     db_session,
 ) -> None:
-    model = Model(name="Bracket", slug="bracket", hash="a" * 64)
-    db_session.add(model)
-    db_session.commit()
+    model = build_model(db_session, name="Bracket", slug="bracket", hash="a" * 64)
     row = ModelProvenanceSource(
         model_id=model.id,
         provider="printables",
@@ -47,9 +45,9 @@ def test_provenance_audit_diff_redacts_snapshot_and_remote_identifiers(
 
 def test_audit_listener_redacts_provenance_on_insert_and_update(db_session) -> None:
     install_audit_listeners()
-    model = Model(name="Audit bracket", slug="audit-bracket", hash="c" * 64)
-    db_session.add(model)
-    db_session.flush()
+    model = build_model(
+        db_session, name="Audit bracket", slug="audit-bracket", hash="c" * 64
+    )
     artifact = File(
         model_id=model.id,
         path="provenance/audit.stl",

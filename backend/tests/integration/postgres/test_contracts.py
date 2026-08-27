@@ -29,7 +29,6 @@ from app.db.models import (
     CollectionRole,
     File,
     FileType,
-    Model,
     ModelProvenanceSource,
     Printer,
     PrinterPermission,
@@ -43,6 +42,7 @@ from app.services import provenance
 from app.services.auth import create_refresh_token, rotate_refresh_token
 from app.services.printer_rbac import effective_printer_role
 from app.services.rbac import effective_collection_role
+from tests.factories import build_file, build_model, build_printer
 from tests.paths import REPO_ROOT
 
 _POSTGRES_URL = os.getenv("PRINTSTASH_TEST_POSTGRES_URL")
@@ -97,7 +97,7 @@ def test_postgres_crud_enums_rbac_and_default_uniqueness(postgres_engine) -> Non
     with Session(postgres_engine) as session:
         user = User(username="pg-user", hashed_password="not-used")
         collection = Collection(name="Parts", slug="parts", path="parts")
-        printer = Printer(name="PG printer", is_default=True)
+        printer = build_printer(session, name="PG printer", is_default=True)
         session.add_all([user, collection, printer])
         session.commit()
         session.refresh(user)
@@ -182,21 +182,20 @@ def test_concurrent_identical_provenance_capture_converges_at_savepoints(
         }
     )
     with Session(postgres_engine) as session:
-        model = Model(name="PG provenance", slug="pg-provenance", hash="p" * 64)
-        session.add(model)
-        session.flush()
+        model = build_model(
+            session, name="PG provenance", slug="pg-provenance", hash="p" * 64
+        )
         assert model.id is not None
-        artifact = File(
-            model_id=model.id,
+        artifact = build_file(
+            session,
+            model,
             path="external/pg-provenance.stl",
-            original_filename="part.stl",
+            filename="part.stl",
             file_type=FileType.STL,
             size_bytes=1,
             sha256="a" * 64,
-            is_external=True,
+            external=True,
         )
-        session.add(artifact)
-        session.commit()
         assert artifact.id is not None and model.id is not None
         file_id: int = artifact.id
         model_id: int = model.id

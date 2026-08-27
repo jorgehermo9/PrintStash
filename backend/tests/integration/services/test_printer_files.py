@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
-from app.db.models import File, Model, Printer, PrinterFile, PrintJob
+from app.db.models import File, Model, PrinterFile
 from app.services import printer_files as pf
 from app.services.printer_files import (
     build_traceable_remote_filename,
     sync_printer_files,
 )
+from tests.factories import build_file, build_model, build_print_job, build_printer
 
 
 class _FakeFile:
@@ -102,39 +103,30 @@ def _make_gcode(
     size: int = 123,
     model_slug: str = "part",
 ) -> tuple[Model, File]:
-    model = Model(name=model_slug.title(), slug=model_slug, hash=model_slug[0] * 64)
-    session.add(model)
-    session.commit()
-    session.refresh(model)
-    f = File(
-        model_id=model.id,
+    model = build_model(
+        session, name=model_slug.title(), slug=model_slug, hash=model_slug[0] * 64
+    )
+    f = build_file(
+        session,
+        model,
         path=f"/data/{name}",
-        original_filename=name,
+        filename=name,
         file_type="gcode",
         version=1,
         size_bytes=size,
         sha256="f" * 64,
     )
-    session.add(f)
-    session.commit()
-    session.refresh(f)
     return model, f
 
 
 def test_sync_matches_upload_history_first(db_session: Session):
     _, f = _make_gcode(db_session)
-    printer = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
-    job = PrintJob(
-        printer_id=printer.id,
-        file_id=f.id,
-        model_id=f.model_id,
-        remote_filename="folder/custom-name.gcode",
+    printer = build_printer(
+        db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
     )
-    db_session.add(job)
-    db_session.commit()
+    build_print_job(
+        db_session, f, printer_id=printer.id, remote_filename="folder/custom-name.gcode"
+    )
 
     rows = sync_printer_files(
         db_session,
@@ -160,10 +152,9 @@ def test_sync_matches_vault_marker_before_filename(db_session: Session):
         size=222,
         model_slug="newer",
     )
-    printer = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
+    printer = build_printer(
+        db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
+    )
 
     remote_filename = build_traceable_remote_filename(marked)
     rows = sync_printer_files(
@@ -183,10 +174,9 @@ def test_sync_matches_vault_marker_before_filename(db_session: Session):
 
 def test_sync_reports_marker_mismatch_without_guessing(db_session: Session):
     _, f = _make_gcode(db_session)
-    printer = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
+    printer = build_printer(
+        db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
+    )
 
     rows = sync_printer_files(
         db_session,
@@ -205,19 +195,16 @@ def test_sync_reports_marker_mismatch_without_guessing(db_session: Session):
 
 def test_sync_does_not_match_external_job_as_upload_history(db_session: Session):
     _, f = _make_gcode(db_session)
-    printer = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
-    job = PrintJob(
+    printer = build_printer(
+        db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
+    )
+    build_print_job(
+        db_session,
+        f,
         printer_id=printer.id,
-        file_id=f.id,
-        model_id=f.model_id,
         remote_filename="external-name.gcode",
         source="external",
     )
-    db_session.add(job)
-    db_session.commit()
 
     rows = sync_printer_files(
         db_session,
@@ -231,10 +218,9 @@ def test_sync_does_not_match_external_job_as_upload_history(db_session: Session)
 
 def test_sync_matches_filename_then_marks_missing(db_session: Session):
     _, f = _make_gcode(db_session, name="bracket.gcode", size=456)
-    printer = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
+    printer = build_printer(
+        db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
+    )
 
     rows = sync_printer_files(
         db_session,
@@ -250,10 +236,9 @@ def test_sync_matches_filename_then_marks_missing(db_session: Session):
 
 
 def test_sync_keeps_unmatched_external_file(db_session: Session):
-    printer = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
+    printer = build_printer(
+        db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
+    )
 
     sync_printer_files(
         db_session,

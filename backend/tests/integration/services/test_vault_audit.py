@@ -37,6 +37,7 @@ from app.services.storage_utils import (
     all_owned_blob_keys,
     ownership_snapshot,
 )
+from tests.factories import build_collection, build_model
 
 
 def _make_user(session: Session, username: str, *, admin: bool = True) -> User:
@@ -58,10 +59,9 @@ def _make_run(
 
 
 def _make_model(session: Session, slug: str) -> Model:
-    model = Model(name=slug, slug=slug, hash=(slug * 8)[:64].ljust(64, "0"))
-    session.add(model)
-    session.commit()
-    session.refresh(model)
+    model = build_model(
+        session, name=slug, slug=slug, hash=(slug * 8)[:64].ljust(64, "0")
+    )
     return model
 
 
@@ -1376,10 +1376,7 @@ def test_ownership_snapshot_document_embedded_image_id_must_match_row(
 def test_ownership_snapshot_skips_collection_row_with_no_id(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    persisted = Collection(name="real-col", slug="real-col", path="real-col")
-    db_session.add(persisted)
-    db_session.commit()
-    db_session.refresh(persisted)
+    build_collection(db_session, name="real-col", slug="real-col", path="real-col")
     unpersisted = Collection(
         name="ghost-col",
         slug="ghost-col",
@@ -1399,20 +1396,17 @@ def test_ownership_snapshot_skips_collection_row_with_no_id(
 def test_ownership_snapshot_collection_embedded_image_id_must_match_row(
     db_session: Session,
 ) -> None:
-    other = Collection(name="other-col", slug="other-col", path="other-col")
-    db_session.add(other)
-    db_session.commit()
-    db_session.refresh(other)
+    other = build_collection(
+        db_session, name="other-col", slug="other-col", path="other-col"
+    )
 
-    owner = Collection(
+    owner = build_collection(
+        db_session,
         name="owner-col",
         slug="owner-col",
         path="owner-col",
         readme=f"![pic](/collections/{other.id}/images/stolen.png)",
     )
-    db_session.add(owner)
-    db_session.commit()
-    db_session.refresh(owner)
 
     result = ownership_snapshot(db_session, discover=False)
 

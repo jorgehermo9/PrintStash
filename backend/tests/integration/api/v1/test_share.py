@@ -26,7 +26,6 @@ from sqlmodel import Session
 
 from app.core.time import utcnow
 from app.db.models import (
-    Collection,
     CollectionPermission,
     CollectionRole,
     File,
@@ -36,6 +35,7 @@ from app.db.models import (
     User,
 )
 from app.services.storage_backend import get_backend
+from tests.factories import build_collection, build_file
 
 
 def _make_model(
@@ -57,18 +57,16 @@ def _make_file(
     path=None,
     version=1,
 ) -> File:
-    row = File(
-        model_id=model.id,
+    row = build_file(
+        db_session,
+        model,
         path=path or f"/nonexistent/{filename}",
-        original_filename=filename,
+        filename=filename,
         file_type=ftype,
         version=version,
         size_bytes=10,
         sha256=f"{filename:a<64}"[:64],
     )
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
     return row
 
 
@@ -462,10 +460,7 @@ class TestCreateShare:
         make_user,
         headers_for,
     ) -> None:
-        collection = Collection(name="Team", slug="team", path="team")
-        db_session.add(collection)
-        db_session.commit()
-        db_session.refresh(collection)
+        collection = build_collection(db_session, name="Team", slug="team", path="team")
         model = _make_model(
             db_session, slug="team-model", hash_="b3" * 32, collection_id=collection.id
         )
@@ -572,10 +567,7 @@ class TestRevokeShare:
         make_user,
         headers_for,
     ) -> None:
-        collection = Collection(name="Team", slug="team", path="team")
-        db_session.add(collection)
-        db_session.commit()
-        db_session.refresh(collection)
+        collection = build_collection(db_session, name="Team", slug="team", path="team")
         model = _make_model(
             db_session, slug="team-model", hash_="b5" * 32, collection_id=collection.id
         )

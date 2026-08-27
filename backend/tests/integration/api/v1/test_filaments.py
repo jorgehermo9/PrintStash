@@ -16,7 +16,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.db.models import FilamentProfile, File, FileType, Metadata, Model
+from app.db.models import FilamentProfile, FileType, Metadata
+from tests.factories import build_file, build_model
 from tests.integration.conftest import UserHeaders
 
 MAX_NAME = 128
@@ -83,22 +84,17 @@ class TestListFilamentProfiles:
         make_profile,
     ) -> None:
         profile = make_profile("Prusament PLA", material_type="PLA")
-        model = Model(name="Bracket", slug="bracket", hash="a" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        gcode = File(
-            model_id=model.id,
+        model = build_model(db_session, name="Bracket", slug="bracket", hash="a" * 64)
+        gcode = build_file(
+            db_session,
+            model,
             path="bracket.gcode",
-            original_filename="bracket.gcode",
+            filename="bracket.gcode",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=10,
             sha256="b" * 64,
         )
-        db_session.add(gcode)
-        db_session.commit()
-        db_session.refresh(gcode)
         db_session.add(
             Metadata(
                 file_id=gcode.id, material_type="PLA", filament_name="Prusament PLA"

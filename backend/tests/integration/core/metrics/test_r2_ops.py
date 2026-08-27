@@ -13,14 +13,13 @@ from app.core.time import utcnow
 from app.db.models import (
     ExternalLibrary,
     ExternalLibraryScanStatus,
-    File,
     FileType,
-    Model,
     PrintJob,
     PrintJobState,
 )
 from app.services import external_library
 from app.services.jobs import JobRegistry
+from tests.factories import build_file, build_model
 
 # --- Item 1: richer /health output --------------------------------------------
 
@@ -107,22 +106,17 @@ def test_metrics_exposes_fleet_queue_and_scheduler_state(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    model = Model(name="Blocked", slug="blocked", hash="c" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
-    artifact = File(
-        model_id=model.id,
+    model = build_model(db_session, name="Blocked", slug="blocked", hash="c" * 64)
+    artifact = build_file(
+        db_session,
+        model,
         path="metrics/blocked.gcode",
-        original_filename="blocked.gcode",
+        filename="blocked.gcode",
         file_type=FileType.GCODE,
         version=1,
         size_bytes=1,
         sha256="d" * 64,
     )
-    db_session.add(artifact)
-    db_session.commit()
-    db_session.refresh(artifact)
     db_session.add(
         PrintJob(
             printer_id=None,

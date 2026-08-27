@@ -40,7 +40,7 @@ from app.db.models import (
     User,
 )
 from app.services import model_views
-from tests.factories import build_file, build_model, build_user
+from tests.factories import build_collection, build_file, build_model, build_user
 
 FIRST_CAPTURE_AT = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
 SECOND_CAPTURE_AT = FIRST_CAPTURE_AT + timedelta(days=7)
@@ -74,10 +74,9 @@ def _source(
 class TestExportPayload:
     def test_reports_the_collection_path_and_tag_names(self, db_session: Session):
         user = build_user(db_session, "export-names", superuser=True)
-        collection = Collection(name="ExportCol", slug="export-col", path="export-col")
-        db_session.add(collection)
-        db_session.commit()
-        db_session.refresh(collection)
+        collection = build_collection(
+            db_session, name="ExportCol", slug="export-col", path="export-col"
+        )
         model = build_model(db_session, "Exportable")
         model.collection_id = collection.id
         tag = Tag(name="Neat", slug="neat")
@@ -295,7 +294,9 @@ class TestExportPayload:
     ):
         member = User(username="export-member", hashed_password="x")
         visible = Collection(name="Visible", slug="visible", path="visible")
-        hidden = Collection(name="Hidden", slug="hidden", path="hidden")
+        hidden = build_collection(
+            db_session, name="Hidden", slug="hidden", path="hidden"
+        )
         db_session.add_all([member, visible, hidden])
         db_session.commit()
         db_session.refresh(member)

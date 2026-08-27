@@ -30,6 +30,7 @@ from app.db.session import SQLiteSessionFactory, _set_sqlite_pragmas
 from app.services import ingestion, provenance, thumbnail
 from app.services.jobs import registry
 from app.services.storage_backend import get_backend
+from tests.factories import build_file, build_model
 
 
 @pytest.fixture
@@ -46,10 +47,7 @@ def storage(tmp_path: Path):
 
 @pytest.fixture
 def model(db_session: Session) -> Model:
-    model = Model(name="Bracket", slug="bracket", hash="h" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
+    model = build_model(db_session, name="Bracket", slug="bracket", hash="h" * 64)
     return model
 
 
@@ -127,22 +125,21 @@ def test_deduplicated_pipeline_recapture_refreshes_provenance_without_new_artifa
     actor = User(
         username="capture-owner", hashed_password="not-used", is_superuser=True
     )
-    model = Model(name="Bracket", slug="bracket", hash=blob_hash)
+    model = build_model(db_session, name="Bracket", slug="bracket", hash=blob_hash)
     db_session.add_all([actor, model])
     db_session.commit()
     db_session.refresh(actor)
     db_session.refresh(model)
     assert model.id is not None
-    file_row = File(
-        model_id=model.id,
+    file_row = build_file(
+        db_session,
+        model,
         path="provenance/existing.stl",
-        original_filename=staged.name,
+        filename=staged.name,
         file_type=FileType.STL,
         size_bytes=staged.stat().st_size,
         sha256=blob_hash,
     )
-    db_session.add(file_row)
-    db_session.flush()
 
     def manifest(title: str, revision: str):
         return provenance.CaptureManifestV2.from_dict(
@@ -333,10 +330,9 @@ def test_concurrent_version_reservations_are_unique(tmp_path: Path) -> None:
     event.listen(engine, "connect", _set_sqlite_pragmas)
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
-        concurrent_model = Model(name="Concurrent", slug="concurrent", hash="c" * 64)
-        session.add(concurrent_model)
-        session.commit()
-        session.refresh(concurrent_model)
+        concurrent_model = build_model(
+            session, name="Concurrent", slug="concurrent", hash="c" * 64
+        )
         model_id = concurrent_model.id
     assert model_id is not None
 
@@ -380,10 +376,7 @@ def test_concurrent_artifacts_keep_distinct_versions_and_matching_hashes(
     event.listen(engine, "connect", _set_sqlite_pragmas)
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
-        concurrent_model = Model(name="Race", slug="race", hash="a" * 64)
-        session.add(concurrent_model)
-        session.commit()
-        session.refresh(concurrent_model)
+        concurrent_model = build_model(session, name="Race", slug="race", hash="a" * 64)
         model_id = concurrent_model.id
     assert model_id is not None
 

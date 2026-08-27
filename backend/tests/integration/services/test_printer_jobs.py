@@ -40,7 +40,7 @@ from app.services.printer_provider import (
     ProviderCapabilities,
     ProviderError,
 )
-from tests.factories import a_gcode_artifact
+from tests.factories import a_gcode_artifact, build_print_job, build_printer
 
 
 def _provider_builder(provider: PrinterProviderClient):
@@ -151,23 +151,20 @@ def test_transfer_artifact_marks_provider_upload_timeout_as_outcome_unknown(
 
 
 def test_dispatch_claimed_raises_when_printer_missing(db_session: Session) -> None:
-    printer = Printer(
-        name="Vanishing", moonraker_url="http://vanish", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Vanishing",
+        moonraker_url="http://vanish",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="x.gcode",
         state=PrintJobState.UPLOADING,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     db_session.delete(printer)
     db_session.commit()
@@ -178,39 +175,33 @@ def test_dispatch_claimed_raises_when_printer_missing(db_session: Session) -> No
 
 def test_dispatch_claimed_raises_when_job_has_no_printer(db_session: Session) -> None:
     artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        artifact,
         printer_id=None,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="x.gcode",
         state=PrintJobState.UPLOADING,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     with pytest.raises(RuntimeError, match="queue_job_not_found"):
         asyncio.run(printer_jobs._dispatch_claimed(job.id, _unused_provider_builder))  # noqa: SLF001
 
 
 def _seeded_upload_job(db_session: Session) -> tuple[Printer, PrintJob]:
-    printer = Printer(
-        name="Capabilities", moonraker_url="http://caps", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Capabilities",
+        moonraker_url="http://caps",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="x.gcode",
         state=PrintJobState.UPLOADING,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
     return printer, job
 
 
@@ -229,18 +220,15 @@ def test_dispatch_rechecks_printer_grant_after_enqueue(db_session: Session) -> N
     )
     db_session.add(permission)
     db_session.commit()
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="revoked.gcode",
         state=PrintJobState.QUEUED,
         routing_strategy=RoutingStrategy.MANUAL,
         requested_by=user.id,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
     db_session.delete(permission)
     db_session.commit()
 

@@ -24,6 +24,7 @@ from sqlmodel import Session
 
 from app.core.time import utcnow
 from app.db.models import Printer, PrinterRole, PrinterStatus
+from tests.factories import build_printer
 from tests.integration.api.v1.printers._helpers import grant_printer, user_headers
 
 TOOL = {"tool_key": "tool0", "label": "Tool 0", "nozzle_diameter_mm": 0.4}
@@ -38,14 +39,12 @@ LOADED_SLOT = {
 
 @pytest.fixture
 def printer(db_session: Session) -> Printer:
-    row = Printer(
+    row = build_printer(
+        db_session,
         name="API material",
         moonraker_url="http://api-material",
         status=PrinterStatus.READY,
     )
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
     return row
 
 

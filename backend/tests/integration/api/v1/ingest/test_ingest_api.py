@@ -14,7 +14,6 @@ from app.core.config import _overlay
 from app.core.time import utcnow
 from app.db.models import (
     BackgroundJob,
-    Collection,
     CollectionPermission,
     CollectionRole,
     FilamentProfile,
@@ -28,12 +27,17 @@ from app.db.models import (
     User,
 )
 from app.services import ingestion as ingestion_service
-from app.services.auth import hash_password
 from app.services.jobs import registry
 from app.services.storage_backend import get_backend
 from app.services.storage_ownership import record_creation
 from tests._env import use_local_storage
-from tests.factories import bearer
+from tests.factories import (
+    bearer,
+    build_collection,
+    build_file,
+    build_model,
+    build_user,
+)
 from tests.integration.api.v1._ingest_assertions import (
     assert_file_created,
     completed_job,
@@ -605,14 +609,14 @@ def test_purge_expired_trash_uses_retention_setting(
         hash="old-cube".ljust(64, "0"),
         deleted_at=utcnow() - timedelta(days=31),
     )
-    fresh_model = Model(
+    fresh_model = build_model(
+        db_session,
         name="Fresh Cube",
         slug="fresh-cube",
         hash="fresh-cube".ljust(64, "0"),
         deleted_at=utcnow() - timedelta(days=3),
     )
     db_session.add(old_model)
-    db_session.add(fresh_model)
     db_session.commit()
     db_session.refresh(old_model)
     db_session.refresh(fresh_model)
@@ -626,17 +630,17 @@ def test_purge_expired_trash_uses_retention_setting(
         size_bytes=4,
         sha256="a" * 64,
     )
-    fresh_file = File(
-        model_id=fresh_model.id,
+    fresh_file = build_file(
+        db_session,
+        fresh_model,
         path=str(tmp_path / "files" / "fresh-cube.stl"),
-        original_filename="fresh-cube.stl",
+        filename="fresh-cube.stl",
         file_type=FileType.STL,
         version=1,
         size_bytes=4,
         sha256="b" * 64,
     )
     db_session.add(old_file)
-    db_session.add(fresh_file)
     db_session.commit()
     old_model_id = old_model.id
     fresh_model_id = fresh_model.id
@@ -731,15 +735,9 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
 # target library) shared by the orca and mesh upload endpoints.
 # --------------------------------------------------------------------------- #
 def _regular_user(session: Session, username: str = "regular") -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=False,
+    user = build_user(
+        session, username=username, password="Password123", active=True, superuser=False
     )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
     return user
 
 
@@ -849,10 +847,7 @@ def test_ingest_model_requires_role_on_existing_collection(
 ) -> None:
     use_local_storage(tmp_path)
     user = _regular_user(db_session)
-    collection = Collection(name="Brackets", slug="brackets", path="brackets")
-    db_session.add(collection)
-    db_session.commit()
-    db_session.refresh(collection)
+    build_collection(db_session, name="Brackets", slug="brackets", path="brackets")
 
     response = client.post(
         "/api/v1/ingest/model",
@@ -868,10 +863,9 @@ def test_ingest_model_succeeds_with_granted_collection_role(
 ) -> None:
     use_local_storage(tmp_path)
     user = _regular_user(db_session)
-    collection = Collection(name="Brackets", slug="brackets", path="brackets")
-    db_session.add(collection)
-    db_session.commit()
-    db_session.refresh(collection)
+    collection = build_collection(
+        db_session, name="Brackets", slug="brackets", path="brackets"
+    )
     db_session.add(
         CollectionPermission(
             user_id=user.id, collection_id=collection.id, role=CollectionRole.EDIT

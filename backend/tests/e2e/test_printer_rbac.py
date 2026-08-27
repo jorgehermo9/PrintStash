@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.db.models import Printer, User
-from app.services.auth import create_access_token, hash_password
+from app.db.models import Printer
+from app.services.auth import create_access_token
+from tests.factories import build_user
 
 
 @pytest.mark.asyncio
@@ -14,10 +15,8 @@ async def test_admin_grants_print_access_to_one_printer(
 ) -> None:
     allowed = Printer(name="Shared", moonraker_url="http://shared.local:7125")
     hidden = Printer(name="Private", moonraker_url="http://private.local:7125")
-    operator = User(
-        username="e2e-operator",
-        hashed_password=hash_password("Password123"),
-        is_active=True,
+    operator = build_user(
+        e2e_db, username="e2e-operator", password="Password123", active=True
     )
     e2e_db.add_all([allowed, hidden, operator])
     e2e_db.commit()

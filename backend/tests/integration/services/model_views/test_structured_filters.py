@@ -10,7 +10,6 @@ from app.db.models import (
     FileRevisionStatus,
     FileType,
     Model,
-    Printer,
     PrinterFile,
     PrintJob,
     PrintJobState,
@@ -19,7 +18,13 @@ from app.db.models import (
 )
 from app.schemas.models import ModelFilters
 from app.services import model_views
-from tests.factories import build_file, build_model, build_user
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    build_printer,
+    build_user,
+)
 
 
 def test_structured_filters_require_metadata_on_same_artifact(
@@ -263,20 +268,20 @@ def test_direct_filter_with_collection_restricts_to_exact_path(
 ) -> None:
     user = build_user(db_session, "direct-admin", superuser=True)
     parent = Collection(name="Parent", slug="parent", path="parent")
-    child = Collection(name="Child", slug="child", path="parent/child")
+    child = build_collection(
+        db_session, name="Child", slug="child", path="parent/child"
+    )
     db_session.add(parent)
-    db_session.add(child)
     db_session.commit()
     db_session.refresh(parent)
     db_session.refresh(child)
     direct_model = Model(
         name="Direct", slug="direct", hash="b" * 64, collection_id=parent.id
     )
-    nested_model = Model(
-        name="Nested", slug="nested", hash="c" * 64, collection_id=child.id
+    build_model(
+        db_session, name="Nested", slug="nested", hash="c" * 64, collection_id=child.id
     )
     db_session.add(direct_model)
-    db_session.add(nested_model)
     db_session.commit()
     db_session.refresh(direct_model)
 
@@ -290,16 +295,14 @@ def test_direct_filter_without_collection_matches_uncategorised_only(
     db_session: Session,
 ) -> None:
     user = build_user(db_session, "direct-admin2", superuser=True)
-    col = Collection(name="Cat", slug="cat", path="cat")
-    db_session.add(col)
-    db_session.commit()
-    db_session.refresh(col)
+    col = build_collection(db_session, name="Cat", slug="cat", path="cat")
     categorised = Model(
         name="Categorised", slug="categorised", hash="d" * 64, collection_id=col.id
     )
-    uncategorised = Model(name="Uncategorised", slug="uncategorised", hash="e" * 64)
+    uncategorised = build_model(
+        db_session, name="Uncategorised", slug="uncategorised", hash="e" * 64
+    )
     db_session.add(categorised)
-    db_session.add(uncategorised)
     db_session.commit()
     db_session.refresh(uncategorised)
 
@@ -312,20 +315,24 @@ def test_direct_filter_without_collection_matches_uncategorised_only(
 def test_indirect_collection_filter_includes_descendants(db_session: Session) -> None:
     user = build_user(db_session, "indirect-admin", superuser=True)
     parent = Collection(name="Parent2", slug="parent2", path="parent2")
-    child = Collection(name="Child2", slug="child2", path="parent2/child2")
+    child = build_collection(
+        db_session, name="Child2", slug="child2", path="parent2/child2"
+    )
     db_session.add(parent)
-    db_session.add(child)
     db_session.commit()
     db_session.refresh(parent)
     db_session.refresh(child)
     direct_model = Model(
         name="Direct2", slug="direct2", hash="f" * 64, collection_id=parent.id
     )
-    nested_model = Model(
-        name="Nested2", slug="nested2", hash="1" * 64, collection_id=child.id
+    nested_model = build_model(
+        db_session,
+        name="Nested2",
+        slug="nested2",
+        hash="1" * 64,
+        collection_id=child.id,
     )
     db_session.add(direct_model)
-    db_session.add(nested_model)
     db_session.commit()
 
     rows = model_views.list_items(
@@ -366,10 +373,9 @@ def test_printer_presence_any_matches_models_present_on_a_printer(
     present_file = build_file(
         db_session, present, filename="present.gcode", file_type=FileType.GCODE
     )
-    printer = Printer(name="Fleet1", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
+    printer = build_printer(
+        db_session, name="Fleet1", moonraker_url="http://10.0.0.1:7125"
+    )
     db_session.add(
         PrinterFile(
             printer_id=printer.id,
@@ -406,17 +412,17 @@ def test_list_items_picks_newest_version_mesh_file_for_preview(
         size_bytes=1,
         sha256="1" * 64,
     )
-    v2 = File(
-        model_id=model.id,
+    v2 = build_file(
+        db_session,
+        model,
         path="v2.stl",
-        original_filename="v2.stl",
+        filename="v2.stl",
         file_type=FileType.STL,
         version=2,
         size_bytes=1,
         sha256="2" * 64,
     )
     db_session.add(v1)
-    db_session.add(v2)
     db_session.commit()
     db_session.refresh(v2)
 

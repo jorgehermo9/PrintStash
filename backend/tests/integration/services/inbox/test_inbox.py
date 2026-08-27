@@ -40,27 +40,19 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.schemas.inbox import CaptureUploadSlotsCreate, InboxItemUpdate
 from app.services import import_resolvers, importer, inbox, staging_leases
-from app.services.auth import hash_password
 from app.services.jobs import registry
+from tests.factories import build_collection, build_file, build_model, build_user
 
 
 def _make_user(session: Session, username: str, *, admin: bool = True) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_superuser=admin,
+    user = build_user(
+        session, username=username, password="Password123", superuser=admin
     )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
     return user
 
 
 def _make_collection(session: Session, path: str = "vault") -> Collection:
-    col = Collection(name=path, slug=path, path=path)
-    session.add(col)
-    session.commit()
-    session.refresh(col)
+    col = build_collection(session, name=path, slug=path, path=path)
     return col
 
 
@@ -1255,10 +1247,9 @@ def test_reconcile_finished_capture_runs_normal_terminalization(
     )
     inbox.finalize_capture_upload(db_session, owner, row.id)
 
-    model = Model(name="Widget", slug="reconcile-widget", hash="f" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
+    model = build_model(
+        db_session, name="Widget", slug="reconcile-widget", hash="f" * 64
+    )
     source = ModelProvenanceSource(
         model_id=model.id,
         provider="makerworld",
@@ -1266,10 +1257,11 @@ def test_reconcile_finished_capture_runs_normal_terminalization(
         canonical_url="https://makerworld.com/en/models/1234-widget",
         identity_key="reconcile-widget",
     )
-    artifact = File(
-        model_id=model.id,
+    artifact = build_file(
+        db_session,
+        model,
         path="reconcile/widget.3mf",
-        original_filename="widget.3mf",
+        filename="widget.3mf",
         file_type=FileType.THREE_MF,
         size_bytes=len(file_bytes),
         sha256=hashlib.sha256(file_bytes).hexdigest(),
@@ -1416,14 +1408,13 @@ def test_reconcile_completed_capture_cleanup_pending_preserves_imported_result(
     slot_id = slot.id
     slot_key = slot.storage_key
 
-    model = Model(
+    model = build_model(
+        db_session,
         name="Completed widget",
         slug="completed-widget",
         hash="c" * 64,
         source_url=source_url,
     )
-    db_session.add(model)
-    db_session.flush()
     source = ModelProvenanceSource(
         model_id=model.id,
         provider="makerworld",
@@ -1431,10 +1422,11 @@ def test_reconcile_completed_capture_cleanup_pending_preserves_imported_result(
         canonical_url=source_url,
         identity_key="completed-widget-source",
     )
-    artifact = File(
-        model_id=model.id,
+    artifact = build_file(
+        db_session,
+        model,
         path="completed/widget.3mf",
-        original_filename="widget.3mf",
+        filename="widget.3mf",
         file_type=FileType.THREE_MF,
         size_bytes=len(file_bytes),
         sha256=hashlib.sha256(file_bytes).hexdigest(),

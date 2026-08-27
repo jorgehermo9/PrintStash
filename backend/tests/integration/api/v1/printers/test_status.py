@@ -23,11 +23,19 @@ from app.db.models import (
     FileType,
     Model,
     Printer,
+    PrinterStatus,
     PrintJob,
     PrintJobState,
     User,
 )
 from app.services.printer_provider import ProviderError
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    build_print_job,
+    build_printer,
+)
 from tests.integration.api.v1.printers._helpers import user_headers
 
 
@@ -35,10 +43,9 @@ class TestPrinterStatus:
     def test_status_returns_printer_and_snapshot(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.get(f"/api/v1/printers/{p.id}/status", headers=auth_headers)
         assert resp.status_code == 200
@@ -53,10 +60,9 @@ class TestPrinterStatus:
 
 class TestPrinterJobs:
     def test_jobs_empty(self, client: TestClient, auth_headers, db_session: Session):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         resp = client.get(f"/api/v1/printers/{p.id}/jobs", headers=auth_headers)
         assert resp.status_code == 200
@@ -65,41 +71,32 @@ class TestPrinterJobs:
     def test_jobs_lists_in_order(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        from app.db.models import File, Model
 
-        m = Model(name="Model", slug="model", hash="i" * 64)
-        db_session.add(m)
-        db_session.commit()
-        db_session.refresh(m)
+        m = build_model(db_session, name="Model", slug="model", hash="i" * 64)
 
-        f = File(
-            model_id=m.id,
+        f = build_file(
+            db_session,
+            m,
             path="/data/model.gcode",
-            original_filename="model.gcode",
+            filename="model.gcode",
             file_type="gcode",
             version=1,
             size_bytes=100,
             sha256="j" * 64,
         )
-        db_session.add(f)
-        db_session.commit()
-        db_session.refresh(f)
 
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
-        job = PrintJob(
+        build_print_job(
+            db_session,
+            f,
             printer_id=p.id,
-            file_id=f.id,
-            model_id=m.id,
             remote_filename="model.gcode",
             state=PrintJobState.COMPLETED,
             progress=1.0,
         )
-        db_session.add(job)
-        db_session.commit()
 
         resp = client.get(f"/api/v1/printers/{p.id}/jobs", headers=auth_headers)
         assert resp.status_code == 200
@@ -116,7 +113,9 @@ class TestPrinterJobs:
             select(User).where(User.username == "job-viewer")
         ).one()
         allowed = Collection(name="Allowed", slug="allowed", path="allowed")
-        denied = Collection(name="Denied", slug="denied", path="denied")
+        denied = build_collection(
+            db_session, name="Denied", slug="denied", path="denied"
+        )
         db_session.add_all([allowed, denied])
         db_session.commit()
         db_session.refresh(allowed)
@@ -140,7 +139,9 @@ class TestPrinterJobs:
             hash="8" * 64,
             collection_id=denied.id,
         )
-        printer = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
+        printer = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
         db_session.add_all([allowed_model, denied_model, printer])
         db_session.commit()
         db_session.refresh(allowed_model)
@@ -154,10 +155,11 @@ class TestPrinterJobs:
             size_bytes=100,
             sha256="9" * 64,
         )
-        denied_file = File(
-            model_id=denied_model.id,
+        denied_file = build_file(
+            db_session,
+            denied_model,
             path="/data/denied-job.gcode",
-            original_filename="denied-job.gcode",
+            filename="denied-job.gcode",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=100,
@@ -207,14 +209,28 @@ class TestDashboard:
     def test_dashboard_with_printers(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p1 = Printer(name="P1", moonraker_url="http://10.0.0.1:7125", group="garage")
-        p2 = Printer(name="P2", moonraker_url="http://10.0.0.2:7125", group="garage")
-        p3 = Printer(name="P3", moonraker_url="http://10.0.0.3:7125")
-        db_session.add_all([p1, p2, p3])
-        db_session.commit()
-        db_session.refresh(p1)
-        db_session.refresh(p2)
-        db_session.refresh(p3)
+        # All three start UNKNOWN: this test counts what the *hub* reports, so a
+        # printer nobody has polled must not already be counted as ready.
+        p1 = build_printer(
+            db_session,
+            name="P1",
+            moonraker_url="http://10.0.0.1:7125",
+            group="garage",
+            status=PrinterStatus.UNKNOWN,
+        )
+        p2 = build_printer(
+            db_session,
+            name="P2",
+            moonraker_url="http://10.0.0.2:7125",
+            group="garage",
+            status=PrinterStatus.UNKNOWN,
+        )
+        build_printer(
+            db_session,
+            name="P3",
+            moonraker_url="http://10.0.0.3:7125",
+            status=PrinterStatus.UNKNOWN,
+        )
 
         from app.services.printer_hub import PrinterHub
 
@@ -255,16 +271,14 @@ class TestPrinterDiagnostics:
     ):
         # Direct DB insert bypasses the API's own _validate_provider_config,
         # simulating a row whose provider build() itself fails.
-        p = Printer(
+        p = build_printer(
+            db_session,
             name="Bad Elegoo",
             provider="elegoo_centauri",
             moonraker_url="",
             provider_variant="generic",
             elegoo_centauri_host="1.2.3.4",
         )
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
 
         resp = client.get(f"/api/v1/printers/{p.id}/diagnostics", headers=auth_headers)
         assert resp.status_code == 200
@@ -277,10 +291,9 @@ class TestPrinterDiagnostics:
     def test_diagnostics_provider_error_check(
         self, client: TestClient, auth_headers, db_session: Session
     ):
-        p = Printer(name="Ender 3", moonraker_url="http://10.0.0.1:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
+        p = build_printer(
+            db_session, name="Ender 3", moonraker_url="http://10.0.0.1:7125"
+        )
 
         offline = ProviderError("boom", code="printer_offline")
         # Diagnostics runs provider_info *and* live_status; both talk to the printer, so
@@ -312,12 +325,10 @@ class TestPrinterDiagnostics:
         self, client: TestClient, auth_headers, db_session: Session
     ) -> None:
         from app.core.time import utcnow
-        from app.db.models import Printer
 
-        printer = Printer(name="Gone", moonraker_url="http://gone.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Gone", moonraker_url="http://gone.local:7125"
+        )
         printer.deleted_at = utcnow()
         db_session.add(printer)
         db_session.commit()

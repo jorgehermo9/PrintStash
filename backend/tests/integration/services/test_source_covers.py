@@ -38,6 +38,7 @@ from app.services.storage_backend import (
     get_backend,
 )
 from app.services.storage_ownership import record_creation
+from tests.factories import build_model
 
 
 def _png(color: str = "navy") -> bytes:
@@ -48,11 +49,12 @@ def _png(color: str = "navy") -> bytes:
 
 def _source(session: Session) -> ModelProvenanceSource:
     ident = uuid.uuid4().hex
-    model = Model(
-        name=f"Cover model {ident}", slug=f"cover-model-{ident}", hash=ident * 2
+    model = build_model(
+        session,
+        name=f"Cover model {ident}",
+        slug=f"cover-model-{ident}",
+        hash=ident * 2,
     )
-    session.add(model)
-    session.flush()
     source = ModelProvenanceSource(
         model_id=model.id,
         provider="test",
@@ -710,13 +712,12 @@ def test_finish_import_uses_only_intent_and_final_sqlite_commits(
         owner = User(username="finish-owner", hashed_password="hash")
         setup.add(owner)
         setup.flush()
-        model = Model(
+        model = build_model(
+            setup,
             name="finish-model",
             slug=f"finish-{uuid.uuid4().hex}",
             hash=uuid.uuid4().hex * 2,
         )
-        setup.add(model)
-        setup.flush()
         source = ModelProvenanceSource(
             model_id=model.id,
             provider="test",

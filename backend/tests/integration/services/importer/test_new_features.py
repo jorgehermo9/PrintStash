@@ -16,12 +16,11 @@ from app.db.models import (
     File,
     FileRevisionStatus,
     FileType,
-    Printer,
     PrintJob,
     PrintJobState,
     ShareLink,
 )
-from tests.factories import build_file, build_model
+from tests.factories import build_file, build_model, build_print_job, build_printer
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -215,34 +214,26 @@ def test_extract_selected_only_returns_importable(tmp_path):
 class TestCompletionCapture:
     def _setup(self, db_session, *, revision_status=None):
         m = build_model(db_session, "cap", slug="cap")
-        f = File(
-            model_id=m.id,
+        f = build_file(
+            db_session,
+            m,
             path="/data/cap.gcode",
-            original_filename="cap.gcode",
+            filename="cap.gcode",
             file_type="gcode",
             version=1,
             size_bytes=100,
             sha256="g" * 64,
-            revision_status=revision_status,
+            status=revision_status,
         )
-        db_session.add(f)
-        db_session.commit()
-        db_session.refresh(f)
-        p = Printer(name="Cap", moonraker_url="http://10.0.0.9:7125")
-        db_session.add(p)
-        db_session.commit()
-        db_session.refresh(p)
-        job = PrintJob(
+        p = build_printer(db_session, name="Cap", moonraker_url="http://10.0.0.9:7125")
+        job = build_print_job(
+            db_session,
+            f,
             printer_id=p.id,
-            file_id=f.id,
-            model_id=m.id,
             remote_filename="cap.gcode",
             state=PrintJobState.PRINTING,
             source="vault",
         )
-        db_session.add(job)
-        db_session.commit()
-        db_session.refresh(job)
         return p.id, f.id, job.id
 
     def test_completion_captures_filament_and_duration(self, hub, db_session):
@@ -418,18 +409,16 @@ def test_stl_response_streams_raw_stl_without_buffering(db_session, tmp_path):
     backend.write_bytes(data, str(blob))
 
     m = build_model(db_session, "rawstl", slug="rawstl")
-    f = File(
-        model_id=m.id,
+    f = build_file(
+        db_session,
+        m,
         path=str(blob),
-        original_filename="raw.stl",
+        filename="raw.stl",
         file_type="stl",
         version=1,
         size_bytes=len(data),
         sha256="b" * 64,
     )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
 
     request = SimpleNamespace(headers={})
     res = files_api.stl_response(f, request)
@@ -454,18 +443,16 @@ def test_stl_response_honours_if_none_match(db_session, tmp_path):
     get_backend().write_bytes(b"solid etag\nendsolid etag\n", str(blob))
 
     m = build_model(db_session, "etag", slug="etag")
-    f = File(
-        model_id=m.id,
+    f = build_file(
+        db_session,
+        m,
         path=str(blob),
-        original_filename="etag.stl",
+        filename="etag.stl",
         file_type="stl",
         version=1,
         size_bytes=24,
         sha256="c" * 64,
     )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
 
     request = SimpleNamespace(headers={"if-none-match": f'"{f.sha256}"'})
     res = files_api.stl_response(f, request)

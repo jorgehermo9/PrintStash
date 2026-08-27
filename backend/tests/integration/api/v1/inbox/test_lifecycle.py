@@ -32,6 +32,7 @@ from app.db.models import (
     InboxItemState,
     Model,
 )
+from tests.factories import build_model
 
 
 class TestUpdateItem:
@@ -394,15 +395,13 @@ class TestDismissItem:
         self, client: TestClient, db_session: Session, make_user, headers_for, make_item
     ) -> None:
         owner = make_user("dismiss-completed")
-        model = Model(
+        model = build_model(
+            db_session,
             name="Imported widget",
             slug="imported-widget",
             hash="d" * 64,
             source_url="https://makerworld.com/en/models/1234-widget",
         )
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
         artifact = File(
             model_id=model.id,
             path="imported/widget.stl",

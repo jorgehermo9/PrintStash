@@ -22,6 +22,7 @@ from app.services.storage_backend import (
     StorageCollisionError,
 )
 from app.services.trash import restore_model, soft_delete_model
+from tests.factories import build_model
 
 
 class _FakeRemoteBackend(LocalStorageBackend):
@@ -187,10 +188,7 @@ def test_move_in_returns_creation_proof_when_staged_cleanup_fails(
 
 
 def test_live_and_trashed_scopes(db_session: Session) -> None:
-    m = Model(name="ScopeTest", slug="scope-test", hash="f" * 64)
-    db_session.add(m)
-    db_session.commit()
-    db_session.refresh(m)
+    m = build_model(db_session, name="ScopeTest", slug="scope-test", hash="f" * 64)
 
     assert m in db_session.exec(select(Model).where(live(Model))).all()
     assert m not in db_session.exec(select(Model).where(trashed(Model))).all()

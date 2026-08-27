@@ -29,6 +29,7 @@ from app.db.models import (
     PrintJob,
     PrintJobState,
 )
+from tests.factories import build_printer
 
 
 @pytest.fixture
@@ -38,10 +39,7 @@ def model(make_model) -> Model:
 
 @pytest.fixture
 def printer(db_session: Session) -> Printer:
-    row = Printer(name="Ender", moonraker_url="http://10.0.0.1:7125")
-    db_session.add(row)
-    db_session.commit()
-    db_session.refresh(row)
+    row = build_printer(db_session, name="Ender", moonraker_url="http://10.0.0.1:7125")
     return row
 
 
@@ -353,10 +351,10 @@ class TestImportPrintJobsFromPrinter:
     def test_refuses_a_printer_with_no_address_to_ask(
         self, client: TestClient, db_session: Session, auth_headers, model: Model
     ) -> None:
-        printer = Printer(name="No URL")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        # Explicitly addressless: `build_printer` fills in the provider's
+        # connection details, so the omission has to be stated or the endpoint
+        # gets a reachable printer and this row asserts nothing.
+        printer = build_printer(db_session, name="No URL", moonraker_url="")
 
         response = client.post(
             f"/api/v1/models/{model.id}/print-jobs/import-printer/{printer.id}",

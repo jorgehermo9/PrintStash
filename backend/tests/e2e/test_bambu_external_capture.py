@@ -8,24 +8,23 @@ from pathlib import Path
 import pytest
 from sqlmodel import select
 
-from app.db.models import File, FileType, Printer, PrinterProvider, PrintJob
+from app.db.models import File, FileType, PrinterProvider, PrintJob
 from app.services.printer_hub import PrinterHub
+from tests.factories import build_printer
 
 
 @pytest.mark.asyncio
 async def test_external_bambu_job_archives_available_gcode_through_real_storage(
     api, superuser_headers, e2e_db, tmp_path: Path
 ):
-    printer = Printer(
+    printer = build_printer(
+        e2e_db,
         name="Bambu X1C",
         provider=PrinterProvider.BAMBU_LAN,
         bambu_host="192.0.2.10",
         bambu_serial="01P00A123456",
         bambu_access_code="12345678",
     )
-    e2e_db.add(printer)
-    e2e_db.commit()
-    e2e_db.refresh(printer)
     hub = PrinterHub()
 
     capture = hub._sync_active_job_db(

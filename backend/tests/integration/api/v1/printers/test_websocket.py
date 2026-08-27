@@ -18,16 +18,16 @@ from starlette.websockets import WebSocketDisconnect
 from app.db.models import (
     Printer,
 )
+from tests.factories import build_printer
 
 
 class TestPrinterWebSocketAuth:
     def test_one_time_ticket_replaces_access_token_in_websocket_url(
         self, client: TestClient, auth_headers: dict[str, str], db_session: Session
     ):
-        printer = Printer(name="Ticketed", moonraker_url="http://printer.local")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Ticketed", moonraker_url="http://printer.local"
+        )
 
         response = client.post(
             f"/api/v1/printers/{printer.id}/ws-ticket", headers=auth_headers
@@ -57,10 +57,9 @@ class TestPrinterWebSocketAuth:
     def test_bearer_header_token_authenticates(
         self, client: TestClient, auth_headers: dict[str, str], db_session: Session
     ):
-        printer = Printer(name="Bearer", moonraker_url="http://printer.local")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Bearer", moonraker_url="http://printer.local"
+        )
 
         with client.websocket_connect(
             f"/api/v1/printers/{printer.id}/ws", headers=auth_headers
@@ -70,10 +69,9 @@ class TestPrinterWebSocketAuth:
     def test_bearer_header_invalid_token_closes(
         self, client: TestClient, db_session: Session
     ):
-        printer = Printer(name="BadToken", moonraker_url="http://printer.local")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="BadToken", moonraker_url="http://printer.local"
+        )
 
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(
@@ -107,12 +105,10 @@ class TestWsTicket:
         self, client: TestClient, auth_headers, db_session: Session
     ) -> None:
         from app.core.time import utcnow
-        from app.db.models import Printer
 
-        printer = Printer(name="Gone", moonraker_url="http://gone.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Gone", moonraker_url="http://gone.local:7125"
+        )
         printer.deleted_at = utcnow()
         db_session.add(printer)
         db_session.commit()
@@ -127,13 +123,11 @@ class TestWsTicket:
     def test_refuses_a_bearer_token_whose_subject_is_not_an_account_id(
         self, client: TestClient, db_session: Session
     ) -> None:
-        from app.db.models import Printer
         from app.services.auth import create_access_token
 
-        printer = Printer(name="Socket", moonraker_url="http://socket.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Socket", moonraker_url="http://socket.local:7125"
+        )
         forged = create_access_token("not-an-id", "ghost", scope="write")  # type: ignore[arg-type]
 
         with pytest.raises(WebSocketDisconnect):

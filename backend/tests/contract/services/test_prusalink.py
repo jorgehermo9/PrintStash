@@ -17,9 +17,7 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 from app.db.models import (
-    File,
     FileType,
-    Model,
     Printer,
     PrinterProvider,
     PrintJob,
@@ -32,6 +30,7 @@ from app.services.printer_provider import (
     build_provider_registry,
     get_provider_client,
 )
+from tests.factories import build_file, build_model, build_print_job, build_printer
 from tests.fakes.mock_prusalink import create_app
 from tests.fakes.server import start_server
 
@@ -53,29 +52,26 @@ PASSWORD = "s3cret"
 
 
 def _seed(db_session: Session, base_url: str, *, auth_mode: str) -> tuple[int, int]:
-    model = Model(
+    model = build_model(
+        db_session,
         name="Mock",
         slug=f"mock-prusa-{auth_mode}",
         hash=("q" if auth_mode == "api_key" else "r") * 64,
     )
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
 
-    f = File(
-        model_id=model.id,
+    f = build_file(
+        db_session,
+        model,
         path="/data/demo.gcode",
-        original_filename=REMOTE,
+        filename=REMOTE,
         file_type=FileType.GCODE,
         version=1,
         size_bytes=100,
         sha256=("s" if auth_mode == "api_key" else "t") * 64,
     )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
 
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name=f"Mock PrusaLink ({auth_mode})",
         provider=PrinterProvider.PRUSALINK,
         prusalink_url=base_url,
@@ -84,20 +80,14 @@ def _seed(db_session: Session, base_url: str, *, auth_mode: str) -> tuple[int, i
         prusalink_username=USERNAME if auth_mode == "digest" else None,
         prusalink_password=PASSWORD if auth_mode == "digest" else None,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        f,
         printer_id=printer.id,
-        file_id=f.id,
-        model_id=model.id,
         remote_filename=REMOTE,
         state=PrintJobState.STARTED,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     return printer.id, job.id
 

@@ -15,6 +15,7 @@ from sqlmodel import select
 
 from app.core.config import _overlay
 from app.db.models import User
+from tests.factories import build_user
 from tests.fakes.mock_oidc_provider import FakeOIDCProvider, build_app
 from tests.fakes.server import start_server
 
@@ -105,15 +106,8 @@ async def test_non_admin_group_provisions_regular_user(api, idp, e2e_db):
 
 @pytest.mark.asyncio
 async def test_username_collision_gets_a_unique_suffix(api, idp, e2e_db):
-    from app.services.auth import hash_password
 
-    existing = User(
-        username="grillmaster",
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-    )
-    e2e_db.add(existing)
-    e2e_db.commit()
+    build_user(e2e_db, username="grillmaster", password="Password123", active=True)
 
     _enable_oidc(idp)
     state, nonce = await _begin_login(api)

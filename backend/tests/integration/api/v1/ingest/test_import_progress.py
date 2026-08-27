@@ -16,8 +16,9 @@ from app.core.time import utcnow
 from app.db.models import BackgroundJob, ExternalLibrary, User
 from app.schemas.ingest import IngestJobStatus
 from app.services import runtime_config
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import create_access_token
 from app.services.jobs import JobRegistry, safe_error, safe_item
+from tests.factories import build_user
 
 
 @pytest.mark.parametrize(
@@ -219,15 +220,9 @@ from tests._env import use_local_storage  # noqa: E402
 
 
 def _regular_user(session: Session, username: str = "regular") -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=False,
+    user = build_user(
+        session, username=username, password="Password123", active=True, superuser=False
     )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
     return user
 
 

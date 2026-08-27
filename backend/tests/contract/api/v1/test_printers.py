@@ -20,7 +20,8 @@ from urllib.parse import parse_qs, urlparse
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.db.models import File, FileType, Model, Printer, PrinterFile, PrintJob
+from app.db.models import File, FileType, PrinterFile, PrintJob
+from tests.factories import build_file, build_model, build_printer
 
 
 @dataclass
@@ -147,25 +148,20 @@ def _stored_gcode(
     name: str = "bracket.gcode",
     body: bytes = b"G28\nG1 X1 Y1\n",
 ) -> File:
-    model = Model(name="Bracket", slug="real-bracket", hash="r" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
+    model = build_model(db_session, name="Bracket", slug="real-bracket", hash="r" * 64)
 
     path = tmp_path / name
     path.write_bytes(body)
-    file_row = File(
-        model_id=model.id,
+    file_row = build_file(
+        db_session,
+        model,
         path=str(path),
-        original_filename=name,
+        filename=name,
         file_type=FileType.GCODE,
         version=1,
         size_bytes=len(body),
         sha256="a" * 64,
     )
-    db_session.add(file_row)
-    db_session.commit()
-    db_session.refresh(file_row)
     return file_row
 
 
@@ -175,10 +171,9 @@ def test_diagnostics_hits_real_moonraker_http_server(
     db_session: Session,
 ) -> None:
     with moonraker_server() as server:
-        printer = Printer(name="Real Moonraker", moonraker_url=server.base_url)
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Real Moonraker", moonraker_url=server.base_url
+        )
 
         resp = client.get(
             f"/api/v1/printers/{printer.id}/diagnostics", headers=auth_headers
@@ -205,10 +200,9 @@ def test_send_to_printer_uploads_real_file_and_records_inventory(
 ) -> None:
     file_row = _stored_gcode(db_session, tmp_path)
     with moonraker_server() as server:
-        printer = Printer(name="Real Moonraker", moonraker_url=server.base_url)
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Real Moonraker", moonraker_url=server.base_url
+        )
 
         resp = client.post(
             f"/api/v1/printers/{printer.id}/send",
@@ -254,10 +248,9 @@ def test_start_existing_printer_file_calls_real_moonraker_start_endpoint(
 ) -> None:
     file_row = _stored_gcode(db_session, tmp_path, name="start-me.gcode")
     with moonraker_server() as server:
-        printer = Printer(name="Real Moonraker", moonraker_url=server.base_url)
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Real Moonraker", moonraker_url=server.base_url
+        )
         db_session.add(
             PrinterFile(
                 printer_id=printer.id,
@@ -294,10 +287,9 @@ def test_sync_printer_files_uses_real_provider_list_response(
             {"path": "folder/from-printer.gcode", "size": 321},
             {"path": "other/external.gcode", "size": 654},
         ]
-        printer = Printer(name="Real Moonraker", moonraker_url=server.base_url)
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Real Moonraker", moonraker_url=server.base_url
+        )
 
         resp = client.post(
             f"/api/v1/printers/{printer.id}/files/sync",
@@ -325,10 +317,9 @@ def test_sync_printer_files_reports_real_provider_http_failure(
 ) -> None:
     with moonraker_server() as server:
         server.state.list_files_status = 503
-        printer = Printer(name="Failing Moonraker", moonraker_url=server.base_url)
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Failing Moonraker", moonraker_url=server.base_url
+        )
 
         resp = client.post(
             f"/api/v1/printers/{printer.id}/files/sync",

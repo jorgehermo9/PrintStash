@@ -14,10 +14,8 @@ from sqlmodel import Session, select
 
 from app.core.time import utcnow
 from app.db.models import (
-    Collection,
     CollectionPermission,
     CollectionRole,
-    File,
     FileType,
     Model,
     Printer,
@@ -30,9 +28,17 @@ from app.db.models import (
     User,
 )
 from app.services import fleet
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import create_access_token
 from app.services.printer_provider import PrinterProviderClient
-from tests.factories import a_gcode_artifact
+from tests.factories import (
+    a_gcode_artifact,
+    build_collection,
+    build_file,
+    build_model,
+    build_print_job,
+    build_printer,
+    build_user,
+)
 
 
 def _provider_builder(provider: PrinterProviderClient):
@@ -48,14 +54,12 @@ def test_admin_can_enqueue_and_list_least_busy_job(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Farm A",
         moonraker_url="http://farm-a.local",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
 
     queued = client.post(
@@ -79,17 +83,20 @@ def test_default_routing_and_soft_drain_are_visible(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    first = Printer(
-        name="First", moonraker_url="http://first", status=PrinterStatus.READY
+    # Built in this order because the *first* printer registered becomes the
+    # fleet default, which is what this test asserts moves.
+    first = build_printer(
+        db_session,
+        name="First",
+        moonraker_url="http://first",
+        status=PrinterStatus.READY,
     )
-    second = Printer(
-        name="Second", moonraker_url="http://second", status=PrinterStatus.READY
+    second = build_printer(
+        db_session,
+        name="Second",
+        moonraker_url="http://second",
+        status=PrinterStatus.READY,
     )
-    db_session.add(first)
-    db_session.add(second)
-    db_session.commit()
-    db_session.refresh(first)
-    db_session.refresh(second)
 
     configured = client.patch(
         f"/api/v1/fleet/printers/{first.id}/routing",
@@ -129,12 +136,12 @@ def test_active_maintenance_blocks_routing_and_log_is_recorded(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="Maintained", moonraker_url="http://maintained", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Maintained",
+        moonraker_url="http://maintained",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     now = utcnow()
 
     window = client.post(
@@ -199,11 +206,12 @@ def test_queued_jobs_can_be_reordered_and_deleted(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="Queue", moonraker_url="http://queue", status=PrinterStatus.READY
+    build_printer(
+        db_session,
+        name="Queue",
+        moonraker_url="http://queue",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     first = client.post(
         "/api/v1/fleet/queue",
@@ -254,11 +262,12 @@ def test_scheduler_dispatches_queued_job_once(
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    printer = Printer(
-        name="Dispatch", moonraker_url="http://dispatch", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Dispatch",
+        moonraker_url="http://dispatch",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -298,12 +307,12 @@ def test_scheduler_rechecks_drain_before_dispatch(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="Drain", moonraker_url="http://drain", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Drain",
+        moonraker_url="http://drain",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -331,13 +340,12 @@ def test_scheduler_rechecks_drain_before_dispatch(
 def test_scheduler_candidate_batch_has_a_fixed_query_budget(
     db_session: Session,
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Offline batch",
         moonraker_url="http://offline-batch",
         status=PrinterStatus.OFFLINE,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     for index in range(120):
         db_session.add(
@@ -417,15 +425,13 @@ def test_fleet_summary_counts_queue_drain_and_maintenance(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Summary",
         moonraker_url="http://summary",
         status=PrinterStatus.READY,
         drain_mode=True,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     now = utcnow()
     client.post(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
@@ -441,18 +447,16 @@ def test_fleet_summary_counts_queue_drain_and_maintenance(
         headers=auth_headers,
         json={"file_id": artifact.id, "strategy": "manual", "printer_id": printer.id},
     )
-    absorbed = PrintJob(
+    build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="absorbed.gcode",
         state=PrintJobState.PRINTING,
         source="external",
         dedupe_absorbed_at=utcnow(),
         dedupe_survivor_id=1,
     )
-    db_session.add(absorbed)
-    db_session.commit()
     from app.services.fleet import _active_counts, build_routing_snapshot
 
     assert build_routing_snapshot(db_session).active_counts == {printer.id: 1}
@@ -503,14 +507,12 @@ def test_fleet_summary_counts_queue_drain_and_maintenance(
 
 
 def test_absorbed_jobs_are_excluded_from_routing_counts(db_session: Session) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="Count scope",
         moonraker_url="http://count-scope",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
     db_session.add(
         PrintJob(
@@ -537,11 +539,12 @@ def test_failed_dispatch_can_be_retried(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="Retry", moonraker_url="http://retry", status=PrinterStatus.READY
+    build_printer(
+        db_session,
+        name="Retry",
+        moonraker_url="http://retry",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -566,13 +569,12 @@ def test_ambiguous_live_dispatch_cannot_be_retried_automatically(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
+    build_printer(
+        db_session,
         name="Ambiguous live dispatch",
         moonraker_url="http://retry",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -600,24 +602,21 @@ def test_ambiguous_live_dispatch_cannot_be_retried_automatically(
 
 
 def test_restart_reconciles_stranded_dispatch(db_session: Session) -> None:
-    printer = Printer(
-        name="Restart", moonraker_url="http://restart", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Restart",
+        moonraker_url="http://restart",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="restart.gcode",
         state=PrintJobState.UPLOADING,
         dispatch_claimed_at=utcnow(),
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     from app.services.printer_jobs import reconcile_stranded_dispatches
 
@@ -635,23 +634,21 @@ def test_ambiguous_restart_cannot_be_retried_automatically(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="Ambiguous", moonraker_url="http://ambiguous", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Ambiguous",
+        moonraker_url="http://ambiguous",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        artifact,
         printer_id=printer.id,
-        file_id=artifact.id,
-        model_id=artifact.model_id,
         remote_filename="ambiguous.gcode",
         state=PrintJobState.UPLOADING,
         dispatch_claimed_at=utcnow(),
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     from app.services.printer_jobs import reconcile_stranded_dispatches
 
@@ -668,11 +665,9 @@ def test_fleet_enqueue_notifies_task_queue(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="Wake", moonraker_url="http://wake", status=PrinterStatus.READY
+    build_printer(
+        db_session, name="Wake", moonraker_url="http://wake", status=PrinterStatus.READY
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     enqueue = AsyncMock()
     app.state.task_queue.enqueue = enqueue
@@ -695,12 +690,12 @@ def test_dispatched_job_reuses_same_row_through_completion(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="Lifecycle", moonraker_url="http://lifecycle", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="Lifecycle",
+        moonraker_url="http://lifecycle",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -758,11 +753,12 @@ def test_queue_history_is_bounded_and_pageable(
     auth_headers: dict[str, str],
     db_session: Session,
 ) -> None:
-    printer = Printer(
-        name="History", moonraker_url="http://history", status=PrinterStatus.READY
+    printer = build_printer(
+        db_session,
+        name="History",
+        moonraker_url="http://history",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     for index in range(12):
         db_session.add(
@@ -803,14 +799,11 @@ def test_queue_history_applies_rbac_before_pagination(
 ) -> None:
     visible = Printer(name="Visible", moonraker_url="http://visible")
     hidden = Printer(name="Hidden", moonraker_url="http://hidden")
-    user = User(
-        username="queue-viewer",
-        hashed_password=hash_password("Password123"),
-        is_active=True,
+    user = build_user(
+        db_session, username="queue-viewer", password="Password123", active=True
     )
     db_session.add(visible)
     db_session.add(hidden)
-    db_session.add(user)
     db_session.commit()
     db_session.refresh(visible)
     db_session.refresh(hidden)
@@ -870,22 +863,17 @@ def test_enqueue_404_for_missing_file(
 def test_enqueue_400_for_non_gcode_file(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    model = Model(name="Not gcode", slug="not-gcode", hash="c" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
-    stl = File(
-        model_id=model.id,
+    model = build_model(db_session, name="Not gcode", slug="not-gcode", hash="c" * 64)
+    stl = build_file(
+        db_session,
+        model,
         path="queue/cube.stl",
-        original_filename="cube.stl",
+        filename="cube.stl",
         file_type=FileType.STL,
         version=1,
         size_bytes=10,
         sha256="d" * 64,
     )
-    db_session.add(stl)
-    db_session.commit()
-    db_session.refresh(stl)
 
     resp = client.post(
         "/api/v1/fleet/queue",
@@ -911,12 +899,12 @@ def test_patch_queue_job_404_for_missing_job(
 def test_patch_queue_job_409_when_not_editable(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
-        name="Editable", moonraker_url="http://editable", status=PrinterStatus.READY
+    build_printer(
+        db_session,
+        name="Editable",
+        moonraker_url="http://editable",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -941,11 +929,12 @@ def test_patch_queue_job_409_when_not_editable(
 def test_patch_queue_job_409_on_stale_expected_updated_at(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
-        name="Stale", moonraker_url="http://stale", status=PrinterStatus.READY
+    build_printer(
+        db_session,
+        name="Stale",
+        moonraker_url="http://stale",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -968,11 +957,12 @@ def test_patch_queue_job_409_on_stale_expected_updated_at(
 def test_patch_queue_job_400_manual_strategy_requires_printer_id(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
-        name="Manual", moonraker_url="http://manual", status=PrinterStatus.READY
+    build_printer(
+        db_session,
+        name="Manual",
+        moonraker_url="http://manual",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -1008,13 +998,12 @@ def test_retry_queue_job_404_for_missing_job(
 def test_retry_queue_job_400_when_not_retryable(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    build_printer(
+        db_session,
         name="NotRetryable",
         moonraker_url="http://not-retryable",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -1070,14 +1059,12 @@ def test_post_maintenance_window_404_for_missing_printer(
 def test_patch_maintenance_window_404_for_missing_window(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="WindowMissing",
         moonraker_url="http://window-missing",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
     resp = client.patch(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/99999",
@@ -1091,14 +1078,12 @@ def test_patch_maintenance_window_404_for_missing_window(
 def test_delete_maintenance_window_404_for_missing_window(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="WindowDeleteMissing",
         moonraker_url="http://window-delete-missing",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
     resp = client.delete(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/99999",
@@ -1133,14 +1118,12 @@ def test_post_maintenance_log_404_for_missing_printer(
 def test_patch_maintenance_log_404_for_missing_log(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="LogMissing",
         moonraker_url="http://log-missing",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
     resp = client.patch(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-log/99999",
@@ -1154,14 +1137,12 @@ def test_patch_maintenance_log_404_for_missing_log(
 def test_delete_maintenance_log_404_for_missing_log(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="LogDeleteMissing",
         moonraker_url="http://log-delete-missing",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
     resp = client.delete(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-log/99999",
@@ -1187,11 +1168,12 @@ def test_enqueue_manual_strategy_unknown_printer_404(
 def test_enqueue_default_strategy_without_default_printer_is_blocked(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
-        name="NoDefault", moonraker_url="http://no-default", status=PrinterStatus.READY
+    build_printer(
+        db_session,
+        name="NoDefault",
+        moonraker_url="http://no-default",
+        status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
 
     resp = client.post(
@@ -1207,22 +1189,19 @@ def test_enqueue_default_strategy_without_default_printer_is_blocked(
 def test_enqueue_rejects_binary_gcode(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    model = Model(name="Binary gcode", slug="binary-gcode", hash="e" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
-    bgcode = File(
-        model_id=model.id,
+    model = build_model(
+        db_session, name="Binary gcode", slug="binary-gcode", hash="e" * 64
+    )
+    bgcode = build_file(
+        db_session,
+        model,
         path="queue/cube.bgcode",
-        original_filename="cube.bgcode",
+        filename="cube.bgcode",
         file_type=FileType.GCODE,
         version=1,
         size_bytes=10,
         sha256="f" * 64,
     )
-    db_session.add(bgcode)
-    db_session.commit()
-    db_session.refresh(bgcode)
 
     resp = client.post(
         "/api/v1/fleet/queue",
@@ -1239,8 +1218,11 @@ def test_patch_queue_job_strategy_change_reroutes(
     first = Printer(
         name="RerouteA", moonraker_url="http://reroute-a", status=PrinterStatus.READY
     )
-    second = Printer(
-        name="RerouteB", moonraker_url="http://reroute-b", status=PrinterStatus.READY
+    second = build_printer(
+        db_session,
+        name="RerouteB",
+        moonraker_url="http://reroute-b",
+        status=PrinterStatus.READY,
     )
     db_session.add_all([first, second])
     db_session.commit()
@@ -1271,14 +1253,12 @@ def test_patch_queue_job_strategy_change_reroutes(
 def test_patch_routing_clears_drain_reason_when_disabling_drain(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="DrainClear",
         moonraker_url="http://drain-clear",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
     on = client.patch(
         f"/api/v1/fleet/printers/{printer.id}/routing",
@@ -1301,14 +1281,12 @@ def test_patch_routing_clears_drain_reason_when_disabling_drain(
 def test_list_maintenance_windows_returns_created_window(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="WindowList",
         moonraker_url="http://window-list",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     now = utcnow()
     created = client.post(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
@@ -1333,14 +1311,12 @@ def test_list_maintenance_windows_returns_created_window(
 def test_patch_maintenance_window_updates_fields(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="WindowEdit",
         moonraker_url="http://window-edit",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     now = utcnow()
     created = client.post(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
@@ -1370,14 +1346,12 @@ def test_patch_maintenance_window_updates_fields(
 def test_patch_maintenance_window_invalid_range_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="WindowInvalid",
         moonraker_url="http://window-invalid",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     now = utcnow()
     created = client.post(
         f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
@@ -1405,15 +1379,13 @@ def test_patch_maintenance_window_invalid_range_404(
 def _user_headers(
     db_session: Session, username: str, *, is_superuser: bool = False
 ) -> dict[str, str]:
-    user = User(
+    user = build_user(
+        db_session,
         username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=is_superuser,
+        password="Password123",
+        active=True,
+        superuser=is_superuser,
     )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
     token = create_access_token(user.id, user.username, scope="write")
     return {"Authorization": f"Bearer {token}"}
 
@@ -1445,42 +1417,33 @@ def test_create_queue_job_403_for_non_superuser_non_manual_strategy(
 def test_create_queue_job_allows_non_superuser_with_printer_role(
     client: TestClient, db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="MemberManual",
         moonraker_url="http://member-manual",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
-    collection = Collection(
-        name="Member vault", slug="member-vault", path="member-vault"
+    collection = build_collection(
+        db_session, name="Member vault", slug="member-vault", path="member-vault"
     )
-    db_session.add(collection)
-    db_session.commit()
-    db_session.refresh(collection)
-    model = Model(
+    model = build_model(
+        db_session,
         name="Member cube",
         slug="member-cube",
         hash="9" * 64,
         collection_id=collection.id,
     )
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
-    artifact = File(
-        model_id=model.id,
+    artifact = build_file(
+        db_session,
+        model,
         path="queue/member-cube.gcode",
-        original_filename="member-cube.gcode",
+        filename="member-cube.gcode",
         file_type=FileType.GCODE,
         version=1,
         size_bytes=42,
         sha256="8" * 64,
     )
-    db_session.add(artifact)
-    db_session.commit()
-    db_session.refresh(artifact)
 
     headers = _user_headers(db_session, "manual-member")
     _grant_printer(db_session, "manual-member", printer, PrinterRole.PRINT)
@@ -1505,13 +1468,12 @@ def test_create_queue_job_allows_non_superuser_with_printer_role(
 def test_queue_error_maps_fleet_queue_job_not_found_to_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
 ) -> None:
-    printer = Printer(
+    build_printer(
+        db_session,
         name="QueueErrorMapping",
         moonraker_url="http://queue-error-mapping",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -1544,13 +1506,12 @@ def test_queue_error_maps_fleet_queue_job_not_found_to_404(
 def test_delete_queue_job_409_when_not_editable(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    build_printer(
+        db_session,
         name="DeleteNotEditable",
         moonraker_url="http://delete-not-editable",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -1572,14 +1533,12 @@ def test_delete_queue_job_409_when_not_editable(
 def test_retry_queue_job_404_when_manual_printer_soft_deleted(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="RetryPrinterGone",
         moonraker_url="http://retry-printer-gone",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -1645,14 +1604,12 @@ def test_require_queue_job_role_404_for_non_superuser_on_unassigned_job(
 def test_patch_queue_job_403_for_non_superuser_strategy_change(
     client: TestClient, db_session: Session
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="MemberStrategy",
         moonraker_url="http://member-strategy",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     artifact = a_gcode_artifact(db_session, "Queue cube")
 
     admin_headers = _user_headers(db_session, "strategy-admin", is_superuser=True)
@@ -1678,14 +1635,12 @@ def test_patch_queue_job_403_for_non_superuser_strategy_change(
 def test_patch_routing_maps_fleet_error_to_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="RoutingRace",
         moonraker_url="http://routing-race",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
 
     def _raise(*_args, **_kwargs):
         raise fleet.FleetError("printer_not_found")
@@ -1705,14 +1660,12 @@ def test_patch_routing_maps_fleet_error_to_404(
 def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
 ) -> None:
-    printer = Printer(
+    printer = build_printer(
+        db_session,
         name="MaintenanceRace",
         moonraker_url="http://maintenance-race",
         status=PrinterStatus.READY,
     )
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
     now = utcnow()
 
     def _raise(*_args, **_kwargs):
@@ -1756,10 +1709,9 @@ def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
 
 def _fleet_printer(session: Session, name: str) -> Printer:
     """A registered printer, for the endpoints that need one named in the body."""
-    row = Printer(name=name, moonraker_url=f"http://{name.lower().replace(' ', '-')}")
-    session.add(row)
-    session.commit()
-    session.refresh(row)
+    row = build_printer(
+        session, name=name, moonraker_url=f"http://{name.lower().replace(' ', '-')}"
+    )
     return row
 
 
@@ -1864,10 +1816,9 @@ class TestCreateBatch:
     ) -> None:
         headers = _user_headers(db_session, "batch-viewer")
         artifact = a_gcode_artifact(db_session, "Queue cube")
-        printer = Printer(name="Not mine", moonraker_url="http://notmine.local:7125")
-        db_session.add(printer)
-        db_session.commit()
-        db_session.refresh(printer)
+        printer = build_printer(
+            db_session, name="Not mine", moonraker_url="http://notmine.local:7125"
+        )
         _grant_printer(db_session, "batch-viewer", printer, PrinterRole.VIEW)
 
         response = client.post(

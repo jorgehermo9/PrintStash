@@ -15,12 +15,13 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
-from app.db.models import File, FileType, Model, Printer, PrintJob, PrintJobState
+from app.db.models import FileType, PrintJob, PrintJobState
 from app.db.session import get_session_factory
 from app.services import runtime_config
 from app.services.moonraker import MoonrakerClient, MoonrakerError
 from app.services.printer_hub import PrinterHub
 from app.services.printer_provider import build_provider_registry, get_provider_client
+from tests.factories import build_file, build_model, build_print_job, build_printer
 from tests.fakes.mock_printer import create_app
 from tests.fakes.server import start_server
 
@@ -65,40 +66,29 @@ def test_mock_enforces_moonraker_http_and_websocket_api_key() -> None:
 
 
 def _seed(db_session: Session, base_url: str) -> tuple[int, int]:
-    model = Model(name="Mock", slug="mock-model", hash="z" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
+    model = build_model(db_session, name="Mock", slug="mock-model", hash="z" * 64)
 
-    f = File(
-        model_id=model.id,
+    f = build_file(
+        db_session,
+        model,
         path="/data/demo.gcode",
-        original_filename=REMOTE,
+        filename=REMOTE,
         file_type=FileType.GCODE,
         version=1,
         size_bytes=100,
         sha256="y" * 64,
     )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
 
-    printer = Printer(name="Mock", moonraker_url=base_url)
-    db_session.add(printer)
-    db_session.commit()
-    db_session.refresh(printer)
+    printer = build_printer(db_session, name="Mock", moonraker_url=base_url)
 
-    job = PrintJob(
+    job = build_print_job(
+        db_session,
+        f,
         printer_id=printer.id,
-        file_id=f.id,
-        model_id=model.id,
         remote_filename=REMOTE,
         state=PrintJobState.STARTED,
         spool_id=1,
     )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
 
     # Enable Spoolman + write-back, pointed at the mock's mounted Spoolman.
     runtime_config.set_spoolman_enabled(db_session, True)

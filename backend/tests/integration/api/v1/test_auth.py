@@ -25,7 +25,8 @@ from sqlmodel import Session
 
 from app.db.models import ApiKey, User
 from app.services import oidc
-from app.services.auth import ACCESS_BLOCKLIST, create_api_key, hash_password
+from app.services.auth import ACCESS_BLOCKLIST, create_api_key
+from tests.factories import build_user
 
 PASSWORD = "Password123"
 
@@ -35,15 +36,13 @@ def account(db_session: Session):
     """Create a user and return them with a freshly logged-in session."""
 
     def build(username: str, *, is_superuser: bool = False) -> User:
-        user = User(
+        user = build_user(
+            db_session,
             username=username,
-            hashed_password=hash_password(PASSWORD),
-            is_superuser=is_superuser,
-            is_active=True,
+            password=PASSWORD,
+            superuser=is_superuser,
+            active=True,
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
         return user
 
     return build

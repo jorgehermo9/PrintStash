@@ -29,6 +29,7 @@ from app.services import model_views as mv
 from app.services.external_library import _collection_path_for, _walk, is_due
 from app.services.ingestion import _collision_safe_path
 from app.services.moonraker import MoonrakerClient
+from tests.factories import build_file, build_model
 
 
 # --------------------------------------------------------------------------- #
@@ -305,10 +306,7 @@ class TestThumbUrl:
 class TestFilamentProfileUsage:
     def test_counts_live_files_matching_each_profile(self, db_session: Session) -> None:
         db_session.add_all(_profiles())
-        model = Model(name="m", slug="m", hash="b" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(db_session, name="m", slug="m", hash="b" * 64)
         f1 = File(
             model_id=model.id,
             path="a.gcode",
@@ -317,17 +315,17 @@ class TestFilamentProfileUsage:
             size_bytes=1,
             sha256="1" * 64,
         )
-        f2 = File(
-            model_id=model.id,
+        f2 = build_file(
+            db_session,
+            model,
             path="b.gcode",
-            original_filename="b.gcode",
+            filename="b.gcode",
             file_type=FileType.GCODE,
             size_bytes=1,
             sha256="2" * 64,
             version=2,
         )
         db_session.add(f1)
-        db_session.add(f2)
         db_session.commit()
         db_session.refresh(f1)
         db_session.refresh(f2)
@@ -360,21 +358,16 @@ class TestPrinterProfileUsage:
         db_session.add(profile)
         db_session.commit()
         db_session.refresh(profile)
-        model = Model(name="pm", slug="pm", hash="c" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        f1 = File(
-            model_id=model.id,
+        model = build_model(db_session, name="pm", slug="pm", hash="c" * 64)
+        f1 = build_file(
+            db_session,
+            model,
             path="a.gcode",
-            original_filename="a.gcode",
+            filename="a.gcode",
             file_type=FileType.GCODE,
             size_bytes=1,
             sha256="3" * 64,
         )
-        db_session.add(f1)
-        db_session.commit()
-        db_session.refresh(f1)
         db_session.add(Metadata(file_id=f1.id, printer_model="Voron 2.4"))
         db_session.commit()
 
@@ -383,21 +376,16 @@ class TestPrinterProfileUsage:
         assert usage[profile.id] == 1
 
     def test_blank_printer_model_is_skipped(self, db_session: Session) -> None:
-        model = Model(name="pm2", slug="pm2", hash="d" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
-        f1 = File(
-            model_id=model.id,
+        model = build_model(db_session, name="pm2", slug="pm2", hash="d" * 64)
+        f1 = build_file(
+            db_session,
+            model,
             path="a.gcode",
-            original_filename="a.gcode",
+            filename="a.gcode",
             file_type=FileType.GCODE,
             size_bytes=1,
             sha256="4" * 64,
         )
-        db_session.add(f1)
-        db_session.commit()
-        db_session.refresh(f1)
         db_session.add(Metadata(file_id=f1.id, printer_model=None))
         db_session.commit()
 

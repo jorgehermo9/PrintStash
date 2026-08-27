@@ -14,7 +14,7 @@ from sqlmodel import Session
 from app.db.models import CollectionPermission, CollectionRole, Model
 from app.services import taxonomy
 from app.services.storage_backend import get_backend
-from tests.factories import bearer, build_user
+from tests.factories import bearer, build_model, build_user
 
 
 class TestListCollections:
@@ -470,10 +470,9 @@ class TestDeleteCollection:
         parent = taxonomy.resolve_or_create_collection(db_session, "Tree")
         child = taxonomy.resolve_or_create_collection(db_session, "Tree/Branch")
         assert parent is not None and child is not None
-        model = Model(name="leaf", slug="leaf", hash="c" * 64, collection_id=child.id)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(
+            db_session, name="leaf", slug="leaf", hash="c" * 64, collection_id=child.id
+        )
 
         resp = client.delete(
             f"/api/v1/collections/{parent.id}?recursive=true", headers=auth_headers
@@ -507,10 +506,7 @@ class TestTags:
         self, client: TestClient, db_session: Session, auth_headers: dict[str, str]
     ) -> None:
         (tag,) = taxonomy.resolve_or_create_tags(db_session, ["pla"])
-        model = Model(name="m", slug="m", hash="d" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(db_session, name="m", slug="m", hash="d" * 64)
         from app.db.models import ModelTagLink
 
         db_session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
@@ -540,10 +536,9 @@ class TestTags:
         col = taxonomy.resolve_or_create_collection(db_session, "TaggedCol")
         assert col is not None
         (tag,) = taxonomy.resolve_or_create_tags(db_session, ["scoped"])
-        model = Model(name="tm", slug="tm", hash="a1" * 32, collection_id=col.id)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(
+            db_session, name="tm", slug="tm", hash="a1" * 32, collection_id=col.id
+        )
         from app.db.models import ModelTagLink
 
         db_session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
@@ -579,10 +574,7 @@ class TestTags:
         self, client: TestClient, db_session: Session, auth_headers: dict[str, str]
     ) -> None:
         (tag,) = taxonomy.resolve_or_create_tags(db_session, ["removable"])
-        model = Model(name="m2", slug="m2", hash="e" * 64)
-        db_session.add(model)
-        db_session.commit()
-        db_session.refresh(model)
+        model = build_model(db_session, name="m2", slug="m2", hash="e" * 64)
         from app.db.models import ModelTagLink
 
         db_session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))

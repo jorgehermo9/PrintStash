@@ -21,7 +21,6 @@ from sqlmodel import Session
 
 from app.core.time import utcnow
 from app.db.models import (
-    Collection,
     FilamentProfile,
     File,
     FileType,
@@ -31,20 +30,19 @@ from app.db.models import (
     PrintJobState,
 )
 from app.services import print_results
+from tests.factories import build_collection, build_file, build_model
 
 
 def _model(
     db_session: Session, *, slug: str, collection_id: int | None = None
 ) -> Model:
-    model = Model(
+    model = build_model(
+        db_session,
         name=slug.title(),
         slug=slug,
         hash=f"{slug:0<64}"[:64],
         collection_id=collection_id,
     )
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
     return model
 
 
@@ -56,18 +54,16 @@ def _file_with_material(
     material_type: str,
     material_brand: str | None = None,
 ) -> File:
-    file_row = File(
-        model_id=model.id,
+    file_row = build_file(
+        db_session,
+        model,
         path=f"/data/files/{model.slug}/{sha}.gcode",
-        original_filename=f"{sha}.gcode",
+        filename=f"{sha}.gcode",
         file_type=FileType.GCODE,
         version=1,
         size_bytes=123,
         sha256=sha * 64,
     )
-    db_session.add(file_row)
-    db_session.commit()
-    db_session.refresh(file_row)
     db_session.add(
         Metadata(
             file_id=file_row.id,
@@ -192,10 +188,9 @@ class TestPrintStats:
         )
         db_session.commit()
 
-        collection = Collection(name="Functional", slug="functional", path="functional")
-        db_session.add(collection)
-        db_session.commit()
-        db_session.refresh(collection)
+        collection = build_collection(
+            db_session, name="Functional", slug="functional", path="functional"
+        )
 
         model = _model(db_session, slug="bracket", collection_id=collection.id)
         file_row = _file_with_material(db_session, model, sha="a", material_type="PETG")
@@ -247,18 +242,16 @@ class TestPrintStats:
         # A Bambu/manual job with no measured filament — stats must use the slicer
         # estimate stored on Metadata instead of reading as "—".
         model = _model(db_session, slug="estimated")
-        file_row = File(
-            model_id=model.id,
+        file_row = build_file(
+            db_session,
+            model,
             path=f"/data/files/{model.slug}/c.gcode",
-            original_filename="c.gcode",
+            filename="c.gcode",
             file_type=FileType.GCODE,
             version=1,
             size_bytes=123,
             sha256="c" * 64,
         )
-        db_session.add(file_row)
-        db_session.commit()
-        db_session.refresh(file_row)
         db_session.add(
             Metadata(
                 file_id=file_row.id,
@@ -304,10 +297,9 @@ class TestPrintStats:
         )
         db_session.commit()
 
-        functional = Collection(name="Functional", slug="functional", path="functional")
-        db_session.add(functional)
-        db_session.commit()
-        db_session.refresh(functional)
+        functional = build_collection(
+            db_session, name="Functional", slug="functional", path="functional"
+        )
 
         bracket = _model(db_session, slug="bracket", collection_id=functional.id)
         bracket_file = _file_with_material(

@@ -10,12 +10,11 @@ from app.db.models import (
     File,
     FileType,
     Model,
-    Printer,
     PrinterFile,
     User,
 )
 from app.services import rbac, taxonomy
-from tests.factories import bearer, build_user
+from tests.factories import bearer, build_file, build_model, build_printer, build_user
 
 
 def _grant(
@@ -35,15 +34,13 @@ def _grant(
 
 
 def _model(session: Session, name: str, collection_id: int | None) -> Model:
-    model = Model(
+    model = build_model(
+        session,
         name=name,
         slug=name.lower().replace(" ", "-"),
         hash=(name[:1].lower() or "a") * 64,
         collection_id=collection_id,
     )
-    session.add(model)
-    session.commit()
-    session.refresh(model)
     return model
 
 
@@ -147,18 +144,16 @@ def test_file_download_denies_collection_without_view(
     collection = taxonomy.resolve_or_create_collection(db_session, "Private")
     assert collection is not None
     model = _model(db_session, "Private Model", collection.id)
-    file_row = File(
-        model_id=model.id,
+    file_row = build_file(
+        db_session,
+        model,
         path="/tmp/private.stl",
-        original_filename="private.stl",
+        filename="private.stl",
         file_type=FileType.STL,
         version=1,
         size_bytes=1,
         sha256="f" * 64,
     )
-    db_session.add(file_row)
-    db_session.commit()
-    db_session.refresh(file_row)
 
     response = client.get(
         f"/api/v1/files/{file_row.id}/download",
@@ -265,7 +260,9 @@ def test_non_superuser_cannot_see_printer_presence(
         size_bytes=1,
         sha256="p" * 64,
     )
-    printer = Printer(name="Hidden Printer", moonraker_url="http://10.0.0.1:7125")
+    printer = build_printer(
+        db_session, name="Hidden Printer", moonraker_url="http://10.0.0.1:7125"
+    )
     db_session.add_all([file_row, printer])
     db_session.commit()
     db_session.refresh(file_row)

@@ -33,7 +33,13 @@ from app.db.models import (
     VaultAuditSeverity,
 )
 from app.services.trash import _cleanup_orphan_blobs, gc_soft_deleted
-from tests.factories import build_model, build_stored_file, store_owned_bytes
+from tests.factories import (
+    build_collection,
+    build_file,
+    build_model,
+    build_stored_file,
+    store_owned_bytes,
+)
 
 
 def _write(key: str, data: bytes = b"x") -> str:
@@ -341,25 +347,22 @@ def test_gc_skips_legacy_candidate_without_blocking_verifiable_candidates(
     first.deleted_at = utcnow() - timedelta(days=1)
     db_session.add(first)
 
-    legacy_model = Model(name="Legacy", slug="legacy", hash="legacy-hash")
-    db_session.add(legacy_model)
-    db_session.commit()
-    db_session.refresh(legacy_model)
+    legacy_model = build_model(
+        db_session, name="Legacy", slug="legacy", hash="legacy-hash"
+    )
     legacy_path = storage.blob_key("legacy", 1, "legacy.stl")
     _write(legacy_path, b"legacy-user-bytes")
-    legacy = File(
-        model_id=legacy_model.id,
+    legacy = build_file(
+        db_session,
+        legacy_model,
         path=legacy_path,
-        original_filename="legacy.stl",
+        filename="legacy.stl",
         file_type=FileType.STL,
         version=1,
         size_bytes=17,
         sha256="legacy-file-hash",
         deleted_at=utcnow() - timedelta(days=1),
     )
-    db_session.add(legacy)
-    db_session.commit()
-    db_session.refresh(legacy)
     first_id = first.id
     first_path = first.path
 
@@ -376,10 +379,9 @@ def test_gc_skips_legacy_candidate_without_blocking_verifiable_candidates(
 def test_gc_adopts_and_purges_pre_ledger_artifact_with_matching_content(
     db_session: Session, storage
 ) -> None:
-    model = Model(name="Legacy owned", slug="legacy-owned", hash="legacy-owned-hash")
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
+    model = build_model(
+        db_session, name="Legacy owned", slug="legacy-owned", hash="legacy-owned-hash"
+    )
     content = b"artifact created before the ownership ledger"
     legacy_path = storage.blob_key("legacy-owned", 1, "legacy.stl")
     _write(legacy_path, content)
@@ -427,18 +429,16 @@ def test_hard_delete_late_storage_failure_leaks_remainder_without_db_rollback(
         storage.blob_key("two-file-purge", 2, "second.stl"),
         b"second",
     ).key
-    second = File(
-        model_id=model.id,
+    second = build_file(
+        db_session,
+        model,
         path=second_key,
-        original_filename="second.stl",
+        filename="second.stl",
         file_type=FileType.STL,
         version=2,
         size_bytes=6,
         sha256="second-file-hash",
     )
-    db_session.add(second)
-    db_session.commit()
-    db_session.refresh(second)
 
     real_rollback = storage.rollback_create
     deletes = 0
@@ -580,10 +580,7 @@ def test_gc_preserves_shared_stl_cache_until_last_artifact_is_purged(
 def test_gc_preserves_unreferenced_collection_images(
     db_session: Session, storage
 ) -> None:
-    collection = Collection(name="Docs", slug="docs", path="docs")
-    db_session.add(collection)
-    db_session.commit()
-    db_session.refresh(collection)
+    collection = build_collection(db_session, name="Docs", slug="docs", path="docs")
     unreferenced = _write(storage.collection_image_key(collection.id, "gone.png"))
 
     removed = _cleanup_orphan_blobs(db_session)
@@ -595,10 +592,7 @@ def test_gc_preserves_unreferenced_collection_images(
 def test_gc_preserves_referenced_collection_images(
     db_session: Session, storage
 ) -> None:
-    collection = Collection(name="Docs", slug="docs", path="docs")
-    db_session.add(collection)
-    db_session.commit()
-    db_session.refresh(collection)
+    collection = build_collection(db_session, name="Docs", slug="docs", path="docs")
     name = "a" * 64 + ".png"
     collection.readme = f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
     db_session.add(collection)
@@ -615,15 +609,13 @@ def test_gc_preserves_referenced_collection_images(
 def test_gc_does_not_infer_ownership_from_expired_collection_namespace(
     db_session: Session, storage
 ) -> None:
-    collection = Collection(
+    collection = build_collection(
+        db_session,
         name="Old docs",
         slug="old-docs",
         path="old-docs",
         deleted_at=utcnow() - timedelta(days=1),
     )
-    db_session.add(collection)
-    db_session.commit()
-    db_session.refresh(collection)
     collection_id = collection.id
     key = _write(storage.collection_image_key(collection.id, "unlinked.png"))
 
@@ -638,15 +630,13 @@ def test_gc_hard_deletes_expired_collection_referenced_image(
     db_session: Session, storage
 ) -> None:
     name = "a" * 64 + ".png"
-    collection = Collection(
+    collection = build_collection(
+        db_session,
         name="Old docs",
         slug="old-docs",
         path="old-docs",
         deleted_at=utcnow() - timedelta(days=1),
     )
-    db_session.add(collection)
-    db_session.commit()
-    db_session.refresh(collection)
     collection.readme = f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
     db_session.add(collection)
     db_session.commit()
@@ -733,15 +723,13 @@ class TestGcSoftDeleted:
         assert Path(artifact.path).exists()
 
     def test_refuses_to_purge_an_expired_collection(self, db_session: Session) -> None:
-        collection = Collection(
+        collection = build_collection(
+            db_session,
             name="Escape docs",
             slug="escape-docs",
             path="escape-docs",
             deleted_at=utcnow() - timedelta(days=1),
         )
-        db_session.add(collection)
-        db_session.commit()
-        db_session.refresh(collection)
         _open_namespace_escape(db_session)
 
         result = gc_soft_deleted(retention_days=0)
