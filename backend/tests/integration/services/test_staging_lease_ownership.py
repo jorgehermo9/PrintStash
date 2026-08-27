@@ -21,6 +21,7 @@ is the fallback, and the path is still never recursively scanned.
 from __future__ import annotations
 
 import errno
+import os
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,29 @@ import pytest
 from app.core.time import utcnow
 from app.db.models import StagingLease
 from app.services import staging_leases
+
+
+def _mark_capture_slot(path: Path, slot_id: str) -> None:
+    """Stamp the slot marker production stamps, where the platform has xattrs.
+
+    `prepare_capture_slot_staging` sets this attribute before any request byte is
+    written, so a spool that lacks it is — correctly — refused as a replacement.
+    A fixture that wrote the file by hand and skipped the marker therefore built
+    a state production never produces, and the test that used it passed on macOS
+    (where `os.getxattr` does not exist at all, so the check is skipped) while
+    failing on Linux (where a missing attribute raises `ENODATA` and the matcher
+    fails closed). Stamping it here keeps the arrange step faithful on both.
+    """
+
+    setxattr = getattr(os, "setxattr", None)
+    if setxattr is None:
+        return
+    try:
+        setxattr(path, staging_leases._CAPTURE_MARKER, slot_id.encode("ascii"))
+    except OSError:
+        # A filesystem without xattr support; the device/inode proof is the
+        # fallback there, which is its own test below.
+        pass
 
 
 def _lease_for(path: Path, **overrides) -> StagingLease:
@@ -122,6 +146,7 @@ class TestMatchingCaptureStagingPath:
             path = staging_leases.capture_slot_staging_path(slot_id)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+            _mark_capture_slot(path, slot_id)
             return path
 
         return build

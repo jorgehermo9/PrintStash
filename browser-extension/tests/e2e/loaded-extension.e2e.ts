@@ -8,7 +8,12 @@ interface LoadedExtensionElement {
 interface LoadedExtensionBrowser {
   $(selector: string): LoadedExtensionElement;
   execute<Result>(script: () => Result): Promise<Result>;
-  getCapabilities(): Promise<{ browserName?: string }>;
+  /**
+   * WebdriverIO 9 exposes the browser under test as a flag rather than through
+   * the `getCapabilities()` call earlier versions had. Reading the flag also
+   * cannot drift with a capability name.
+   */
+  isFirefox: boolean;
   installAddOn(path: string | undefined, temporary: boolean): Promise<string>;
   url(destination: string | undefined): Promise<void>;
 }
@@ -21,8 +26,7 @@ declare const chrome: {
 
 describe("loaded extension", () => {
   it("installs the manifest and opens a popup extension context", async () => {
-    const capabilities = await browser.getCapabilities();
-    if (capabilities.browserName === "firefox") {
+    if (browser.isFirefox) {
       const addOnId = await browser.installAddOn(process.env.PRINTSTASH_EXTENSION_XPI, true);
       assert.equal(addOnId, "printstash-model-importer@printstash.local");
       await browser.url("about:debugging#/runtime/this-firefox");

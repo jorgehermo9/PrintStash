@@ -808,6 +808,35 @@ class TestSubscribe:
         assert websocket.pings >= 1
 
     @pytest.mark.asyncio
+    async def test_yields_between_pings_on_an_idle_connection(self) -> None:
+        stop = asyncio.Event()
+        websocket = _FakeWebSocket([])
+        client = MoonrakerClient(
+            MoonrakerConfig(BASE_URL, None), websocket_connector=_connector(websocket)
+        )
+
+        async def on_status(_status: dict[str, Any]) -> None:
+            raise AssertionError("no status was delivered")
+
+        task = asyncio.get_running_loop().create_task(
+            client.subscribe(on_status, stop_event=stop)
+        )
+        # Several scheduler hops with the loop idle. If the receive/ping loop
+        # does not yield, nothing else on this event loop ever runs again — on
+        # Python 3.12+, `asyncio.wait_for` awaits the coroutine directly rather
+        # than wrapping it in a task, so a `recv()` that finishes without
+        # suspending stopped providing the hop this loop used to rely on. The
+        # symptom was the whole suite hanging on 3.13; in production it would be
+        # the API process spinning at 100% and ignoring shutdown.
+        for _ in range(20):
+            await asyncio.sleep(0)
+        stop.set()
+        await asyncio.wait_for(task, timeout=5.0)
+        await client.aclose()
+
+        assert websocket.pings >= 2
+
+    @pytest.mark.asyncio
     async def test_returns_immediately_when_asked_to_stop_before_connecting(
         self,
     ) -> None:
