@@ -60,15 +60,15 @@ jobs:
       - name: Test autonomous package
         run: .venv/bin/pytest tests -q
 
-      # The backend gate measures `app/` only, so printstash_core had no floor at all
-      # and drifted to ~82%. This floor is set just under the measured baseline: it
-      # stops the drift now, and ratchets up as the P2 coverage work lands.
+      # The backend gate measures `app/` only, so printstash_core had no floor at
+      # all and had drifted to ~82%. Ratcheted, never lowered: this sits just under
+      # the measured value (2026-08: 87%) so a regression fails and drift does not.
       - name: Coverage floor for the autonomous package
         if: matrix.python == '3.11' && matrix.resolution == 'highest'
         run: |
           .venv/bin/pip install pytest-cov
           .venv/bin/pytest tests -q \
-            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=80
+            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=86
 
       - name: Lint autonomous package
         run: .venv/bin/ruff check src tests

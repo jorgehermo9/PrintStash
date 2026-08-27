@@ -10,6 +10,7 @@ from printstash_core.gcode import (
     MaterialRequirement,
     parse,
     parse_duration,
+    parser,
     to_legacy_dict,
 )
 
@@ -101,3 +102,157 @@ def test_parse_duration(value: str, expected: int | None) -> None:
 
 def test_missing_file_returns_empty_metadata(tmp_path: Path) -> None:
     assert parse(tmp_path / "missing.gcode") == GcodeMetadata()
+
+
+class TestParseHelpers:
+    """The small conversions that turn slicer comment text into typed values.
+
+    Slicer comments are free text written by five different programs, so every one of
+    these has to answer "I could not tell" rather than guess. A wrong number here becomes
+    a wrong cost estimate or a wrong print time on a card, which nobody checks.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param("1h 30m", 5400, id="hours-and-minutes"),
+            pytest.param("2d", 172800, id="days"),
+            pytest.param("45s", 45, id="seconds"),
+            pytest.param("90", 90, id="bare-seconds"),
+            pytest.param("90.7", 90, id="fractional-seconds"),
+        ],
+    )
+    def test_reads_a_duration(self, value: str, expected: int) -> None:
+        assert parser.parse_duration(value) == expected
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("not a duration", id="prose"),
+            pytest.param("-30", id="negative"),
+        ],
+    )
+    def test_says_it_cannot_read_a_duration(self, value: str) -> None:
+        assert parser.parse_duration(value) is None
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param("1.5", 1.5, id="plain"),
+            pytest.param("  -2.25 mm", -2.25, id="signed-with-unit"),
+            pytest.param("+3", 3.0, id="explicit-plus"),
+        ],
+    )
+    def test_reads_a_number_out_of_a_comment(self, value: str, expected: float) -> None:
+        assert parser._to_float(value) == expected
+
+    @pytest.mark.parametrize("value", [None, "no digits here"], ids=["absent", "prose"])
+    def test_says_it_cannot_read_a_number(self, value: str | None) -> None:
+        assert parser._to_float(value) is None
+
+    def test_reads_the_first_of_a_comma_separated_integer_list(self) -> None:
+        # Multi-tool slicers write one value per tool; the first is the one the
+        # single-value fields describe.
+        assert parser._to_int("3,4,5") == 3
+
+    @pytest.mark.parametrize("value", [None, "abc"], ids=["absent", "prose"])
+    def test_says_it_cannot_read_an_integer(self, value: str | None) -> None:
+        assert parser._to_int(value) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        ["1", "true", "yes", "on", "enabled", "generated", "TRUE"],
+        ids=["one", "true", "yes", "on", "enabled", "generated", "uppercase"],
+    )
+    def test_reads_every_spelling_of_yes(self, value: str) -> None:
+        assert parser._to_bool(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        ["0", "false", "no", "off", "disabled", "none", "not generated"],
+        ids=["zero", "false", "no", "off", "disabled", "none", "not-generated"],
+    )
+    def test_reads_every_spelling_of_no(self, value: str) -> None:
+        assert parser._to_bool(value) is False
+
+    @pytest.mark.parametrize("value", [None, "maybe"], ids=["absent", "unknown"])
+    def test_says_it_cannot_read_a_flag(self, value: str | None) -> None:
+        # Guessing `False` here would silently claim a feature was off.
+        assert parser._to_bool(value) is None
+
+    @pytest.mark.parametrize(
+        ("version", "expected"),
+        [
+            pytest.param("OrcaSlicer 2.1", "OrcaSlicer", id="orca"),
+            pytest.param("PrusaSlicer 2.7", "PrusaSlicer", id="prusa"),
+            pytest.param("BambuStudio 1.9", "BambuStudio", id="bambu"),
+            pytest.param("SuperSlicer 2.5", "SuperSlicer", id="super"),
+            pytest.param("Cura_SteamEngine 5.6", "Cura", id="cura"),
+        ],
+    )
+    def test_names_the_slicer_from_its_version_string(
+        self, version: str, expected: str
+    ) -> None:
+        assert parser._slicer_name(version) == expected
+
+    @pytest.mark.parametrize(
+        "version", [None, "SomeNewSlicer 1.0"], ids=["absent", "unknown"]
+    )
+    def test_says_it_does_not_recognise_a_slicer(self, version: str | None) -> None:
+        assert parser._slicer_name(version) is None
+
+
+class TestParseWindow:
+    """Only the head and tail of a file are read, because a G-code file is huge.
+
+    Slicers write their metadata as comments at the very top and the very bottom, so the
+    parser reads two bounded windows rather than the whole file. A 2 GB print would
+    otherwise be 2 GB of memory to learn its layer height.
+    """
+
+    def test_reads_metadata_from_the_end_of_a_large_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "big.gcode"
+        padding = b"G1 X1 Y1 E1\n" * 200_000
+        path.write_bytes(
+            b"; generated by OrcaSlicer 2.1\n" + padding + b"; layer_height = 0.2\n"
+        )
+
+        metadata = parser.parse(path)
+
+        assert metadata.slicer_name == "OrcaSlicer"
+        assert metadata.layer_height_mm == 0.2
+
+    def test_ignores_the_middle_of_a_large_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "middle.gcode"
+        path.write_bytes(
+            b"; generated by OrcaSlicer 2.1\n"
+            + b"G1 X1 Y1 E1\n" * 200_000
+            + b"; layer_height = 0.9\n"
+            + b"G1 X1 Y1 E1\n" * 200_000
+            + b"; nozzle_diameter = 0.4\n"
+        )
+
+        metadata = parser.parse(path)
+
+        # The buried value is deliberately not found: reading it would mean
+        # reading the whole file.
+        assert metadata.layer_height_mm is None
+
+    def test_survives_bytes_that_are_not_valid_utf8(self, tmp_path: Path) -> None:
+        path = tmp_path / "binary.gcode"
+        path.write_bytes(
+            b"; generated by OrcaSlicer 2.1\n\xff\xfe\n; layer_height = 0.2\n"
+        )
+
+        # A slicer profile name can carry any encoding somebody typed; a decode
+        # error must not lose the rest of the metadata.
+        assert parser.parse(path).slicer_name == "OrcaSlicer"
+
+    def test_converts_curas_metres_to_millimetres(self, tmp_path: Path) -> None:
+        path = tmp_path / "cura.gcode"
+        path.write_bytes(b"; generated by Cura_SteamEngine 5.6\n;Filament used: 1.5m\n")
+
+        # Cura reports metres while every other slicer reports millimetres, and
+        # the stored field is millimetres.
+        assert parser.parse(path).filament_length_mm == 1500
