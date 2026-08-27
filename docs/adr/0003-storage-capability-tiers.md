@@ -110,9 +110,17 @@ reports the backend as `local` and behaves as though every guarantee holds.
 
 Therefore `LocalStorageBackend.capabilities()` is **probed at
 `ensure_setup()`**, not hardcoded: attempt a hardlink inside the data dir,
-attempt an `O_DIRECTORY` fsync on it, and detect a network or FUSE filesystem
-(`statfs` `f_type`, `/proc/mounts`) whose inode numbers may not survive a
-remount. A mounted-share install then reports Guarded or Unguarded honestly
+attempt an `O_DIRECTORY` fsync on it, and classify the filesystem beneath it.
+
+The classifier already exists. `external_library.detect_fs_kind()` reads
+`/proc/self/mountinfo` and returns `local` / `network` / `unknown`, written for
+exactly the analogous reason — *"real-time watching only works on local
+filesystems; on network mounts the kernel does not deliver inotify events"* — and
+it already treats fuse and virtiofs as `unknown`. It moves to a shared module and
+gains a second caller. **This ADR adds no new filesystem-detection machinery; it
+notices that PrintStash already distrusts network mounts in one subsystem and
+extends that distrust to the one where the stakes are bytes rather than
+latency.** A mounted-share install then reports Guarded or Unguarded honestly
 instead of claiming Verified.
 
 This is the highest-value item in the ADR for existing installs, it needs no
@@ -683,6 +691,130 @@ The local backend is excluded for the reasons in decision 1, which no upstream
 release can change. So OpenDAL's scope is exactly the backends PrintStash has no
 adapter for, and that scope is not expected to grow.
 
+### 10. The provider picker is category-first, and the form is server-described
+
+A flat selector is already ~15 rows and grows with every provider. It is also
+the wrong shape: it makes the operator scan an undifferentiated list, then
+discover the safety consequence only after committing to a form.
+
+So the picker is **two-step, grouped by transport family** — which is the same
+axis that determines tier, so navigating the picker teaches the guarantee story
+instead of springing a badge at the end:
+
+```
+Step 1 — category (5 cards, no scrolling)
+  ┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┐
+  │ This machine │ S3-compatible│  Nextcloud   │   NAS over   │    Cloud     │
+  │              │object storage│  & WebDAV    │     SFTP     │  providers   │
+  │  ✓ Verified  │  ✓ Verified  │ ⚠ Unguarded  │ ⚠ Unguarded  │  ~ Guarded   │
+  └──────────────┴──────────────┴──────────────┴──────────────┴──────────────┘
+
+Step 2 — provider within the family (2–6 rows, each with its tier badge)
+Step 3 — the generated form for that provider
+```
+
+The tier badge appears at **step 2, before** the operator fills anything in.
+"Generic WebDAV" sits last inside its own family as the typed escape valve.
+
+This composes existing `components/ui/` primitives only — `card`, `tabs`,
+`badge`, `input`, `modal` — so it needs **no new primitive**, which matters given
+`DESIGN.md`'s compose-don't-hand-roll rule and its zero-counts. A searchable
+combobox would have to be built from scratch; a category grid does not.
+
+The form is **described by the server**, not coded per provider:
+
+```
+GET /api/v1/storage/providers
+[
+  { "id": "nextcloud", "label": "Nextcloud", "category": "webdav",
+    "blurb": "Store the library in a Nextcloud folder.",
+    "expected_tier": "unguarded",
+    "consequences": ["Two simultaneous uploads of the same revision …"],
+    "docs_url": "…/storage-providers.md#nextcloud",
+    "fields": [
+      { "name": "server_url", "label": "Nextcloud URL", "type": "url",
+        "help": "e.g. https://cloud.example.com", "secret": false,
+        "required": true },
+      { "name": "app_password", "label": "App password", "type": "string",
+        "help": "Settings → Security → Create new app password.",
+        "secret": true, "required": true }
+    ] }
+]
+```
+
+Field metadata is projected straight from the provider's pydantic model —
+`title`, `description`, `SecretStr`-ness, required-ness. **Adding a provider is a
+backend-only change**: no frontend edit, no new route, no new translation key
+beyond the strings the model already carries. `secret: true` fields render masked
+and are write-only; the API never returns a stored secret's value, only whether
+one is set.
+
+### 11. Documentation is generated from the catalogue, and "provider" gets disambiguated
+
+**A naming collision exists today.** `docs/provider-support.md` is titled
+*"Printer Provider Support"*. Introducing storage providers overloads a word that
+`CONTEXT.md` already flags as ambiguous for "Backend". Therefore `CONTEXT.md`
+gains binding entries — **Storage provider**, **Transport**, and the three tier
+names — and the unqualified word "provider" continues to mean the printer kind,
+matching existing usage. Storage code says "storage provider" in full.
+
+Documentation lands in five places, each with a distinct audience:
+
+| Where | Audience | Content |
+|---|---|---|
+| **`docs/storage-providers.md`** *(new)* | operators deploying | one section per storage provider: env vars, a worked example, its tier and what that implies, setup gotchas |
+| `CONTEXT.md` | contributors and agents | binding vocabulary: Storage provider, Transport, Verified/Guarded/Unguarded |
+| `docs/known-limitations.md` | operators diagnosing | the network-mount warning **currently absent**, plus per-tier caveats |
+| `UPGRADE.md` | upgraders | `VAULT_STORAGE_BACKEND` → `VAULT_STORAGE_PROVIDER` alias; the dropped `s3:CreateBucket` / `s3:PutLifecycleConfiguration` grants |
+| `.env.example` | first-time setup | the new variables, commented |
+
+The per-provider table in `docs/storage-providers.md` is **generated from
+`PROVIDERS`**, with a `repo/` test asserting the document matches the registry —
+the same anti-drift pattern as `test_openapi_contract.py` and
+`test_ci_workflows.py`. That makes documentation the **sixth** consumer of the one
+declaration, and the only one a human could otherwise forget to update.
+
+Each provider section states its tier and consequences in the operator's terms,
+generated from the same per-axis table as the boot log and the UI. One source, so
+the docs cannot promise what the probe denies.
+
+### 12. External libraries are explicitly out of scope, and the ADR records why
+
+`ExternalLibrary` does **not** get storage providers for free, and mostly should
+not want them.
+
+How it works today: the source bytes are read with raw POSIX calls — `os.walk`,
+`Path.stat()`, `open()` — against `library.root_path`, a local absolute path.
+`get_backend()` is used only for **derived** artifacts (the thumbnail written
+through `create_bytes` + `record_creation`), which already live in vault storage.
+Per `CONTEXT.md`, the folder is the source of truth and *"PrintStash never
+overwrites or deletes a linked file's bytes"*.
+
+That asymmetry is why most of this ADR does not apply: with no writes to the
+source and trash/GC skipping external blobs, the write-side safety protocol has
+nothing to protect. A remote external library therefore needs only `list` /
+`stat` / `read`, which every transport provides.
+
+Three things block it regardless, and they are the actual scope of the follow-up:
+
+1. **`File.path` is an absolute filesystem path.** A remote library needs a
+   storage key plus a provider reference, which changes the meaning of `path` and
+   `is_external` — a data-model change with a migration, not a seam reuse.
+2. **Write-back genuinely writes.** `ingestion.resolve_write_target` routes
+   uploads *into* a library folder, collision-safe today because the local
+   backend only ever adds. On a non-Verified transport that guarantee is gone, so
+   write-back must be gated by tier exactly as vault writes are.
+3. **Watch mode cannot exist.** Real-time watching is already impossible on
+   network mounts (`ExternalLibraryWatchMode` documents precisely this), and over
+   WebDAV or SFTP there is no event mechanism at all — such a library is
+   scheduled-scan-only, and `AUTO`/`EVENTS` become meaningless for it.
+
+**Decision:** the provider catalogue is defined as storage-role-agnostic so that
+`ExternalLibrary` can gain an optional provider reference later, and nothing in
+decisions 1–11 assumes the vault is the only consumer. Remote external libraries
+are a separate ADR and a separate issue. Recorded here so the next reader does
+not mistake the omission for an oversight.
+
 ## Consequences
 
 **Gained**
@@ -695,8 +827,19 @@ adapter for, and that scope is not expected to grow.
   cannot drift apart.
 - **A uniform provider catalogue for every backend, including the two we already
   have.** Env var names, the runtime overlay, the Settings form, the docs table,
-  and the tier badge are all generated from one declaration, so adding a backend
-  is a backend-only change and the five surfaces cannot disagree.
+  the tier badge, and `docs/storage-providers.md` are all generated from one
+  declaration, so adding a storage provider is a backend-only change and the six
+  surfaces cannot disagree — with a `repo/` test enforcing it.
+- **`CONTEXT.md` gains the vocabulary** (Storage provider, Transport, and the
+  three tier names), which the cloud seam will need whether or not OpenDAL ever
+  lands.
+
+**Deliberately not gained**
+
+- Remote external libraries. `ExternalLibrary` reads its source bytes with raw
+  POSIX calls against a local path and uses `get_backend()` only for derived
+  thumbnails; making it provider-aware is a data-model change plus a write-back
+  tier gate plus the loss of watch mode. Decision 12 records the scope.
 
 **Accepted costs**
 
@@ -772,8 +915,15 @@ work it authorises carries these obligations:
   warning-table row. Provider registry: every `StorageProvider` has a spec, every
   spec's model round-trips through the config/secrets columns, and every
   `transport()` produces a non-empty root.
-- `repo/` — one invariant test that every enum member appears in `PROVIDERS`, so
-  a new provider cannot ship without its spec, docs anchor, and expected tier.
+- `repo/` — every `StorageProvider` member appears in `PROVIDERS`, and
+  `docs/storage-providers.md` matches the registry, so a new storage provider
+  cannot ship without its spec, docs section, and expected tier.
+- `integration/` — `GET /api/v1/storage/providers` returns a field descriptor per
+  provider, never returns a secret's value, and rejects a write to an unverified
+  provider without the flag.
+- `frontend/src/**/__tests__/` — the picker renders categories from the API
+  response and shows a tier badge before the form, with **no** provider names
+  hard-coded in the component.
 - `integration/` — the ledger's insert-then-write ordering, the orphan sweep's
   refusal to touch committed rows, and the boot gate's refusal without the flag.
 - `contract/` — each supported OpenDAL scheme against a real server over a
