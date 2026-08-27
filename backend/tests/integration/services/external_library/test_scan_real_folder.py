@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
 from sqlmodel import Session
 
 from app.db.models import (
@@ -29,17 +28,25 @@ from tests.integration.services.external_library._helpers import (
     enable_feature,
     external_files,
 )
-from tests.paths import TESTDATA_DIR
+from tests.paths import TESTDATA_DIR, require_fixtures
 
 # Defaults to the repo's ``testdata/`` folder; override with PRINTSTASH_TEST_NAS_DIR.
 _REPO_TESTDATA = TESTDATA_DIR
 
 
-def _real_nas_dir() -> Path | None:
+def _real_nas_dir() -> Path:
+    """The folder to scan: `testdata/` by default, overridable for a bigger corpus.
+
+    Not optional. `testdata/` is committed, so it is always there, and the previous
+    `skipif` meant this test — the only one that runs the scanner over real slicer
+    output rather than synthetic files — vanished from any run where the check went
+    wrong, silently.
+    """
     env = os.environ.get("PRINTSTASH_TEST_NAS_DIR")
     if env:
         return Path(env)
-    return _REPO_TESTDATA if _REPO_TESTDATA.is_dir() else None
+    require_fixtures(_REPO_TESTDATA)
+    return _REPO_TESTDATA
 
 
 def _supported_files(root: Path) -> list[Path]:
@@ -54,10 +61,6 @@ def _supported_files(root: Path) -> list[Path]:
 
 
 class TestScanLibrary:
-    @pytest.mark.skipif(
-        _real_nas_dir() is None,
-        reason="no testdata/ folder and PRINTSTASH_TEST_NAS_DIR unset",
-    )
     def test_scan_real_world_folder(self, tmp_path: Path, db_session: Session) -> None:
         """Scan the engine against real STL/3MF/OBJ/g-code files (repo ``testdata/``).
 

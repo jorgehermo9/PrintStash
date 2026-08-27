@@ -25,3 +25,22 @@ ALEMBIC_INI = BACKEND_DIR / "alembic.ini"
 ALEMBIC_DIR = BACKEND_DIR / "alembic"
 
 CORE_PACKAGE_ROOT = BACKEND_DIR / "packages" / "printstash-core"
+
+
+def require_fixtures(*paths: Path) -> None:
+    """Fail collection when a committed test fixture is missing.
+
+    These files live in the repository — real slicer output under `testdata/`, real
+    `.bgcode` and `.3mf` under `tests/fixtures/`. Absence means a bad checkout or a
+    deletion, never an environment that legitimately lacks them.
+
+    The alternative, `@pytest.mark.skipif(not path.exists())`, silently removes exactly
+    the tests that exercise real files rather than synthetic ones, and reports the run
+    as green. Raising at import time names the missing file instead.
+    """
+    missing = sorted(str(path) for path in paths if not path.exists())
+    if missing:
+        raise RuntimeError(
+            "committed test fixtures are missing, so the tests that parse real slicer "
+            "output cannot run: " + ", ".join(missing)
+        )

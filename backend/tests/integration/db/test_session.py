@@ -38,7 +38,16 @@ from app.db.session import (
 )
 from app.db.url import normalize_async_database_url, normalize_database_url
 
-_HAS_AIOSQLITE = find_spec("aiosqlite") is not None
+# `aiosqlite` is declared in both the `dev` and `async-db` extras, so absence means a
+# broken environment rather than an optional feature nobody installed. Skipping the
+# async-engine tests on that basis hid them from every `uv sync` that got it wrong —
+# which is how four of them came to be permanently skipped locally before the extras
+# were fixed.
+if find_spec("aiosqlite") is None:
+    raise RuntimeError(
+        "aiosqlite is missing, so the async engine cannot be tested. It is a `dev` "
+        "extra dependency: re-run `uv sync --extra dev --extra full`."
+    )
 
 # --------------------------------------------------------------------------- #
 # SQLite pragmas
@@ -102,7 +111,6 @@ class TestSqliteSessionFactory:
         finally:
             engine.dispose()
 
-    @pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
     @pytest.mark.asyncio
     async def test_optional_sqlite_async_factory_executes_query(self, tmp_path) -> None:
         factory = create_async_session_factory(f"sqlite:///{tmp_path / 'async.sqlite'}")
@@ -151,7 +159,6 @@ class TestSqliteSessionFactory:
         with pytest.raises(AsyncDatabaseCapabilityError, match="async-db"):
             create_async_engine_for_db("sqlite:///:memory:")
 
-    @pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
     def test_async_session_factory_is_a_lazy_singleton(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -206,7 +213,6 @@ class TestSetSqlitePragmas:
 
 
 class TestCreateAsyncEngineForDb:
-    @pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
     def test_create_async_engine_for_db_sqlite(self) -> None:
         engine = create_async_engine_for_db("sqlite:///:memory:")
         try:
@@ -363,8 +369,6 @@ class TestGetAsyncSession:
     async def test_get_async_session_closes_the_session_after_yielding(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        if not _HAS_AIOSQLITE:
-            pytest.skip("requires the async-db extra")
         monkeypatch.setattr(db_session_mod, "_default_async_factory", None)
         monkeypatch.setitem(_overlay, "db_url", "sqlite:///:memory:")
 

@@ -4,6 +4,64 @@ Invoke before any schema change, migration, or query that touches soft-deleted r
 SQLite is the default installation and PostgreSQL is optional, so every rule here
 has to hold on both.
 
+## The regular workflow: changing the schema
+
+The short answer to "do I hand-edit anything?" — **you edit the generated file, you
+never author the DDL.** In a converged repo that edit is small, because autogenerate
+emits only your change: verified, and held by
+`test_models_versus_chain.py::TestAutogenerateIsEmpty`, which fails if
+`--autogenerate` against the chain would emit anything at all.
+
+Adding a nullable column, start to finish:
+
+```bash
+# 1. Change the model. This is the source of truth — `create_all` builds new
+#    installations straight from it.
+$EDITOR app/db/models.py
+
+# 2. Generate. Emits `with op.batch_alter_table(...)` for SQLite, and renders
+#    sqlmodel's types as plain SQLAlchemy ones.
+cd backend && uv run alembic revision --autogenerate -m "add model.notes"
+
+# 3. Read it. Should be one `add_column`. If it is not, something drifted — read
+#    the extra operations before deleting them, they are telling you something.
+$EDITOR alembic/versions/<rev>_add_model_notes.py
+#    Replace the generated docstring with what the change is for.
+
+# 4. Round-trip it.
+uv run alembic upgrade head && uv run alembic downgrade -1 && uv run alembic upgrade head
+
+# 5. Test the behaviour the column exists for, and the migration itself if it
+#    rebuilds a table or touches rows.
+./scripts/test.sh coverage
+```
+
+What each step is actually protecting:
+
+| Step | Without it |
+| --- | --- |
+| 1 before 2 | autogenerate has nothing to compare against and emits an empty migration |
+| 3 | the 890-line convergence migration ships as "add a column" |
+| 3, docstring | the next person debugging an upgrade has your `-m` message and nothing else |
+| 4 downgrade | a rebuild that loses rows on the way back is found by a self-hoster |
+| 5 | see rule 4 below |
+
+**Adding a constraint** — a foreign key, a unique constraint, a column type change —
+is the same five steps plus two, because SQLite rebuilds the table:
+
+```
+3a. Repair first. Autogenerate compares schemas and knows nothing about rows, so
+    a constraint added over data that already violates it is hand-written work.
+3b. Verify after, scoped to what you added.
+```
+
+Both are spelled out under **Repair before you constrain**. The rebuild itself is
+fast — 10 ms per 10,000 rows — and needs foreign keys off, which Alembic's engine
+already leaves off.
+
+**Changing a column's nullability or type** is a rebuild too, so it goes down the
+constraint path, not the column path.
+
 ## Migrations
 
 ### Never hand-write one
@@ -58,9 +116,13 @@ three months. `tests/repo/test_migration_patterns.py` now fails on that shape.
    *Always edit what it generated*, before committing it:
 
    - **Delete what is not your change.** Autogenerate offers every difference it
-     noticed, which on a drifted schema was 890 lines. Keep the operations your change
-     is about. (When the change *is* convergence, keep them all — `6acea2a5e555` kept
-     all 212.)
+     noticed. On a synchronised repo that *is* your change and there is nothing to
+     delete — verified: autogenerate against the current chain emits `pass`, and
+     `test_models_versus_chain.py::TestAutogenerateIsEmpty` keeps it that way. The 890
+     lines and 212 operations that had to be trimmed once were three months of
+     accumulated drift, not a standing review burden. If a generated migration is much
+     bigger than the change you made, that is the signal something drifted — read it,
+     do not trim it blindly.
    - **Write the docstring.** The generated one is the `-m` message. Say what the
      migration is for and what it assumes; a migration is read years later by someone
      debugging an upgrade.

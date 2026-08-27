@@ -121,6 +121,18 @@ def _relative(path: Path) -> str:
     return str(path.relative_to(TESTS_ROOT.parent))
 
 
+def _factory_checked_modules() -> list[Path]:
+    """Test modules the factory rule applies to.
+
+    Filtered rather than skipped. An entry in `CONSTRUCTION_ALLOWED` is a file the
+    rule does not apply to — the builders themselves, the backup harness that seeds a
+    separate engine's schema — so generating a case for it and skipping reports
+    thirteen declined tests where there are none. A skip should mean "this could pass
+    and did not run", and none of these ever could.
+    """
+    return [module for module in _all_test_modules() if not _is_allowed(module)]
+
+
 def _is_allowed(path: Path) -> bool:
     return any(fragment in _relative(path) for fragment in CONSTRUCTION_ALLOWED)
 
@@ -189,7 +201,7 @@ class TestSuiteHygiene:
             "in another directory."
         )
 
-    @pytest.mark.parametrize("module", _test_modules(), ids=_relative)
+    @pytest.mark.parametrize("module", _factory_checked_modules(), ids=_relative)
     def test_rows_are_built_through_the_factories(self, module: Path) -> None:
         """No test file builds a factory-owned row by hand. Every file, no exemptions.
 
@@ -202,10 +214,9 @@ class TestSuiteHygiene:
 
         If a file genuinely cannot use a builder, the answer is a factory that covers
         its case — `printer_config` and the `detached_*` helpers exist because of
-        exactly that — or an entry in `CONSTRUCTION_ALLOWED` with a reason.
+        exactly that — or an entry in `CONSTRUCTION_ALLOWED` with a reason, which
+        removes the file from `_factory_checked_modules()` rather than skipping it.
         """
-        if _is_allowed(module):
-            pytest.skip("this file legitimately constructs rows directly")
         tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
         offenders: set[str] = set()
         for node in ast.walk(tree):
@@ -320,4 +331,56 @@ class TestSuiteHygiene:
             "assertions of one behaviour, name the behaviour instead. If the `and` "
             "is part of a production symbol, the `class Test…` group already "
             "carries the unit's name.\n  " + "\n  ".join(sorted(offenders))
+        )
+
+
+class TestSkips:
+    """No test in this suite skips itself.
+
+    A skip is a run that reports success having verified nothing, and there are only
+    two honest reasons to write one: a resource is missing, or the case does not
+    apply. This suite answers both differently.
+
+    **A missing resource is an error.** `tests/containers.py` starts PostgreSQL and
+    SeaweedFS itself and stops the session with a message when Docker is not there,
+    rather than skipping 26 tests and reporting green. `psutil` replaced
+    `/proc/self/status` so the memory-reclamation assertions run on macOS too, and the
+    mesh corpus defaults to `testdata/` instead of waiting for an environment variable
+    nobody sets.
+
+    **A case that does not apply is not generated.** `test_transport_errors_become_
+    provider_errors` is parametrized over the providers that *have* an injectable
+    transport, and the factory rule over the files it applies to — filtered lists, not
+    `pytest.skip` inside the body. Generating a case and skipping it reports a test
+    that was never written as a test that was declined, and the number can never
+    become a pass.
+
+    `xfail` is out for the same reason, and `skipif` on a platform check is the shape
+    this rule exists to catch: it silently narrows what the maintainer's machine
+    verifies.
+    """
+
+    @pytest.mark.parametrize("module", _all_test_modules(), ids=_relative)
+    def test_no_module_skips_or_xfails(self, module: Path) -> None:
+        source = module.read_text(encoding="utf-8")
+        if module.name == Path(__file__).name:
+            return
+
+        markers = sorted(
+            {
+                marker
+                for marker in (
+                    "pytest.skip(",
+                    "pytest.xfail(",
+                    "mark.skip",
+                    "mark.xfail",
+                )
+                if marker in source
+            }
+        )
+
+        assert not markers, (
+            f"{_relative(module)} uses {', '.join(markers)}. If a resource is missing, "
+            "fail with a message that names it — see tests/containers.py. If the case "
+            "does not apply, do not generate it: filter the parametrize list instead."
         )

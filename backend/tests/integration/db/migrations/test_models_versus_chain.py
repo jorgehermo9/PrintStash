@@ -41,10 +41,13 @@ does not make.
 
 from __future__ import annotations
 
+import warnings
 from collections import Counter
 from pathlib import Path
 
 import pytest
+from alembic.autogenerate import produce_migrations
+from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
 from sqlmodel import SQLModel
 
@@ -229,4 +232,60 @@ class TestStructuralParity:
                 for category, (now, before) in sorted(shrunk.items())
             )
             + ". Lower them here."
+        )
+
+
+class TestAutogenerateIsEmpty:
+    """Alembic itself has nothing left to say about a chain-built database.
+
+    The strongest form of the invariant, and the most direct: rather than comparing
+    schemas ourselves, ask the tool that writes migrations whether it would write one.
+    On a converged database it produces `pass`.
+
+    This is also the reassuring half of the workflow the database skill describes.
+    "Read the generated migration and delete what is not your change" sounds alarming
+    until you know that a synchronised repo generates *only* your change — the 890
+    lines and 212 operations that had to be trimmed once were the accumulated drift of
+    three months, not a standing review burden. Keeping this green is what keeps the
+    next `--autogenerate` small enough to read in one sitting.
+
+    Goes red when a model changes without a migration, or a migration changes the
+    schema in a way `create_all` does not.
+    """
+
+    def test_a_chain_built_database_needs_no_further_migration(
+        self, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        path = tmp_path_factory.mktemp("autogen") / "chain.sqlite"
+        url = f"sqlite:///{path}"
+        command.upgrade(migrate_mod._alembic_config(url), "head")
+
+        engine = create_engine(url)
+        try:
+            with engine.connect() as connection:
+                with warnings.catch_warnings():
+                    # The deliberate files <-> models cycle; see _all_table_names.
+                    warnings.filterwarnings(
+                        "ignore", message="Cannot correctly sort tables.*"
+                    )
+                    context = MigrationContext.configure(
+                        connection,
+                        opts={
+                            "compare_type": True,
+                            "compare_server_default": True,
+                            "target_metadata": SQLModel.metadata,
+                        },
+                    )
+                    script = produce_migrations(context, SQLModel.metadata)
+        finally:
+            engine.dispose()
+
+        rendered = [
+            str(op)
+            for op in script.upgrade_ops.as_diffs()  # type: ignore[union-attr]
+        ]
+        assert not rendered, (
+            "`alembic revision --autogenerate` would still emit operations against a "
+            "database built by the migration chain, so the two supported "
+            f"installations do not have the same schema: {rendered[:10]}"
         )

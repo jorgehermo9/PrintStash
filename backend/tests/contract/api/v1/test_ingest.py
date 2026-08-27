@@ -43,7 +43,7 @@ from app.core.config import _overlay, settings
 from app.db.models import Collection, File, FileType, Model
 from app.services import import_resolvers, importer
 from tests._env import use_local_storage
-from tests.paths import TESTDATA_DIR
+from tests.paths import TESTDATA_DIR, require_fixtures
 
 # --------------------------------------------------------------------------- #
 # Real fixtures + real-world URLs
@@ -64,10 +64,19 @@ MAKERWORLD_URL = (
 
 
 def _requires(*paths: Path):
-    missing = [p for p in paths if not p.exists()]
-    return pytest.mark.skipif(
-        bool(missing), reason=f"missing real fixture(s): {missing}"
-    )
+    """Assert the fixtures exist, and return a no-op decorator.
+
+    Kept as a decorator so the call sites still read as a declaration of what each
+    test needs, but it fails rather than skips: these files are committed, so a
+    missing one is a broken checkout, and skipping would quietly drop the only tests
+    that parse real slicer output.
+    """
+    require_fixtures(*paths)
+
+    def decorate(target):
+        return target
+
+    return decorate
 
 
 # --------------------------------------------------------------------------- #

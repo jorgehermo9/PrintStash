@@ -71,6 +71,7 @@ METHOD_ARGS: dict[str, tuple] = {
 }
 
 ALL_PROVIDERS = list(PrinterProvider)
+
 REGISTRY = build_provider_registry()
 
 
@@ -81,6 +82,16 @@ def _printer(provider: PrinterProvider, **overrides) -> Printer:
 
 def _build(provider: PrinterProvider):
     return get_provider_client(_printer(provider), registry=REGISTRY)
+
+
+# The providers whose client delegates to an injectable transport. The rest reach the
+# device directly, so there is nothing to make fail on cue — see
+# `test_transport_errors_become_provider_errors`.
+DELEGATING_PROVIDERS = [
+    provider
+    for provider in ALL_PROVIDERS
+    if isinstance(_build(provider), DelegatingProvider)
+]
 
 
 @pytest.mark.parametrize("provider", ALL_PROVIDERS)
@@ -125,30 +136,6 @@ class TestProviderConformance:
                 await getattr(client, method)(*METHOD_ARGS[method])
             assert exc.value.code == "operation_not_supported_for_provider", method
 
-    @pytest.mark.asyncio
-    async def test_transport_errors_become_provider_errors(self, provider):
-        """Client exceptions never leak past the provider boundary."""
-        client = _build(provider)
-        if not isinstance(client, DelegatingProvider):
-            pytest.skip("no delegating client to fault-inject")
-        error = type(client).client_error
-        caps = capabilities_for_provider(provider)
-
-        class Boom:
-            def __getattr__(self, name):
-                async def _raise(*args, **kwargs):
-                    raise error("boom")
-
-                return _raise
-
-        client.client = Boom()
-        for method, capability in _METHOD_CAPABILITY.items():
-            if not caps.supports(capability):
-                continue
-            with pytest.raises(ProviderError) as exc:
-                await getattr(client, method)(*METHOD_ARGS[method])
-            assert exc.value.code, method
-
     def test_methods_are_awaitable(self, provider):
         client = _build(provider)
         for method in [*METHOD_ARGS, "info", "subscribe_status"]:
@@ -167,3 +154,45 @@ class TestProviderRegistry:
         """A new PrinterProvider enum member must be registered and credentialed."""
         assert set(PROVIDERS) == set(ALL_PROVIDERS)
         assert set(FULL_CREDENTIALS) == set(ALL_PROVIDERS)
+
+
+class TestTransportFaults:
+    """What a provider does when its transport raises.
+
+    Its own group rather than a case inside `TestProviderConformance`, because it
+    applies to a different set of providers: only the ones whose client delegates to
+    an injectable transport have a transport to break. The class above is
+    parametrized over every provider, and a member of it could only express that by
+    skipping — which reports a test that was never written as a test that was
+    declined.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider", DELEGATING_PROVIDERS)
+    async def test_transport_errors_become_provider_errors(self, provider):
+        """Client exceptions never leak past the provider boundary.
+
+        Parametrized over `DELEGATING_PROVIDERS` rather than every provider, and
+        `pytest.skip` deliberately not used: a provider with no delegating client has
+        no transport to inject a fault into, so the case does not exist. Generating it
+        and skipping reports a test that was never written as a test that was declined,
+        and the run then counts a skip that can never become a pass.
+        """
+        client = _build(provider)
+        error = type(client).client_error
+        caps = capabilities_for_provider(provider)
+
+        class Boom:
+            def __getattr__(self, name):
+                async def _raise(*args, **kwargs):
+                    raise error("boom")
+
+                return _raise
+
+        client.client = Boom()
+        for method, capability in _METHOD_CAPABILITY.items():
+            if not caps.supports(capability):
+                continue
+            with pytest.raises(ProviderError) as exc:
+                await getattr(client, method)(*METHOD_ARGS[method])
+            assert exc.value.code, method

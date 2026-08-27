@@ -32,7 +32,7 @@ from app.services.ingestion import (
 )
 from app.services.jobs import registry
 from tests._env import use_local_storage
-from tests.paths import TESTDATA_DIR
+from tests.paths import TESTDATA_DIR, require_fixtures
 
 # --------------------------------------------------------------------------- #
 # Real fixtures
@@ -48,8 +48,20 @@ BENCHY_GCODE_A = TESTDATA / "benchy" / "3dbenchy_PLA_1h12m.gcode"
 BENCHY_GCODE_B = TESTDATA / "benchy" / "3dbenchy_PLA_1h13m.gcode"
 
 
-def _requires(path: Path):
-    return pytest.mark.skipif(not path.exists(), reason=f"missing real fixture {path}")
+def _requires(*paths: Path):
+    """Assert the fixtures exist, and return a no-op decorator.
+
+    Kept as a decorator so the call sites still read as a declaration of what each
+    test needs, but it fails rather than skips: these files are committed, so a
+    missing one is a broken checkout, and skipping would quietly drop the only tests
+    that parse real slicer output.
+    """
+    require_fixtures(*paths)
+
+    def decorate(target):
+        return target
+
+    return decorate
 
 
 # --------------------------------------------------------------------------- #

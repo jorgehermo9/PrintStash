@@ -23,14 +23,17 @@ every file processes within a peak-RSS budget instead of OOM-killing the scan.
 
 from __future__ import annotations
 
+import gc
 import os
 import zipfile
 from pathlib import Path
 
+import psutil
 import pytest
 
 from app.core.config import _overlay
 from app.services import mesh_processing
+from tests.paths import TESTDATA_DIR
 
 # mesh_processing lazy-imports trimesh, so importing it above is safe without it;
 # skip the whole module when trimesh itself is unavailable (these build real meshes).
@@ -62,30 +65,17 @@ def _slicer_preview_png(width: int = 8, height: int = 8) -> bytes:
 
 
 # --------------------------------------------------------------------------- #
-# Resident-memory helpers (Linux /proc; skip the memory assertions elsewhere).
+# Resident-memory helper.
+#
+# `psutil` rather than `/proc/self/status`, which is Linux-only and made this skip
+# itself on every macOS machine. Only the corpus budget uses it now: a 2 GB ceiling
+# across every real file is loose enough to be stable, where a 120 MB steady-state
+# bound was not — see `test_analysis_retains_no_mesh_afterwards` for why that one
+# became a reachability assertion instead.
 # --------------------------------------------------------------------------- #
-def _proc_kb(field: str) -> int | None:
-    try:
-        with open("/proc/self/status", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith(field):
-                    return int(line.split()[1])
-    except OSError:
-        return None
-    return None
-
-
-def _rss_kb() -> int | None:
-    """Current resident set size in KB (recedes when memory is returned)."""
-    return _proc_kb("VmRSS:")
-
-
-def _peak_rss_kb() -> int | None:
+def _peak_rss_kb() -> int:
     """High-water resident set size in KB (monotonic)."""
-    return _proc_kb("VmHWM:")
-
-
-_HAVE_PROC_RSS = _rss_kb() is not None
+    return psutil.Process().memory_info().rss // 1024
 
 
 # --------------------------------------------------------------------------- #
@@ -101,6 +91,8 @@ def _write_real_stl(path: Path, *, subdivisions: int) -> int:
 # --------------------------------------------------------------------------- #
 # Real guards (genuine trimesh path, no monkeypatching of the loader).
 # --------------------------------------------------------------------------- #
+
+
 class TestLoadMesh:
     def test_real_over_triangle_mesh_uses_streaming_fallback(
         self, tmp_path: Path, monkeypatch
@@ -173,40 +165,51 @@ class TestLoadMesh:
         assert geometry["bbox_x_mm"] and geometry["bbox_x_mm"] > 0
         assert thumb is not None and thumb.startswith(mesh_processing._PNG_MAGIC)
 
-    @pytest.mark.skipif(not _HAVE_PROC_RSS, reason="needs Linux /proc for RSS")
-    def test_repeated_real_loads_do_not_grow_rss(
+    def test_analysis_retains_no_mesh_afterwards(
         self, tmp_path: Path, monkeypatch
     ) -> None:
+        """`analyze_mesh` leaves no `Trimesh` reachable when it returns.
+
+        This replaces a resident-memory bound, and the bound was the wrong instrument.
+        It asserted that 20 loads grew RSS by under 120 MB, which is a proxy for "the
+        mesh was not retained" and a poor one: RSS is process-wide, an xdist worker has
+        already run hundreds of tests by the time this one starts, and freed memory is
+        not returned to the OS on any schedule the test controls. It measured 393 MB in
+        one full run and passed the next — a coin flip, and one that would have gone on
+        being re-tuned rather than believed.
+
+        Reachability is the actual invariant, and it is deterministic. After a
+        `gc.collect()` the object graph either holds a mesh or it does not; no
+        threshold, no allocator, no tracer.
+        """
         monkeypatch.setitem(_overlay, "mesh_max_load_mb", 0)
         monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 5_000_000)
-        p = tmp_path / "sphere.stl"
-        _write_real_stl(p, subdivisions=6)  # ~80k triangles — a real, non-trivial load
+        path = tmp_path / "sphere.stl"
+        _write_real_stl(path, subdivisions=6)  # ~80k triangles — a real load
 
-        # Warm up: first loads pull in trimesh/numpy machinery and grow the heap once.
-        for _ in range(3):
-            mesh_processing.analyze_mesh(p)
+        geometry, thumb = mesh_processing.analyze_mesh(path)
+        gc.collect()
 
-        baseline = _rss_kb()
-        for _ in range(20):
-            geometry, thumb = mesh_processing.analyze_mesh(p)
-            assert thumb is not None  # real work happened every iteration
-        growth_mb = (_rss_kb() - baseline) / 1024
-
-        # With per-file reclamation, steady-state growth is ~0. A real leak (e.g. the
-        # mesh retained each iteration) would add tens of MB per loop → hundreds over
-        # 20. The 120 MB bound is comfortably between the two.
-        assert growth_mb < 120, (
-            f"RSS grew {growth_mb:.0f} MB over 20 loads — possible leak"
+        assert thumb is not None  # real work happened
+        assert geometry["triangle_count"]
+        retained = [obj for obj in gc.get_objects() if type(obj).__name__ == "Trimesh"]
+        assert not retained, (
+            f"{len(retained)} Trimesh object(s) still reachable after analyze_mesh "
+            "returned — the per-file reclamation that keeps a large library importable "
+            "is not happening"
         )
 
-    @pytest.mark.skipif(
-        not os.environ.get("PRINTSTASH_MESH_CORPUS"),
-        reason="set PRINTSTASH_MESH_CORPUS to a folder of real mesh files",
-    )
     def test_real_corpus_processes_within_memory_budget(self) -> None:
+        """Every real mesh in the repo, processed under one RSS budget.
+
+        Defaults to `testdata/`, which ships real slicer output, so this runs on every
+        machine and in CI. `PRINTSTASH_MESH_CORPUS` still overrides it with a bigger
+        folder — that is what it was for — but it is no longer the difference between
+        the test running and the test not existing.
+        """
         from app.db.models import SUFFIX_TO_FILE_TYPE
 
-        corpus = Path(os.environ["PRINTSTASH_MESH_CORPUS"])
+        corpus = Path(os.environ.get("PRINTSTASH_MESH_CORPUS") or TESTDATA_DIR)
         budget_mb = int(os.environ.get("PRINTSTASH_MESH_RSS_BUDGET_MB", "2048"))
         files = [
             f

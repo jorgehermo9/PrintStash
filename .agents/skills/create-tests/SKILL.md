@@ -340,6 +340,42 @@ A seam that must stay swappable (`StorageBackend`, `SessionFactory`, `RealtimeBu
 fast lane fast. The container is for the provider-specific half, not a replacement
 for the seam.
 
+### Never skip. A skip is not a pass
+
+A skipped test reports success having verified nothing, and a suite that counts skips
+as green gives exactly the confidence it has not earned. This suite has **zero**, and
+`tests/repo/test_test_hygiene.py::TestSkips` keeps it there — `pytest.skip`,
+`skipif`, `xfail` and `mark.skip` all fail the hygiene check.
+
+It had 16, and every one of them was one of two things wearing a skip:
+
+**A missing resource — make it an error.** The run was asked to verify something and
+could not; that is a failure, not an absence. `tests/containers.py` starts PostgreSQL
+and SeaweedFS itself and calls `pytest.exit` with a message naming the prerequisite
+when Docker is not reachable, rather than skipping 26 tests and printing green. The
+same reasoning retired four more:
+
+| Was skipped because | Now |
+| --- | --- |
+| `/proc/self/status` is Linux-only, so the memory-leak assertions skipped on macOS | `psutil`, which reports RSS on both — a memory test nobody runs locally is a memory test that regresses locally |
+| `PRINTSTASH_MESH_CORPUS` unset | defaults to `testdata/`, which is committed; the variable still overrides it with a bigger corpus |
+| a committed fixture might not exist | `tests.paths.require_fixtures()` raises at import, naming the file. These live in the repo: absence is a broken checkout, not an environment |
+| `aiosqlite` might not be installed | it is a declared `dev` extra, so absence is a broken environment — the module now refuses to import |
+
+**A case that does not apply — do not generate it.** Filter the parametrize list.
+`test_transport_errors_become_provider_errors` is parametrized over the providers that
+*have* an injectable transport rather than over all of them and skipping the rest, and
+the factory rule over `_factory_checked_modules()` rather than every module. Generating
+a case and skipping it reports a test that was never written as a test that was
+declined, and that number can never become a pass.
+
+The one legitimate exception is a **lane**, not a skip: a marker that selects a
+subset, deselected by name (`postgres`, `s3`, `slow`, `coverage_gate`). Every one of
+those tests runs somewhere, and the lane table says where.
+
+If you cannot make a test pass, it is a `❌` row in the matrix — visible, in the PR —
+not a skip in the suite.
+
 ## Tier Policy
 
 **"Write tests. Not too many. Mostly integration."** The highest
@@ -534,9 +570,10 @@ section comments. Rules that keep it that way:
   `expect(rows).toEqual([...])` over `toHaveLength` when the content matters.
 - **The name is the matrix row**: `test_<verb phrase>` / `it("<verb
   phrase>")`. No `test_1`, no `test_works`, no `it("should work")`.
-- **No `skip`/`xfail`/`.skip` without an issue URL in the reason**, and no
-  commented-out tests. A test you can't make pass is a `❌` row in the
-  matrix, visible, not a dead block.
+- **No `skip`, `skipif` or `xfail` at all** — see "Never skip" above. A missing
+  resource is an error; a case that does not apply is not generated. A test you
+  cannot make pass is a `❌` row in the matrix, visible, not a dead block, and not a
+  skip.
 
 ### Parametrized tests
 
