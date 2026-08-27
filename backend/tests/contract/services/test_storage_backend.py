@@ -5,28 +5,29 @@ they cannot cover is the protocol: conditional writes, version ids, ETag
 semantics and the exact shape of a `ClientError` are properties of the store, and
 a stub that returns what we expect proves only that we expect it.
 
-The endpoint comes from ``PRINTSTASH_TEST_S3_ENDPOINT`` when it is set and from a
-throwaway SeaweedFS container otherwise, so this runs locally rather than being
-skipped. See ``tests/containers.py``; the whole file skips only when there is no
-endpoint and no Docker.
+The endpoint is a SeaweedFS container started for the run — the only path, so
+this file runs everywhere or the session stops saying why. See
+``tests/containers.py``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
+from io import BytesIO
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import pytest
 
 from app.core.config import _overlay
-from app.services.storage_backend import S3StorageBackend
-from tests.containers import s3_endpoint
+from app.services.storage_backend import S3StorageBackend, StorageCollisionError
+from tests.containers import S3_ACCESS_KEY, S3_SECRET_KEY, s3_endpoint
 
-# The `s3` marker owns the skip: conftest.py resolves the endpoint once per run
-# and skips anything carrying this marker when there is none, so the reason is
-# worded once for every resource-gated file instead of once per file.
+# The `s3` marker is what tells conftest.py this file needs a real endpoint, so
+# the prerequisite is stated once for every resource-gated file rather than
+# re-implemented per file.
 pytestmark = pytest.mark.s3
 
 
@@ -38,12 +39,8 @@ def s3_backend() -> Iterator[S3StorageBackend]:
             "s3_bucket": bucket,
             "s3_endpoint_url": s3_endpoint(),
             "s3_region": "us-east-1",
-            "s3_access_key": os.environ.get(
-                "PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"
-            ),
-            "s3_secret_key": os.environ.get(
-                "PRINTSTASH_TEST_S3_SECRET_KEY", "printstash-secret"
-            ),
+            "s3_access_key": S3_ACCESS_KEY,
+            "s3_secret_key": S3_SECRET_KEY,
         }
     )
     backend = S3StorageBackend()  # creates the bucket (_ensure_bucket)
@@ -60,6 +57,25 @@ def s3_backend() -> Iterator[S3StorageBackend]:
             "s3_secret_key",
         ):
             _overlay.pop(field, None)
+
+
+@pytest.fixture
+def versioned_s3_backend(s3_backend: S3StorageBackend) -> S3StorageBackend:
+    """The same backend against a bucket with object versioning enabled.
+
+    This is the configuration PrintStash's delete path actually supports, and the
+    distinction is load-bearing rather than incidental. `rollback_create` refuses
+    to delete an object it cannot name by immutable version id, so on a bucket
+    without versioning *every* rollback fails closed — which means
+    `verify_destructive_access` raises and no purge can run at all. Both halves are
+    real deployments, so both are tested: this fixture for the supported one, and
+    `TestUnversionedBucket` for what an operator hits without it.
+    """
+    s3_backend._client.put_bucket_versioning(
+        Bucket=s3_backend._bucket,
+        VersioningConfiguration={"Status": "Enabled"},
+    )
+    return s3_backend
 
 
 class TestCaptureUploadSlotKey:
@@ -297,3 +313,289 @@ class TestMoveIn:
         assert s3_backend.exists(key)
         assert s3_backend.read_bytes(key) == b"staged content"
         assert not staged.exists()
+
+
+class TestKeyDerivation:
+    """Where every kind of object lands under the configured prefix.
+
+    These look trivial and are the most consequential methods on the class: the
+    key *is* the object's identity, and every audit, GC sweep and ownership check
+    finds an object by deriving the same key again. A prefix that drops off one of
+    them writes objects the audit cannot see, which reads as missing data rather
+    than as a naming bug — and it stays invisible until somebody enables S3.
+    """
+
+    def test_reports_no_local_path_for_any_key(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        # Callers branch on this to choose between a filesystem operation and an
+        # API call. A path returned here sends a local `open()` at an object store.
+        assert s3_backend.direct_path("anything") is None
+
+    def test_derives_an_artifact_key_that_carries_its_revision(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        key = s3_backend.blob_key("bracket", 2, "part.stl")
+
+        # The version in the path is what lets two revisions of one model coexist.
+        assert key == f"{s3_backend._prefix()}files/bracket/v2/part.stl"
+
+    @pytest.mark.parametrize(
+        ("derive", "expected"),
+        [
+            (lambda b: b.thumbnail_key(7), "thumbs/7.webp"),
+            (lambda b: b.legacy_thumbnail_key(7), "thumbs/7.png"),
+            (lambda b: b.source_cover_key(9), "source-covers/9.webp"),
+            (lambda b: b.capture_upload_slot_key("abc"), "capture-slots/abc"),
+            (lambda b: b.stl_cache_key("a" * 64), f"stl-cache/{'a' * 64}.stl"),
+            (
+                lambda b: b.collection_image_key(3, "hero.webp"),
+                "collection-images/3/hero.webp",
+            ),
+            (lambda b: b.document_file_key(4, "manual.pdf"), "documents/4/manual.pdf"),
+            (
+                lambda b: b.document_image_key(4, "fig.webp"),
+                "document-images/4/fig.webp",
+            ),
+        ],
+    )
+    def test_puts_every_object_kind_in_its_own_namespace(
+        self,
+        s3_backend: S3StorageBackend,
+        derive: Callable[[S3StorageBackend], str],
+        expected: str,
+    ) -> None:
+        # Separate namespaces are what make a prefix-scoped sweep possible: GC
+        # walks `thumbs/` without touching `files/`, so two kinds sharing a prefix
+        # means one sweep deletes the other's objects.
+        assert derive(s3_backend) == f"{s3_backend._prefix()}{expected}"
+
+    def test_keeps_the_legacy_thumbnail_key_distinct_from_the_current_one(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        # Same id, two extensions. They must not collide, or the repair job that
+        # regenerates a `.webp` overwrites the `.png` it is migrating from.
+        assert s3_backend.thumbnail_key(7) != s3_backend.legacy_thumbnail_key(7)
+
+
+class TestConstruction:
+    def test_refuses_to_build_without_a_bucket(self) -> None:
+        _overlay.update(
+            {
+                "s3_endpoint_url": s3_endpoint(),
+                "s3_region": "us-east-1",
+                "s3_access_key": S3_ACCESS_KEY,
+                "s3_secret_key": S3_SECRET_KEY,
+            }
+        )
+        _overlay.pop("s3_bucket", None)
+        try:
+            # Failing at construction is the point: a bucket-less client builds
+            # fine and then addresses every object at `s3://None/...`, which
+            # surfaces as a permission error far from the missing setting.
+            with pytest.raises(RuntimeError, match="VAULT_S3_BUCKET is required"):
+                S3StorageBackend()
+        finally:
+            for field in (
+                "s3_endpoint_url",
+                "s3_region",
+                "s3_access_key",
+                "s3_secret_key",
+            ):
+                _overlay.pop(field, None)
+
+
+class TestRollbackCreate:
+    def test_removes_the_exact_version_the_receipt_names(
+        self, versioned_s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = versioned_s3_backend.create_bytes(b"mine", "rollback-happy.bin")
+
+        assert versioned_s3_backend.rollback_create(receipt) is True
+        assert versioned_s3_backend.object_info(receipt.key) is None
+
+    def test_treats_an_object_that_is_already_gone_as_rolled_back(
+        self, versioned_s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = versioned_s3_backend.create_bytes(b"gone", "rollback-absent.bin")
+        versioned_s3_backend.rollback_create(receipt)
+
+        # Idempotent on purpose: a rollback that ran, crashed before recording,
+        # and ran again must not report failure and leave the caller retrying
+        # forever against an object nobody has.
+        assert versioned_s3_backend.rollback_create(receipt) is True
+
+    def test_removes_only_its_own_version_when_another_writer_added_one(
+        self, versioned_s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = versioned_s3_backend.create_bytes(b"mine", "rollback-replaced.bin")
+        versioned_s3_backend._client.put_object(
+            Bucket=versioned_s3_backend._bucket,
+            Key=receipt.key,
+            Body=b"theirs",
+            Metadata={"printstash-create-token": "somebody-else"},
+        )
+
+        assert versioned_s3_backend.rollback_create(receipt) is True
+
+        # This is what versioning buys. The rollback names its own version, so the
+        # other writer's version survives untouched — where a delete by key would
+        # have destroyed a write this caller never made. The current version is
+        # still theirs.
+        assert versioned_s3_backend.read_bytes(receipt.key) == b"theirs"
+
+
+class TestUnversionedBucket:
+    """What an operator gets on a bucket without object versioning.
+
+    Not a hypothetical: it is the default for a new bucket on most stores, and on
+    SeaweedFS's `mini` mode. `create_bytes` there returns a receipt with no version
+    id, and `rollback_create` will not delete an object it cannot name immutably —
+    so it fails closed, and `verify_destructive_access` refuses to let any purge
+    start.
+
+    That is the safe direction, and it is also a configuration in which PrintStash
+    can never reclaim storage. These two tests exist so the behaviour is a stated
+    constraint rather than something discovered from a support thread; the
+    operator-facing half (telling them to enable versioning) is not implemented.
+    """
+
+    def test_writes_a_receipt_with_no_version_identity(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = s3_backend.create_bytes(b"payload", "unversioned.bin")
+
+        assert receipt.version_id is None
+
+    def test_refuses_to_delete_an_object_it_cannot_name_immutably(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = s3_backend.create_bytes(b"payload", "unversioned-rollback.bin")
+
+        # Fails closed. Deleting by key alone would remove whatever is at that key
+        # now, which after a concurrent write is somebody else's object.
+        assert s3_backend.rollback_create(receipt) is False
+        assert s3_backend.read_bytes(receipt.key) == b"payload"
+
+    def test_blocks_a_purge_from_starting_at_all(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = s3_backend.create_bytes(b"real", "unversioned-target.bin")
+
+        # The probe cannot clean itself up, so the purge refuses to proceed. An
+        # installation on a non-versioned bucket therefore never reclaims storage —
+        # the trade PrintStash makes for never deleting the wrong bytes.
+        with pytest.raises(RuntimeError, match="storage_delete_probe_cleanup"):
+            s3_backend.verify_destructive_access([receipt.key])
+
+
+class TestAdoptExisting:
+    def test_recovers_a_publication_that_crashed_before_its_receipt(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        data = b"published-but-unrecorded"
+        original = s3_backend.create_bytes(data, "adopt-me.bin")
+
+        adopted = s3_backend.adopt_existing(
+            original.key,
+            expected_size=len(data),
+            expected_sha256=hashlib.sha256(data).hexdigest(),
+        )
+
+        # The restart path: the bytes reached S3 and the process died before
+        # writing the row. Adoption is what lets the object be owned afterwards
+        # instead of leaking forever.
+        assert adopted.key == original.key
+        assert adopted.token == original.token
+
+    def test_reports_a_key_that_was_never_published(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        with pytest.raises(FileNotFoundError):
+            s3_backend.adopt_existing(
+                "adopt-missing.bin", expected_size=1, expected_sha256="0" * 64
+            )
+
+    def test_refuses_an_object_whose_size_disagrees(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = s3_backend.create_bytes(b"four", "adopt-size.bin")
+
+        # Adopting on key alone would claim ownership of whatever happens to sit
+        # there, which on a shared bucket is somebody else's object.
+        with pytest.raises(StorageCollisionError):
+            s3_backend.adopt_existing(
+                receipt.key, expected_size=999, expected_sha256="0" * 64
+            )
+
+    def test_refuses_an_object_whose_bytes_disagree(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        data = b"actual-content"
+        receipt = s3_backend.create_bytes(data, "adopt-digest.bin")
+
+        # Same length, different content — the case a size check alone accepts.
+        with pytest.raises(StorageCollisionError):
+            s3_backend.adopt_existing(
+                receipt.key,
+                expected_size=len(data),
+                expected_sha256=hashlib.sha256(b"x" * len(data)).hexdigest(),
+            )
+
+
+class TestReplaceStream:
+    def test_replaces_the_bytes_behind_a_current_receipt(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = s3_backend.create_bytes(b"first", "replace-me.bin")
+
+        replaced = s3_backend.replace_stream(BytesIO(b"second"), receipt)
+
+        assert s3_backend.read_bytes(receipt.key) == b"second"
+        assert replaced.token != receipt.token
+
+    def test_refuses_to_replace_through_a_receipt_that_is_no_longer_current(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = s3_backend.create_bytes(b"first", "replace-stale.bin")
+        s3_backend.replace_stream(BytesIO(b"second"), receipt)
+
+        # The stale receipt still names the right key. Honouring it would let a
+        # slow writer overwrite a newer version it never read.
+        with pytest.raises(StorageCollisionError):
+            s3_backend.replace_stream(BytesIO(b"third"), receipt)
+        assert s3_backend.read_bytes(receipt.key) == b"second"
+
+
+class TestVerifyDestructiveAccess:
+    def test_asks_for_nothing_when_there_is_nothing_to_delete(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        # Called on every purge, including ones with an empty candidate list. A
+        # probe object written for a no-op delete is a leak per sweep.
+        assert s3_backend.verify_destructive_access([]) is None
+
+    def test_proves_it_can_delete_before_deleting_anything(
+        self, versioned_s3_backend: S3StorageBackend
+    ) -> None:
+        receipt = versioned_s3_backend.create_bytes(b"real", "probe-target.bin")
+
+        versioned_s3_backend.verify_destructive_access([receipt.key])
+
+        # The probe writes and removes its own object rather than testing against
+        # the caller's, and it leaves nothing behind — a stranded probe would be
+        # counted by the next audit as an unowned object.
+        assert not [
+            key for key in versioned_s3_backend.list_keys() if "delete-probes" in key
+        ]
+
+
+class TestDestructiveLifecycleFindings:
+    def test_reports_nothing_for_a_bucket_with_no_expiry_rules(
+        self, s3_backend: S3StorageBackend
+    ) -> None:
+        # An expiry rule over the vault prefix silently deletes a user's models on
+        # the object store's own schedule, which no amount of PrintStash-side
+        # retention can prevent. A fresh bucket has none, and the check must say so
+        # rather than raising on a store with no lifecycle API at all.
+        assert s3_backend.destructive_lifecycle_findings() == []

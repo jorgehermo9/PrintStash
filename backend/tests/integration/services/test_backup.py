@@ -13,7 +13,6 @@ a local storage root under ``tmp_path``.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import tarfile
 import threading
@@ -40,7 +39,7 @@ from app.db.models import (
 )
 from app.services.auth import create_access_token
 from app.services.storage_backend import get_backend
-from tests.containers import s3_endpoint
+from tests.containers import S3_ACCESS_KEY, S3_SECRET_KEY, s3_endpoint
 from tests.factories import (
     build_file,
     build_model,
@@ -137,8 +136,8 @@ def _auth_headers(env: BackupEnv) -> dict[str, str]:
 # S3 backup destination (independent from vault storage) — needs a real endpoint
 # ---------------------------------------------------------------------------
 
-# conftest.py resolves the endpoint once per run — the configured one, or a
-# container it starts — and skips anything marked `s3` when there is neither.
+# The `s3` marker tells conftest.py these need a real endpoint; it starts one
+# container per run and stops the session if Docker is not available.
 requires_s3 = pytest.mark.s3
 
 
@@ -152,12 +151,8 @@ def backup_s3_env(backup_env: BackupEnv) -> Iterator[BackupEnv]:
             "backup_s3_bucket": bucket,
             "backup_s3_endpoint_url": s3_endpoint(),
             "backup_s3_region": "us-east-1",
-            "backup_s3_access_key": os.environ.get(
-                "PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"
-            ),
-            "backup_s3_secret_key": os.environ.get(
-                "PRINTSTASH_TEST_S3_SECRET_KEY", "printstash-secret"
-            ),
+            "backup_s3_access_key": S3_ACCESS_KEY,
+            "backup_s3_secret_key": S3_SECRET_KEY,
         }
     )
     # First call to _get_backup_s3() lazily creates the bucket via boto3's

@@ -68,10 +68,9 @@ dev = [
     "pytest-randomly>=3.15",
     "pyright>=1.1.403",
     "ruff>=0.8",
-    # Starts a throwaway PostgreSQL and SeaweedFS for the `postgres`- and
-    # `s3`-marked tests when no endpoint is configured, so a local `full` run
-    # covers the dialect and object-store contracts instead of skipping them.
-    # Optional at runtime: without a Docker daemon those tests skip as before.
+    # Provides the real PostgreSQL and SeaweedFS the `postgres`- and `s3`-marked
+    # tests run against. There is no second path: see `tests/containers.py`.
+    # Without a Docker daemon those tests skip, naming the prerequisite.
     "testcontainers[postgres]>=4.9,<5",
     "wsproto>=1.3,<2",
     "ty>=0.0.1",
@@ -87,8 +86,8 @@ markers = [
     "contract: our client against a contract-enforcing fake over a real loopback socket (lane: contract)",
     "e2e: the whole app over ASGITransport against the fakes (lane: e2e)",
     # Resources. These gate a subset *inside* a tier and skip when the resource is absent.
-    "postgres: needs a real PostgreSQL at PRINTSTASH_TEST_POSTGRES_URL",
-    "s3: needs a real S3-compatible endpoint at PRINTSTASH_TEST_S3_ENDPOINT",
+    "postgres: runs against a real PostgreSQL container (tests/containers.py)",
+    "s3: runs against a real SeaweedFS container (tests/containers.py)",
     "slow: large real fixtures or long simulations; excluded from the fast lane",
 ]
 

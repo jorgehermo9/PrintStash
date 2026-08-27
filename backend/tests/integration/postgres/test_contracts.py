@@ -6,9 +6,8 @@ column, a concurrent-write conflict and a migration's rendered SQL all behave
 differently on PostgreSQL, and every one of those differences is invisible until
 somebody self-hosts on it.
 
-The server comes from ``PRINTSTASH_TEST_POSTGRES_URL`` when it is set (CI's
-``services:`` block) and from a throwaway container otherwise, so a local run
-covers this instead of skipping it. See ``tests/containers.py``.
+The server is a container started for the run — the only path, so this file runs
+everywhere or the session stops saying why. See ``tests/containers.py``.
 """
 
 from __future__ import annotations
@@ -61,8 +60,6 @@ from tests.paths import ALEMBIC_INI
 @pytest.fixture(scope="module")
 def postgres_engine() -> Iterator:
     url = postgres_url()
-    if not url:
-        pytest.skip("no real PostgreSQL available")
     run_migrations(url)
     engine = create_engine(normalize_database_url(url), pool_pre_ping=True)
     try:
@@ -153,10 +150,7 @@ class TestCrud:
 class TestAsyncEngine:
     @pytest.mark.asyncio
     async def test_psycopg_async_engine_executes_against_real_postgres(self) -> None:
-        url = postgres_url()
-        if not url:
-            pytest.skip("no real PostgreSQL available")
-        engine = create_async_engine_for_db(url)
+        engine = create_async_engine_for_db(postgres_url())
         try:
             async with AsyncSession(engine) as session:
                 result = await session.execute(text("SELECT 1"))

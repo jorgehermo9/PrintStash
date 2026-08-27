@@ -67,21 +67,16 @@ from tests import containers  # noqa: E402
 
 _TIER_MARKERS = {"contract": "contract", "e2e": "e2e"}
 _RESOURCE_DIRS = {"postgres": "postgres"}
-# Each resource names the variable that configures it and the resolver that gets
-# one — an env var if the operator set it, else a throwaway container, else
-# `None`. See `tests/containers.py` for why that order.
+# Each resource marker names the service it needs. Containers are the only path
+# and their absence is an error rather than a skip — see `tests/containers.py`.
 _RESOURCES = {
-    "postgres": ("PRINTSTASH_TEST_POSTGRES_URL", "PostgreSQL", containers.postgres_url),
-    "s3": (
-        "PRINTSTASH_TEST_S3_ENDPOINT",
-        "an S3 endpoint (SeaweedFS)",
-        containers.s3_endpoint,
-    ),
+    "postgres": containers.POSTGRES_RESOURCE,
+    "s3": containers.S3_RESOURCE,
 }
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Mark the tiers that have their own lane, and skip what has no resource.
+    """Mark the tiers that have their own lane, and refuse to run without a service.
 
     The tier of a test is the directory it lives in, so the marker is derived from the
     path — never from the filename. ``unit`` and ``integration`` get no marker at all:
@@ -89,15 +84,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     heuristic (``*_integration.py``, ``"migration" in name``) silently mis-tiered any
     file that did not happen to match.
 
-    ``postgres`` and ``s3`` are *resource* markers, not tiers: they gate a subset inside
-    a tier. Each resolves its resource on demand — the configured endpoint, or a
-    container started for the run — and skips only when neither is available, so a
-    contributor with Docker runs the same tests CI does and one without still gets a
-    green suite.
-
-    The resolution happens here rather than in a fixture because it must be settled
-    before the skip decision, and it happens only for markers a *selected* test
-    carries, so a run that touches neither resource starts no container.
+    ``postgres`` and ``s3`` are *resource* markers, not tiers: they gate a subset
+    inside a tier and get their service from a container. If a selected test carries
+    one and Docker is not running, the **session stops here** rather than skipping —
+    a green run with those tests quietly absent verified none of what it claimed.
+    Checking at collection means the failure arrives before any test runs, naming
+    the prerequisite once instead of twenty-one times.
     """
     # Markers first, in their own pass: the `postgres` marker comes from the
     # *directory* rather than a `pytestmark`, so computing what is needed before
@@ -108,19 +100,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if directory in parts:
                 item.add_marker(getattr(pytest.mark, marker))
 
-    needed = {
-        marker
-        for marker in _RESOURCES
-        if any(marker in item.keywords for item in items)
-    }
-    for marker in sorted(needed):
-        env_var, resource, resolve = _RESOURCES[marker]
-        if resolve() is not None:
-            continue
-        reason = containers.unavailable_reason(env_var, resource)
-        for item in items:
-            if marker in item.keywords:
-                item.add_marker(pytest.mark.skip(reason=reason))
+    for marker, resource in sorted(_RESOURCES.items()):
+        if any(marker in item.keywords for item in items):
+            containers.require_docker(resource)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

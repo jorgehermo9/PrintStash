@@ -119,16 +119,18 @@ works end to end through the real app (and, for UI features, through
 
 ### CI
 
-Per-PR jobs live in `.github/workflows/ci.yml` (backend + coverage gate,
-`storage-s3`/SeaweedFS, frontend, e2e-real, security, migration-upgrade, docker).
+Per-PR jobs live in `.github/workflows/ci.yml` (backend + coverage gate, frontend,
+e2e-real, security, migration-upgrade, docker). The PostgreSQL and SeaweedFS
+contracts have no job of their own any more: the `backend` job's `full` lane runs
+them, because `backend/tests/containers.py` starts both services itself.
 A `schedule` (nightly) + `workflow_dispatch` re-runs the whole gauntlet as a
 comprehensive off-peak / on-demand gate. Backend coverage is gated at
 `--cov-fail-under=95`; frontend vitest thresholds (`vite.config.ts`) are an
-informative floor for now. The `backend` job runs without a live S3-compatible
-endpoint, so `S3StorageBackend` (`app/services/storage_backend.py`) and the
-S3 branches of `app/services/backup.py` are marked `# pragma: no cover` —
-they're validated for real against SeaweedFS in the separate `storage-s3` job,
-which doesn't feed the coverage gate.
+informative floor for now. The `backend` job now starts a real SeaweedFS
+through `backend/tests/containers.py`, so `S3StorageBackend`
+(`app/services/storage_backend.py`) and the S3 branches of
+`app/services/backup.py` execute under the coverage gate rather than being
+excluded from it.
 
 ## API changes
 

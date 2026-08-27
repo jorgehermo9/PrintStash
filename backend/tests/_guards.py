@@ -83,10 +83,11 @@ def _blocked(node_id: str, what: str, target: object) -> RealNetworkAccess:
     )
 
 
-# Resource markers *mean* "this test needs a real server". They gate a subset
-# inside a tier and skip themselves when the resource is absent, so exempting
-# them is narrow and self-limiting: without a `PRINTSTASH_TEST_S3_ENDPOINT` the
-# test does not run at all, and with one it must be allowed to reach it.
+# Resource markers *mean* "this test needs a real server", so exempting them from
+# the network guard is the point rather than a loophole: the server is a container
+# `tests/containers.py` started for the run, and a test that may not reach it
+# cannot assert anything about it. The exemption stays narrow because the markers
+# do — two of them, both naming a service the suite owns.
 _RESOURCE_MARKERS = frozenset({"postgres", "s3"})
 
 

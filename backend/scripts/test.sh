@@ -25,9 +25,11 @@ Anything after the lane goes to pytest, so a path or `-k` still works:
   ./scripts/test.sh fast tests/unit/services/test_gcode_parser.py
   ./scripts/test.sh full -k "trash and not slow" -x
 
-Resource-gated subsets skip themselves unless the resource is configured:
-  PRINTSTASH_TEST_POSTGRES_URL=postgresql://...  → `postgres`-marked tests
-  PRINTSTASH_TEST_S3_ENDPOINT=http://...         → `s3`-marked tests
+The `postgres`- and `s3`-marked subsets run against a real PostgreSQL and a real
+SeaweedFS, started as containers for the run (see backend/tests/containers.py).
+`full` therefore needs Docker running and stops with a message if it is not —
+skipping them would report a green run that verified none of them. `fast` needs
+nothing.
 EOF
 }
 

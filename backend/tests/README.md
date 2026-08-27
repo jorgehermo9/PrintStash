@@ -46,13 +46,16 @@ is not a unit — find the unit first.
 Resource markers gate subsets *within* a tier: `postgres`, `s3`, and `slow` (large real
 fixtures; out of the fast lane).
 
-`postgres` and `s3` need a real service, and `tests/containers.py` finds one — the
-endpoint you configured (`PRINTSTASH_TEST_POSTGRES_URL` / `PRINTSTASH_TEST_S3_ENDPOINT`),
-else a throwaway PostgreSQL or SeaweedFS container if Docker is running, else it skips
-with a reason that says so. **With Docker running you need no setup**: `./scripts/test.sh
-full` covers the dialect and object-store contracts that used to skip silently, which is
-21 tests including the migration path self-hosters upgrade through. Containers start on
-the first test that needs one and stop at the end of the session.
+`postgres` and `s3` run against a real PostgreSQL and a real SeaweedFS, started as
+containers by `tests/containers.py`. There is nothing to configure and no environment
+variable — one definition of the image, the command and the readiness check, used by
+your machine and by CI alike.
+
+`full` therefore **needs Docker running, and fails without it.** That is deliberate: it
+used to skip those 21 tests and report green, and they are the dialect-sensitive SQL, the
+migration path self-hosters upgrade through, and the S3 storage and backup destinations.
+A run that verified none of that should not look like a run that did. `fast` needs
+nothing, and containers start only on the first test that needs one.
 
 ## Before you add one
 

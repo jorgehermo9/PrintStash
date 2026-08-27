@@ -93,9 +93,11 @@ cd backend
 ./scripts/test.sh serial -q       # diagnostic reference only
 ```
 
-Subsets that need a real service skip themselves unless you configure one:
-`PRINTSTASH_TEST_POSTGRES_URL` for the `postgres` cases,
-`PRINTSTASH_TEST_S3_ENDPOINT` for the `s3` ones.
+The `postgres` and `s3` subsets run against a real PostgreSQL and a real
+SeaweedFS, started as containers for the run — so `full` needs Docker running,
+and stops with a message naming the prerequisite if it is not. There is nothing
+to configure. It is an error rather than a skip because a green run with those
+tests absent verified neither the dialect-sensitive SQL nor the upgrade path.
 
 `affected` stores only local dependency metadata in the ignored `.testmondata`
 file. Treat it as a tight edit/test loop, not a substitute for `full`. Generic

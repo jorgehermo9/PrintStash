@@ -24,7 +24,7 @@ backend/tests/
     postgres/test_<contract>.py    @pytest.mark.postgres — dialect + concurrency gate
   contract/              our clients vs contract-enforcing fakes over a real loopback socket · mirrors app/
     services/test_<provider>.py    emulator / MQTT-FTPS / OIDC fakes
-    services/test_storage_backend.py   @pytest.mark.s3 — SeaweedFS (storage-s3 CI job)
+    services/test_storage_backend.py   @pytest.mark.s3 — a real SeaweedFS container
   e2e/                   whole app via ASGITransport + fakes
     conftest.py
     test_<flow>.py                 one headline flow per file
@@ -275,44 +275,43 @@ style). The cached outbound client is dropped per test, so a fresh
 
 ## Real services (`postgres`, `s3`)
 
-Two markers need a service the suite cannot fake, and `tests/containers.py`
-resolves each in one fixed order:
+Two markers need a service the suite cannot fake, and `tests/containers.py` starts
+it: a pinned `postgres:16-alpine` and a pinned SeaweedFS. **That is the only
+path** — no environment variable, no `docker run`, no compose file. The image, the
+command and the readiness check are written once, so a local run and a CI run are
+the same run.
 
-1. **The configured endpoint** — `PRINTSTASH_TEST_POSTGRES_URL` /
-   `PRINTSTASH_TEST_S3_ENDPOINT`. Honoured even when it is broken, because
-   silently starting a container instead would hide an operator's
-   misconfiguration.
-2. **A throwaway container** via `testcontainers`, when the variable is unset and
-   a Docker daemon is reachable. Started lazily — on the first *selected* test
-   that carries the marker, never at collection — and stopped once at session
-   end.
-3. **Skip**, when there is neither. The reason names Docker rather than an
-   environment variable the reader has no reason to know about.
+**No Docker is an error, not a skip.** If a selected test carries one of these
+markers and no daemon is reachable, `pytest_collection_modifyitems` stops the
+session with a message naming the prerequisite. This is the rule the whole
+arrangement exists for: the previous setup passed locally with 21 tests quietly
+absent, and those 21 were the dialect-sensitive SQL, the migration path
+self-hosters upgrade through, and the S3 storage and backup destinations. A run
+that verified none of that must not look like a run that did. Selecting a subset
+that needs neither service (`./scripts/test.sh fast`, or any single unit file) is
+unaffected — the check only fires for markers a *selected* test carries.
 
-**Why not testcontainers in CI as well.** CI sets the variables. GitHub's
-`services:` block starts PostgreSQL in parallel with checkout from the runner's
-image cache, and the SeaweedFS `docker run` is pinned to a digest with a
-development-sized volume limit that is worth reading in the workflow. Starting
-either from inside the step would add wall clock to every run and gain nothing.
-
-**Why not for `scripts/test_minio_migration.sh`.** That rehearses a
-compose-level migration an operator performs by hand, and its value is that it
-runs the same commands they would. Wrapping it in a Python container API would
-make it a different procedure from the one it documents.
+Containers start lazily, on the first selected test that needs one, and stop once
+at session end. A run that touches neither starts nothing.
 
 **Writing one of these tests.** Carry the marker (or live in
 `integration/postgres/`, which gets it from the directory) and read the endpoint
 through `postgres_url()` / `s3_endpoint()` **inside a fixture or test body** —
-never as a module-level constant. A module-level `os.environ.get` is evaluated at
-import, which is before the resolver has had a chance to start anything, so the
-test would see `None` and skip on a machine that could have run it.
+never as a module-level constant. A module-level read happens at import, before
+the resolver has started anything.
+
+**What is deliberately not converted.** `scripts/test_minio_migration.sh`
+rehearses a compose-level migration an operator performs by hand, and its value is
+that it runs the same commands they would; wrapping it in a Python container API
+would make it a different procedure from the one it documents. The production and
+manual-testing compose stacks are likewise not test infrastructure.
 
 Add a `postgres` case when a change introduces a query, index, constraint, or
 migration whose behaviour can differ from SQLite (JSON operators, `ON CONFLICT`,
 boolean/enum handling, batch alters). Add an `s3` case when a change touches
 storage keys, conditional writes, version ids, or ETag handling — those are
-properties of the object store, and a stub that returns what we expect proves
-only that we expect it.
+properties of the object store, and a stub that returns what we expect proves only
+that we expect it.
 
 ## Contract snapshots (`tests/repo/`)
 
@@ -328,8 +327,9 @@ only that we expect it.
 
 CI runs `./scripts/test.sh full --cov=app --cov-fail-under=95`. A new branch
 without a test lowers the number; add the test. `# pragma: no cover` is
-reserved for the `s3`-marked paths the `storage-s3` job validates for real —
-not a tool for skipping hard cases.
+reserved for the `s3`-marked paths a real SeaweedFS validates — not a tool for
+skipping hard cases. Those paths now run in `full` too, since the container starts
+itself, so the pragma covers less than it used to.
 
 ## Lint and types
 

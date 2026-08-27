@@ -1,51 +1,74 @@
-"""Resolving the two real services a slice of this suite needs: PostgreSQL and S3.
+"""The real PostgreSQL and S3 services a slice of this suite runs against.
 
-Both are gated by an environment variable today, which means a contributor
-running `./scripts/test.sh full` locally gets a green result with **21 tests
-silently skipped** — and they are not incidental ones. They are the
+Containers are how those tests get their service — the only way. There is no
+environment variable to set, no `docker run` to remember, and no second code path
+that behaves differently in CI than it does on a laptop. That is the point: the
+previous arrangement had three definitions of the same two services (a GitHub
+`services:` block, a `docker run` in the workflow, and a documented invocation in
+the README), which is three things to keep in step and three ways for a local run
+to disagree with CI. Now the image, the command and the readiness check are
+written once, here.
+
+What that buys is that `./scripts/test.sh full` runs the *whole* suite. It used to
+be green with 21 tests skipped, and they were not incidental ones: the
 dialect-sensitive SQL, the migration path a self-hoster upgrades through, and the
 S3 storage and backup destinations. A local run that skips those is not the suite
-CI runs, so "it passed for me" and "it passed in CI" stop meaning the same thing.
+CI runs, so "it passed for me" and "it passed in CI" stopped meaning the same
+thing.
 
-So the resolution order here is: **the environment variable if it is set, else a
-throwaway container, else skip.**
+Containers start **lazily** — on the first selected test that carries the marker,
+never at collection — and stop once at session end. A run that touches neither
+resource starts nothing, so the fast lane pays nothing for this.
 
-*Environment variable first* because CI already provides one. GitHub's
-`services:` block starts PostgreSQL in parallel with checkout from the runner's
-image cache; starting it from inside the step instead would add wall clock to
-every run and gain nothing. The SeaweedFS command is pinned to a digest and given
-a development-sized volume limit, which is worth keeping explicit in the workflow
-where an operator can read it.
-
-*A container second* so the local run matches CI without anybody having to
-remember two `docker run` invocations and two exports.
-
-*Skip last, and only when Docker is genuinely absent.* The skip reason says so,
-rather than naming an environment variable the contributor has no reason to know
-about.
-
-Containers are started lazily — on the first test that needs one, not at
-collection — and torn down once at session end. A run that touches neither
-resource starts nothing.
+**No Docker is an error, not a skip.** A run that selected these tests and could
+not start their services did not verify what it was asked to verify, and
+reporting that as green is the exact degradation this suite is built to prevent:
+the previous arrangement passed locally with 21 tests quietly absent, and those 21
+were the dialect SQL, the upgrade path and the object store. So the session stops
+with a message naming the prerequisite. Selecting a subset that needs neither
+service — the `fast` lane, or any single unit file — is unaffected, because the
+check only fires for markers a *selected* test carries.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
-# SeaweedFS in `mini` mode: master, volume and S3 gateway in one process. Pinned by
-# digest and given the same development-sized volume limit as CI, so a failure here
-# and a failure there are the same failure.
+import pytest
+
+# SeaweedFS in `mini` mode: master, volume server and S3 gateway in one process.
+# Pinned by digest so a green run here and a green run in CI are the same run, and
+# given a development-sized volume limit so it allocates in seconds rather than
+# reserving gigabytes.
 SEAWEEDFS_IMAGE = (
     "chrislusf/seaweedfs:4.41"
     "@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d"
 )
 SEAWEEDFS_S3_PORT = 8333
-POSTGRES_IMAGE = "postgres:16-alpine"
+SEAWEEDFS_COMMAND = (
+    "mini -dir=/data -master.volumeSizeLimitMB=64 -master.telemetry=false"
+)
+# The gateway's own readiness line. SeaweedFS binds the port before the S3 API can
+# answer, so a port check races and the first request comes back as a connection
+# reset.
+SEAWEEDFS_READY_LOG = "Start Seaweed S3 API"
 
-S3_ACCESS_KEY = os.environ.get("PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash")
-S3_SECRET_KEY = os.environ.get("PRINTSTASH_TEST_S3_SECRET_KEY", "printstash-secret")
+S3_RESOURCE = "SeaweedFS (the S3 endpoint)"
+POSTGRES_RESOURCE = "PostgreSQL"
+
+POSTGRES_IMAGE = "postgres:16-alpine"
+POSTGRES_USER = "printstash"
+POSTGRES_PASSWORD = "printstash"
+POSTGRES_DB = "printstash"
+
+# Obviously-fake credentials. SeaweedFS accepts whatever it is given; nothing here
+# may resemble a real key.
+S3_ACCESS_KEY = "printstash"
+S3_SECRET_KEY = "printstash-secret"
+
+# Generous, because these run on a cold image pull in CI and on a laptop that may
+# be starting Docker at the same time. A tight timeout here is a flake.
+STARTUP_TIMEOUT_S = 180
 
 _started: list[Any] = []
 _resolved: dict[str, str | None] = {}
@@ -54,9 +77,8 @@ _resolved: dict[str, str | None] = {}
 def docker_available() -> bool:
     """Whether a Docker daemon is reachable, without raising if it is not.
 
-    Checked rather than assumed because the alternative is turning a clean skip
-    into an import error on every machine without Docker — including the CI jobs
-    that deliberately run without one.
+    Checked rather than assumed so that a machine with no daemon gets the message
+    below instead of a connection error out of the middle of a plugin stack.
     """
     try:
         from testcontainers.core.docker_client import DockerClient
@@ -69,80 +91,90 @@ def docker_available() -> bool:
     return True
 
 
-def _resolve(key: str, env_var: str, start: Callable[[], str]) -> str | None:
-    """Return the configured URL for *key*, starting a container if we must."""
-    if key in _resolved:
-        return _resolved[key]
-    configured = os.environ.get(env_var)
-    if configured:
-        _resolved[key] = configured
-        return configured
-    if not docker_available():
-        _resolved[key] = None
+def _resolve(key: str, resource: str, start: Callable[[], str]) -> str:
+    """Start the container for *key* once per session and return its URL.
+
+    Raises rather than returning `None`: a caller that reached here needs the
+    service, and handing back nothing would let the test skip itself.
+    """
+    if key not in _resolved:
+        require_docker(resource)
+        _resolved[key] = start()
+    return _resolved[key]
+
+
+def require_docker(resource: str) -> None | NoReturn:
+    """Stop the run when *resource* cannot be started.
+
+    A hard stop rather than a skip. The session was asked to verify something it
+    cannot verify, and a green result with the tests quietly absent is worse than
+    no result — that is how a suite degrades without anybody deciding to let it.
+
+    `pytest.exit` rather than an exception so the reader gets the message and a
+    non-zero status instead of a traceback through the plugin stack.
+    """
+    if docker_available():
         return None
-    url = start()
-    # Exported so any code still reading the variable directly agrees with the
-    # fixtures, and so a subprocess the tests spawn inherits the same endpoint.
-    os.environ[env_var] = url
-    _resolved[key] = url
-    return url
+    pytest.exit(
+        f"cannot start {resource}: no Docker daemon is reachable. "
+        "These tests run against the real service — the dialect-sensitive SQL, the "
+        "migration path self-hosters upgrade through, and the S3 storage and backup "
+        "destinations — so there is nothing to fall back to, and skipping them would "
+        "report a green run that verified none of it. "
+        "Start Docker and re-run, or select a subset that needs neither service "
+        "(./scripts/test.sh fast).",
+        returncode=1,
+    )
 
 
 def _start_postgres() -> str:
-    from testcontainers.postgres import PostgresContainer
+    from testcontainers.community.postgres import PostgresContainer
 
     container = PostgresContainer(
         POSTGRES_IMAGE,
-        username="printstash",
-        password="printstash",
-        dbname="printstash",
+        username=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        dbname=POSTGRES_DB,
     )
     container.start()
     _started.append(container)
-    # `psycopg2` is the driver testcontainers advertises; the app normalises the
-    # scheme itself, so hand on the plain `postgresql://` form it understands.
+    # `driver=None` asks for the plain `postgresql://` form. The app normalises the
+    # scheme to whichever driver it needs, so handing it a pre-selected one would
+    # test a URL shape production never sees.
     return container.get_connection_url(driver=None)
 
 
 def _start_seaweedfs() -> str:
     from testcontainers.core.container import DockerContainer
-    from testcontainers.core.waiting_utils import wait_for_logs
+    from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
     container = (
         DockerContainer(SEAWEEDFS_IMAGE)
         .with_env("AWS_ACCESS_KEY_ID", S3_ACCESS_KEY)
         .with_env("AWS_SECRET_ACCESS_KEY", S3_SECRET_KEY)
         .with_exposed_ports(SEAWEEDFS_S3_PORT)
-        .with_command(
-            "mini -dir=/data -master.volumeSizeLimitMB=64 -master.telemetry=false"
+        .with_command(SEAWEEDFS_COMMAND)
+        .waiting_for(
+            LogMessageWaitStrategy(SEAWEEDFS_READY_LOG).with_startup_timeout(
+                STARTUP_TIMEOUT_S
+            )
         )
     )
     container.start()
     _started.append(container)
-    # The S3 gateway logs this once it is accepting requests. Waiting on the log
-    # rather than on the port avoids the race where the port is bound before the
-    # gateway can answer, which presents as a connection reset on the first call.
-    wait_for_logs(container, "Start Seaweed S3 API", timeout=60)
     host = container.get_container_host_ip()
     port = container.get_exposed_port(SEAWEEDFS_S3_PORT)
     return f"http://{host}:{port}"
 
 
-def postgres_url() -> str | None:
-    """A real PostgreSQL URL, or `None` when there is no way to get one."""
-    return _resolve("postgres", "PRINTSTASH_TEST_POSTGRES_URL", _start_postgres)
+def postgres_url() -> str:
+    """A real PostgreSQL URL. Raises when Docker is not running."""
+    return _resolve("postgres", POSTGRES_RESOURCE, _start_postgres)
 
 
-def s3_endpoint() -> str | None:
-    """A real S3-compatible endpoint URL, or `None` when there is none."""
-    return _resolve("s3", "PRINTSTASH_TEST_S3_ENDPOINT", _start_seaweedfs)
-
-
-def unavailable_reason(env_var: str, resource: str) -> str:
-    """Why *resource* is being skipped, in terms the reader can act on."""
-    if docker_available():
-        return f"could not start {resource}; set {env_var} to point at your own"
-    return f"needs {resource}: start Docker, or set {env_var}"
+def s3_endpoint() -> str:
+    """A real S3-compatible endpoint URL. Raises when Docker is not running."""
+    return _resolve("s3", S3_RESOURCE, _start_seaweedfs)
 
 
 def shutdown_containers() -> None:
@@ -152,6 +184,6 @@ def shutdown_containers() -> None:
         try:
             container.stop()
         except Exception:
-            # A container that already died takes nothing with it, and raising
-            # here would turn a clean run into a session-teardown error.
+            # A container that already died takes nothing with it, and raising here
+            # would turn a clean run into a session-teardown error.
             pass

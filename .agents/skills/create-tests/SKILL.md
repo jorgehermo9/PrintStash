@@ -182,11 +182,12 @@ stand in for are egress boundaries.
 
 A directory is a tier; **resource markers** (`postgres`, `s3`, `slow`) gate
 subsets *within* a tier. `postgres` and `s3` need a real service, and
-`tests/containers.py` resolves one: the configured endpoint if there is one, else
-a throwaway container when Docker is reachable, else skip. So a local run covers
-the dialect and object-store contracts rather than quietly skipping 21 tests —
-read the endpoint through `postgres_url()` / `s3_endpoint()` inside a fixture,
-never as a module-level constant. There is no "integration" marker — the
+`tests/containers.py` starts it as a container — the only path, with no
+environment variable and no `docker run`. **No Docker is an error, not a skip**,
+because a green run with those 21 tests absent verified neither the
+dialect-sensitive SQL nor the upgrade path. Read the endpoint through
+`postgres_url()` / `s3_endpoint()` inside a fixture, never as a module-level
+constant. There is no "integration" marker — the
 directory says it.
 
 ### Category → tier: the default mapping
@@ -248,8 +249,8 @@ moves to a patched test — and then only the fault is patched, not the DB.
 | Service with DB writes | **Integration** | `db_session`; real storage backend |
 | Live/trashed visibility, RBAC resolution | **Integration** | real rows, real roles |
 | Real slicer output | **Integration** | fixture under `tests/fixtures/`; `slow` marker if it's a large file |
-| Dialect-sensitive SQL, migration | **Integration** + `postgres` marker | real `postgres:16` — `PRINTSTASH_TEST_POSTGRES_URL`, or a container started for the run |
-| S3 storage paths | **Integration** + `s3` marker | real SeaweedFS — CI's `storage-s3` job, or a container started for the run |
+| Dialect-sensitive SQL, migration | **Integration** + `postgres` marker | real `postgres:16`, started as a container for the run |
+| S3 storage paths | **Integration** + `s3` marker | real SeaweedFS, started as a container for the run |
 | Provider wire protocol | **Contract** | emulator over loopback (`start_server`, `PrintSim`, `Recorder`) |
 | Headline flow of a feature | **E2E** | `api` + `fakes` fixtures in `tests/e2e/` |
 | Pure function | Unit | none |
