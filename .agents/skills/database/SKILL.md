@@ -52,18 +52,31 @@ constraint, a check constraint, changing a column type — needs the table rebui
 
 `op.batch_alter_table` does that: create `_alembic_tmp_<table>` with the full target
 definition, `INSERT … SELECT` the rows across, drop the original, rename. Alembic
-picks per batch (`recreate="auto"`, the default), so it is **not** a rebuild every
-time:
+picks per batch (`recreate="auto"`, the default), and the line falls in a place worth
+knowing exactly, because **a new column that is a foreign key is on the expensive
+side**:
 
-| Batch contains | What runs |
+| What the migration does | What runs |
 | --- | --- |
-| `add_column` only | `ALTER TABLE … ADD COLUMN`. No rebuild. |
-| any constraint or type change | full rebuild |
+| `add_column`, no constraint | `ALTER TABLE … ADD COLUMN`. No rebuild. |
+| `op.add_column` with an inline `ForeignKey`, no batch | refuses: `NotImplementedError: No support for ALTER of constraints in SQLite dialect` |
+| `batch.add_column` with an inline `ForeignKey` | `ValueError: Constraint must have a name` unless a `naming_convention` is in play — then **rebuild** |
+| `batch.add_column` then `batch.create_foreign_key` | **rebuild** |
+| any constraint or column-type change | **rebuild** |
 
-So adding a column stays cheap forever; only constraint work pays. And the rebuild is
-cheaper than it sounds — **10 ms for 10,000 rows, 93 ms for 100,000** on a
-library-shaped `files` table. Table size is not a reason to avoid it at this
-product's scale.
+So a plain column is cheap forever and *every* new foreign-key column costs one
+rebuild. There is no way around that through Alembic: it classifies a foreign key as
+a constraint operation, and its SQLite dialect does not implement ALTER of
+constraints. Note that this is Alembic being conservative rather than SQLite
+refusing — raw SQLite accepts
+`ALTER TABLE things ADD COLUMN owner_id INTEGER REFERENCES users(id)` quite happily.
+Reaching for `op.execute` to exploit that is not worth it: it is hand-written DDL
+(rule 1), it skips the model Alembic reasons about, and it saves 93 ms.
+
+Which is the other half of the answer — the rebuild is cheap. Measured on a
+library-shaped `files` table: **10 ms for 10,000 rows, 93 ms for 100,000.** Table
+size is not a reason to avoid a foreign key at this product's scale, and "we will add
+the constraint later" is how the schemas diverged in the first place.
 
 ### Rebuilding needs foreign keys off, and a check afterwards
 
@@ -113,24 +126,102 @@ Two details that bite:
   `PRAGMA foreign_keys` while one is open. This is the same trap that left the test
   suite with enforcement off for months (`tests/conftest.py::_truncate_all`).
 
-### Constraint names
+### Constraint names: the naming convention is load-bearing
 
-Batch mode drops a constraint *by name* in order to recreate it, so an unnamed
-constraint cannot be altered on SQLite at all. There is no `naming_convention` on
-`SQLModel.metadata` today, which is why the schema comparison reports "different
-unique constraints" for things that are otherwise equivalent — the two paths generate
-different names.
+`SQLModel.metadata` carries a `naming_convention` (declared in `app/db/models.py`),
+and it is not cosmetic. Batch mode alters a constraint by dropping it **by name** and
+recreating it, so an anonymous constraint cannot be altered on SQLite at all —
+`batch_alter_table` fails with `ValueError: Constraint must have a name`. The
+convention is what makes a schema migratable on the database this product ships with.
 
-Adding one is the enabling step for any future constraint migration. It affects
-constraints generated *after* it, not existing DDL, so it is safe but it does move
-what `create_all` emits — take it as its own change, with the parity counts in
-`tests/integration/db/migrations/test_models_versus_chain.py` re-measured.
+It also makes the two schemas comparable: without it, `create_all` and the chain
+generate different names for the same constraint, and the parity test cannot tell
+that apart from real divergence.
 
-Until then: name every constraint explicitly in the models
-(`sa.UniqueConstraint(..., name="uq_…")`) so batch mode can reach it. **13 of the 18
-`UniqueConstraint` declarations in `app/db/models.py` are unnamed today**, which means
-those constraints cannot be altered on SQLite at all. Naming one is a two-line change
-and worth doing as you touch the table.
+Declared constraints may still name themselves, and five in `app/db/models.py` do.
+The convention only fills in the rest.
+
+### `copy_from` versus reflection — they do different things
+
+Batch mode without `copy_from` **reflects** the table: it rebuilds it in the shape the
+database currently has, and applies only the operations the migration names. With
+`copy_from=<Table>`, the table instead *becomes* the definition you pass.
+
+That is a difference in behaviour, not just in safety. Measured on a table whose
+database shape was missing a foreign key the models declare:
+
+| | Result |
+| --- | --- |
+| reflection + `create_foreign_key("fk_files_deleted_by_users")` | 2 foreign keys — the missing one stayed missing |
+| `copy_from=<literal Table with all three>` | 3 foreign keys — the table converged to the definition |
+
+So pick by intent:
+
+- **Reflection** when you are changing one thing and want everything else preserved
+  exactly as it is. Smallest blast radius. This is what
+  `eb8435c9400e_add_missing_audit_foreign_keys` uses: it adds eighteen foreign keys
+  and deliberately does *not* sweep up the enum-representation and server-default
+  differences autogenerate also offered.
+- **`copy_from`** when you want the table to *become* a known shape — converging a
+  divergence, or when reflection cannot see something (an odd server default, a check
+  constraint an older SQLAlchemy misses). Define the `Table` **literally in the
+  migration file**, never imported from the models: a migration is pinned to a
+  revision, and the models will move on without it.
+
+`copy_from` is a per-call argument. There is no Alembic setting that turns it on
+globally, and the 78 existing `batch_alter_table` calls in this chain all use
+reflection. They will not be changed — they have already run on real installations
+(rule 2) — so this is a rule for new work.
+
+### Repair before you constrain
+
+Adding a constraint to rows that already violate it leaves a database that cannot be
+written to. SQLite adds the constraint without validating existing rows, because
+enforcement is off for the rebuild, so the violation sits there until something
+touches the row and then fails at the worst possible moment.
+
+So a constraint migration has three parts, in this order:
+
+1. **Repair.** Null the references that point at rows which are not there. Every
+   column `eb8435c9400e` touches is nullable, which is what makes this free: an audit
+   pointer (`created_by`, `updated_by`, `deleted_by`) to a user id that does not exist
+   carries nothing that nulling destroys.
+2. **Constrain**, in batch mode.
+3. **Verify**, and *scope the verification to what you added*.
+   `PRAGMA foreign_key_check` is the obvious tool and the wrong one: with no argument
+   it walks the whole database, and even given a table it reports every violation of
+   every constraint on it. The migration test data alone has `print_jobs` rows pointing
+   at models that do not exist — violations that predate the migration and are none of
+   its business. Reporting them would turn an unrelated inconsistency into a failed
+   upgrade. Ask instead the same question the repair asked, per constraint you added,
+   and expect no answer.
+
+### The whole thing, end to end, on SQLite
+
+What actually happens when you add a foreign key, from writing it to a self-hoster
+upgrading:
+
+1. You declare it in `app/db/models.py`. `create_all` will now emit it, so **new
+   installations get it immediately** — that path builds from the models and stamps
+   head, and never replays the chain.
+2. You autogenerate a migration. Alembic compares the models against a database and
+   emits `with op.batch_alter_table(...)` blocks, because `render_as_batch=True` is
+   set for SQLite.
+3. You trim it. Autogenerate offers everything it noticed — 890 lines and 242
+   operations, the first time this was run — and you keep only what the change is
+   about.
+4. Repair, constrain, verify (above).
+5. On upgrade, each affected table is rebuilt: `CREATE TABLE _alembic_tmp_x` with the
+   constraint inline, `INSERT … SELECT` the rows, `DROP TABLE x`, rename. Foreign keys
+   must be off for that `DROP`, and Alembic's engine leaves them off. **10 ms per
+   10,000 rows, 93 ms per 100,000.**
+6. `PRAGMA foreign_keys=ON` is restored per connection by `app/db/session.py`, so the
+   constraint is enforced from the next request onwards.
+7. The parity test proves the two schemas now agree on it.
+
+The recurring temptation is to skip step 4–5 for one dialect because it is awkward.
+That is the whole bug: `if not is_sqlite:` is cheap to write and produces two
+products.
 
 ## Two schemas exist. Know which one you are looking at
 

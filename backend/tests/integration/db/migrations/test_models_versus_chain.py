@@ -7,8 +7,8 @@
 * **upgraded** — an existing `alembic_version`, so the chain runs from wherever the
   installation is. This is what a self-hoster who upgraded has.
 
-The difference is eighteen foreign keys — 108 against 90 — and the cause is not an
-oversight. SQLite has no `ALTER TABLE ADD CONSTRAINT`, so the migrations that added
+The difference *was* eighteen foreign keys — 108 against 90 — and the cause was not
+an oversight. SQLite has no `ALTER TABLE ADD CONSTRAINT`, so the migrations that added
 the audit columns guarded their `op.create_foreign_key` calls with
 `if not is_sqlite` (see `69b6a6d8a1d1_phase_4c_4d_lifecycle_audit.py`). The column
 lands, the constraint does not. `batch_alter_table` — which Alembic implements on
@@ -27,10 +27,16 @@ PostgreSQL is not affected. The chain's baseline cannot bootstrap a Postgres
 database at all — which is exactly why the fresh path became `create_all` — so every
 Postgres installation is a `create_all` installation and has all 108.
 
-This test does not assert the two agree, because they do not. It pins the gap in
-both directions: a new divergence fails it, and *closing* the gap fails it too, with
-the message saying to delete the entry. Converging them needs a batch migration and
-is a release decision about every self-hoster's upgrade path.
+`eb8435c9400e_add_missing_audit_foreign_keys` closed it, by rebuilding those seven
+tables the way SQLite requires. The foreign keys now match exactly, and this test
+pins that: `KNOWN_MISSING_IN_CHAIN` is empty and may not gain an entry.
+
+131 differences remain, all in categories that do not change behaviour — enum columns
+stored as text, Python-side defaults never written as server defaults, and indexes
+one path creates and the other does not. Those are counted rather than enumerated,
+because 131 lines of `unexpected index …` is not something anyone reads, and counted
+rather than ignored because "does not change behaviour" is a judgement the comparator
+does not make.
 """
 
 from __future__ import annotations
@@ -50,32 +56,15 @@ from app.db import migrate as migrate_mod
 # (table, column). Two-sided: a new entry means fresh and upgraded installs drifted
 # further apart, and a removed one means the gap was closed and this list should
 # shrink with it.
-KNOWN_MISSING_IN_CHAIN = {
-    # The audit columns. Seventeen of the eighteen, across six tables — every
-    # migration that added a `*_by` column declared it as a plain integer.
-    ("collections", "created_by"),
-    ("collections", "deleted_by"),
-    ("collections", "updated_by"),
-    ("files", "deleted_by"),
-    ("models", "created_by"),
-    ("models", "deleted_by"),
-    ("models", "updated_by"),
-    ("print_jobs", "created_by"),
-    ("print_jobs", "deleted_by"),
-    ("print_jobs", "updated_by"),
-    ("printers", "created_by"),
-    ("printers", "deleted_by"),
-    ("printers", "updated_by"),
-    ("tags", "created_by"),
-    ("tags", "deleted_by"),
-    ("tags", "updated_by"),
-    ("users", "deleted_by"),
-    # The one that is not an audit column, and the only one of the eighteen that
-    # is reachable today: `DELETE /api/v1/libraries/{id}` trashes the indexed files
-    # but leaves this column pointing at the library it then deletes. On a fresh
-    # install that is a 500; on an upgraded one it succeeds and dangles.
-    ("files", "external_library_id"),
-}
+# Empty, and that is the point. It held eighteen entries until
+# `eb8435c9400e_add_missing_audit_foreign_keys` rebuilt the seven tables that were
+# missing them, and one more until `vault_audit_findings.run_id` gained the
+# `ondelete="CASCADE"` the chain had all along and the models did not. The two
+# schemas now agree on every foreign key.
+#
+# Two-sided, so it stays that way: a new entry here means a migration changed the
+# schema in a way `create_all` does not, which is how the gap opened the first time.
+KNOWN_MISSING_IN_CHAIN: set[tuple[str, str]] = set()
 
 
 def _foreign_keys(url: str) -> set[tuple[str, str]]:
@@ -190,14 +179,11 @@ STRUCTURAL_DIFFERENCE_COUNTS = {
     "different default": 53,
     "different type": 27,
     "unexpected index": 15,
-    "different foreign": 8,
+    "unexpected constraint": 10,
     "different index": 8,
     "different unique": 8,
     "missing index": 8,
-    "unexpected constraint": 5,
     "different nullable": 2,
-    "structural difference add_fk": 1,
-    "structural difference remove_fk": 1,
 }
 
 
