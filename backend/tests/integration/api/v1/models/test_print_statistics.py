@@ -97,9 +97,7 @@ def _job(
     return job
 
 
-def test_print_stats_empty(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
+def test_print_stats_empty(client: TestClient, auth_headers: dict[str, str]) -> None:
     resp = client.get("/api/v1/models/stats/prints?period=30d", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
@@ -113,9 +111,7 @@ def test_print_stats_empty(
 def test_print_stats_aggregates_completed(
     client: TestClient, db_session: Session, auth_headers: dict[str, str]
 ) -> None:
-    db_session.add(
-        FilamentProfile(name="PETG", material_type="PETG", cost_per_kg=20.0)
-    )
+    db_session.add(FilamentProfile(name="PETG", material_type="PETG", cost_per_kg=20.0))
     db_session.commit()
 
     collection = Collection(name="Functional", slug="functional", path="functional")
@@ -124,9 +120,7 @@ def test_print_stats_aggregates_completed(
     db_session.refresh(collection)
 
     model = _model(db_session, slug="bracket", collection_id=collection.id)
-    file_row = _file_with_material(
-        db_session, model, sha="a", material_type="PETG"
-    )
+    file_row = _file_with_material(db_session, model, sha="a", material_type="PETG")
     # Two completed PETG prints: 100g @ 20/kg => 2.0 each.
     _job(db_session, model, file_row, grams=100.0, duration_s=3600)
     _job(db_session, model, file_row, grams=100.0, duration_s=1800)
@@ -236,7 +230,9 @@ def _oracle_totals(db_session: Session, period: str) -> dict:
 
     lookback_days = mv._STATS_PERIODS.get(period, mv._STATS_PERIODS["30d"])
     end_at = utcnow()
-    start_at = end_at - timedelta(days=lookback_days) if lookback_days is not None else None
+    start_at = (
+        end_at - timedelta(days=lookback_days) if lookback_days is not None else None
+    )
     anchor = func.coalesce(PrintJob.finished_at, PrintJob.created_at)
 
     query = (
@@ -300,13 +296,31 @@ def test_print_statistics_matches_oracle(
     db_session.refresh(functional)
 
     bracket = _model(db_session, slug="bracket", collection_id=functional.id)
-    bracket_file = _file_with_material(db_session, bracket, sha="a", material_type="PETG")
-    _job(db_session, bracket, bracket_file, grams=100.0, duration_s=3600, finished_days_ago=2)
-    _job(db_session, bracket, bracket_file, grams=150.0, duration_s=1800, finished_days_ago=45)
+    bracket_file = _file_with_material(
+        db_session, bracket, sha="a", material_type="PETG"
+    )
+    _job(
+        db_session,
+        bracket,
+        bracket_file,
+        grams=100.0,
+        duration_s=3600,
+        finished_days_ago=2,
+    )
+    _job(
+        db_session,
+        bracket,
+        bracket_file,
+        grams=150.0,
+        duration_s=1800,
+        finished_days_ago=45,
+    )
 
     loose = _model(db_session, slug="loose")
     loose_file = _file_with_material(db_session, loose, sha="b", material_type="PLA")
-    _job(db_session, loose, loose_file, grams=50.0, duration_s=900, finished_days_ago=200)
+    _job(
+        db_session, loose, loose_file, grams=50.0, duration_s=900, finished_days_ago=200
+    )
     _job(db_session, loose, loose_file, state=PrintJobState.FAILED, grams=999.0)
 
     for period in ("7d", "30d", "90d", "1y", "all"):
@@ -396,16 +410,18 @@ def test_completed_job_persists_cost_via_manual_log(
     db_session.commit()
     model = _model(db_session, slug="manual-log")
     file_row = _file_with_material(db_session, model, sha="ml", material_type="PLA")
-    md = db_session.exec(
-        select(Metadata).where(Metadata.file_id == file_row.id)
-    ).one()
+    md = db_session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).one()
     md.filament_weight_g = 100.0
     db_session.add(md)
     db_session.commit()
 
     resp = client.post(
         f"/api/v1/models/{model.id}/print-jobs",
-        json={"file_id": file_row.id, "printer_name": "Bench printer", "state": "completed"},
+        json={
+            "file_id": file_row.id,
+            "printer_name": "Bench printer",
+            "state": "completed",
+        },
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text

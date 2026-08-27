@@ -36,7 +36,9 @@ def _headers(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _grant(session: Session, user: User, collection_id: int, role: CollectionRole) -> None:
+def _grant(
+    session: Session, user: User, collection_id: int, role: CollectionRole
+) -> None:
     from app.db.models import CollectionPermission
 
     session.add(
@@ -69,7 +71,9 @@ def _tag_slugs(session: Session, model_id: int) -> set[str]:
     return set(rows)
 
 
-def _revision(session: Session, model: Model, version: int, label: str | None = None) -> File:
+def _revision(
+    session: Session, model: Model, version: int, label: str | None = None
+) -> File:
     row = File(
         model_id=model.id,
         path=f"/tmp/{model.id}-{version}.gcode",
@@ -232,9 +236,7 @@ def test_batch_tags_add_is_additive_and_idempotent(
     assert _tag_slugs(db_session, m.id) == {"keep", "new"}
 
 
-def test_batch_tags_remove_only_named(
-    client: TestClient, db_session: Session
-) -> None:
+def test_batch_tags_remove_only_named(client: TestClient, db_session: Session) -> None:
     user = _user(db_session, "untagger", superuser=True)
     m = _model(db_session, "HasTags", None)
     tags = taxonomy.resolve_or_create_tags(db_session, ["alpha", "beta"])
@@ -359,9 +361,7 @@ def test_batch_tags_all_failed_does_not_create_tag(
     assert res.status_code == 403
 
     db_session.expire_all()
-    tag = db_session.exec(
-        select(Tag).where(Tag.slug == "should-not-exist")
-    ).first()
+    tag = db_session.exec(select(Tag).where(Tag.slug == "should-not-exist")).first()
     assert tag is None, "tag created despite zero editable models"
 
 
@@ -408,12 +408,17 @@ def test_batch_revision_labels_rbac_failure_is_atomic(
     client: TestClient, db_session: Session
 ) -> None:
     user = _user(db_session, "revision-limited")
-    allowed_collection = taxonomy.resolve_or_create_collection(db_session, "Rev Allowed")
+    allowed_collection = taxonomy.resolve_or_create_collection(
+        db_session, "Rev Allowed"
+    )
     denied_collection = taxonomy.resolve_or_create_collection(db_session, "Rev Denied")
     assert allowed_collection is not None and denied_collection is not None
     _grant(db_session, user, allowed_collection.id, CollectionRole.EDIT)
     allowed = _revision(
-        db_session, _model(db_session, "Allowed Revision", allowed_collection.id), 1, "A"
+        db_session,
+        _model(db_session, "Allowed Revision", allowed_collection.id),
+        1,
+        "A",
     )
     denied = _revision(
         db_session, _model(db_session, "Denied Revision", denied_collection.id), 1, "B"
@@ -440,7 +445,9 @@ def test_batch_revision_labels_rolls_back_partial_service_failure(
     first = _revision(db_session, model, 1, "first")
     second = _revision(db_session, model, 2, "second")
 
-    def fail_after_first(session: Session, files: list[File], revision_label: str | None) -> None:
+    def fail_after_first(
+        session: Session, files: list[File], revision_label: str | None
+    ) -> None:
         files[0].revision_label = revision_label
         session.add(files[0])
         session.flush()
