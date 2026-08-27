@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from app.core.config import _overlay
-from app.services import mesh_processing
+from app.services import mesh_processing, stl_streaming
 from app.services.stl_streaming import (
     STLStreamingLimits,
     STLStreamingResult,
@@ -737,3 +737,412 @@ def test_worker_rejects_invalid_expected_parent_pid_before_limits(
         )
 
     assert calls == []
+
+
+class TestEffectiveLimits:
+    """The budgets the worker is launched with, and the ceilings they cannot pass."""
+
+    def test_uses_the_configured_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(_overlay, "mesh_stream_timeout_seconds", 20)
+
+        assert stl_streaming._effective_limits().soft_timeout_seconds == 20.0
+
+    def test_clamps_a_timeout_that_is_too_generous(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(_overlay, "mesh_stream_timeout_seconds", 9999)
+
+        # An operator cannot configure away the isolation this whole module is
+        # built on; 45s is the ceiling whatever the setting says.
+        assert stl_streaming._effective_limits().soft_timeout_seconds == 45.0
+
+    def test_clamps_a_timeout_that_is_too_small(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(_overlay, "mesh_stream_timeout_seconds", 0)
+
+        assert stl_streaming._effective_limits().soft_timeout_seconds == 1.0
+
+    def test_falls_back_when_the_setting_is_not_a_number(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(_overlay, "mesh_stream_timeout_seconds", "soon")
+
+        # A typo'd setting must not stop previews being generated at all.
+        assert stl_streaming._effective_limits().soft_timeout_seconds == 45.0
+
+    def test_gives_the_hard_timeout_room_beyond_the_soft_one(self) -> None:
+        limits = stl_streaming._effective_limits()
+
+        # The soft timeout asks the worker to stop; the hard one kills it. They
+        # cannot be the same instant or a clean shutdown never happens.
+        assert limits.hard_timeout_seconds > limits.soft_timeout_seconds
+
+
+class TestWorkerMemoryBudget:
+    def test_uses_the_shared_per_job_share_when_it_is_smaller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            mesh_processing, "_step_memory_budget_bytes", lambda: 64 * 1024 * 1024
+        )
+
+        assert stl_streaming._worker_memory_budget() == 64 * 1024 * 1024
+
+    def test_never_goes_below_a_floor_a_render_can_work_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(mesh_processing, "_step_memory_budget_bytes", lambda: 1)
+
+        # A budget below this cannot load Pillow, so the worker would die on
+        # every file rather than on large ones.
+        assert stl_streaming._worker_memory_budget() == 32 * 1024 * 1024
+
+    def test_falls_back_when_there_is_no_shared_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(mesh_processing, "_step_memory_budget_bytes", lambda: None)
+
+        assert stl_streaming._worker_memory_budget() > 0
+
+
+class TestWithinWorkerHardBounds:
+    """Caller-supplied budgets can only ever be *tighter* than the built-in ones."""
+
+    def test_accepts_the_defaults(self) -> None:
+        assert stl_streaming._within_worker_hard_bounds(STLStreamingLimits()) is True
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            pytest.param({"max_triangles": 0}, id="triangles-zero"),
+            pytest.param({"max_triangles": 10**9}, id="triangles-over-ceiling"),
+            pytest.param({"max_source_bytes": 0}, id="source-zero"),
+            pytest.param({"max_candidates": 0}, id="candidates-zero"),
+            pytest.param({"chunk_triangles": 0}, id="chunk-zero"),
+            pytest.param({"chunk_triangles": 99_999}, id="chunk-over-ceiling"),
+            pytest.param({"max_lines": 0}, id="lines-zero"),
+            pytest.param({"max_line_bytes": 10**6}, id="line-bytes-over-ceiling"),
+            pytest.param({"soft_timeout_seconds": 0}, id="soft-timeout-zero"),
+            pytest.param({"soft_timeout_seconds": 999}, id="soft-timeout-over-ceiling"),
+            pytest.param({"hard_timeout_seconds": 999}, id="hard-timeout-over-ceiling"),
+            pytest.param({"max_rss_bytes": 0}, id="rss-zero"),
+            pytest.param({"address_space_bytes": 0}, id="address-space-zero"),
+            pytest.param(
+                {"address_space_bytes": 10**12}, id="address-space-over-ceiling"
+            ),
+        ],
+    )
+    def test_refuses_a_budget_that_would_weaken_the_isolation(
+        self, override: dict
+    ) -> None:
+        limits = STLStreamingLimits(**override)
+
+        assert stl_streaming._within_worker_hard_bounds(limits) is False
+
+
+class TestValidManifest:
+    """A worker's manifest is checked before its PNG is trusted."""
+
+    BASE = {
+        "version": 1,
+        "status": "complete",
+        "width": 64,
+        "height": 48,
+        "triangle_count": 12,
+        "parsed_triangles": 12,
+        "scanned_bytes": 700,
+        "raster_candidates": 100,
+        "bounds_min": [0.0, 0.0, 0.0],
+        "bounds_max": [1.0, 1.0, 1.0],
+    }
+
+    def _check(self, **overrides: object) -> bool:
+        return stl_streaming._valid_manifest(
+            {**self.BASE, **overrides}, width=64, height=48
+        )
+
+    def test_accepts_a_complete_manifest(self) -> None:
+        assert self._check() is True
+
+    def test_refuses_something_that_is_not_an_object(self) -> None:
+        assert stl_streaming._valid_manifest("not a dict", width=64, height=48) is False
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            pytest.param({"version": 99}, id="wrong-version"),
+            pytest.param({"status": "partial"}, id="not-complete"),
+            pytest.param({"width": 100}, id="wrong-width"),
+            pytest.param({"height": 100}, id="wrong-height"),
+        ],
+    )
+    def test_refuses_a_manifest_from_a_different_run(self, override: dict) -> None:
+        # A stale manifest left by an earlier worker would publish the wrong
+        # picture at the wrong size.
+        assert self._check(**override) is False
+
+    @pytest.mark.parametrize(
+        "key",
+        ["triangle_count", "parsed_triangles", "scanned_bytes", "raster_candidates"],
+    )
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0, id="zero"),
+            pytest.param("1", id="string"),
+            pytest.param(True, id="bool"),
+        ],
+    )
+    def test_refuses_a_count_it_cannot_use(self, key: str, value: object) -> None:
+        assert self._check(**{key: value}) is False
+
+    def test_refuses_a_partial_parse_reported_as_complete(self) -> None:
+        # `parsed < total` means the worker stopped early; publishing that PNG
+        # would show half a model as if it were the whole thing.
+        assert self._check(parsed_triangles=6) is False
+
+    @pytest.mark.parametrize(
+        "bounds",
+        [
+            pytest.param({"bounds_min": "no"}, id="not-a-list"),
+            pytest.param({"bounds_min": [0.0, 0.0]}, id="too-short"),
+            pytest.param({"bounds_min": [0.0, 0.0, "x"]}, id="not-a-number"),
+            pytest.param({"bounds_min": [0.0, 0.0, math.inf]}, id="not-finite"),
+            pytest.param({"bounds_min": [0.0, 0.0, True]}, id="bool"),
+        ],
+    )
+    def test_refuses_bounds_it_cannot_use(self, bounds: dict) -> None:
+        assert self._check(**bounds) is False
+
+    def test_refuses_bounds_that_are_inside_out(self) -> None:
+        # A minimum above its maximum frames nothing and would divide by a
+        # negative extent downstream.
+        assert (
+            self._check(bounds_min=[2.0, 0.0, 0.0], bounds_max=[1.0, 1.0, 1.0]) is False
+        )
+
+
+class TestDecodeResult:
+    """The worker's output is read back and re-validated before it is published."""
+
+    def _write(self, tmp_path: Path, manifest: object, png: bytes) -> tuple[Path, Path]:
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest))
+        output = tmp_path / "out.png"
+        output.write_bytes(png)
+        return output, manifest_path
+
+    def _png(self, width: int = 8, height: int = 8) -> bytes:
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGBA", (width, height), (0, 0, 0, 0)).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def _manifest(self, **overrides: object) -> dict[str, Any]:
+        base = {
+            "version": 1,
+            "status": "complete",
+            "width": 8,
+            "height": 8,
+            "triangle_count": 12,
+            "parsed_triangles": 12,
+            "scanned_bytes": 700,
+            "raster_candidates": 100,
+            "bounds_min": [0.0, 0.0, 0.0],
+            "bounds_max": [1.0, 1.0, 1.0],
+        }
+        base.update(overrides)
+        return base
+
+    def _decode(self, tmp_path: Path, manifest: object, png: bytes):
+        output, manifest_path = self._write(tmp_path, manifest, png)
+        return stl_streaming._decode_result(
+            output, manifest_path, width=8, height=8, limits=STLStreamingLimits()
+        )
+
+    def test_returns_the_render_when_everything_checks_out(
+        self, tmp_path: Path
+    ) -> None:
+        result = self._decode(tmp_path, self._manifest(), self._png())
+
+        assert result is not None
+        assert result.triangle_count == 12
+
+    def test_refuses_a_manifest_that_is_not_json(self, tmp_path: Path) -> None:
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text("{not json")
+        output = tmp_path / "out.png"
+        output.write_bytes(self._png())
+
+        assert (
+            stl_streaming._decode_result(
+                output, manifest_path, width=8, height=8, limits=STLStreamingLimits()
+            )
+            is None
+        )
+
+    def test_refuses_a_manifest_larger_than_the_cap(self, tmp_path: Path) -> None:
+        manifest = self._manifest(padding="x" * (stl_streaming._MAX_MANIFEST_BYTES + 1))
+
+        assert self._decode(tmp_path, manifest, self._png()) is None
+
+    def test_refuses_a_manifest_that_is_missing(self, tmp_path: Path) -> None:
+        output = tmp_path / "out.png"
+        output.write_bytes(self._png())
+
+        assert (
+            stl_streaming._decode_result(
+                output,
+                tmp_path / "gone.json",
+                width=8,
+                height=8,
+                limits=STLStreamingLimits(),
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "limit_field"),
+        [
+            ("triangle_count", "max_triangles"),
+            ("scanned_bytes", "max_source_bytes"),
+            ("raster_candidates", "max_candidates"),
+        ],
+    )
+    def test_refuses_a_run_that_exceeded_its_budget(
+        self, tmp_path: Path, field: str, limit_field: str
+    ) -> None:
+        limits = STLStreamingLimits()
+        manifest = self._manifest(**{field: getattr(limits, limit_field) + 1})
+
+        # The worker reports what it did; if that is past the budget the parent
+        # set, the output is not the one it asked for.
+        assert self._decode(tmp_path, manifest, self._png()) is None
+
+    def test_refuses_bytes_that_are_not_a_png(self, tmp_path: Path) -> None:
+        assert self._decode(tmp_path, self._manifest(), b"not a png") is None
+
+    def test_refuses_a_png_larger_than_the_cap(self, tmp_path: Path) -> None:
+        oversized = b"\x89PNG\r\n\x1a\n" + b"\0" * stl_streaming._MAX_PNG_BYTES
+
+        assert self._decode(tmp_path, self._manifest(), oversized) is None
+
+    def test_refuses_a_png_of_the_wrong_size(self, tmp_path: Path) -> None:
+        # The worker was told 8×8; anything else means it rendered something
+        # other than what was asked for.
+        assert self._decode(tmp_path, self._manifest(), self._png(16, 16)) is None
+
+    def test_refuses_a_png_that_is_only_a_png_header(self, tmp_path: Path) -> None:
+        assert (
+            self._decode(tmp_path, self._manifest(), b"\x89PNG\r\n\x1a\ntruncated")
+            is None
+        )
+
+
+class TestTerminateProcessGroup:
+    """Killing a worker means killing everything it started, not just the worker."""
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 4242) -> None:
+            self.pid = pid
+            self.killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+    def test_kills_the_whole_process_group(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        killed: list[tuple[int, int]] = []
+        monkeypatch.setattr(stl_streaming.os, "getpgid", lambda _pid: 99)
+        monkeypatch.setattr(
+            stl_streaming.os, "killpg", lambda pgid, sig: killed.append((pgid, sig))
+        )
+        process = self._FakeProcess()
+
+        stl_streaming._terminate_process_group(process)
+
+        # A worker that spawned a child would otherwise leave it holding the
+        # memory this whole design exists to bound.
+        assert killed == [(99, signal.SIGKILL)]
+        assert process.killed is False
+
+    def test_falls_back_to_the_process_when_it_has_no_group(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_group(_pid: int) -> int:
+            raise ProcessLookupError
+
+        monkeypatch.setattr(stl_streaming.os, "getpgid", no_group)
+        process = self._FakeProcess()
+
+        stl_streaming._terminate_process_group(process)
+
+        assert process.killed is True
+
+    def test_falls_back_when_the_group_kill_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refused(_pgid: int, _sig: int) -> None:
+            raise ProcessLookupError
+
+        monkeypatch.setattr(stl_streaming.os, "getpgid", lambda _pid: 99)
+        monkeypatch.setattr(stl_streaming.os, "killpg", refused)
+        process = self._FakeProcess()
+
+        stl_streaming._terminate_process_group(process)
+
+        assert process.killed is True
+
+    def test_survives_a_process_that_is_already_gone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Gone(self._FakeProcess):
+            def kill(self) -> None:
+                raise ProcessLookupError
+
+        monkeypatch.setattr(stl_streaming.os, "getpgid", lambda _pid: 99)
+        monkeypatch.setattr(
+            stl_streaming.os,
+            "killpg",
+            lambda _pgid, _sig: (_ for _ in ()).throw(ProcessLookupError),
+        )
+
+        # Reaping a worker that already exited must not raise into ingestion.
+        stl_streaming._terminate_process_group(_Gone())
+
+
+class TestReadRssBytes:
+    """Peak memory is read from /proc where it exists, and simply unknown elsewhere."""
+
+    def test_reports_the_resident_size(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        status = tmp_path / "status"
+        status.write_text("Name:\tworker\nVmRSS:\t   2048 kB\n")
+        monkeypatch.setattr(stl_streaming, "Path", lambda _p: status)
+
+        assert stl_streaming._read_rss_bytes(1) == 2048 * 1024
+
+    def test_says_it_does_not_know_on_a_platform_without_proc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Missing:
+            def read_text(self) -> str:
+                raise OSError("no /proc here")
+
+        monkeypatch.setattr(stl_streaming, "Path", lambda _p: _Missing())
+
+        # macOS has no /proc; a missing measurement is not a failed render.
+        assert stl_streaming._read_rss_bytes(1) is None
+
+    def test_says_it_does_not_know_when_the_line_is_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        status = tmp_path / "status"
+        status.write_text("Name:\tworker\n")
+        monkeypatch.setattr(stl_streaming, "Path", lambda _p: status)
+
+        assert stl_streaming._read_rss_bytes(1) is None
