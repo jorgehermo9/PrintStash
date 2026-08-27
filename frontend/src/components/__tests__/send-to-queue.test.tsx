@@ -7,12 +7,12 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 import { SendToButtons, type SendToCommands } from "@/components/model-detail/send-to-buttons";
 import { storeLogin } from "@/lib/auth";
+import { aPrinter } from "@/test-support/factories";
 import { AuthContext, type AuthState } from "@/lib/auth-context";
 import { queryKeys } from "@/lib/query-client";
 import type {
   MetadataRead,
   PrintBatchRead,
-  PrinterRead,
   PrintJobRead,
   SpoolmanStatus,
   SpoolRead,
@@ -31,39 +31,12 @@ const commands: SendToCommands = {
   sendToPrinter,
 };
 
-const printer: PrinterRead = {
+const printer = aPrinter({
   id: 7,
   name: "Farm printer",
-  provider: "moonraker",
   moonraker_url: "http://farm",
-  has_api_key: false,
-  access: { role: "admin", can_view: true, can_print: true, can_control: true, can_admin: true },
-  capabilities: {
-    can_start: true,
-    can_pause: true,
-    can_resume: true,
-    can_cancel: true,
-    can_live_status: true,
-    can_upload: true,
-    can_list_files: true,
-    can_send_gcode: true,
-    can_measure_consumption: true,
-    support_level: "stable",
-    support_notes: [],
-    unsupported_actions: [],
-  },
-  notes: null,
-  group: null,
-  is_default: false,
-  drain_mode: false,
-  drain_reason: null,
-  drain_updated_at: null,
-  status: "ready",
   last_seen_at: null,
-  last_error: null,
-  created_at: "2026-07-15T00:00:00Z",
-  updated_at: "2026-07-15T00:00:00Z",
-};
+});
 
 const adminUser = { id: 1, username: "admin", email: null, is_superuser: true };
 

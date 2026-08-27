@@ -194,6 +194,37 @@ part of the change: delete its local builder, call the factory, and make explici
 whatever state the local default was hiding. Then remove its line from the list in
 the same commit.
 
+## The frontend equivalent
+
+`frontend/src/test-support/factories.ts` does the same job for API-shaped
+objects, and exists for a *different* failure: a response literal written inline
+that is missing a field. TypeScript stops helping the moment the object is spelled
+out in a test, and `PrinterRead` has thirty-odd fields — so two files that each
+write one drift apart, and a wire-type change has to be chased through every
+literal by hand.
+
+```ts
+const printer = aPrinter({ status: "printing" });
+const denied = aPrinter({ access: printerAccess({ can_print: false }) });
+```
+
+Rules specific to the frontend:
+
+- **Complete objects, never an `as` cast.** A cast lets the object drift out of
+  shape the moment the wire type gains a field. If TypeScript complains after a
+  schema change, that complaint is the whole point.
+- **Nested blocks are composed, not deep-merged.** `access` and `capabilities`
+  have their own builders. A generic deep merge needs `unknown` parameters and a
+  runtime `typeof` walk, both of which the anti-slop lint rules forbid — and
+  composition reads better anyway, since the block being customised is named
+  rather than inferred from nesting depth.
+- **Absolute ISO timestamps** from the shared `FROZEN_NOW`, never `Date.now()`.
+- **Defaults are the ordinary case** — a reachable, fully-capable printer — so an
+  interesting variant is visible at the call site. A test asserting a control is
+  hidden must turn its capability off, which is exactly the signal a reader wants.
+- `_wire.ts` beside the API-client tests stays separate: that stands in for
+  `fetch`, this builds the bodies it returns.
+
 ## Environment fixtures
 
 Not every fixture is a row builder. `local_storage`, `backup_env`, `no_egress`

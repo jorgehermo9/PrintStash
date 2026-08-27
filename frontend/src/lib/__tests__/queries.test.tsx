@@ -25,10 +25,10 @@ import type {
   ModelPageRead,
   OutlinerModelRead,
   PrinterProfileRead,
-  PrinterRead,
   TagRead,
   VaultStatsRead,
 } from "@/types";
+import { aPrinter } from "@/test-support/factories";
 
 // The hooks are thin, but they encode two real contracts worth locking down:
 // (1) every shared read passes `{ fresh: true }` so TanStack Query — not the
@@ -67,39 +67,7 @@ const collection: CollectionRead = {
 
 const tag: TagRead = { id: 1, name: "petg", slug: "petg", model_count: 1 };
 
-const printer: PrinterRead = {
-  id: 1,
-  name: "Voron",
-  provider: "moonraker",
-  moonraker_url: "http://10.0.0.1:7125",
-  has_api_key: false,
-  access: { role: "admin", can_view: true, can_print: true, can_control: true, can_admin: true },
-  capabilities: {
-    can_start: true,
-    can_pause: true,
-    can_resume: true,
-    can_cancel: true,
-    can_live_status: true,
-    can_upload: true,
-    can_list_files: true,
-    can_send_gcode: true,
-    can_measure_consumption: true,
-    support_level: "stable",
-    support_notes: [],
-    unsupported_actions: [],
-  },
-  notes: null,
-  group: null,
-  is_default: false,
-  drain_mode: false,
-  drain_reason: null,
-  drain_updated_at: null,
-  status: "ready",
-  last_seen_at: null,
-  last_error: null,
-  created_at: TIMESTAMP,
-  updated_at: TIMESTAMP,
-};
+const printer = aPrinter({ name: "Voron", moonraker_url: "http://10.0.0.1:7125" });
 
 const printerProfile: PrinterProfileRead = {
   id: 1,
