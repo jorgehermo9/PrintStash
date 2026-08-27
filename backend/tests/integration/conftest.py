@@ -27,7 +27,7 @@ from sqlmodel import Session
 from tests import factories
 from tests._guards import block_real_network  # noqa: F401 — autouse
 from tests.factories.protocols import (
-    AModelWithGcode,
+    AGcodeArtifact,
     APrinterWithAQueue,
     GrantRole,
     HeadersFor,
@@ -288,9 +288,9 @@ def make_notification_channel(db_session: Session) -> Any:
 
 
 @pytest.fixture
-def a_model_with_gcode(db_session: Session) -> AModelWithGcode:
+def a_gcode_artifact(db_session: Session) -> AGcodeArtifact:
     """A model with one recommended, known-good G-code revision."""
-    return _bound(factories.a_model_with_gcode, db_session)
+    return _bound(factories.a_gcode_artifact, db_session)
 
 
 @pytest.fixture
@@ -310,22 +310,10 @@ def a_member_who_can_see_one_collection(db_session: Session) -> Any:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture
-def backup_env(tmp_path, monkeypatch: pytest.MonkeyPatch):
-    """A file-based vault the backup service can read and rewrite as files.
-
-    Shared by `services/test_backup.py` and `api/v1/test_backup.py`; the harness itself
-    is `tests/integration/_backup_harness.py`.
-    """
-    from tests.integration._backup_harness import build_backup_env
-
-    yield from build_backup_env(tmp_path, monkeypatch)
-
-
 # Re-exported for the tests that annotate a fixture parameter: importing the
 # protocol from the conftest that provides the fixture keeps the two together.
 __all__ = [
-    "AModelWithGcode",
+    "AGcodeArtifact",
     "APrinterWithAQueue",
     "GrantRole",
     "HeadersFor",
@@ -347,9 +335,8 @@ __all__ = [
     "MakeUser",
     "UserHeaders",
     "a_member_who_can_see_one_collection",
-    "a_model_with_gcode",
+    "a_gcode_artifact",
     "a_printer_with_a_queue",
-    "backup_env",
     "block_real_network",
     "grant_printer_role",
     "grant_role",

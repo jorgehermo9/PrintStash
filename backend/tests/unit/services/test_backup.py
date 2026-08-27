@@ -13,13 +13,7 @@ from pathlib import Path
 import pytest
 
 from app.services import backup
-from tests.integration.services.test_backup import (  # noqa: F811 — fixture reuse, not a real redefinition
-    BackupEnv,
-    _seed_model_with_blob,
-    backup_env,
-)
-
-__all__ = ["backup_env"]
+from tests.integration._backup_harness import BackupEnv, seed_model_with_blob
 
 
 def _verify_direct(
@@ -66,7 +60,7 @@ def _id_from(archive: Path) -> str:
 
 
 def _fresh_archive(env: BackupEnv) -> tuple[Path, dict[str, bytes], dict]:
-    _seed_model_with_blob(env, name="Verified", content=b"solid verified\n")
+    seed_model_with_blob(env, name="Verified", content=b"solid verified\n")
     meta = backup.create_backup()
     archive = Path(meta.path)
     contents, manifest = _extract(archive)

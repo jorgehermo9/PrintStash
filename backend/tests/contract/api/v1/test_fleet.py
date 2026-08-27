@@ -18,9 +18,6 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.db.models import (
-    File,
-    FileType,
-    Model,
     Printer,
     PrinterStatus,
     PrintJob,
@@ -29,6 +26,7 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.services.printer_hub import PrinterHub
 from app.services.printer_provider import build_provider_registry, get_provider_client
+from tests.factories import a_gcode_artifact
 from tests.fakes.mock_printer import create_app
 from tests.fakes.server import start_server
 
@@ -49,26 +47,6 @@ REGISTRY = build_provider_registry()
 
 def _provider_builder(printer: Printer):
     return get_provider_client(printer, registry=REGISTRY)
-
-
-def _gcode(session: Session, slug: str) -> File:
-    model = Model(name=slug, slug=slug, hash=(slug * 64)[:64])
-    session.add(model)
-    session.commit()
-    session.refresh(model)
-    artifact = File(
-        model_id=model.id,
-        path=f"queue/{slug}.gcode",
-        original_filename=f"{slug}.gcode",
-        file_type=FileType.GCODE,
-        version=1,
-        size_bytes=42,
-        sha256=(slug * 64)[:64],
-    )
-    session.add(artifact)
-    session.commit()
-    session.refresh(artifact)
-    return artifact
 
 
 async def _run_hub(printer_id: int, body) -> None:
@@ -142,8 +120,8 @@ def test_dispatch_to_two_emulated_printers_both_complete(
         db_session.refresh(printer_a)
         db_session.refresh(printer_b)
 
-        artifact_1 = _gcode(db_session, "fleetcube1")
-        artifact_2 = _gcode(db_session, "fleetcube2")
+        artifact_1 = a_gcode_artifact(db_session, "fleetcube1")
+        artifact_2 = a_gcode_artifact(db_session, "fleetcube2")
         job1 = client.post(
             "/api/v1/fleet/queue",
             headers=auth_headers,
@@ -233,7 +211,7 @@ def test_draining_printer_is_skipped_by_least_busy_routing(
         db_session.refresh(draining)
         db_session.refresh(available)
 
-        artifact = _gcode(db_session, "drainjob")
+        artifact = a_gcode_artifact(db_session, "drainjob")
         queued = client.post(
             "/api/v1/fleet/queue",
             headers=auth_headers,

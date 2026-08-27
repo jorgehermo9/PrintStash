@@ -12,21 +12,18 @@ a local storage root under ``tmp_path``.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
 import tarfile
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, create_engine, select
 
 import app.services.backup as backup
 import app.services.storage_backend as storage_backend
@@ -45,105 +42,9 @@ from app.db.models import (
     PrintJobState,
     User,
 )
-from app.db.session import (
-    SQLiteSessionFactory,
-    _set_sqlite_pragmas,
-    override_session_factory,
-)
 from app.services.auth import create_access_token, hash_password
 from app.services.storage_backend import get_backend
-
-
-@dataclass
-class BackupEnv:
-    root: Path
-    data_dir: Path
-    backup_dir: Path
-    db_file: Path
-    engine: object
-
-    def new_session(self) -> Session:
-        return Session(self.engine)
-
-
-@pytest.fixture
-def backup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[BackupEnv]:
-    data_dir = tmp_path / "files"
-    thumb_dir = tmp_path / "thumbs"
-    backup_dir = tmp_path / "backups"
-    db_dir = tmp_path / "db"
-    for d in (data_dir, thumb_dir, backup_dir, db_dir):
-        d.mkdir(parents=True, exist_ok=True)
-    db_file = db_dir / "vault.sqlite"
-    db_url = f"sqlite:///{db_file}"
-
-    # Point the effective config at our file-based vault.
-    _overlay.update(
-        {
-            "storage_backend": "local",
-            "data_dir": data_dir,
-            "thumb_dir": thumb_dir,
-            "backup_dir": backup_dir,
-            "db_url": db_url,
-        }
-    )
-
-    # A real on-disk SQLite DB that the session factory and the backup
-    # service's file-level reads/writes both target.
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
-    event.listen(engine, "connect", _set_sqlite_pragmas)
-    SQLModel.metadata.create_all(engine)
-    override_session_factory(SQLiteSessionFactory(engine))
-
-    # The application composition root binds storage after applying the
-    # runtime overlay. This fixture owns an equivalent isolated composition.
-    storage_backend.bind_backend(storage_backend.LocalStorageBackend())
-    monkeypatch.setattr(backup, "_backup_s3", None, raising=False)
-    # Real restores wait a grace period for in-flight jobs to finish; tests
-    # don't need to pay that wall-clock cost.
-    monkeypatch.setattr(backup, "_RESTORE_GRACE_PERIOD_S", 0)
-
-    try:
-        yield BackupEnv(
-            root=tmp_path,
-            data_dir=data_dir,
-            backup_dir=backup_dir,
-            db_file=db_file,
-            engine=engine,
-        )
-    finally:
-        engine.dispose()
-
-
-def _seed_model_with_blob(
-    env: BackupEnv, *, name: str, content: bytes
-) -> tuple[int, str]:
-    """Create a Model + File row and write the blob through the backend.
-
-    Returns ``(model_id, storage_key)``.
-    """
-    slug = name.lower().replace(" ", "-")
-    key = get_backend().blob_key(slug, 1, f"{slug}.stl")
-    get_backend().write_bytes(content, key)
-
-    sha = hashlib.sha256(content).hexdigest()
-    with env.new_session() as session:
-        model = Model(name=name, slug=slug, hash=sha)
-        session.add(model)
-        session.commit()
-        session.refresh(model)
-        f = File(
-            model_id=model.id,
-            path=key,
-            original_filename=f"{slug}.stl",
-            file_type=FileType.STL,
-            version=1,
-            size_bytes=len(content),
-            sha256=sha,
-        )
-        session.add(f)
-        session.commit()
-        return model.id, key
+from tests.integration._backup_harness import BackupEnv, seed_model_with_blob
 
 
 def _seed_document_with_blob(env: BackupEnv, *, name: str, content: bytes) -> str:
@@ -196,8 +97,8 @@ def _auth_headers(env: BackupEnv) -> dict[str, str]:
 
 
 def test_create_backup_archive_contents(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
-    _seed_model_with_blob(backup_env, name="Gadget", content=b"solid gadget\n")
+    seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    seed_model_with_blob(backup_env, name="Gadget", content=b"solid gadget\n")
 
     meta = backup.create_backup()
 
@@ -227,7 +128,7 @@ def test_create_backup_includes_rows_committed_only_to_wal(backup_env: BackupEnv
     with backup_env.engine.connect() as connection:
         connection.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
 
-    _seed_model_with_blob(
+    seed_model_with_blob(
         backup_env,
         name="Committed In WAL",
         content=b"solid committed-in-wal\n",
@@ -249,7 +150,7 @@ def test_create_backup_includes_rows_committed_only_to_wal(backup_env: BackupEnv
 
 
 def test_verify_backup_checks_manifest_members_and_sizes(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Verified", content=b"solid verified\n")
+    seed_model_with_blob(backup_env, name="Verified", content=b"solid verified\n")
     meta = backup.create_backup()
 
     result = backup.verify_backup(meta.id)
@@ -260,7 +161,7 @@ def test_verify_backup_checks_manifest_members_and_sizes(backup_env: BackupEnv):
 
 
 def test_create_backup_fails_when_owned_blob_is_missing(backup_env: BackupEnv):
-    _, key = _seed_model_with_blob(backup_env, name="Missing", content=b"gone")
+    _, key = seed_model_with_blob(backup_env, name="Missing", content=b"gone")
     direct = get_backend().direct_path(key)
     assert direct is not None
     direct.unlink()  # Simulate loss outside PrintStash; unchecked delete is disabled.
@@ -299,7 +200,7 @@ def test_backup_ignores_external_job_sentinel_but_keeps_vault_artifact(
     backup_env: BackupEnv,
 ):
     """The /dev/null placeholder is not a blob, while real vault files remain."""
-    _model_id, vault_key = _seed_model_with_blob(
+    _model_id, vault_key = seed_model_with_blob(
         backup_env, name="Vault artifact", content=b"real vault bytes"
     )
     with backup_env.new_session() as session:
@@ -354,8 +255,8 @@ def test_manifest_is_first_archive_member(backup_env: BackupEnv):
     import gzip
     import tarfile
 
-    _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
-    _seed_model_with_blob(backup_env, name="Gadget", content=b"solid gadget\n")
+    seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    seed_model_with_blob(backup_env, name="Gadget", content=b"solid gadget\n")
     meta = backup.create_backup()
 
     with gzip.open(Path(meta.path), "rb") as gz:
@@ -365,7 +266,7 @@ def test_manifest_is_first_archive_member(backup_env: BackupEnv):
 
 
 def test_backup_appears_in_list_and_get(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     listed = backup.list_backups()
@@ -378,7 +279,7 @@ def test_backup_appears_in_list_and_get(backup_env: BackupEnv):
 
 
 def test_download_backup_archive_endpoint(client: TestClient, backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     resp = client.get(
@@ -397,7 +298,7 @@ def test_download_backup_archive_endpoint(client: TestClient, backup_env: Backup
 
 
 def test_restore_recovers_database_rows(backup_env: BackupEnv):
-    _, key = _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    _, key = seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
     meta = backup.create_backup()
 
     # Disaster: wipe every model row.
@@ -432,7 +333,7 @@ def test_restore_recovers_database_rows(backup_env: BackupEnv):
 
 
 def test_restore_replaces_live_wal_state_without_replay(backup_env: BackupEnv):
-    _, key = _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    _, key = seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
     meta = backup.create_backup()
 
     # Keep a WAL connection open with a committed post-backup change. A raw
@@ -460,7 +361,7 @@ def test_restore_replaces_live_wal_state_without_replay(backup_env: BackupEnv):
 
 def test_restore_recovers_blob_bytes(backup_env: BackupEnv):
     content = b"solid widget\nendsolid\n"
-    _model_id, key = _seed_model_with_blob(backup_env, name="Widget", content=content)
+    _model_id, key = seed_model_with_blob(backup_env, name="Widget", content=content)
     meta = backup.create_backup()
 
     # Disaster: delete the stored blob.
@@ -520,7 +421,7 @@ def test_download_then_restore_endpoint_round_trip(
     client: TestClient, backup_env: BackupEnv
 ):
     content = b"solid endpoint widget\nendsolid\n"
-    _model_id, key = _seed_model_with_blob(
+    _model_id, key = seed_model_with_blob(
         backup_env, name="Endpoint Widget", content=content
     )
     headers = _auth_headers(backup_env)
@@ -585,7 +486,7 @@ def test_backup_writes_audit_row(backup_env: BackupEnv):
 def test_restore_writes_complete_row_on_success(backup_env: BackupEnv):
     from app.db.models import AuditLog
 
-    _, key = _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    _, key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
     Path(key).unlink()
 
@@ -608,7 +509,7 @@ def test_restore_rejected_while_job_running_writes_start_and_failed_rows(
     from app.db.models import AuditLog
     from app.services.jobs import registry
 
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     job_id = registry.create()
@@ -631,7 +532,7 @@ def test_failed_restore_writes_failed_row(
 ):
     from app.db.models import AuditLog
 
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     def _boom(*args, **kwargs):
@@ -648,10 +549,10 @@ def test_failed_restore_writes_failed_row(
 
 
 def test_restore_collision_preserves_files_and_database(backup_env: BackupEnv):
-    _, first_key = _seed_model_with_blob(
+    _, first_key = seed_model_with_blob(
         backup_env, name="First", content=b"backup-first"
     )
-    _, second_key = _seed_model_with_blob(
+    _, second_key = seed_model_with_blob(
         backup_env, name="Second", content=b"backup-second"
     )
     meta = backup.create_backup()
@@ -675,10 +576,10 @@ def test_restore_collision_preserves_files_and_database(backup_env: BackupEnv):
 def test_failed_blob_restore_removes_only_receipted_partial_creates(
     backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
 ):
-    _, first_key = _seed_model_with_blob(
+    _, first_key = seed_model_with_blob(
         backup_env, name="First", content=b"backup-first"
     )
-    _, second_key = _seed_model_with_blob(
+    _, second_key = seed_model_with_blob(
         backup_env, name="Second", content=b"backup-second"
     )
     meta = backup.create_backup()
@@ -713,7 +614,7 @@ def test_failed_blob_restore_removes_only_receipted_partial_creates(
 def test_restore_rejected_while_job_running(backup_env: BackupEnv):
     from app.services.jobs import registry
 
-    model_id, _key = _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    model_id, _key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     job_id = registry.create()
@@ -802,7 +703,7 @@ def test_mutating_request_is_rejected_during_restore(
 def test_gate_is_cleared_when_restore_raises(
     backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
 ):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     def _boom(*args, **kwargs):
@@ -817,7 +718,7 @@ def test_gate_is_cleared_when_restore_raises(
 
 
 def test_delete_backup_removes_archive(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
     assert Path(meta.path).exists()
 
@@ -834,7 +735,7 @@ def test_backup_id_round_trips_despite_timestamped_name(backup_env: BackupEnv):
     """The archive name embeds a hyphenated timestamp before the id; the id
     derived on list/get must still equal the one create_backup returned
     (regression for the rsplit-based id extraction)."""
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     # id is the trailing 12-hex token, not a timestamp fragment.
@@ -877,7 +778,7 @@ def test_purge_keeps_fresh_removes_old(
 def test_list_backups_skips_archive_with_unreadable_manifest(
     backup_env: BackupEnv, caplog: pytest.LogCaptureFixture
 ):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     good = backup.create_backup()
 
     corrupt_path = (
@@ -894,7 +795,7 @@ def test_restore_of_corrupt_archive_raises_not_found(backup_env: BackupEnv):
     ``test_list_backups_skips_archive_with_unreadable_manifest``), so
     ``get_backup`` can't find it and restore never reaches ``tarfile.open`` —
     it's rejected as unknown before any DB/file mutation, not mid-restore."""
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
     Path(meta.path).write_bytes(Path(meta.path).read_bytes()[:20])
 
@@ -926,7 +827,7 @@ def test_restore_database_raises_for_non_file_db(
 
 
 def test_find_blobs_fails_for_unreadable_owned_blob(backup_env: BackupEnv):
-    _model_id, key = _seed_model_with_blob(
+    _model_id, key = seed_model_with_blob(
         backup_env, name="Widget", content=b"solid widget\n"
     )
     Path(key).unlink()
@@ -941,7 +842,7 @@ def test_create_backup_fails_if_blob_vanishes_mid_write(
     caplog: pytest.LogCaptureFixture,
 ):
     """A backup never reports success after a censused blob vanishes."""
-    _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
 
     def _boom(*args, **kwargs):
         raise OSError("vanished")
@@ -966,7 +867,7 @@ def test_list_local_backups_empty_when_dir_missing(backup_env: BackupEnv):
 
 
 def test_delete_backup_aborts_on_permission_error(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     # Removing a file requires write on its parent dir, not the file itself.
@@ -1006,7 +907,7 @@ def test_download_backup_to_local_raises_when_local_file_missing(
 def test_has_member_false_for_missing_entry(backup_env: BackupEnv):
     import tarfile
 
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
 
     with tarfile.open(Path(meta.path), mode="r:gz") as tar:
@@ -1045,7 +946,7 @@ def test_restore_key_map_empty_for_corrupt_manifest_json(tmp_path: Path):
 
 
 def test_purge_old_backups_noop_when_retention_non_positive(backup_env: BackupEnv):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     backup.create_backup()
     assert backup.purge_old_backups(retain_days=0) == 0
     assert backup.purge_old_backups(retain_days=-5) == 0
@@ -1065,7 +966,7 @@ def test_create_backup_raises_when_blob_size_changes_mid_archive(
 ):
     """If the recorded size for a censused blob no longer matches what actually
     gets streamed into the tar, the archive must not be reported as complete."""
-    _, key = _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+    _, key = seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
 
     real_find_blobs = backup._find_blobs
 
@@ -1090,7 +991,7 @@ def test_create_backup_raises_when_blob_size_changes_mid_archive(
 def test_list_backups_merges_s3_only_entry_and_local_wins_on_id_collision(
     backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
 ):
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     local_meta = backup.create_backup()
 
     s3_only = backup.BackupMeta(
@@ -1184,7 +1085,7 @@ def test_restore_skips_directory_entries_under_files_prefix(
     import tarfile
 
     content = b"solid widget\n"
-    _model_id, key = _seed_model_with_blob(backup_env, name="Widget", content=content)
+    _model_id, key = seed_model_with_blob(backup_env, name="Widget", content=content)
     meta = backup.create_backup()
     archive = Path(meta.path)
 
@@ -1285,7 +1186,7 @@ def test_list_backups_merges_s3_only_entry_and_local_wins_on_dup_id(
     """Exercises the merge/dedup loop in list_backups() without a real S3
     endpoint: _list_s3_backups() is stubbed to return a cloud-only entry plus
     a duplicate of a local id, and the loop's own logic is what's checked."""
-    _seed_model_with_blob(backup_env, name="Widget", content=b"x")
+    seed_model_with_blob(backup_env, name="Widget", content=b"x")
     local_meta = backup.create_backup()
 
     cloud_only = backup.BackupMeta(
@@ -1378,7 +1279,7 @@ def test_restore_skips_unreadable_files_member(backup_env: BackupEnv):
     import tarfile
 
     content = b"solid widget\n"
-    _, key = _seed_model_with_blob(backup_env, name="Widget", content=content)
+    _, key = seed_model_with_blob(backup_env, name="Widget", content=content)
     meta = backup.create_backup()
     archive = Path(meta.path)
 
@@ -1474,7 +1375,7 @@ def backup_s3_env(backup_env: BackupEnv) -> Iterator[BackupEnv]:
 
 @requires_s3
 def test_create_backup_uploads_to_s3(backup_s3_env: BackupEnv):
-    _seed_model_with_blob(backup_s3_env, name="Widget", content=b"solid widget\n")
+    seed_model_with_blob(backup_s3_env, name="Widget", content=b"solid widget\n")
 
     meta = backup.create_backup()
 
@@ -1486,7 +1387,7 @@ def test_create_backup_uploads_to_s3(backup_s3_env: BackupEnv):
 
 @requires_s3
 def test_list_backups_finds_s3_only_backup(backup_s3_env: BackupEnv):
-    _seed_model_with_blob(backup_s3_env, name="Widget", content=b"solid widget\n")
+    seed_model_with_blob(backup_s3_env, name="Widget", content=b"solid widget\n")
     meta = backup.create_backup()
 
     # Simulate cloud-only: the local copy is gone, only the S3 upload remains.
@@ -1500,7 +1401,7 @@ def test_list_backups_finds_s3_only_backup(backup_s3_env: BackupEnv):
 
 @requires_s3
 def test_restore_downloads_s3_only_backup_before_restoring(backup_s3_env: BackupEnv):
-    _model_id, key = _seed_model_with_blob(
+    _model_id, key = seed_model_with_blob(
         backup_s3_env, name="Widget", content=b"solid widget\n"
     )
     meta = backup.create_backup()
@@ -1525,7 +1426,7 @@ def test_restore_downloads_s3_only_backup_before_restoring(backup_s3_env: Backup
 
 @requires_s3
 def test_delete_backup_removes_s3_copy(backup_s3_env: BackupEnv):
-    _seed_model_with_blob(backup_s3_env, name="Widget", content=b"solid widget\n")
+    seed_model_with_blob(backup_s3_env, name="Widget", content=b"solid widget\n")
     meta = backup.create_backup()
 
     s3 = backup._get_backup_s3()

@@ -249,10 +249,10 @@ class MakeShareLink(Protocol):
     ) -> ShareLink: ...
 
 
-class AModelWithGcode(Protocol):
+class AGcodeArtifact(Protocol):
     def __call__(
-        self, name: str = "Bracket", **overrides: Any
-    ) -> tuple[Model, File]: ...
+        self, name: str = "Cube", *, dispatchable: bool = False, **overrides: Any
+    ) -> File: ...
 
 
 class APrinterWithAQueue(Protocol):
@@ -262,7 +262,7 @@ class APrinterWithAQueue(Protocol):
 
 
 __all__ = [
-    "AModelWithGcode",
+    "AGcodeArtifact",
     "APrinterWithAQueue",
     "GrantRole",
     "HeadersFor",

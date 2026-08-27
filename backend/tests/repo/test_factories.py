@@ -371,8 +371,10 @@ class TestBuildAuditFinding:
 
 
 class TestScenarios:
-    def test_a_model_with_gcode_is_dispatchable(self, db_session: Session) -> None:
-        _model, gcode = factories.a_model_with_gcode(db_session)
+    def test_a_dispatchable_gcode_artifact_is_recommended_and_known_good(
+        self, db_session: Session
+    ) -> None:
+        gcode = factories.a_gcode_artifact(db_session, dispatchable=True)
 
         # Dispatch only considers a recommended revision and the queue endpoints
         # only accept a known-good one, so both have to hold for the scenario to
@@ -380,6 +382,23 @@ class TestScenarios:
         assert gcode.is_recommended is True
         assert gcode.revision_status is FileRevisionStatus.KNOWN_GOOD
         assert gcode.file_type is FileType.GCODE
+
+    def test_a_plain_gcode_artifact_is_neither(self, db_session: Session) -> None:
+        gcode = factories.a_gcode_artifact(db_session)
+
+        # The default is the plain artifact, because most tests want one and
+        # silently getting a dispatchable one would make a "not dispatched" row
+        # pass for the wrong reason.
+        assert gcode.is_recommended is False
+        assert gcode.revision_status is None
+
+    def test_a_gcode_artifact_hangs_under_its_own_model(
+        self, db_session: Session
+    ) -> None:
+        first = factories.a_gcode_artifact(db_session, "First")
+        second = factories.a_gcode_artifact(db_session, "Second")
+
+        assert first.model_id != second.model_id
 
     def test_a_printer_with_a_queue_has_a_defined_order(
         self, db_session: Session

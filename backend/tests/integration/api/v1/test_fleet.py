@@ -32,6 +32,7 @@ from app.db.models import (
 from app.services import fleet
 from app.services.auth import create_access_token, hash_password
 from app.services.printer_provider import PrinterProviderClient
+from tests.factories import a_gcode_artifact
 
 
 def _provider_builder(provider: PrinterProviderClient):
@@ -40,26 +41,6 @@ def _provider_builder(provider: PrinterProviderClient):
 
 def _unused_provider_builder(_printer: Printer) -> PrinterProviderClient:
     raise AssertionError("provider construction should not be reached")
-
-
-def _gcode(session: Session) -> File:
-    model = Model(name="Queue cube", slug="queue-cube", hash="a" * 64)
-    session.add(model)
-    session.commit()
-    session.refresh(model)
-    artifact = File(
-        model_id=model.id,
-        path="queue/cube.gcode",
-        original_filename="cube.gcode",
-        file_type=FileType.GCODE,
-        version=1,
-        size_bytes=42,
-        sha256="b" * 64,
-    )
-    session.add(artifact)
-    session.commit()
-    session.refresh(artifact)
-    return artifact
 
 
 def test_admin_can_enqueue_and_list_least_busy_job(
@@ -75,7 +56,7 @@ def test_admin_can_enqueue_and_list_least_busy_job(
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
 
     queued = client.post(
         "/api/v1/fleet/queue",
@@ -132,7 +113,7 @@ def test_default_routing_and_soft_drain_are_visible(
         headers=auth_headers,
         json={"drain_mode": True, "drain_reason": "Nozzle"},
     )
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -167,7 +148,7 @@ def test_active_maintenance_blocks_routing_and_log_is_recorded(
     )
     assert window.status_code == 201
 
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -223,7 +204,7 @@ def test_queued_jobs_can_be_reordered_and_deleted(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     first = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -278,7 +259,7 @@ def test_scheduler_dispatches_queued_job_once(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -323,7 +304,7 @@ def test_scheduler_rechecks_drain_before_dispatch(
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -357,7 +338,7 @@ def test_scheduler_candidate_batch_has_a_fixed_query_budget(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     for index in range(120):
         db_session.add(
             PrintJob(
@@ -454,7 +435,7 @@ def test_fleet_summary_counts_queue_drain_and_maintenance(
             "ends_at": (now + timedelta(minutes=10)).isoformat(),
         },
     )
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -530,7 +511,7 @@ def test_absorbed_jobs_are_excluded_from_routing_counts(db_session: Session) -> 
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     db_session.add(
         PrintJob(
             printer_id=printer.id,
@@ -561,7 +542,7 @@ def test_failed_dispatch_can_be_retried(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -592,7 +573,7 @@ def test_ambiguous_live_dispatch_cannot_be_retried_automatically(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -625,7 +606,7 @@ def test_restart_reconciles_stranded_dispatch(db_session: Session) -> None:
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     job = PrintJob(
         printer_id=printer.id,
         file_id=artifact.id,
@@ -659,7 +640,7 @@ def test_ambiguous_restart_cannot_be_retried_automatically(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     job = PrintJob(
         printer_id=printer.id,
         file_id=artifact.id,
@@ -692,7 +673,7 @@ def test_fleet_enqueue_notifies_task_queue(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     enqueue = AsyncMock()
     app.state.task_queue.enqueue = enqueue
 
@@ -720,7 +701,7 @@ def test_dispatched_job_reuses_same_row_through_completion(
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -782,7 +763,7 @@ def test_queue_history_is_bounded_and_pageable(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     for index in range(12):
         db_session.add(
             PrintJob(
@@ -841,7 +822,7 @@ def test_queue_history_applies_rbac_before_pagination(
             role=PrinterRole.VIEW,
         )
     )
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     now = utcnow()
     for index, printer in enumerate((hidden, visible, hidden, visible)):
         db_session.add(
@@ -936,7 +917,7 @@ def test_patch_queue_job_409_when_not_editable(
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -965,7 +946,7 @@ def test_patch_queue_job_409_on_stale_expected_updated_at(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -992,7 +973,7 @@ def test_patch_queue_job_400_manual_strategy_requires_printer_id(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1034,7 +1015,7 @@ def test_retry_queue_job_400_when_not_retryable(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1193,7 +1174,7 @@ def test_delete_maintenance_log_404_for_missing_log(
 def test_enqueue_manual_strategy_unknown_printer_404(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     resp = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1211,7 +1192,7 @@ def test_enqueue_default_strategy_without_default_printer_is_blocked(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
 
     resp = client.post(
         "/api/v1/fleet/queue",
@@ -1265,7 +1246,7 @@ def test_patch_queue_job_strategy_change_reroutes(
     db_session.commit()
     db_session.refresh(first)
     db_session.refresh(second)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1449,7 +1430,7 @@ def test_create_queue_job_403_for_non_superuser_non_manual_strategy(
     client: TestClient, db_session: Session
 ) -> None:
     headers = _user_headers(db_session, "queue-member")
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
 
     resp = client.post(
         "/api/v1/fleet/queue",
@@ -1531,7 +1512,7 @@ def test_queue_error_maps_fleet_queue_job_not_found_to_404(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1570,7 +1551,7 @@ def test_delete_queue_job_409_when_not_editable(
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1599,7 +1580,7 @@ def test_retry_queue_job_404_when_manual_printer_soft_deleted(
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1628,7 +1609,7 @@ def test_retry_queue_job_404_when_manual_printer_soft_deleted(
 def test_require_queue_job_role_returns_unassigned_job_for_superuser(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1646,7 +1627,7 @@ def test_require_queue_job_role_returns_unassigned_job_for_superuser(
 def test_require_queue_job_role_404_for_non_superuser_on_unassigned_job(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     queued = client.post(
         "/api/v1/fleet/queue",
         headers=auth_headers,
@@ -1672,7 +1653,7 @@ def test_patch_queue_job_403_for_non_superuser_strategy_change(
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
 
     admin_headers = _user_headers(db_session, "strategy-admin", is_superuser=True)
     queued = client.post(
@@ -1802,7 +1783,7 @@ class TestCheckCompatibility:
     def test_reports_a_file_whose_model_is_in_the_trash(
         self, client: TestClient, auth_headers, db_session: Session
     ) -> None:
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
         model = db_session.get(Model, artifact.model_id)
         assert model is not None
         model.deleted_at = utcnow()
@@ -1826,7 +1807,7 @@ class TestCheckCompatibility:
     ) -> None:
         from app.api.v1 import fleet as fleet_api
 
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
 
         def unreadable(*_args: object, **_kwargs: object):
             raise fleet_api.materials.MaterialStateError("printer_not_found")
@@ -1851,7 +1832,7 @@ class TestCreateBatch:
         self, client: TestClient, db_session: Session
     ) -> None:
         headers = _user_headers(db_session, "batch-member")
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
 
         response = client.post(
             "/api/v1/fleet/batches",
@@ -1868,7 +1849,7 @@ class TestCreateBatch:
         self, client: TestClient, db_session: Session
     ) -> None:
         headers = _user_headers(db_session, "batch-no-printer")
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
 
         response = client.post(
             "/api/v1/fleet/batches",
@@ -1882,7 +1863,7 @@ class TestCreateBatch:
         self, client: TestClient, db_session: Session
     ) -> None:
         headers = _user_headers(db_session, "batch-viewer")
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
         printer = Printer(name="Not mine", moonraker_url="http://notmine.local:7125")
         db_session.add(printer)
         db_session.commit()
@@ -1906,7 +1887,7 @@ class TestCreateBatch:
         self, client: TestClient, db_session: Session
     ) -> None:
         headers = _user_headers(db_session, "batch-admin", is_superuser=True)
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
 
         response = client.post(
             "/api/v1/fleet/batches",
@@ -1928,7 +1909,7 @@ class TestCreateBatch:
     ) -> None:
         from app.api.v1 import fleet as fleet_api
 
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
 
         def mismatch(*_args: object, **_kwargs: object):
             raise fleet_api.fleet.FleetError("material_mismatch_confirmation_required")
@@ -1948,7 +1929,7 @@ class TestCreateBatch:
     def test_rejects_an_unauthenticated_caller(
         self, client: TestClient, db_session: Session
     ) -> None:
-        artifact = _gcode(db_session)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
 
         response = client.post(
             "/api/v1/fleet/batches",

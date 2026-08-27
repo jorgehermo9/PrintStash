@@ -37,8 +37,7 @@ from app.schemas.materials import (
     MaterialToolWrite,
 )
 from app.services import fleet, materials
-from tests.factories import build_user
-from tests.integration.api.v1.test_fleet import _gcode
+from tests.factories import a_gcode_artifact, build_user
 
 
 def test_material_and_fleet_schema_validation_edges() -> None:
@@ -64,7 +63,7 @@ def test_material_and_fleet_schema_validation_edges() -> None:
 
 
 def _requirements(session: Session, material: str = "PLA", nozzle: float = 0.4):
-    artifact = _gcode(session)
+    artifact = a_gcode_artifact(session, "Queue cube")
     session.add(
         Metadata(
             file_id=artifact.id,
@@ -223,7 +222,7 @@ def test_batch_creation_is_atomic_and_spreads_least_busy_copies(
     ]
     db_session.add_all(printers)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
 
     batch, jobs = fleet.create_batch(
         db_session,
@@ -249,7 +248,7 @@ def test_operator_hold_resolves_gate_and_enables_drain(db_session: Session) -> N
     )
     db_session.add(printer)
     db_session.commit()
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     job = PrintJob(
         printer_id=printer.id,
         file_id=artifact.id,
@@ -580,7 +579,7 @@ def test_compatibility_unknown_inputs_multitool_mapping_and_report(
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    no_requirements = _gcode(db_session)
+    no_requirements = a_gcode_artifact(db_session, "Queue cube")
     assert materials.compatibility_for_printer(
         db_session, int(no_requirements.id), int(printer.id)
     ).reasons == ("job_material_unknown",)
@@ -779,7 +778,7 @@ def test_batch_queue_and_operator_edge_paths(db_session: Session) -> None:
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
 
     for payload, code in (
         (BatchCreate(file_id=999_999, quantity=1), "file_not_found"),

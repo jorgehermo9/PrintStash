@@ -39,26 +39,37 @@ from tests.factories.library import build_collection, build_file, build_model
 from tests.factories.printers import build_print_job, build_printer
 
 
-def a_model_with_gcode(
-    session: Session, name: str = "Bracket", **overrides: Any
-) -> tuple[Model, File]:
-    """A model with one recommended, known-good G-code revision.
+def a_gcode_artifact(
+    session: Session,
+    name: str = "Cube",
+    *,
+    dispatchable: bool = False,
+    **overrides: Any,
+) -> File:
+    """One G-code artifact under a model of its own.
 
-    This is the shape the print and fleet paths assume: dispatch only considers a
-    *recommended* revision, and the queue endpoints only accept a `known_good`
-    one. A model with an unmarked G-code file looks complete in the database and
-    is invisible to both, which is why so many "the queue is empty" failures
-    trace back to this setup rather than to the code under test.
+    The artifact is what callers queue, print and transfer, but a `File` cannot
+    exist without a model, and five test files were each creating that pair by
+    hand. It returns the artifact rather than both rows because the model is a
+    required parent here, not a second thing under test — reach it through
+    `artifact.model_id` when a test needs it.
+
+    `dispatchable=True` additionally marks it recommended and known-good. That is
+    a *different shape*, not a nicety: the fleet dispatcher only considers a
+    recommended revision and the queue endpoints only accept a known-good one, so
+    a plain artifact is invisible to both. It is a flag rather than a second
+    scenario because the two differ by exactly those two fields, and a pair of
+    near-identical scenarios is the thing a reader cannot tell apart.
     """
     model = build_model(session, name, **overrides)
-    gcode = build_file(
+    return build_file(
         session,
         model,
         file_type=FileType.GCODE,
-        recommended=True,
-        status=FileRevisionStatus.KNOWN_GOOD,
+        filename=f"{model.slug}.gcode",
+        recommended=dispatchable,
+        status=FileRevisionStatus.KNOWN_GOOD if dispatchable else None,
     )
-    return model, gcode
 
 
 def a_printer_with_a_queue(
@@ -74,7 +85,7 @@ def a_printer_with_a_queue(
     printer = build_printer(session, **overrides)
     artifacts: list[File] = []
     for position in range(depth):
-        _model, gcode = a_model_with_gcode(session, f"Queued {position + 1}")
+        gcode = a_gcode_artifact(session, f"Queued {position + 1}")
         build_print_job(
             session,
             gcode,

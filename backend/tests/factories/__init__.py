@@ -96,8 +96,8 @@ from tests.factories.provenance import (
     build_provenance_source,
 )
 from tests.factories.scenarios import (
+    a_gcode_artifact,
     a_member_who_can_see_one_collection,
-    a_model_with_gcode,
     a_printer_with_a_queue,
 )
 from tests.factories.storage import (
@@ -109,7 +109,7 @@ from tests.factories.storage import (
 __all__ = [
     "PASSWORD",
     "a_member_who_can_see_one_collection",
-    "a_model_with_gcode",
+    "a_gcode_artifact",
     "a_printer_with_a_queue",
     "bearer",
     "build_artifact_link",

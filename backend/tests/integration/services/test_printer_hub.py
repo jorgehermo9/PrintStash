@@ -26,7 +26,7 @@ from app.services import printer_hub as printer_hub_module
 from app.services.printer_hub import PrinterHub
 from app.services.realtime import InProcessBus
 from app.services.spoolman import SpoolmanError
-from tests.integration.api.v1.test_fleet import _gcode
+from tests.factories import a_gcode_artifact
 
 
 def test_hub_uses_its_injected_session_factory(
@@ -249,7 +249,7 @@ def test_hub_material_config_helpers_and_snapshot_attach(hub: PrinterHub) -> Non
 def test_external_capture_failure_paths_are_persistent(
     hub: PrinterHub, db_session
 ) -> None:
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     job = PrintJob(
         file_id=artifact.id,
         model_id=artifact.model_id,

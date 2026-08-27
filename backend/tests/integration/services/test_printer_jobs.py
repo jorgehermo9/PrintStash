@@ -20,7 +20,6 @@ from sqlmodel import Session
 from app.db.models import (
     File,
     FileType,
-    Model,
     Printer,
     PrinterPermission,
     PrinterRole,
@@ -41,6 +40,7 @@ from app.services.printer_provider import (
     ProviderCapabilities,
     ProviderError,
 )
+from tests.factories import a_gcode_artifact
 
 
 def _provider_builder(provider: PrinterProviderClient):
@@ -49,26 +49,6 @@ def _provider_builder(provider: PrinterProviderClient):
 
 def _unused_provider_builder(_printer: Printer) -> PrinterProviderClient:
     raise AssertionError("provider construction should not be reached")
-
-
-def _gcode(session: Session, slug: str = "dispatch-cube") -> File:
-    model = Model(name=slug, slug=slug, hash=(slug * 64)[:64])
-    session.add(model)
-    session.commit()
-    session.refresh(model)
-    artifact = File(
-        model_id=model.id,
-        path=f"queue/{slug}.gcode",
-        original_filename=f"{slug}.gcode",
-        file_type=FileType.GCODE,
-        version=1,
-        size_bytes=42,
-        sha256=(slug * 64)[:64],
-    )
-    session.add(artifact)
-    session.commit()
-    session.refresh(artifact)
-    return artifact
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +157,7 @@ def test_dispatch_claimed_raises_when_printer_missing(db_session: Session) -> No
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     job = PrintJob(
         printer_id=printer.id,
         file_id=artifact.id,
@@ -197,7 +177,7 @@ def test_dispatch_claimed_raises_when_printer_missing(db_session: Session) -> No
 
 
 def test_dispatch_claimed_raises_when_job_has_no_printer(db_session: Session) -> None:
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     job = PrintJob(
         printer_id=None,
         file_id=artifact.id,
@@ -220,7 +200,7 @@ def _seeded_upload_job(db_session: Session) -> tuple[Printer, PrintJob]:
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
-    artifact = _gcode(db_session)
+    artifact = a_gcode_artifact(db_session, "Queue cube")
     job = PrintJob(
         printer_id=printer.id,
         file_id=artifact.id,
@@ -243,7 +223,7 @@ def test_dispatch_rechecks_printer_grant_after_enqueue(db_session: Session) -> N
     db_session.commit()
     db_session.refresh(printer)
     db_session.refresh(user)
-    artifact = _gcode(db_session, "revoked-cube")
+    artifact = a_gcode_artifact(db_session, "revoked-cube")
     permission = PrinterPermission(
         printer_id=printer.id, user_id=user.id, role=PrinterRole.PRINT
     )

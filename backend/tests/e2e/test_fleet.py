@@ -25,10 +25,7 @@ import pytest
 from app.core.time import utcnow
 from app.db.models import (
     ArtifactMaterialRequirement,
-    File,
-    FileType,
     Metadata,
-    Model,
     Printer,
     PrinterStatus,
     PrintJob,
@@ -37,6 +34,7 @@ from app.db.models import (
 from app.services.printer_hub import PrinterHub
 from app.services.printer_jobs import dispatch_next, reconcile_stranded_dispatches
 from app.services.printer_provider import build_provider_registry, get_provider_client
+from tests.factories import a_gcode_artifact
 from tests.fakes.mock_printer import create_app
 from tests.fakes.server import start_server
 
@@ -56,26 +54,6 @@ class _Backend:
     def download_to_path(self, _key: str, target: Path) -> Path:
         target.write_text("G28\n")
         return target
-
-
-def _gcode(session, slug: str) -> File:
-    model = Model(name=slug, slug=slug, hash=(slug * 64)[:64])
-    session.add(model)
-    session.commit()
-    session.refresh(model)
-    artifact = File(
-        model_id=model.id,
-        path=f"queue/{slug}.gcode",
-        original_filename=f"{slug}.gcode",
-        file_type=FileType.GCODE,
-        version=1,
-        size_bytes=42,
-        sha256=(slug * 64)[:64],
-    )
-    session.add(artifact)
-    session.commit()
-    session.refresh(artifact)
-    return artifact
 
 
 async def _wait_job_state(
@@ -103,7 +81,7 @@ async def test_queue_jobs_can_be_edited_reordered_and_deleted_via_real_api(
     e2e_db.add(printer)
     e2e_db.commit()
     e2e_db.refresh(printer)
-    artifact = _gcode(e2e_db, "queue-edit")
+    artifact = a_gcode_artifact(e2e_db, "queue-edit")
 
     first = (
         await api.post(
@@ -175,8 +153,8 @@ async def test_two_printers_dispatch_and_complete_via_real_api(
         e2e_db.refresh(printer_a)
         e2e_db.refresh(printer_b)
 
-        artifact_1 = _gcode(e2e_db, "fleetcube1")
-        artifact_2 = _gcode(e2e_db, "fleetcube2")
+        artifact_1 = a_gcode_artifact(e2e_db, "fleetcube1")
+        artifact_2 = a_gcode_artifact(e2e_db, "fleetcube2")
 
         job1 = (
             await api.post(
@@ -260,7 +238,7 @@ async def test_material_mismatch_override_then_multi_printer_batch_via_real_api(
     e2e_db.commit()
     for printer in printers:
         e2e_db.refresh(printer)
-    artifact = _gcode(e2e_db, "material-batch")
+    artifact = a_gcode_artifact(e2e_db, "material-batch")
     e2e_db.add(
         Metadata(file_id=artifact.id, material_type="PLA", nozzle_diameter_mm=0.4)
     )
@@ -372,7 +350,7 @@ async def test_drain_mode_blocks_routing_via_api(api, superuser_headers, e2e_db)
         assert drain_resp.status_code == 200, drain_resp.text
         assert drain_resp.json()["drain_mode"] is True
 
-        artifact = _gcode(e2e_db, "drainjob")
+        artifact = a_gcode_artifact(e2e_db, "drainjob")
         queued = (
             await api.post(
                 "/api/v1/fleet/queue",
@@ -422,7 +400,7 @@ async def test_maintenance_window_blocks_manual_routing_via_api(
     )
     assert window.status_code == 201, window.text
 
-    artifact = _gcode(e2e_db, "maintenancejob")
+    artifact = a_gcode_artifact(e2e_db, "maintenancejob")
     queued = (
         await api.post(
             "/api/v1/fleet/queue",
@@ -464,7 +442,7 @@ async def test_restart_reconciles_stranded_dispatch_and_blocks_retry(
     e2e_db.add(printer)
     e2e_db.commit()
     e2e_db.refresh(printer)
-    artifact = _gcode(e2e_db, "restartjob")
+    artifact = a_gcode_artifact(e2e_db, "restartjob")
 
     job = PrintJob(
         printer_id=printer.id,

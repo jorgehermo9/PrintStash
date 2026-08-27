@@ -344,6 +344,20 @@ def local_storage(tmp_path: Path) -> Iterator[Path]:
     clear_local_storage()
 
 
+@pytest.fixture
+def backup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A file-based vault the backup service can read and rewrite as real files.
+
+    In the root conftest rather than `integration/` because the unit backup tests
+    need it too — that is why `unit/services/test_backup.py` was importing the
+    fixture out of `integration/services/test_backup.py`, a coupling that made a
+    unit test fail to collect whenever the integration file was edited.
+    """
+    from tests.integration._backup_harness import build_backup_env
+
+    yield from build_backup_env(tmp_path, monkeypatch)
+
+
 @pytest.fixture(autouse=True)
 def _reset_factory_counters() -> None:
     """Rewind the `tests.factories` sequence counters between tests.
