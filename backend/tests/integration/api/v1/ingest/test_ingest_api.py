@@ -51,13 +51,10 @@ from app.db.models import (
 from app.services import ingestion as ingestion_service
 from app.services.jobs import registry
 from app.services.storage_backend import get_backend
-from app.services.storage_ownership import record_creation
 from tests._env import use_local_storage
 from tests.factories import (
     bearer,
     build_collection,
-    build_file,
-    build_model,
     build_user,
 )
 from tests.integration.api.v1._ingest_assertions import (
@@ -201,290 +198,6 @@ def _over_cap_binary_stl(n_triangles: int = 1_001) -> bytes:
     return output.getvalue()
 
 
-def test_ingest_stl_creates_db_blob_and_thumbnail(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-
-    payload = completed_job(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("cube.stl", _cube_stl(), "application/sla")},
-            data={"model_name": "Cube"},
-        ),
-    )
-    file_id = payload["file_id"]
-    assert_file_created(db_session, file_id, FileType.STL)
-
-    download = client.get(f"/api/v1/files/{file_id}/download", headers=auth_headers)
-    assert download.status_code == 200, download.text
-    assert b"solid cube" in download.content
-
-    thumbnail = client.get(f"/api/v1/files/{file_id}/thumbnail", headers=auth_headers)
-    assert thumbnail.status_code == 200, thumbnail.text
-    assert thumbnail.headers["content-type"] == "image/webp"
-    assert thumbnail.content.startswith(WEBP_MAGIC)
-
-
-def test_ingest_publishes_terminal_only_after_fresh_durability_check(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    use_local_storage(tmp_path)
-    checkpoints: list[str] = []
-    observed_job_ids: list[str] = []
-    original_verify = ingestion_service.verify_durable_artifact
-
-    def observe_checkpoint(stage: str, current_job_id: str) -> None:
-        if stage == "after_commit":
-            observed_job_ids.append(current_job_id)
-
-    def observed_verify(*args, **kwargs) -> None:
-        status = ingestion_service.registry.get(observed_job_ids[-1])
-        assert status is not None
-        assert status.state == "running"
-        assert status.progress is None or status.progress < 100
-        assert status.committed_at is not None
-        checkpoints.append("fresh_session_and_storage")
-        original_verify(*args, **kwargs)
-
-    monkeypatch.setattr(
-        ingestion_service, "_fault_injection_checkpoint", observe_checkpoint
-    )
-    monkeypatch.setattr(ingestion_service, "verify_durable_artifact", observed_verify)
-    response = client.post(
-        "/api/v1/ingest/model",
-        headers=auth_headers,
-        files={"file": ("durable.stl", _cube_stl(), "application/sla")},
-        data={"model_name": "Durable Cube"},
-    )
-    assert response.status_code == 202
-    job_id = response.json()["job_id"]
-
-    status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers).json()
-    assert checkpoints == ["fresh_session_and_storage"]
-    assert status["state"] == "completed"
-    assert status["completion"] == "complete"
-    assert status["thumbnail_status"] == "generated"
-    assert status["committed_at"] is not None
-
-
-def test_issue_67_over_cap_stl_persists_authenticated_webp_fallback(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    use_local_storage(tmp_path)
-    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
-
-    payload = completed_job(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={
-                "file": (
-                    "issue-67-over-limit.stl",
-                    _over_cap_binary_stl(),
-                    "application/sla",
-                )
-            },
-            data={"model_name": "Issue 67 Fallback"},
-        ),
-    )
-
-    assert payload["completion"] == "complete"
-    assert payload["thumbnail_status"] == "fallback_generated"
-    thumbnail = client.get(
-        f"/api/v1/files/{payload['file_id']}/thumbnail", headers=auth_headers
-    )
-    assert thumbnail.status_code == 200
-    assert thumbnail.headers["content-type"] == "image/webp"
-    assert thumbnail.content.startswith(WEBP_MAGIC)
-
-
-def test_issue_67_upload_survives_pruning_completed_inbox_job(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    """A stale terminal inbox link must not turn the next upload into a 500."""
-    use_local_storage(tmp_path)
-    owner = db_session.exec(select(User).where(User.username == "test-writer")).one()
-    old_job = BackgroundJob(
-        id="expired-inbox-job",
-        owner_user_id=owner.id,
-        state="completed",
-        status_json='{"state":"completed"}',
-        finished_at=utcnow() - timedelta(hours=2),
-    )
-    db_session.add(old_job)
-    db_session.flush()
-    db_session.add(
-        InboxItem(
-            owner_user_id=owner.id,
-            state=InboxItemState.COMPLETED,
-            background_job_id=old_job.id,
-        )
-    )
-    db_session.commit()
-    monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
-
-    response = client.post(
-        "/api/v1/ingest/model",
-        headers=auth_headers,
-        files={"file": ("issue-67.stl", _cube_stl(), "application/sla")},
-        data={"model_name": "Issue 67 Upload"},
-    )
-
-    assert response.status_code == 202, response.text
-
-
-def test_purge_expired_trash_uses_retention_setting(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-    _overlay["trash_retention_days"] = 30
-    old_model = Model(
-        name="Old Cube",
-        slug="old-cube",
-        hash="old-cube".ljust(64, "0"),
-        deleted_at=utcnow() - timedelta(days=31),
-    )
-    fresh_model = build_model(
-        db_session,
-        name="Fresh Cube",
-        slug="fresh-cube",
-        hash="fresh-cube".ljust(64, "0"),
-        deleted_at=utcnow() - timedelta(days=3),
-    )
-    db_session.add(old_model)
-    db_session.commit()
-    db_session.refresh(old_model)
-    db_session.refresh(fresh_model)
-
-    old_file = File(
-        model_id=old_model.id,
-        path=str(tmp_path / "files" / "old-cube.stl"),
-        original_filename="old-cube.stl",
-        file_type=FileType.STL,
-        version=1,
-        size_bytes=4,
-        sha256="a" * 64,
-    )
-    fresh_file = build_file(
-        db_session,
-        fresh_model,
-        path=str(tmp_path / "files" / "fresh-cube.stl"),
-        filename="fresh-cube.stl",
-        file_type=FileType.STL,
-        version=1,
-        size_bytes=4,
-        sha256="b" * 64,
-    )
-    db_session.add(old_file)
-    db_session.commit()
-    old_model_id = old_model.id
-    fresh_model_id = fresh_model.id
-    old_file_path = old_file.path
-    fresh_file_path = fresh_file.path
-    backend = get_backend()
-    record_creation(
-        db_session,
-        backend.create_bytes(b"old", old_file.path),
-        object_kind="artifact",
-    )
-    record_creation(
-        db_session,
-        backend.create_bytes(b"new", fresh_file.path),
-        object_kind="artifact",
-    )
-    db_session.commit()
-
-    purged = client.delete("/api/v1/models/trash/expired", headers=auth_headers)
-
-    assert purged.status_code == 200, purged.text
-    assert purged.json() == {
-        "purged_model_ids": [old_model_id],
-        "purged_count": 1,
-        "storage_completed": 1,
-        "storage_pending": 0,
-        "storage_blocked": 0,
-        "resources_blocked": 0,
-    }
-    db_session.expire_all()
-    assert db_session.get(Model, old_model_id) is None
-    assert db_session.get(Model, fresh_model_id) is not None
-    assert not Path(old_file_path).exists()
-    assert Path(fresh_file_path).exists()
-
-
-def test_force_rebuild_refreshes_existing_mesh_thumbnail(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    from PIL import Image
-
-    use_local_storage(tmp_path)
-
-    payload = completed_job(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("cube.stl", _cube_stl(), "application/sla")},
-            data={"model_name": "Cube"},
-        ),
-    )
-    file_id = payload["file_id"]
-    model_id = payload["model_id"]
-    replacement_buffer = io.BytesIO()
-    Image.new("RGB", (12, 10), (220, 30, 20)).save(replacement_buffer, format="PNG")
-    replacement = replacement_buffer.getvalue()
-
-    monkeypatch.setattr(
-        "app.services.mesh_processing.render_thumbnail",
-        lambda _path: replacement,
-    )
-
-    response = client.post(
-        "/api/v1/files/thumbnails/rebuild?force=true",
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 202, response.text
-    job_id = response.json()["job_id"]
-    job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers)
-    assert job.status_code == 200, job.text
-    payload = job.json()
-    assert payload["state"] == "completed", payload
-    assert payload["completion"] == "complete"
-    assert payload["thumbnail_status"] == "generated"
-    assert payload["succeeded"] == 1
-    assert payload["result"]["rebuilt"] == [model_id]
-
-    thumbnail = client.get(f"/api/v1/files/{file_id}/thumbnail", headers=auth_headers)
-    assert thumbnail.status_code == 200, thumbnail.text
-    assert thumbnail.content.startswith(WEBP_MAGIC)
-    with Image.open(io.BytesIO(thumbnail.content)) as refreshed:
-        assert refreshed.convert("RGB").getpixel((0, 0)) == (220, 30, 20)
-
-
 # --------------------------------------------------------------------------- #
 # Validation / error paths (filename, file type, collection permission,
 # target library) shared by the orca and mesh upload endpoints.
@@ -524,88 +237,28 @@ def _post_empty_filename_multipart(
     )
 
 
-def test_ingest_jobs_list_and_get_scoped_to_owner(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-    payload = completed_job(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("cube.stl", _cube_stl(), "application/sla")},
-            data={"model_name": "Cube"},
-        ),
-    )
-    jobs = client.get("/api/v1/ingest/jobs", headers=auth_headers)
-    assert jobs.status_code == 200, jobs.text
-    assert any(j["model_id"] == payload["model_id"] for j in jobs.json())
-
-    other = _regular_user(db_session, "other-owner")
-    forbidden = client.get(
-        f"/api/v1/ingest/jobs/{jobs.json()[0]['job_id']}", headers=bearer(other)
-    )
-    assert forbidden.status_code == 404, forbidden.text
-
-
-def test_ingest_refuses_an_upload_when_staging_is_full(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    use_local_storage(tmp_path)
-    monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
-
-    response = client.post(
-        "/api/v1/ingest/orca",
-        headers=auth_headers,
-        files={"file": ("part.gcode", b"G28\n", "text/plain")},
-    )
-
-    # 507, not 500: the request was fine, the disk was not.
-    assert response.status_code == 507, response.text
-    assert response.json()["detail"] == "staging_capacity_exceeded"
-
-
-def test_ingest_fails_the_job_when_the_staging_lease_cannot_be_taken(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    from app.api.v1 import ingest as ingest_api
-
-    use_local_storage(tmp_path)
-    created: list[str] = []
-    real_create = ingest_api.registry.create
-
-    def recording_create(*args: object, **kwargs: object) -> str:
-        job_id = real_create(*args, **kwargs)
-        created.append(job_id)
-        return job_id
-
-    def broken(*_args: object, **_kwargs: object):
-        raise RuntimeError("staging ledger unavailable")
-
-    monkeypatch.setattr(ingest_api.registry, "create", recording_create)
-    monkeypatch.setattr(ingest_api, "_record_staging_lease", broken)
-
-    with pytest.raises(RuntimeError, match="staging ledger unavailable"):
-        client.post(
-            "/api/v1/ingest/orca",
-            headers=auth_headers,
-            files={"file": ("part.gcode", b"G28\n", "text/plain")},
+class TestListJobs:
+    def test_lists_the_callers_own_ingest_job(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+        payload = completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("cube.stl", _cube_stl(), "application/sla")},
+                data={"model_name": "Cube"},
+            ),
         )
 
-    # A job left pending forever is a queue an operator cannot clear.
-    status = registry.get(created[0])
-    assert status is not None
-    assert status.state == "failed"
-    assert status.error == "staging_lease_failed"
+        jobs = client.get("/api/v1/ingest/jobs", headers=auth_headers)
+
+        assert jobs.status_code == 200, jobs.text
+        assert any(job["model_id"] == payload["model_id"] for job in jobs.json())
 
 
 class TestIngestOrca:
@@ -886,19 +539,275 @@ class TestIngestModel:
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "external_libraries_disabled"
 
-
-class TestGetJob:
-    def test_get_job_unknown_id_returns_404(
-        self, client: TestClient, auth_headers: dict[str, str]
+    def test_ingest_stl_creates_db_blob_and_thumbnail(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
     ) -> None:
-        response = client.get(
-            "/api/v1/ingest/jobs/does-not-exist", headers=auth_headers
+        use_local_storage(tmp_path)
+
+        payload = completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("cube.stl", _cube_stl(), "application/sla")},
+                data={"model_name": "Cube"},
+            ),
         )
-        assert response.status_code == 404, response.text
-        assert response.json()["detail"] == "job_not_found"
+        file_id = payload["file_id"]
+        assert_file_created(db_session, file_id, FileType.STL)
 
+        download = client.get(f"/api/v1/files/{file_id}/download", headers=auth_headers)
+        assert download.status_code == 200, download.text
+        assert b"solid cube" in download.content
 
-class TestFile:
+        thumbnail = client.get(
+            f"/api/v1/files/{file_id}/thumbnail", headers=auth_headers
+        )
+        assert thumbnail.status_code == 200, thumbnail.text
+        assert thumbnail.headers["content-type"] == "image/webp"
+        assert thumbnail.content.startswith(WEBP_MAGIC)
+
+    def test_ingest_publishes_terminal_only_after_fresh_durability_check(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        use_local_storage(tmp_path)
+        checkpoints: list[str] = []
+        observed_job_ids: list[str] = []
+        original_verify = ingestion_service.verify_durable_artifact
+
+        def observe_checkpoint(stage: str, current_job_id: str) -> None:
+            if stage == "after_commit":
+                observed_job_ids.append(current_job_id)
+
+        def observed_verify(*args, **kwargs) -> None:
+            status = ingestion_service.registry.get(observed_job_ids[-1])
+            assert status is not None
+            assert status.state == "running"
+            assert status.progress is None or status.progress < 100
+            assert status.committed_at is not None
+            checkpoints.append("fresh_session_and_storage")
+            original_verify(*args, **kwargs)
+
+        monkeypatch.setattr(
+            ingestion_service, "_fault_injection_checkpoint", observe_checkpoint
+        )
+        monkeypatch.setattr(
+            ingestion_service, "verify_durable_artifact", observed_verify
+        )
+        response = client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={"file": ("durable.stl", _cube_stl(), "application/sla")},
+            data={"model_name": "Durable Cube"},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["job_id"]
+
+        status = client.get(
+            f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers
+        ).json()
+        assert checkpoints == ["fresh_session_and_storage"]
+        assert status["state"] == "completed"
+        assert status["completion"] == "complete"
+        assert status["thumbnail_status"] == "generated"
+        assert status["committed_at"] is not None
+
+    def test_issue_67_over_cap_stl_persists_authenticated_webp_fallback(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        use_local_storage(tmp_path)
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+
+        payload = completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={
+                    "file": (
+                        "issue-67-over-limit.stl",
+                        _over_cap_binary_stl(),
+                        "application/sla",
+                    )
+                },
+                data={"model_name": "Issue 67 Fallback"},
+            ),
+        )
+
+        assert payload["completion"] == "complete"
+        assert payload["thumbnail_status"] == "fallback_generated"
+        thumbnail = client.get(
+            f"/api/v1/files/{payload['file_id']}/thumbnail", headers=auth_headers
+        )
+        assert thumbnail.status_code == 200
+        assert thumbnail.headers["content-type"] == "image/webp"
+        assert thumbnail.content.startswith(WEBP_MAGIC)
+
+    def test_issue_67_upload_survives_pruning_completed_inbox_job(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        """A stale terminal inbox link must not turn the next upload into a 500."""
+        use_local_storage(tmp_path)
+        owner = db_session.exec(
+            select(User).where(User.username == "test-writer")
+        ).one()
+        old_job = BackgroundJob(
+            id="expired-inbox-job",
+            owner_user_id=owner.id,
+            state="completed",
+            status_json='{"state":"completed"}',
+            finished_at=utcnow() - timedelta(hours=2),
+        )
+        db_session.add(old_job)
+        db_session.flush()
+        db_session.add(
+            InboxItem(
+                owner_user_id=owner.id,
+                state=InboxItemState.COMPLETED,
+                background_job_id=old_job.id,
+            )
+        )
+        db_session.commit()
+        monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
+
+        response = client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={"file": ("issue-67.stl", _cube_stl(), "application/sla")},
+            data={"model_name": "Issue 67 Upload"},
+        )
+
+        assert response.status_code == 202, response.text
+
+    def test_force_rebuild_refreshes_existing_mesh_thumbnail(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        from PIL import Image
+
+        use_local_storage(tmp_path)
+
+        payload = completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("cube.stl", _cube_stl(), "application/sla")},
+                data={"model_name": "Cube"},
+            ),
+        )
+        file_id = payload["file_id"]
+        model_id = payload["model_id"]
+        replacement_buffer = io.BytesIO()
+        Image.new("RGB", (12, 10), (220, 30, 20)).save(replacement_buffer, format="PNG")
+        replacement = replacement_buffer.getvalue()
+
+        monkeypatch.setattr(
+            "app.services.mesh_processing.render_thumbnail",
+            lambda _path: replacement,
+        )
+
+        response = client.post(
+            "/api/v1/files/thumbnails/rebuild?force=true",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 202, response.text
+        job_id = response.json()["job_id"]
+        job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers)
+        assert job.status_code == 200, job.text
+        payload = job.json()
+        assert payload["state"] == "completed", payload
+        assert payload["completion"] == "complete"
+        assert payload["thumbnail_status"] == "generated"
+        assert payload["succeeded"] == 1
+        assert payload["result"]["rebuilt"] == [model_id]
+
+        thumbnail = client.get(
+            f"/api/v1/files/{file_id}/thumbnail", headers=auth_headers
+        )
+        assert thumbnail.status_code == 200, thumbnail.text
+        assert thumbnail.content.startswith(WEBP_MAGIC)
+        with Image.open(io.BytesIO(thumbnail.content)) as refreshed:
+            assert refreshed.convert("RGB").getpixel((0, 0)) == (220, 30, 20)
+
+    def test_ingest_refuses_an_upload_when_staging_is_full(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        use_local_storage(tmp_path)
+        monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
+
+        response = client.post(
+            "/api/v1/ingest/orca",
+            headers=auth_headers,
+            files={"file": ("part.gcode", b"G28\n", "text/plain")},
+        )
+
+        # 507, not 500: the request was fine, the disk was not.
+        assert response.status_code == 507, response.text
+        assert response.json()["detail"] == "staging_capacity_exceeded"
+
+    def test_ingest_fails_the_job_when_the_staging_lease_cannot_be_taken(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        from app.api.v1 import ingest as ingest_api
+
+        use_local_storage(tmp_path)
+        created: list[str] = []
+        real_create = ingest_api.registry.create
+
+        def recording_create(*args: object, **kwargs: object) -> str:
+            job_id = real_create(*args, **kwargs)
+            created.append(job_id)
+            return job_id
+
+        def broken(*_args: object, **_kwargs: object):
+            raise RuntimeError("staging ledger unavailable")
+
+        monkeypatch.setattr(ingest_api.registry, "create", recording_create)
+        monkeypatch.setattr(ingest_api, "_record_staging_lease", broken)
+
+        with pytest.raises(RuntimeError, match="staging ledger unavailable"):
+            client.post(
+                "/api/v1/ingest/orca",
+                headers=auth_headers,
+                files={"file": ("part.gcode", b"G28\n", "text/plain")},
+            )
+
+        # A job left pending forever is a queue an operator cannot clear.
+        status = registry.get(created[0])
+        assert status is not None
+        assert status.state == "failed"
+        assert status.error == "staging_lease_failed"
+
     def test_ingest_removes_the_staged_file_when_staging_is_full(
         self,
         tmp_path: Path,
@@ -926,8 +835,40 @@ class TestFile:
         )
         assert staged == []
 
+    def test_exception_after_commit_is_a_durable_partial_result(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        use_local_storage(tmp_path)
 
-class TestModel:
+        def inject(stage: str, _job_id: str) -> None:
+            if stage == "after_commit":
+                raise RuntimeError("injected_after_commit")
+
+        monkeypatch.setattr(ingestion_service, "_fault_injection_checkpoint", inject)
+        response = client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={"file": ("post-commit.stl", _cube_stl(), "application/sla")},
+            data={"model_name": "Post Commit Cube"},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["job_id"]
+        status = client.get(
+            f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers
+        ).json()
+
+        assert status["state"] == "completed"
+        assert status["completion"] == "partial"
+        assert status["thumbnail_reason"] == "post_commit_exception"
+        assert status["retryable"] is True
+        assert db_session.get(Model, status["model_id"]) is not None
+        assert db_session.get(File, status["file_id"]) is not None
+
     def test_reuploading_deleted_model_restores_it(
         self,
         tmp_path: Path,
@@ -1032,37 +973,40 @@ class TestModel:
         assert not get_backend().exists(thumb_path)
 
 
-class TestCommit:
-    def test_exception_after_commit_is_a_durable_partial_result(
+class TestGetJob:
+    def test_get_job_unknown_id_returns_404(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        response = client.get(
+            "/api/v1/ingest/jobs/does-not-exist", headers=auth_headers
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "job_not_found"
+
+    def test_hides_another_users_ingest_job_as_not_found(
         self,
         tmp_path: Path,
         client: TestClient,
         db_session: Session,
         auth_headers: dict[str, str],
-        monkeypatch,
     ) -> None:
         use_local_storage(tmp_path)
-
-        def inject(stage: str, _job_id: str) -> None:
-            if stage == "after_commit":
-                raise RuntimeError("injected_after_commit")
-
-        monkeypatch.setattr(ingestion_service, "_fault_injection_checkpoint", inject)
-        response = client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("post-commit.stl", _cube_stl(), "application/sla")},
-            data={"model_name": "Post Commit Cube"},
+        completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("cube.stl", _cube_stl(), "application/sla")},
+                data={"model_name": "Cube"},
+            ),
         )
-        assert response.status_code == 202
-        job_id = response.json()["job_id"]
-        status = client.get(
-            f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers
-        ).json()
+        job_id = client.get("/api/v1/ingest/jobs", headers=auth_headers).json()[0][
+            "job_id"
+        ]
+        other = _regular_user(db_session, "other-owner")
 
-        assert status["state"] == "completed"
-        assert status["completion"] == "partial"
-        assert status["thumbnail_reason"] == "post_commit_exception"
-        assert status["retryable"] is True
-        assert db_session.get(Model, status["model_id"]) is not None
-        assert db_session.get(File, status["file_id"]) is not None
+        response = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=bearer(other))
+
+        # 404 rather than 403: a job id is guessable, and confirming one exists tells
+        # the caller that somebody else uploaded something.
+        assert response.status_code == 404, response.text

@@ -78,344 +78,155 @@ def _receipt(key: str = "opaque/covers/1.webp", token: str = "new") -> CreationR
     )
 
 
-def test_create_rolls_back_published_bytes_when_recording_the_receipt_fails(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = _source(db_session)
-    backend = _backend()
-    receipt = _receipt(f"opaque/covers/{source.id}.webp")
-    backend.create_bytes.return_value = receipt
-    monkeypatch.setattr(
-        staging_leases,
-        "record_cover_receipt",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("proof failed")),
-    )
+class TestPut:
+    def test_create_rolls_back_published_bytes_when_recording_the_receipt_fails(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = _source(db_session)
+        backend = _backend()
+        receipt = _receipt(f"opaque/covers/{source.id}.webp")
+        backend.create_bytes.return_value = receipt
+        monkeypatch.setattr(
+            staging_leases,
+            "record_cover_receipt",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("proof failed")),
+        )
 
-    with pytest.raises(RuntimeError, match="proof failed"):
+        with pytest.raises(RuntimeError, match="proof failed"):
+            source_covers.put(
+                db_session,
+                backend,
+                provenance_source_id=source.id,
+                actor_id=None,
+                data=_png(),
+                content_type="image/png",
+            )
+
+        backend.rollback_create.assert_called_once_with(receipt)
+        assert db_session.exec(select(ModelSourceCover)).all() == []
+        assert db_session.exec(select(StagingLease)).all() == []
+        assert db_session.exec(select(OwnedStorageObject)).all() == []
+
+    def test_replacement_failure_keeps_old_metadata_and_proof(
+        self, db_session: Session
+    ) -> None:
+        source = _source(db_session)
+        cover = ModelSourceCover(
+            provenance_source_id=source.id,
+            storage_key="opaque/covers/1.webp",
+            size_bytes=3,
+        )
+        db_session.add(cover)
+        old = _receipt(token="old")
+        record_creation(db_session, old, object_kind="model_source_cover")
+        db_session.flush()
+        backend = _backend()
+        backend.read_bytes.return_value = b"old"
+        backend.creation_matches.return_value = True
+        backend.replace_bytes.side_effect = RuntimeError("replace failed")
+
+        with pytest.raises(RuntimeError, match="replace failed"):
+            source_covers.put(
+                db_session,
+                backend,
+                provenance_source_id=source.id,
+                actor_id=None,
+                data=_png(),
+                content_type="image/png",
+            )
+
+        assert cover.size_bytes == 3
+        proof = db_session.exec(select(OwnedStorageObject)).one()
+        assert proof.token == "old"
+
+    def test_successive_replacements_publish_latest_bytes_and_release_each_lease(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        backend = get_backend()
+
+        first = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png("navy"),
+            content_type="image/png",
+        )
+        db_session.commit()
+
+        second = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png("maroon"),
+            content_type="image/png",
+        )
+        assert second.cover.id == first.cover.id
+        assert db_session.exec(select(StagingLease)).all() == []
+        db_session.commit()
+
+        latest = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png("gold"),
+            content_type="image/png",
+        )
+        db_session.commit()
+
+        assert latest.cover.id == first.cover.id
+        expected = process_source_cover_upload(_png("gold"), "image/png").data
+        assert backend.read_bytes(latest.cover.storage_key) == expected
+        assert db_session.exec(select(StagingLease)).all() == []
+
+    def test_new_replacement_supersedes_a_crashed_prior_generation(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        backend = get_backend()
+        first = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png("navy"),
+            content_type="image/png",
+        )
+        db_session.commit()
+
         source_covers.put(
             db_session,
             backend,
             provenance_source_id=source.id,
             actor_id=None,
-            data=_png(),
+            data=_png("maroon"),
             content_type="image/png",
         )
+        # Simulate a process crash after publication but before the caller's
+        # transaction commits its replacement metadata and lease release.
+        db_session.rollback()
+        assert db_session.exec(select(StagingLease)).one()
 
-    backend.rollback_create.assert_called_once_with(receipt)
-    assert db_session.exec(select(ModelSourceCover)).all() == []
-    assert db_session.exec(select(StagingLease)).all() == []
-    assert db_session.exec(select(OwnedStorageObject)).all() == []
-
-
-def test_replacement_failure_keeps_old_metadata_and_proof(db_session: Session) -> None:
-    source = _source(db_session)
-    cover = ModelSourceCover(
-        provenance_source_id=source.id, storage_key="opaque/covers/1.webp", size_bytes=3
-    )
-    db_session.add(cover)
-    old = _receipt(token="old")
-    record_creation(db_session, old, object_kind="model_source_cover")
-    db_session.flush()
-    backend = _backend()
-    backend.read_bytes.return_value = b"old"
-    backend.creation_matches.return_value = True
-    backend.replace_bytes.side_effect = RuntimeError("replace failed")
-
-    with pytest.raises(RuntimeError, match="replace failed"):
-        source_covers.put(
+        latest = source_covers.put(
             db_session,
             backend,
             provenance_source_id=source.id,
             actor_id=None,
-            data=_png(),
+            data=_png("gold"),
             content_type="image/png",
         )
+        db_session.commit()
 
-    assert cover.size_bytes == 3
-    proof = db_session.exec(select(OwnedStorageObject)).one()
-    assert proof.token == "old"
+        expected = process_source_cover_upload(_png("gold"), "image/png").data
+        assert latest.cover.id == first.cover.id
+        assert backend.read_bytes(latest.cover.storage_key) == expected
+        assert db_session.exec(select(StagingLease)).all() == []
 
-
-def test_successive_replacements_publish_latest_bytes_and_release_each_lease(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    backend = get_backend()
-
-    first = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("navy"),
-        content_type="image/png",
-    )
-    db_session.commit()
-
-    second = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("maroon"),
-        content_type="image/png",
-    )
-    assert second.cover.id == first.cover.id
-    assert db_session.exec(select(StagingLease)).all() == []
-    db_session.commit()
-
-    latest = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("gold"),
-        content_type="image/png",
-    )
-    db_session.commit()
-
-    assert latest.cover.id == first.cover.id
-    expected = process_source_cover_upload(_png("gold"), "image/png").data
-    assert backend.read_bytes(latest.cover.storage_key) == expected
-    assert db_session.exec(select(StagingLease)).all() == []
-
-
-def test_new_replacement_supersedes_a_crashed_prior_generation(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    backend = get_backend()
-    first = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("navy"),
-        content_type="image/png",
-    )
-    db_session.commit()
-
-    source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("maroon"),
-        content_type="image/png",
-    )
-    # Simulate a process crash after publication but before the caller's
-    # transaction commits its replacement metadata and lease release.
-    db_session.rollback()
-    assert db_session.exec(select(StagingLease)).one()
-
-    latest = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("gold"),
-        content_type="image/png",
-    )
-    db_session.commit()
-
-    expected = process_source_cover_upload(_png("gold"), "image/png").data
-    assert latest.cover.id == first.cover.id
-    assert backend.read_bytes(latest.cover.storage_key) == expected
-    assert db_session.exec(select(StagingLease)).all() == []
-
-
-def test_restart_reconciles_replacement_without_restoring_old_bytes(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    backend = get_backend()
-    first = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("navy"),
-        content_type="image/png",
-    )
-    db_session.commit()
-    replacement_data = _png("maroon")
-    source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=replacement_data,
-        content_type="image/png",
-    )
-    db_session.rollback()
-
-    normalized = process_source_cover_upload(replacement_data, "image/png").data
-    assert backend.read_bytes(first.cover.storage_key) == normalized
-    assert source_covers.reconcile_pending(db_session, backend) == 1
-    db_session.commit()
-
-    cover = db_session.get(ModelSourceCover, first.cover.id)
-    assert cover is not None
-    assert cover.size_bytes == len(normalized)
-    proof = db_session.exec(select(OwnedStorageObject)).one()
-    assert backend.creation_matches(
-        CreationReceipt(
-            key=proof.key,
-            size=proof.size_bytes,
-            token=proof.token,
-            backend=proof.backend,
-            namespace=proof.namespace,
-            etag=proof.etag,
-            version_id=proof.version_id,
-            device=proof.device,
-            inode=proof.inode,
-            ctime_ns=proof.ctime_ns,
-        )
-    )
-
-
-def test_expired_cover_intent_without_bytes_removes_cover_and_lease(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    db_session.commit()
-    cover = ModelSourceCover(
-        provenance_source_id=source.id,
-        storage_key="opaque/covers/not-published.webp",
-        size_bytes=4,
-    )
-    db_session.add(cover)
-    db_session.flush()
-    lease = staging_leases.create_cover_lease(
-        db_session,
-        model_source_cover_id=cover.id or 0,
-        owner_user_id=None,
-        destination_key=cover.storage_key,
-        size_bytes=4,
-        sha256="a" * 64,
-    )
-    lease.expires_at = lease.created_at
-    db_session.commit()
-    backend = _backend()
-    backend.adopt_existing.side_effect = NotImplementedError
-    backend.object_info.return_value = None
-
-    assert staging_leases.prune_expired(
-        db_session, now=lease.expires_at, backend=backend
-    ) == (1, 0)
-    assert db_session.get(ModelSourceCover, cover.id) is None
-    assert db_session.get(StagingLease, lease.id) is None
-    backend.rollback_create.assert_not_called()
-
-
-def test_restart_reconcile_discards_unpublished_cover_intent(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    db_session.commit()
-    cover = ModelSourceCover(
-        provenance_source_id=source.id,
-        storage_key="opaque/covers/restart-missing.webp",
-        size_bytes=4,
-    )
-    db_session.add(cover)
-    db_session.flush()
-    lease = staging_leases.create_cover_lease(
-        db_session,
-        model_source_cover_id=cover.id or 0,
-        owner_user_id=None,
-        destination_key=cover.storage_key,
-        size_bytes=4,
-        sha256="d" * 64,
-    )
-    db_session.commit()
-    backend = _backend()
-    backend.adopt_existing.side_effect = NotImplementedError
-    backend.object_info.return_value = None
-
-    assert source_covers.reconcile_pending(db_session, backend) == 1
-    db_session.commit()
-    assert db_session.get(ModelSourceCover, cover.id) is None
-    assert db_session.get(StagingLease, lease.id) is None
-
-
-@pytest.mark.parametrize(
-    "object_info",
-    [StorageObjectInfo(size=7), RuntimeError("storage unavailable")],
-)
-def test_expired_cover_intent_never_deletes_mismatched_or_uncertain_storage(
-    db_session: Session, object_info: object
-) -> None:
-    source = _source(db_session)
-    db_session.commit()
-    cover = ModelSourceCover(
-        provenance_source_id=source.id,
-        storage_key="opaque/covers/foreign.webp",
-        size_bytes=4,
-    )
-    db_session.add(cover)
-    db_session.flush()
-    lease = staging_leases.create_cover_lease(
-        db_session,
-        model_source_cover_id=cover.id or 0,
-        owner_user_id=None,
-        destination_key=cover.storage_key,
-        size_bytes=4,
-        sha256="b" * 64,
-    )
-    lease.expires_at = lease.created_at
-    db_session.commit()
-    backend = _backend()
-    backend.adopt_existing.side_effect = NotImplementedError
-    if isinstance(object_info, Exception):
-        backend.object_info.side_effect = object_info
-    else:
-        backend.object_info.return_value = object_info
-
-    assert staging_leases.prune_expired(
-        db_session, now=lease.expires_at, backend=backend
-    ) == (0, 0)
-    assert db_session.get(ModelSourceCover, cover.id) is not None
-    assert db_session.get(StagingLease, lease.id) is not None
-    backend.rollback_create.assert_not_called()
-
-
-def test_expired_replacement_intent_keeps_existing_cover_when_old_bytes_remain(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    db_session.commit()
-    cover = ModelSourceCover(
-        provenance_source_id=source.id,
-        storage_key="opaque/covers/replacement.webp",
-        size_bytes=3,
-    )
-    db_session.add(cover)
-    db_session.flush()
-    old = _receipt(key=cover.storage_key, token="old")
-    record_creation(db_session, old, object_kind="model_source_cover")
-    lease = staging_leases.create_cover_lease(
-        db_session,
-        model_source_cover_id=cover.id or 0,
-        owner_user_id=None,
-        destination_key=cover.storage_key,
-        size_bytes=5,
-        sha256="c" * 64,
-    )
-    lease.expires_at = lease.created_at
-    db_session.commit()
-    backend = _backend()
-    backend.adopt_existing.side_effect = NotImplementedError
-    backend.object_info.return_value = StorageObjectInfo(size=3)
-
-    assert staging_leases.prune_expired(
-        db_session, now=lease.expires_at, backend=backend
-    ) == (0, 0)
-    assert db_session.get(ModelSourceCover, cover.id) is not None
-    assert db_session.get(StagingLease, lease.id) is not None
-
-
-class TestCoverLease:
     def test_create_publish_failure_leaves_no_cover_lease_or_proof(
         self,
         db_session: Session,
@@ -489,8 +300,6 @@ class TestCoverLease:
             db_session.commit()
         db_session.rollback()
 
-
-class TestCommit:
     def test_commit_failure_rolls_back_new_publish_with_exact_receipt(
         self,
         db_session: Session,
@@ -621,8 +430,6 @@ class TestCommit:
         monkeypatch.setattr(db_session, "commit", caller_commit)
         db_session.rollback()
 
-
-class TestFinishImport:
     def test_finish_import_uses_only_intent_and_final_sqlite_commits(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -742,8 +549,6 @@ class TestFinishImport:
             )
         engine.dispose()
 
-
-class TestDelete:
     def test_soft_delete_and_restore_keep_cover_and_proof(
         self, db_session: Session
     ) -> None:
@@ -801,3 +606,206 @@ class TestDelete:
         assert len(intents) == 1
         assert intents[0].key == result.cover.storage_key
         assert intents[0].resource_id == str(result.cover.id)
+
+
+class TestReconcilePending:
+    def test_restart_reconciles_replacement_without_restoring_old_bytes(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        backend = get_backend()
+        first = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png("navy"),
+            content_type="image/png",
+        )
+        db_session.commit()
+        replacement_data = _png("maroon")
+        source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=replacement_data,
+            content_type="image/png",
+        )
+        db_session.rollback()
+
+        normalized = process_source_cover_upload(replacement_data, "image/png").data
+        assert backend.read_bytes(first.cover.storage_key) == normalized
+        assert source_covers.reconcile_pending(db_session, backend) == 1
+        db_session.commit()
+
+        cover = db_session.get(ModelSourceCover, first.cover.id)
+        assert cover is not None
+        assert cover.size_bytes == len(normalized)
+        proof = db_session.exec(select(OwnedStorageObject)).one()
+        assert backend.creation_matches(
+            CreationReceipt(
+                key=proof.key,
+                size=proof.size_bytes,
+                token=proof.token,
+                backend=proof.backend,
+                namespace=proof.namespace,
+                etag=proof.etag,
+                version_id=proof.version_id,
+                device=proof.device,
+                inode=proof.inode,
+                ctime_ns=proof.ctime_ns,
+            )
+        )
+
+    def test_restart_reconcile_discards_unpublished_cover_intent(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        db_session.commit()
+        cover = ModelSourceCover(
+            provenance_source_id=source.id,
+            storage_key="opaque/covers/restart-missing.webp",
+            size_bytes=4,
+        )
+        db_session.add(cover)
+        db_session.flush()
+        lease = staging_leases.create_cover_lease(
+            db_session,
+            model_source_cover_id=cover.id or 0,
+            owner_user_id=None,
+            destination_key=cover.storage_key,
+            size_bytes=4,
+            sha256="d" * 64,
+        )
+        db_session.commit()
+        backend = _backend()
+        backend.adopt_existing.side_effect = NotImplementedError
+        backend.object_info.return_value = None
+
+        assert source_covers.reconcile_pending(db_session, backend) == 1
+        db_session.commit()
+        assert db_session.get(ModelSourceCover, cover.id) is None
+        assert db_session.get(StagingLease, lease.id) is None
+
+
+class TestPruneExpired:
+    """The staging sweep meeting a cover intent it did not create.
+
+    `staging_leases.prune_expired` is a generic reaper, and a cover's lease is
+    only one of the things it walks. Its judgement about somebody else's bytes is
+    what these rows pin: an intent with nothing published loses its cover and
+    lease, and an intent whose storage does not match — or whose state it cannot
+    be sure about — is left entirely alone, because a wrong guess here deletes a
+    cover a user can see."""
+
+    def test_expired_cover_intent_without_bytes_removes_cover_and_lease(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        db_session.commit()
+        cover = ModelSourceCover(
+            provenance_source_id=source.id,
+            storage_key="opaque/covers/not-published.webp",
+            size_bytes=4,
+        )
+        db_session.add(cover)
+        db_session.flush()
+        lease = staging_leases.create_cover_lease(
+            db_session,
+            model_source_cover_id=cover.id or 0,
+            owner_user_id=None,
+            destination_key=cover.storage_key,
+            size_bytes=4,
+            sha256="a" * 64,
+        )
+        lease.expires_at = lease.created_at
+        db_session.commit()
+        backend = _backend()
+        backend.adopt_existing.side_effect = NotImplementedError
+        backend.object_info.return_value = None
+
+        assert staging_leases.prune_expired(
+            db_session, now=lease.expires_at, backend=backend
+        ) == (1, 0)
+        assert db_session.get(ModelSourceCover, cover.id) is None
+        assert db_session.get(StagingLease, lease.id) is None
+        backend.rollback_create.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "object_info",
+        [StorageObjectInfo(size=7), RuntimeError("storage unavailable")],
+    )
+    def test_expired_cover_intent_never_deletes_mismatched_or_uncertain_storage(
+        self, db_session: Session, object_info: object
+    ) -> None:
+        source = _source(db_session)
+        db_session.commit()
+        cover = ModelSourceCover(
+            provenance_source_id=source.id,
+            storage_key="opaque/covers/foreign.webp",
+            size_bytes=4,
+        )
+        db_session.add(cover)
+        db_session.flush()
+        lease = staging_leases.create_cover_lease(
+            db_session,
+            model_source_cover_id=cover.id or 0,
+            owner_user_id=None,
+            destination_key=cover.storage_key,
+            size_bytes=4,
+            sha256="b" * 64,
+        )
+        lease.expires_at = lease.created_at
+        db_session.commit()
+        backend = _backend()
+        backend.adopt_existing.side_effect = NotImplementedError
+        if isinstance(object_info, Exception):
+            backend.object_info.side_effect = object_info
+        else:
+            backend.object_info.return_value = object_info
+
+        assert staging_leases.prune_expired(
+            db_session, now=lease.expires_at, backend=backend
+        ) == (0, 0)
+        assert db_session.get(ModelSourceCover, cover.id) is not None
+        assert db_session.get(StagingLease, lease.id) is not None
+        backend.rollback_create.assert_not_called()
+
+    def test_expired_replacement_intent_keeps_existing_cover_when_old_bytes_remain(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        db_session.commit()
+        cover = ModelSourceCover(
+            provenance_source_id=source.id,
+            storage_key="opaque/covers/replacement.webp",
+            size_bytes=3,
+        )
+        db_session.add(cover)
+        db_session.flush()
+        old = _receipt(key=cover.storage_key, token="old")
+        record_creation(db_session, old, object_kind="model_source_cover")
+        lease = staging_leases.create_cover_lease(
+            db_session,
+            model_source_cover_id=cover.id or 0,
+            owner_user_id=None,
+            destination_key=cover.storage_key,
+            size_bytes=5,
+            sha256="c" * 64,
+        )
+        lease.expires_at = lease.created_at
+        db_session.commit()
+        backend = _backend()
+        backend.adopt_existing.side_effect = NotImplementedError
+        backend.object_info.return_value = StorageObjectInfo(size=3)
+
+        assert staging_leases.prune_expired(
+            db_session, now=lease.expires_at, backend=backend
+        ) == (0, 0)
+        assert db_session.get(ModelSourceCover, cover.id) is not None
+        assert db_session.get(StagingLease, lease.id) is not None

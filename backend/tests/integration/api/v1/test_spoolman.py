@@ -31,141 +31,52 @@ def spoolman_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(router_mod.filament_sync, "sync_from_spoolman", no_sync)
 
 
-def test_requires_superuser(client: TestClient):
-    assert client.get("/api/v1/spoolman").status_code == 401
+class TestGetStatus:
+    def test_requires_superuser(self, client: TestClient):
+        assert client.get("/api/v1/spoolman").status_code == 401
 
+    def test_status_defaults_disabled(self, client: TestClient, auth_headers):
+        body = client.get("/api/v1/spoolman", headers=auth_headers).json()
+        assert body["enabled"] is False
+        assert body["base_url"] is None
+        assert body["has_api_key"] is False
+        # Disabled means no network probe runs.
+        assert body["connected"] is False
 
-def test_status_defaults_disabled(client: TestClient, auth_headers):
-    body = client.get("/api/v1/spoolman", headers=auth_headers).json()
-    assert body["enabled"] is False
-    assert body["base_url"] is None
-    assert body["has_api_key"] is False
-    # Disabled means no network probe runs.
-    assert body["connected"] is False
-
-
-def test_config_roundtrip_and_masks_key(client: TestClient, auth_headers):
-    resp = client.put(
-        "/api/v1/spoolman",
-        json={"base_url": "http://spoolman.local:7912", "api_key": "secret"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["base_url"] == "http://spoolman.local:7912"
-    # The key itself is never returned; only its presence.
-    assert body["has_api_key"] is True
-    assert "secret" not in resp.text
-
-
-def test_update_preserves_key_when_masked(client: TestClient, auth_headers):
-    client.put(
-        "/api/v1/spoolman",
-        json={"base_url": "http://spoolman.local:7912", "api_key": "secret"},
-        headers=auth_headers,
-    )
-    # Re-sending the mask must not wipe the stored key.
-    client.put(
-        "/api/v1/spoolman",
-        json={"base_url": "http://spoolman.local:7912", "api_key": "********"},
-        headers=auth_headers,
-    )
-    body = client.get("/api/v1/spoolman", headers=auth_headers).json()
-    assert body["has_api_key"] is True
-
-
-def test_spools_empty_when_disabled(client: TestClient, auth_headers):
-    # Even with a base URL set, a disabled integration returns no inventory and
-    # makes no network call.
-    client.put(
-        "/api/v1/spoolman",
-        json={"base_url": "http://spoolman.local:7912"},
-        headers=auth_headers,
-    )
-    resp = client.get("/api/v1/spoolman/spools", headers=auth_headers)
-    assert resp.status_code == 200
-    assert resp.json() == []
-
-
-def test_enable_toggle(client: TestClient, auth_headers):
-    client.put("/api/v1/spoolman", json={"enabled": True}, headers=auth_headers)
-    assert (
-        client.get("/api/v1/spoolman", headers=auth_headers).json()["enabled"] is True
-    )
-
-
-def test_write_toggles_roundtrip(client: TestClient, auth_headers):
-    resp = client.put(
-        "/api/v1/spoolman",
-        json={"write_enabled": False, "write_force": True},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["write_enabled"] is False
-    assert body["write_force"] is True
-
-
-def test_enable_triggers_initial_filament_sync(
-    client: TestClient, auth_headers, monkeypatch
-):
-    import app.api.v1.spoolman as mod
-    from app.services.filament_sync import SyncResult
-
-    called = {"n": 0}
-
-    async def fake_sync(session):
-        called["n"] += 1
-        return SyncResult(created=3)
-
-    monkeypatch.setattr(mod.filament_sync, "sync_from_spoolman", fake_sync)
-    client.put(
-        "/api/v1/spoolman",
-        json={"base_url": "http://s:7912"},
-        headers=auth_headers,
-    )
-    resp = client.put("/api/v1/spoolman", json={"enabled": True}, headers=auth_headers)
-    assert resp.status_code == 200
-    assert called["n"] == 1
-
-    # Re-enabling (already enabled) must not trigger a second sync.
-    resp2 = client.put("/api/v1/spoolman", json={"enabled": True}, headers=auth_headers)
-    assert resp2.status_code == 200
-    assert called["n"] == 1
-
-
-def test_enable_sync_failure_does_not_fail_the_save(
-    client: TestClient, auth_headers, monkeypatch
-):
-    import app.api.v1.spoolman as mod
-    from app.services.spoolman import SpoolmanError
-
-    async def fake_sync(session):
-        raise SpoolmanError("unreachable")
-
-    monkeypatch.setattr(mod.filament_sync, "sync_from_spoolman", fake_sync)
-    resp = client.put(
-        "/api/v1/spoolman",
-        json={"base_url": "http://s:7912", "enabled": True},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    assert resp.json()["enabled"] is True
-
-
-class TestProbe:
-    def test_probe_reports_connected_and_native_hook(
+    def test_reports_the_version_a_reachable_spoolman_answers_with(
         self, client: TestClient, auth_headers, monkeypatch
     ):
-        """Exercises the real ``_probe`` helper (not mocked away), through the
-        status endpoint's live-probe branch."""
+        import app.services.spoolman as spoolman_mod
+
+        async def fake_health_check(self):
+            return {"version": "1.9.0"}
+
+        monkeypatch.setattr(
+            spoolman_mod.SpoolmanClient, "health_check", fake_health_check
+        )
+        client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://s:7912", "enabled": True},
+            headers=auth_headers,
+        )
+
+        resp = client.get("/api/v1/spoolman", headers=auth_headers)
+
+        # The real `_probe` helper runs; only the outbound call is stood in for.
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["connected"] is True
+        assert resp.json()["version"] == "1.9.0"
+
+    def test_reports_the_native_hook_when_spoolman_has_an_active_spool(
+        self, client: TestClient, auth_headers, monkeypatch
+    ):
         import app.services.spoolman as spoolman_mod
 
         async def fake_health_check(self):
             return {"version": "1.9.0"}
 
         async def fake_active_spool(self):
-            return 42  # a truthy spool id -> native_hook_detected True
+            return 42
 
         monkeypatch.setattr(
             spoolman_mod.SpoolmanClient, "health_check", fake_health_check
@@ -173,19 +84,17 @@ class TestProbe:
         monkeypatch.setattr(
             spoolman_mod.SpoolmanClient, "active_spool", fake_active_spool
         )
-
         client.put(
             "/api/v1/spoolman",
             json={"base_url": "http://s:7912", "enabled": True},
             headers=auth_headers,
         )
+
         resp = client.get("/api/v1/spoolman", headers=auth_headers)
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["connected"] is True
-        assert body["version"] == "1.9.0"
-        assert body["native_hook_detected"] is True
+        # An active spool means Spoolman is already driving the printer's
+        # filament tracking itself, which changes what PrintStash offers to do.
+        assert resp.json()["native_hook_detected"] is True
 
     def test_probe_reports_error_on_spoolman_error(
         self, client: TestClient, auth_headers, monkeypatch
@@ -211,6 +120,114 @@ class TestProbe:
         body = resp.json()
         assert body["connected"] is False
         assert "connection refused" in body["error"]
+
+
+class TestUpdateStatus:
+    def test_stores_the_configured_base_url(self, client: TestClient, auth_headers):
+        resp = client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://spoolman.local:7912", "api_key": "secret"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["base_url"] == "http://spoolman.local:7912"
+
+    def test_never_returns_the_api_key_it_was_given(
+        self, client: TestClient, auth_headers
+    ):
+        resp = client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://spoolman.local:7912", "api_key": "secret"},
+            headers=auth_headers,
+        )
+
+        # Only its presence, never the value: the response is rendered into a form
+        # the browser keeps, and an echoed key ends up in caches and logs.
+        assert resp.json()["has_api_key"] is True
+        assert "secret" not in resp.text
+
+    def test_update_preserves_key_when_masked(self, client: TestClient, auth_headers):
+        client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://spoolman.local:7912", "api_key": "secret"},
+            headers=auth_headers,
+        )
+        # Re-sending the mask must not wipe the stored key.
+        client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://spoolman.local:7912", "api_key": "********"},
+            headers=auth_headers,
+        )
+        body = client.get("/api/v1/spoolman", headers=auth_headers).json()
+        assert body["has_api_key"] is True
+
+    def test_enable_toggle(self, client: TestClient, auth_headers):
+        client.put("/api/v1/spoolman", json={"enabled": True}, headers=auth_headers)
+        assert (
+            client.get("/api/v1/spoolman", headers=auth_headers).json()["enabled"]
+            is True
+        )
+
+    def test_write_toggles_roundtrip(self, client: TestClient, auth_headers):
+        resp = client.put(
+            "/api/v1/spoolman",
+            json={"write_enabled": False, "write_force": True},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["write_enabled"] is False
+        assert body["write_force"] is True
+
+    def test_enable_triggers_initial_filament_sync(
+        self, client: TestClient, auth_headers, monkeypatch
+    ):
+        import app.api.v1.spoolman as mod
+        from app.services.filament_sync import SyncResult
+
+        called = {"n": 0}
+
+        async def fake_sync(session):
+            called["n"] += 1
+            return SyncResult(created=3)
+
+        monkeypatch.setattr(mod.filament_sync, "sync_from_spoolman", fake_sync)
+        client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://s:7912"},
+            headers=auth_headers,
+        )
+        resp = client.put(
+            "/api/v1/spoolman", json={"enabled": True}, headers=auth_headers
+        )
+        assert resp.status_code == 200
+        assert called["n"] == 1
+
+        # Re-enabling (already enabled) must not trigger a second sync.
+        resp2 = client.put(
+            "/api/v1/spoolman", json={"enabled": True}, headers=auth_headers
+        )
+        assert resp2.status_code == 200
+        assert called["n"] == 1
+
+    def test_enable_sync_failure_does_not_fail_the_save(
+        self, client: TestClient, auth_headers, monkeypatch
+    ):
+        import app.api.v1.spoolman as mod
+        from app.services.spoolman import SpoolmanError
+
+        async def fake_sync(session):
+            raise SpoolmanError("unreachable")
+
+        monkeypatch.setattr(mod.filament_sync, "sync_from_spoolman", fake_sync)
+        resp = client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://s:7912", "enabled": True},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["enabled"] is True
 
 
 class TestSyncFilaments:
@@ -406,5 +423,17 @@ class TestListSpools:
         monkeypatch.setattr(mod.SpoolmanClient, "list_spools", fake_list_spools)
         resp = client.get("/api/v1/spoolman/spools", headers=auth_headers)
 
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_spools_empty_when_disabled(self, client: TestClient, auth_headers):
+        # Even with a base URL set, a disabled integration returns no inventory and
+        # makes no network call.
+        client.put(
+            "/api/v1/spoolman",
+            json={"base_url": "http://spoolman.local:7912"},
+            headers=auth_headers,
+        )
+        resp = client.get("/api/v1/spoolman/spools", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json() == []

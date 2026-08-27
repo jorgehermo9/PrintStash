@@ -14,6 +14,8 @@ belongs to somebody's external library, which no amount of trash retention can u
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -263,3 +265,55 @@ class TestPurgeExpiredTrash:
 
     def test_rejects_an_unauthenticated_caller(self, client: TestClient) -> None:
         assert client.delete("/api/v1/models/trash/expired").status_code == 401
+
+    def test_removes_the_expired_models_bytes_from_storage(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers,
+        make_model,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from datetime import timedelta
+
+        from app.core.config import _overlay
+        from app.db.models import FileType
+        from app.services.storage_backend import get_backend
+        from app.services.storage_ownership import record_creation
+        from tests._env import use_local_storage
+        from tests.factories import build_file
+
+        use_local_storage(tmp_path)
+        monkeypatch.setitem(_overlay, "trash_retention_days", 30)
+        expired = make_model("Long expired", deleted_at=utcnow() - timedelta(days=90))
+        fresh = make_model("Recently trashed", deleted_at=utcnow())
+        paths = {}
+        for index, (model, name) in enumerate(((expired, "old"), (fresh, "new"))):
+            path = str(tmp_path / "files" / f"{name}-cube.stl")
+            build_file(
+                db_session,
+                model,
+                path=path,
+                filename=f"{name}-cube.stl",
+                file_type=FileType.STL,
+                size_bytes=3,
+                sha256=chr(ord("a") + index) * 64,
+            )
+            record_creation(
+                db_session,
+                get_backend().create_bytes(name.encode(), path),
+                object_kind="artifact",
+            )
+            paths[name] = Path(path)
+        db_session.commit()
+
+        response = client.delete("/api/v1/models/trash/expired", headers=auth_headers)
+
+        # The row going is not the point — the bytes are. A purge that deleted
+        # the row and left the blob is a storage leak nothing will ever collect,
+        # and one that deleted the wrong blob takes a model the user can still
+        # see in their trash.
+        assert response.status_code == 200, response.text
+        assert not paths["old"].exists()
+        assert paths["new"].exists()

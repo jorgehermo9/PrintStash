@@ -46,166 +46,176 @@ from app.services.jobs import JobRegistry, safe_error, safe_item
 from tests.factories import build_user
 
 
-def test_progress_keeps_total_unknown_until_discovery() -> None:
-    jobs = JobRegistry()
-    job_id = jobs.create(owner_user_id=7)
-    jobs.update(job_id, state="running", stage="resolving", processed=0)
-    assert jobs.get(job_id).total is None  # type: ignore[union-attr]
+class TestJobUpdate:
+    def test_progress_keeps_total_unknown_until_discovery(self) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+        jobs.update(job_id, state="running", stage="resolving", processed=0)
+        assert jobs.get(job_id).total is None  # type: ignore[union-attr]
 
-    jobs.update(job_id, stage="ingesting", total=3, processed=1)
-    status = jobs.get(job_id)
-    assert status is not None
-    assert (status.processed, status.total) == (1, 3)
+        jobs.update(job_id, stage="ingesting", total=3, processed=1)
+        status = jobs.get(job_id)
+        assert status is not None
+        assert (status.processed, status.total) == (1, 3)
 
+    def test_partial_success_has_summary_and_safe_retry_details(self) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+        jobs.update(
+            job_id,
+            state="completed",
+            succeeded=2,
+            deduplicated=1,
+            skipped=1,
+            failed=1,
+            retryable=True,
+            result={"errors": ["/srv/private/models/broken.stl: token=secret"]},
+            failed_items=[
+                {
+                    "name": "/srv/private/models/broken.stl",
+                    "reason": "read /srv/private/models/broken.stl?token=secret failed",
+                    "retryable": True,
+                }
+            ],
+        )
+        status = jobs.get(job_id)
+        assert status is not None
+        assert status.completion == "partial"
+        assert status.failed_items[0].name == "broken.stl"
+        assert "/srv/private" not in status.failed_items[0].reason
+        assert "secret" not in status.failed_items[0].reason
+        assert "/srv/private" not in str(status.result)
+        assert "secret" not in str(status.result)
 
-def test_partial_success_has_summary_and_safe_retry_details() -> None:
-    jobs = JobRegistry()
-    job_id = jobs.create(owner_user_id=7)
-    jobs.update(
-        job_id,
-        state="completed",
-        succeeded=2,
-        deduplicated=1,
-        skipped=1,
-        failed=1,
-        retryable=True,
-        result={"errors": ["/srv/private/models/broken.stl: token=secret"]},
-        failed_items=[
-            {
-                "name": "/srv/private/models/broken.stl",
-                "reason": "read /srv/private/models/broken.stl?token=secret failed",
-                "retryable": True,
-            }
+    def test_complete_failure_is_distinct_from_partial_success(self) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+        jobs.update(job_id, state="failed", error="download_failed", retryable=True)
+        status = jobs.get(job_id)
+        assert status is not None
+        assert status.completion is None
+        assert status.succeeded == 0
+
+    @pytest.mark.parametrize(
+        "stage",
+        [
+            "resolving",
+            "downloading",
+            "inspecting",
+            "extracting",
+            "hashing",
+            "ingesting",
+            "thumbnailing",
+            "completed",
         ],
     )
-    status = jobs.get(job_id)
-    assert status is not None
-    assert status.completion == "partial"
-    assert status.failed_items[0].name == "broken.stl"
-    assert "/srv/private" not in status.failed_items[0].reason
-    assert "secret" not in status.failed_items[0].reason
-    assert "/srv/private" not in str(status.result)
-    assert "secret" not in str(status.result)
+    def test_registry_supports_every_import_stage(self, stage: str) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+        jobs.update(job_id, stage=stage)  # type: ignore[arg-type]
+        assert jobs.get(job_id).stage == stage  # type: ignore[union-attr]
 
-
-def test_complete_failure_is_distinct_from_partial_success() -> None:
-    jobs = JobRegistry()
-    job_id = jobs.create(owner_user_id=7)
-    jobs.update(job_id, state="failed", error="download_failed", retryable=True)
-    status = jobs.get(job_id)
-    assert status is not None
-    assert status.completion is None
-    assert status.succeeded == 0
-
-
-def test_reconnect_listing_respects_owner_permissions() -> None:
-    jobs = JobRegistry()
-    own = jobs.create(owner_user_id=7)
-    other = jobs.create(owner_user_id=8)
-    assert [job.job_id for job in jobs.list_for_user(7)] == [own]
-    assert {job.job_id for job in jobs.list_for_user(7, is_superuser=True)} == {
-        own,
-        other,
-    }
-    assert jobs.get(own).state == "pending"  # type: ignore[union-attr]
-
-
-def test_reconnect_listing_scopes_before_status_deserialization(
-    db_session: Session,
-) -> None:
-    db_session.add(
-        BackgroundJob(
-            id="other-corrupt",
-            owner_user_id=8,
-            visible=True,
-            state="completed",
-            status_json="not-json",
+    def test_pending_registry_prunes_entries_past_ttl(self) -> None:
+        registry_ = ingest_module._PendingRegistry()
+        stale = ingest_module._PendingModelFiles(
+            page_url="https://x",
+            page_title="x",
+            owner_user_id=1,
+            files=[],
+            created_at=0.0,
         )
-    )
-    db_session.add(
-        BackgroundJob(
-            id="mine-valid",
-            owner_user_id=7,
-            visible=True,
-            state="running",
-            status_json=json.dumps({"state": "running"}),
-        )
-    )
-    db_session.commit()
-
-    listed = JobRegistry().list_for_user(7)
-
-    assert [job.job_id for job in listed] == ["mine-valid"]
-
-
-def test_reconnect_listing_keeps_active_and_bounds_terminal_history(
-    db_session: Session,
-) -> None:
-    now = utcnow()
-    db_session.add(
-        BackgroundJob(
-            id="active",
-            owner_user_id=7,
-            visible=True,
-            state="running",
-            status_json=json.dumps({"state": "running"}),
-            updated_at=now,
-        )
-    )
-    for index in range(5):
-        db_session.add(
-            BackgroundJob(
-                id=f"done-{index}",
-                owner_user_id=7,
-                visible=True,
-                state="completed",
-                status_json=json.dumps({"state": "completed"}),
-                updated_at=now - timedelta(seconds=index + 1),
+        registry_._items["stale-token"] = stale
+        fresh_token = registry_.add(
+            ingest_module._PendingModelFiles(
+                page_url="https://y", page_title="y", owner_user_id=1, files=[]
             )
         )
-    db_session.commit()
-
-    listed = JobRegistry().list_for_user(7, terminal_limit=2)
-
-    assert {job.job_id for job in listed} == {"active", "done-0", "done-1"}
-
-
-def test_display_sanitizers_hide_paths_credentials_and_control_characters() -> None:
-    assert safe_item("/mnt/nas/private/Cube\n.stl") == "Cube.stl"
-    error = safe_error("failed /mnt/nas/private/Cube.stl?api_key=hunter2")
-    assert error is not None
-    assert "/mnt/nas" not in error
-    assert "hunter2" not in error
+        assert registry_.get("stale-token") is None
+        assert registry_.get(fresh_token) is not None
+        assert registry_.pop(fresh_token) is not None
+        assert registry_.get(fresh_token) is None
 
 
-def test_progress_schema_rejects_unknown_stage() -> None:
-    with pytest.raises(ValueError):
-        IngestJobStatus(job_id="bad", state="running", stage="uploading")
+class TestListForUser:
+    def test_reconnect_listing_respects_owner_permissions(self) -> None:
+        jobs = JobRegistry()
+        own = jobs.create(owner_user_id=7)
+        other = jobs.create(owner_user_id=8)
+        assert [job.job_id for job in jobs.list_for_user(7)] == [own]
+        assert {job.job_id for job in jobs.list_for_user(7, is_superuser=True)} == {
+            own,
+            other,
+        }
+        assert jobs.get(own).state == "pending"  # type: ignore[union-attr]
 
+    def test_reconnect_listing_scopes_before_status_deserialization(
+        self,
+        db_session: Session,
+    ) -> None:
+        db_session.add(
+            BackgroundJob(
+                id="other-corrupt",
+                owner_user_id=8,
+                visible=True,
+                state="completed",
+                status_json="not-json",
+            )
+        )
+        db_session.add(
+            BackgroundJob(
+                id="mine-valid",
+                owner_user_id=7,
+                visible=True,
+                state="running",
+                status_json=json.dumps({"state": "running"}),
+            )
+        )
+        db_session.commit()
 
-def test_uploaded_zip_inspection_runs_as_reconnectable_job(
-    tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    _overlay["staging_dir"] = tmp_path / "staging"
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w") as bundle:
-        bundle.writestr("models/cube.stl", b"solid cube\nendsolid cube\n")
+        listed = JobRegistry().list_for_user(7)
 
-    queued = client.post(
-        "/api/v1/ingest/archive/inspect",
-        headers=auth_headers,
-        files={"file": ("models.zip", archive.getvalue(), "application/zip")},
-    )
-    assert queued.status_code == 202
-    job_id = queued.json()["job_id"]
-    status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers)
-    assert status.status_code == 200
-    payload = status.json()
-    assert payload["state"] == "completed"
-    assert payload["stage"] == "completed"
-    assert payload["result"]["kind"] == "archive_manifest"
-    assert payload["result"]["entries"][0]["name"] == "models/cube.stl"
-    assert status.headers["cache-control"] == "no-store"
+        assert [job.job_id for job in listed] == ["mine-valid"]
+
+    def test_reconnect_listing_keeps_active_and_bounds_terminal_history(
+        self,
+        db_session: Session,
+    ) -> None:
+        now = utcnow()
+        db_session.add(
+            BackgroundJob(
+                id="active",
+                owner_user_id=7,
+                visible=True,
+                state="running",
+                status_json=json.dumps({"state": "running"}),
+                updated_at=now,
+            )
+        )
+        for index in range(5):
+            db_session.add(
+                BackgroundJob(
+                    id=f"done-{index}",
+                    owner_user_id=7,
+                    visible=True,
+                    state="completed",
+                    status_json=json.dumps({"state": "completed"}),
+                    updated_at=now - timedelta(seconds=index + 1),
+                )
+            )
+        db_session.commit()
+
+        listed = JobRegistry().list_for_user(7, terminal_limit=2)
+
+        assert {job.job_id for job in listed} == {"active", "done-0", "done-1"}
+
+    def test_owns_helper_permissions(self) -> None:
+        owner = User(id=1, username="owner", hashed_password="x", is_superuser=False)
+        other = User(id=2, username="other", hashed_password="x", is_superuser=False)
+        admin = User(id=3, username="admin", hashed_password="x", is_superuser=True)
+        assert ingest_module._owns(None, other) is True
+        assert ingest_module._owns(1, owner) is True
+        assert ingest_module._owns(1, other) is False
+        assert ingest_module._owns(1, admin) is True
 
 
 # --------------------------------------------------------------------------- #
@@ -302,17 +312,6 @@ class TestCollectionTarget:
         assert ingest_module._collection_target("Parent/", "Child") == "Parent/Child"
         assert ingest_module._collection_target(None, "  ") == "Imported collection"
         assert ingest_module._collection_target("  ", "  ") == "Imported collection"
-
-
-class TestOwns:
-    def test_owns_helper_permissions(self) -> None:
-        owner = User(id=1, username="owner", hashed_password="x", is_superuser=False)
-        other = User(id=2, username="other", hashed_password="x", is_superuser=False)
-        admin = User(id=3, username="admin", hashed_password="x", is_superuser=True)
-        assert ingest_module._owns(None, other) is True
-        assert ingest_module._owns(1, owner) is True
-        assert ingest_module._owns(1, other) is False
-        assert ingest_module._owns(1, admin) is True
 
 
 class TestDownloadAndCollect:
@@ -1232,6 +1231,43 @@ class TestInspectArchiveBackground:
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "archive_invalid"
 
+    def test_display_sanitizers_hide_paths_credentials_and_control_characters(
+        self,
+    ) -> None:
+        assert safe_item("/mnt/nas/private/Cube\n.stl") == "Cube.stl"
+        error = safe_error("failed /mnt/nas/private/Cube.stl?api_key=hunter2")
+        assert error is not None
+        assert "/mnt/nas" not in error
+        assert "hunter2" not in error
+
+    def test_progress_schema_rejects_unknown_stage(self) -> None:
+        with pytest.raises(ValueError):
+            IngestJobStatus(job_id="bad", state="running", stage="uploading")
+
+    def test_uploaded_zip_inspection_runs_as_reconnectable_job(
+        self, tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        _overlay["staging_dir"] = tmp_path / "staging"
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("models/cube.stl", b"solid cube\nendsolid cube\n")
+
+        queued = client.post(
+            "/api/v1/ingest/archive/inspect",
+            headers=auth_headers,
+            files={"file": ("models.zip", archive.getvalue(), "application/zip")},
+        )
+        assert queued.status_code == 202
+        job_id = queued.json()["job_id"]
+        status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers)
+        assert status.status_code == 200
+        payload = status.json()
+        assert payload["state"] == "completed"
+        assert payload["stage"] == "completed"
+        assert payload["result"]["kind"] == "archive_manifest"
+        assert payload["result"]["entries"][0]["name"] == "models/cube.stl"
+        assert status.headers["cache-control"] == "no-store"
+
 
 class TestSelectArchiveEntries:
     def test_select_archive_entries_not_found(
@@ -1618,44 +1654,3 @@ class TestSelectCollectionMembers:
         )
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "no_members_selected"
-
-
-class TestRegistry:
-    @pytest.mark.parametrize(
-        "stage",
-        [
-            "resolving",
-            "downloading",
-            "inspecting",
-            "extracting",
-            "hashing",
-            "ingesting",
-            "thumbnailing",
-            "completed",
-        ],
-    )
-    def test_registry_supports_every_import_stage(self, stage: str) -> None:
-        jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
-        jobs.update(job_id, stage=stage)  # type: ignore[arg-type]
-        assert jobs.get(job_id).stage == stage  # type: ignore[union-attr]
-
-    def test_pending_registry_prunes_entries_past_ttl(self) -> None:
-        registry_ = ingest_module._PendingRegistry()
-        stale = ingest_module._PendingModelFiles(
-            page_url="https://x",
-            page_title="x",
-            owner_user_id=1,
-            files=[],
-            created_at=0.0,
-        )
-        registry_._items["stale-token"] = stale
-        fresh_token = registry_.add(
-            ingest_module._PendingModelFiles(
-                page_url="https://y", page_title="y", owner_user_id=1, files=[]
-            )
-        )
-        assert registry_.get("stale-token") is None
-        assert registry_.get(fresh_token) is not None
-        assert registry_.pop(fresh_token) is not None
-        assert registry_.get(fresh_token) is None
