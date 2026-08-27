@@ -209,6 +209,21 @@ class TestPageModels:
         assert response.status_code == 403, response.text
         assert response.json()["detail"] == "admin_required"
 
+    def test_surfaces_an_error_it_has_no_mapping_for(
+        self, client: TestClient, auth_headers, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.api.v1 import models as models_api
+
+        def unexpected(*_args: object, **_kwargs: object):
+            raise ValueError("something_nobody_planned_for")
+
+        monkeypatch.setattr(models_api.model_views, "page_items", unexpected)
+
+        # Only the cursor error becomes a 400; anything else is a bug, and
+        # reporting a bug as a client error is how it stays unfixed.
+        with pytest.raises(ValueError, match="something_nobody_planned_for"):
+            client.get("/api/v1/models/page", headers=auth_headers)
+
     def test_rejects_an_unauthenticated_caller(self, client: TestClient) -> None:
         assert client.get("/api/v1/models/page").status_code == 401
 

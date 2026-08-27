@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import io
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -26,6 +24,7 @@ from app.db.models import (
     PrintJobState,
     User,
 )
+from app.services import storage
 from app.services.auth import create_access_token, hash_password
 
 
@@ -979,23 +978,6 @@ def test_print_stats_returns_window(
     assert resp.status_code == 200
 
 
-def test_list_trash_and_purge_expired(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = _model(db_session)
-    model.deleted_at = utcnow()
-    db_session.add(model)
-    db_session.commit()
-
-    trash = client.get("/api/v1/models/trash", headers=auth_headers)
-    assert trash.status_code == 200
-    assert any(row["id"] == model.id for row in trash.json())
-
-    purged = client.delete("/api/v1/models/trash/expired", headers=auth_headers)
-    assert purged.status_code == 200
-    assert "purged_count" in purged.json()
-
-
 def test_update_model_can_move_to_root_as_superuser(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
@@ -1128,62 +1110,6 @@ def test_update_model_replaces_tags(
     assert cleared.json()["tags"] == []
 
 
-def test_delete_model_soft_deletes(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = _model(db_session)
-    resp = client.delete(f"/api/v1/models/{model.id}", headers=auth_headers)
-    assert resp.status_code == 204
-    db_session.refresh(model)
-    assert model.deleted_at is not None
-
-
-def test_restore_model_and_purge_model(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = _model(db_session)
-    model.deleted_at = utcnow()
-    db_session.add(model)
-    db_session.commit()
-
-    restored = client.post(f"/api/v1/models/{model.id}/restore", headers=auth_headers)
-    assert restored.status_code == 200
-    db_session.refresh(model)
-    assert model.deleted_at is None
-
-    model.deleted_at = utcnow()
-    db_session.add(model)
-    db_session.commit()
-    purged = client.delete(f"/api/v1/models/{model.id}/purge", headers=auth_headers)
-    assert purged.status_code == 200
-    assert purged.json()["purged_model_ids"] == [model.id]
-
-
-def test_restore_model_unknown_id_404(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.post("/api/v1/models/999999/restore", headers=auth_headers)
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "model_not_found"
-
-
-def test_purge_model_unknown_id_404(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.delete("/api/v1/models/999999/purge", headers=auth_headers)
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "model_not_found"
-
-
-def test_purge_model_not_in_trash_rejected(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = _model(db_session)
-    resp = client.delete(f"/api/v1/models/{model.id}/purge", headers=auth_headers)
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "model_not_in_trash"
-
-
 # --------------------------------------------------------------------------- #
 # Batch operations.
 # --------------------------------------------------------------------------- #
@@ -1310,81 +1236,6 @@ def test_batch_delete_models(
     assert resp.json()["succeeded_ids"] == [model.id]
     db_session.refresh(model)
     assert model.deleted_at is not None
-
-
-# --------------------------------------------------------------------------- #
-# Library archive export / import.
-# --------------------------------------------------------------------------- #
-def test_library_archive_export_and_import_round_trip(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    _configure_storage(tmp_path)
-    # Real ingest so the exported artifact has an actual on-disk blob (the
-    # archive writer stats + reads every file from storage).
-    uploaded = client.post(
-        "/api/v1/ingest/model",
-        headers=auth_headers,
-        files={"file": ("cube.stl", b"solid cube\nendsolid cube\n", "application/sla")},
-        data={"model_name": "Archive Me"},
-    )
-    assert uploaded.status_code == 202, uploaded.text
-    job = client.get(
-        f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=auth_headers
-    )
-    assert job.json()["state"] == "completed", job.json()
-
-    export = client.get("/api/v1/models/library-archive", headers=auth_headers)
-    assert export.status_code == 200
-    assert export.headers["content-type"] == "application/zip"
-
-    import_resp = client.post(
-        "/api/v1/models/library-import",
-        headers=auth_headers,
-        files={
-            "file": ("printstash-library-v1.zip", export.content, "application/zip")
-        },
-    )
-    assert import_resp.status_code == 202
-    imported_job = client.get(
-        f"/api/v1/ingest/jobs/{import_resp.json()['job_id']}", headers=auth_headers
-    )
-    assert imported_job.json()["state"] == "completed"
-
-
-def test_library_import_rejects_non_zip(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.post(
-        "/api/v1/models/library-import",
-        headers=auth_headers,
-        files={"file": ("archive.tar", b"not a zip", "application/x-tar")},
-    )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "archive_zip_required"
-
-
-def test_library_import_reports_invalid_archive_in_job(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as bundle:
-        bundle.writestr("not-a-manifest.txt", "hello")
-
-    resp = client.post(
-        "/api/v1/models/library-import",
-        headers=auth_headers,
-        files={"file": ("bad.zip", buf.getvalue(), "application/zip")},
-    )
-    assert resp.status_code == 202
-    status = client.get(
-        f"/api/v1/ingest/jobs/{resp.json()['job_id']}", headers=auth_headers
-    )
-    assert status.status_code == 200
-    assert status.json()["state"] == "failed"
-    assert status.json()["error"] == "portable_manifest_invalid"
 
 
 def test_star_unknown_model_returns_404(
@@ -1619,19 +1470,6 @@ def test_batch_move_denies_model_in_uneditable_source_collection(
     assert resp.json()["detail"] == "collection_permission_denied"
 
 
-def test_batch_tag_models_skips_blank_remove_entries(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = _model(db_session)
-    resp = client.post(
-        "/api/v1/models/batch/tags",
-        json={"model_ids": [model.id], "add": [], "remove": ["   "]},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    assert resp.json()["succeeded_count"] == 1
-
-
 def test_batch_set_revision_labels_reports_unexpected_error(
     client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
 ) -> None:
@@ -1687,3 +1525,61 @@ def test_delete_file_revision_clears_stale_thumbnail_pointer(
     db_session.refresh(model)
     assert model.thumbnail_file_id is None
     assert model.thumbnail_path is None
+
+
+def test_add_gcode_revision_rejects_a_file_past_the_upload_cap(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """The route's own cap, behind the app-wide body limit that answers first."""
+    _configure_storage(tmp_path)
+    model = _model(db_session)
+
+    def too_large(*_args, **_kwargs):
+        raise storage.UploadTooLarge("upload_too_large")
+
+    monkeypatch.setattr("app.api.v1.models.storage.stream_to_path", too_large)
+
+    response = client.post(
+        f"/api/v1/models/{model.id}/gcode-revisions",
+        headers=auth_headers,
+        files={"file": ("rev.gcode", b"G28\n", "text/plain")},
+    )
+
+    assert response.status_code == 413, response.text
+    assert response.json()["detail"] == "upload_too_large"
+
+
+def test_batch_tag_remove_treats_a_blank_entry_as_the_fallback_slug(
+    client: TestClient, auth_headers: dict[str, str], db_session: Session
+) -> None:
+    """`slugify` never returns empty, so a blank remove entry is not skipped.
+
+    It resolves to the fallback slug `model`. See the findings section of
+    `reports/22-test-overhaul-report.md`: the guard that looks like it skips
+    blanks (`if not slug: continue`) cannot fire, and the previous test for it
+    asserted only the 200 it would have returned either way.
+    """
+    from app.services import taxonomy
+
+    model = _model(db_session)
+    tag = taxonomy.resolve_or_create_tags_in_transaction(db_session, ["model"])[0]
+    db_session.commit()
+    client.post(
+        "/api/v1/models/batch/tags",
+        json={"model_ids": [model.id], "add": ["model"], "remove": []},
+        headers=auth_headers,
+    )
+
+    response = client.post(
+        "/api/v1/models/batch/tags",
+        json={"model_ids": [model.id], "add": [], "remove": ["   "]},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    detail = client.get(f"/api/v1/models/{model.id}", headers=auth_headers).json()
+    assert tag.slug not in detail["tags"]
