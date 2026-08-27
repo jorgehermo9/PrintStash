@@ -44,6 +44,7 @@ from app.db.scopes import live
 from app.services import external_library, runtime_config, taxonomy, trash
 from app.services.ingestion import add_gcode_revision_to_model, ingest_orca_gcode
 from app.services.jobs import registry
+from tests._env import use_local_storage
 from tests.paths import FIXTURES_DIR, TESTDATA_DIR
 
 
@@ -168,13 +169,6 @@ endsolid cube
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    (tmp_path / "files").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "thumbs").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "staging" / "_incoming").mkdir(parents=True, exist_ok=True)
 
 
 def _enable_feature(session: Session) -> None:
@@ -232,7 +226,7 @@ def test_hard_delete_model_never_destroys_nas_bytes(
 ) -> None:
     """Trash retention purge (hard delete) removes DB rows + vault thumbnails but
     must leave the original file on the NAS completely untouched."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "precious.gcode", marker="keep-me")
@@ -257,7 +251,7 @@ def test_hard_delete_model_never_destroys_nas_bytes(
 
 def test_gc_never_deletes_external_blobs(tmp_path: Path, db_session: Session) -> None:
     """External files are user-owned and survive GC, even at zero retention."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "onnas.gcode", marker="gc")
@@ -277,7 +271,7 @@ def test_write_back_never_overwrites_existing_nas_file(
 ) -> None:
     """A web upload routed into the NAS must not clobber a same-named file the
     user already has there — it lands under a collision-safe name instead."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     nas.mkdir(parents=True)
@@ -311,7 +305,7 @@ def test_write_back_rejects_collection_symlink_escape(
     tmp_path: Path, db_session: Session
 ) -> None:
     """A mirrored collection symlink cannot redirect a write outside the NAS."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     outside = tmp_path / "outside"
@@ -347,7 +341,7 @@ def test_write_back_rejects_collection_symlink_escape(
 # --------------------------------------------------------------------------- #
 def test_scan_indexes_mixed_mesh_and_gcode(tmp_path: Path, db_session: Session) -> None:
     """A realistic folder mixes meshes and slicer output; both index in place."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_stl(nas, "bracket.stl")
@@ -378,7 +372,7 @@ def test_scan_indexes_but_skips_over_cap_mesh(
     trimesh = pytest.importorskip("trimesh")
     from app.db.models import Metadata
 
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     nas.mkdir(parents=True, exist_ok=True)
@@ -414,7 +408,7 @@ def test_scan_indexes_but_skips_over_cap_mesh(
 def test_deep_nested_folders_build_collection_hierarchy(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas / "mechanical" / "brackets" / "v2", "corner.gcode", marker="deep")
@@ -435,7 +429,7 @@ def test_single_collection_mode_ignores_folder_structure(
 ) -> None:
     """SINGLE mode dumps every scanned file into one configured collection,
     regardless of where it sits in the folder tree."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     coll = taxonomy.resolve_or_create_collection(db_session, "nas-dump")
     db_session.commit()
@@ -466,7 +460,7 @@ def test_file_moved_within_nas_is_reconciled(
 ) -> None:
     """Moving a file to another subfolder reads as remove(old) + add(new): the
     index follows the file to its new path without leaving a stale live row."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     old_path = _drop_gcode(nas / "incoming", "widget.gcode", marker="move")
@@ -492,7 +486,7 @@ def test_mtime_touch_without_content_change_is_skipped(
 ) -> None:
     """A backup tool that rewrites mtimes but not bytes must not trigger a
     needless re-import — we just record the new signature."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "stable.gcode", marker="touch")
@@ -519,7 +513,7 @@ def test_per_file_error_is_isolated_and_scan_continues(
 ) -> None:
     """One unparseable/locked file must not abort the whole NAS sync: it is
     recorded in ``errors`` while the rest of the folder still indexes."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "good-1.gcode", marker="g1")
@@ -549,7 +543,7 @@ def test_per_file_error_is_isolated_and_scan_continues(
 
 def test_clean_scan_reports_ok(tmp_path: Path, db_session: Session) -> None:
     """A scan with no per-file failures stays OK (PARTIAL is only for errors)."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "good.gcode", marker="ok")
@@ -567,7 +561,7 @@ def test_unexpected_failure_never_strands_scan_running(
     """An exception outside the per-file boundary (e.g. a NAS mount dropping
     mid-walk) must land the library in a terminal ERROR state, not leave it
     stranded RUNNING where the scheduler would skip it forever (#24 follow-up)."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "any.gcode", marker="x")
@@ -594,7 +588,7 @@ def test_mtime_jitter_within_tolerance_skips_rehash(
 ) -> None:
     """Sub-second/FAT-granularity mtime drift on unchanged content takes the
     cheap skip path — it must not trigger a full sha256 re-hash over the NAS."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "stable.gcode", marker="jitter")
@@ -627,7 +621,7 @@ def test_mtime_jitter_within_tolerance_skips_rehash(
 def test_revision_is_written_back_into_library(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "bracket.gcode", marker="v1")
@@ -741,7 +735,7 @@ def test_scan_real_world_folder(tmp_path: Path, db_session: Session) -> None:
     immediate rescan must be a clean no-op. Unsupported files are silently
     ignored, never errored.
     """
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     root = _real_nas_dir()
     assert root is not None

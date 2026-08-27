@@ -30,17 +30,12 @@ from app.db.models import (
 from app.db.scopes import live
 from app.services import external_library, runtime_config
 from app.services.jobs import registry
+from tests._env import use_local_storage
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
 
 
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    (tmp_path / "thumbs").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "staging" / "_incoming").mkdir(parents=True, exist_ok=True)
 
 
 def _enable_feature(session: Session) -> None:
@@ -163,7 +158,7 @@ class TestCreateLibrary:
     def test_external_library_cannot_overlap_private_storage(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         nested = Path(_overlay["data_dir"]) / "nextcloud"
         nested.mkdir(parents=True)
@@ -299,7 +294,7 @@ class TestDeleteLibrary:
     def test_delete_library_via_api_trashes_index_but_keeps_nas_bytes(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         p1 = _drop_gcode(nas, "a.gcode", marker="a")
@@ -327,7 +322,7 @@ class TestScanNow:
     def test_scan_now_queues_job(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas, "a.gcode")
@@ -343,7 +338,7 @@ class TestScanNow:
     def test_coalesces_onto_the_scan_that_is_already_running(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas, "a.gcode")
@@ -365,7 +360,7 @@ class TestScanNow:
     def test_starts_a_new_scan_once_the_claim_has_expired(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas, "a.gcode")
@@ -396,7 +391,7 @@ class TestScanNow:
     ) -> None:
         """Full round trip: create a library over HTTP, trigger a scan, and confirm
         the background job completes and the folder is indexed."""
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas / "parts", "alpha.gcode", marker="a")
@@ -433,7 +428,7 @@ class TestScanPath:
     def test_scan_path_queues_job_for_subfolder(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas / "functional", "bracket.gcode")
@@ -502,7 +497,7 @@ class TestOverlapGuards:
     def test_refuses_a_root_that_contains_another_external_library(
         self, client: TestClient, db_session: Session, tmp_path: Path, auth_headers
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         inner = tmp_path / "nas" / "inner"
         inner.mkdir(parents=True)
@@ -521,7 +516,7 @@ class TestOverlapGuards:
     def test_refuses_a_root_that_contains_the_database_file(
         self, client: TestClient, db_session: Session, tmp_path: Path, auth_headers
     ) -> None:
-        _configure_storage(tmp_path)
+        use_local_storage(tmp_path)
         _enable_feature(db_session)
         database = tmp_path / "nas" / "printstash.sqlite"
         database.parent.mkdir(parents=True, exist_ok=True)

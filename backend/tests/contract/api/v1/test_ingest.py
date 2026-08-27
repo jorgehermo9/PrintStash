@@ -42,6 +42,7 @@ from app.core import url_safety
 from app.core.config import _overlay, settings
 from app.db.models import Collection, File, FileType, Model
 from app.services import import_resolvers, importer
+from tests._env import use_local_storage
 from tests.paths import TESTDATA_DIR
 
 # --------------------------------------------------------------------------- #
@@ -72,11 +73,6 @@ def _requires(*paths: Path):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    settings.incoming_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _stage_bytes(data: bytes, suffix: str) -> Path:
@@ -201,7 +197,7 @@ def _fresh_http_client() -> Iterator[None]:
 async def test_download_to_staging_fetches_real_file(
     tmp_path: Path, http_server: tuple[str, dict[str, dict]]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     base, routes = http_server
     stl_bytes = BENCHY_STL.read_bytes()
     routes["/download"] = {
@@ -229,7 +225,7 @@ async def test_download_to_staging_fetches_real_file(
 async def test_download_to_staging_follows_redirect(
     tmp_path: Path, http_server: tuple[str, dict[str, dict]]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     base, routes = http_server
     routes["/start"] = {"status": 302, "headers": {"Location": "/final.stl"}}
     routes["/final.stl"] = {"headers": {"Content-Type": "model/stl"}, "body": b"solid x\nendsolid x\n"}
@@ -246,7 +242,7 @@ async def test_download_to_staging_follows_redirect(
 async def test_download_to_staging_enforces_size_limit(
     tmp_path: Path, http_server: tuple[str, dict[str, dict]]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _overlay["max_upload_mb"] = 1  # 1 MiB cap
     base, routes = http_server
     routes["/big.stl"] = {"body": b"\0" * (2 * 1024 * 1024)}  # 2 MiB
@@ -266,7 +262,7 @@ async def test_download_to_staging_rejects_private_host(
     tmp_path: Path, http_server: tuple[str, dict[str, dict]]
 ) -> None:
     """Without relaxing the guard, the loopback server is refused (real SSRF)."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     base, routes = http_server
     routes["/download"] = {"body": b"data"}
 
@@ -286,7 +282,7 @@ def test_ingest_url_downloads_and_ingests_for_real(
     auth_headers: dict[str, str],
     http_server: tuple[str, dict[str, dict]],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     base, routes = http_server
     routes["/3dbenchy.stl"] = {
         "headers": {"Content-Type": "model/stl"},
@@ -323,7 +319,7 @@ def test_import_real_benchy_from_printables_url_records_source(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     staged = _stage_bytes(BENCHY_STL.read_bytes(), ".stl")
 
     with (
@@ -373,7 +369,7 @@ def test_import_from_url_names_model_from_download(
     URL imports no longer accept a ``model_name`` override — the name comes from
     the resolved file (or page) instead.
     """
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     staged = _stage_bytes(BENCHY_STL.read_bytes(), ".stl")
 
     with (
@@ -410,7 +406,7 @@ def test_import_real_benchy_zip_from_makerworld_url(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     zip_bytes = _benchy_zip_bytes(BENCHY_STL, BENCHY_GCODE_A)
     staged = _stage_bytes(zip_bytes, ".zip")
 
@@ -472,7 +468,7 @@ def test_import_zip_built_from_testdata_benchy_files(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     # Include a binary .bgcode (now importable as G-code) and a README (skipped).
     sources = [BENCHY_GCODE_A, BENCHY_GCODE_B]
     expected = [
@@ -531,7 +527,7 @@ def test_import_zip_mirrors_folder_structure_into_collections(
 ) -> None:
     """A zip with sub-folders mirrors its layout into nested sub-collections,
     while a file at the archive root stays in the archive's own collection."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     # Two distinct g-code files (distinct hashes → distinct models) arranged so
     # one sits at the root and one inside a "Terrain/" folder.
     buf = io.BytesIO()
@@ -593,7 +589,7 @@ def test_import_url_unrecognised_host_html_fails_gracefully(
     suffix) is rejected cleanly as ``url_not_a_direct_file`` rather than
     crashing the job. Resolution returns ``None`` for the unknown host, so the
     raw URL is downloaded as-is."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     staged = _stage_bytes(b"<!doctype html><title>3DBenchy</title>", ".bin")
 
     with (
@@ -628,7 +624,7 @@ def test_import_url_unresolvable_page_reports_host_error(
     """When a recognised model page can't be resolved to a download link, the
     job fails with the host-specific code (not a generic crash), and nothing is
     downloaded."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
     download = _fake_download(_stage_bytes(b"x", ".bin"), "unused")
     with (
@@ -692,7 +688,7 @@ def test_collection_auto_import_creates_models_per_member(
 ) -> None:
     """A collection URL (auto mode) imports every member into one collection,
     each model recording its own member page URL as source."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     members = [
         import_resolvers.CollectionMember(
             page_url="https://www.printables.com/model/1-a", title="A", source_id="1"
@@ -752,7 +748,7 @@ def test_collection_review_then_select_imports_chosen_member(
     auth_headers: dict[str, str],
 ) -> None:
     """Review mode returns a member manifest; selecting a subset imports only it."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     members = [
         import_resolvers.CollectionMember(
             page_url="https://www.printables.com/model/1-a", title="A", source_id="1"
@@ -814,7 +810,7 @@ def test_model_page_files_manifest_then_select(
 ) -> None:
     """A multi-file Printables page returns a file manifest; selecting a subset
     downloads only those files and imports them."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     files = [
         import_resolvers.ModelFile(file_id="10", name="a.stl", file_type="stl"),
         import_resolvers.ModelFile(file_id="11", name="b.stl", file_type="stl"),

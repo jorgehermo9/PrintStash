@@ -215,15 +215,7 @@ from app.db.session import get_session_factory  # noqa: E402
 from app.services import import_resolvers, importer  # noqa: E402
 from app.services.importer import ImportError_  # noqa: E402
 from app.services.jobs import registry  # noqa: E402
-
-
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    from app.core.config import settings
-
-    settings.incoming_dir.mkdir(parents=True, exist_ok=True)
+from tests._env import use_local_storage  # noqa: E402
 
 
 def _regular_user(session: Session, username: str = "regular") -> User:
@@ -365,7 +357,7 @@ async def test_stage_members_isolates_per_member_failures() -> None:
 def test_ingest_model_superuser_can_target_unknown_collection(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     response = client.post(
         "/api/v1/ingest/model",
         headers=auth_headers,
@@ -385,7 +377,7 @@ def test_ingest_model_target_library_not_found(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     runtime_config.set_external_libraries_enabled(db_session, True)
     response = client.post(
         "/api/v1/ingest/model",
@@ -403,7 +395,7 @@ def test_ingest_model_target_library_disabled(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     runtime_config.set_external_libraries_enabled(db_session, True)
     lib = ExternalLibrary(name="nas", root_path=str(tmp_path / "nas"), enabled=False)
     db_session.add(lib)
@@ -433,7 +425,7 @@ def _zip_bytes(*, entry: str = "cube.stl", content: bytes | None = None) -> byte
 def test_ingest_archive_rejects_missing_filename(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     boundary = "archiveboundary"
     body = (
         f"--{boundary}\r\n"
@@ -457,7 +449,7 @@ def test_ingest_archive_rejects_missing_filename(
 def test_ingest_archive_rejects_unsupported_suffix(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     response = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -470,7 +462,7 @@ def test_ingest_archive_rejects_unsupported_suffix(
 def test_ingest_archive_rejects_invalid_zip(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     response = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -483,7 +475,7 @@ def test_ingest_archive_rejects_invalid_zip(
 def test_ingest_archive_upload_returns_manifest(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     response = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -498,7 +490,7 @@ def test_ingest_archive_upload_returns_manifest(
 def test_inspect_archive_background_rejects_missing_filename(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     boundary = "inspectboundary"
     body = (
         f"--{boundary}\r\n"
@@ -522,7 +514,7 @@ def test_inspect_archive_background_rejects_missing_filename(
 def test_inspect_archive_background_rejects_unsupported_suffix(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     response = client.post(
         "/api/v1/ingest/archive/inspect",
         headers=auth_headers,
@@ -535,7 +527,7 @@ def test_inspect_archive_background_rejects_unsupported_suffix(
 def test_inspect_archive_background_rejects_invalid_zip(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     response = client.post(
         "/api/v1/ingest/archive/inspect",
         headers=auth_headers,
@@ -547,7 +539,7 @@ def test_inspect_archive_background_rejects_invalid_zip(
 
 @pytest.mark.asyncio
 async def test_inspect_uploaded_archive_reports_import_error(tmp_path: Path) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     staged = tmp_path / "staged.zip"
     staged.write_bytes(_zip_bytes())
     job_id = registry.create(owner_user_id=1)
@@ -575,7 +567,7 @@ async def test_inspect_uploaded_archive_reports_import_error(tmp_path: Path) -> 
 async def test_inspect_uploaded_archive_reports_unexpected_error(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     staged = tmp_path / "staged2.zip"
     staged.write_bytes(_zip_bytes())
     job_id = registry.create(owner_user_id=1)
@@ -614,7 +606,7 @@ def test_select_archive_entries_owner_mismatch_hidden_as_not_found(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -639,7 +631,7 @@ def test_select_archive_entries_owner_mismatch_hidden_as_not_found(
 def test_select_archive_entries_rejects_empty_selection(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -658,7 +650,7 @@ def test_select_archive_entries_rejects_empty_selection(
 def test_select_archive_entries_imports_chosen_files(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -711,7 +703,7 @@ def test_ingest_url_rejects_unsafe_url(
 async def test_import_from_url_collection_resolve_failure_marks_job_failed(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.schemas.ingest import UrlIngestRequest
 
     job_id = registry.create(owner_user_id=1)
@@ -740,7 +732,7 @@ async def test_import_from_url_collection_resolve_failure_marks_job_failed(
 async def test_import_from_url_download_import_error_marks_job_failed(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.schemas.ingest import UrlIngestRequest
 
     job_id = registry.create(owner_user_id=1)
@@ -775,7 +767,7 @@ async def test_import_from_url_download_import_error_marks_job_failed(
 async def test_import_from_url_unexpected_download_error_marks_job_failed(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.schemas.ingest import UrlIngestRequest
 
     job_id = registry.create(owner_user_id=1)
@@ -810,7 +802,7 @@ async def test_import_from_url_unexpected_download_error_marks_job_failed(
 async def test_import_from_url_non_file_response_reports_not_a_direct_file(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.core.config import settings
     from app.schemas.ingest import UrlIngestRequest
 
@@ -849,7 +841,7 @@ async def test_import_from_url_non_file_response_reports_not_a_direct_file(
 async def test_import_from_url_zip_response_stages_archive_manifest(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.core.config import settings
     from app.schemas.ingest import UrlIngestRequest
 
@@ -887,7 +879,7 @@ async def test_import_from_url_zip_response_stages_archive_manifest(
 async def test_import_from_url_multi_file_page_stages_files_manifest(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.schemas.ingest import UrlIngestRequest
 
     job_id = registry.create(owner_user_id=1)
@@ -921,7 +913,7 @@ async def test_import_from_url_multi_file_page_stages_files_manifest(
 
 @pytest.mark.asyncio
 async def test_handle_collection_url_review_stages_manifest(tmp_path: Path) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.schemas.ingest import UrlIngestRequest
 
     job_id = registry.create(owner_user_id=1)
@@ -952,7 +944,7 @@ async def test_handle_collection_url_review_stages_manifest(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_handle_collection_url_auto_imports_members(tmp_path: Path) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.schemas.ingest import UrlIngestRequest
 
     job_id = registry.create(owner_user_id=1)
@@ -1048,7 +1040,7 @@ def test_select_model_files_rejects_unmatched_ids(
 def test_select_model_files_imports_chosen_files(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     files = [import_resolvers.ModelFile(file_id="1", name="cube.stl", file_type="stl")]
     token = ingest_module.pending_model_files.add(
         ingest_module._PendingModelFiles(
@@ -1129,7 +1121,7 @@ def test_select_collection_members_rejects_empty_selection(
 def test_select_collection_members_imports_chosen_members(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     member = import_resolvers.CollectionMember(
         page_url="https://printables.com/model/1", title="A", source_id="1"
     )
@@ -1171,7 +1163,7 @@ def test_select_collection_members_imports_chosen_members(
 
 @pytest.mark.asyncio
 async def test_run_file_selection_import_reports_import_error(tmp_path: Path) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     job_id = registry.create(owner_user_id=1)
     with patch.object(
         import_resolvers,
@@ -1197,7 +1189,7 @@ async def test_run_file_selection_import_reports_import_error(tmp_path: Path) ->
 async def test_run_file_selection_import_no_files_reports_failure(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     job_id = registry.create(owner_user_id=1)
     with (
         patch.object(
@@ -1228,7 +1220,7 @@ async def test_run_file_selection_import_no_files_reports_failure(
 async def test_run_collection_member_import_reports_unexpected_error(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     job_id = registry.create(owner_user_id=1)
     with patch.object(
         ingest_module, "_stage_members", AsyncMock(side_effect=RuntimeError("boom"))
@@ -1260,7 +1252,7 @@ def test_stage_upload_rejects_stream_exceeding_max_bytes(
     guard (e.g. against a future caller that streams a file in without going
     through that middleware).
     """
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _overlay["max_upload_mb"] = 0.001  # ~1KB
 
     class _FakeUpload:
@@ -1310,7 +1302,7 @@ async def test_stage_members_reports_no_importable_files_without_error() -> None
 async def test_import_from_url_zip_inspect_import_error_marks_job_failed(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.core.config import settings
     from app.schemas.ingest import UrlIngestRequest
 
@@ -1354,7 +1346,7 @@ async def test_import_from_url_zip_inspect_import_error_marks_job_failed(
 async def test_import_from_url_single_direct_file_imports_successfully(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.core.config import settings
     from app.schemas.ingest import UrlIngestRequest
 
@@ -1391,7 +1383,7 @@ async def test_import_from_url_single_direct_file_imports_successfully(
 def test_ingest_url_creates_job_and_completes(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     from app.core.config import settings
 
     staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.stl"
@@ -1433,7 +1425,7 @@ def test_ingest_url_creates_job_and_completes(
 def test_ingest_archive_reports_inspect_import_error(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     with patch.object(
         ingest_module.importer,
         "inspect_archive",
@@ -1451,7 +1443,7 @@ def test_ingest_archive_reports_inspect_import_error(
 def test_select_archive_entries_reports_extract_import_error(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -1475,7 +1467,7 @@ def test_select_archive_entries_reports_extract_import_error(
 def test_select_archive_entries_reports_no_importable_files(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -1496,7 +1488,7 @@ def test_select_archive_entries_reports_no_importable_files(
 async def test_run_file_selection_import_reports_unexpected_error(
     tmp_path: Path,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     job_id = registry.create(owner_user_id=1)
     with patch.object(
         import_resolvers,
@@ -1554,7 +1546,7 @@ def test_select_archive_entries_rejects_a_selection_claimed_by_another_request(
     both get past those and only one can win. The loser must not fall through and
     import the same files a second time.
     """
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -1576,7 +1568,7 @@ def test_select_archive_entries_rejects_a_selection_claimed_by_another_request(
 def test_select_archive_entries_accepts_entry_ids(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,
@@ -1598,7 +1590,7 @@ def test_select_archive_entries_accepts_entry_ids(
 def test_select_archive_entries_rejects_an_entry_id_that_is_not_in_the_archive(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     upload = client.post(
         "/api/v1/ingest/archive",
         headers=auth_headers,

@@ -32,6 +32,11 @@ from app.services.auth import create_access_token, hash_password
 from app.services.jobs import registry
 from app.services.storage_backend import get_backend
 from app.services.storage_ownership import record_creation
+from tests._env import use_local_storage
+from tests.integration.api.v1._ingest_assertions import (
+    assert_file_created,
+    completed_job,
+)
 from tests.paths import FIXTURES_DIR
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -169,54 +174,16 @@ def _over_cap_binary_stl(n_triangles: int = 1_001) -> bytes:
     return output.getvalue()
 
 
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-
-
-def _completed_job(client: TestClient, response) -> dict:
-    assert response.status_code == 202, response.text
-    job_id = response.json()["job_id"]
-    headers = {}
-    auth = response.request.headers.get("authorization")
-    if auth:
-        headers["Authorization"] = auth
-    job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-    assert job.status_code == 200, job.text
-    payload = job.json()
-    assert payload["state"] == "completed", payload
-    assert payload["model_id"] is not None
-    assert payload["file_id"] is not None
-    return payload
-
-
-def _assert_file_created(session: Session, file_id: int, file_type: FileType) -> File:
-    file_row = session.get(File, file_id)
-    assert file_row is not None
-    assert file_row.file_type == file_type
-    assert file_row.size_bytes > 0
-    assert get_backend().exists(file_row.path)
-    metadata = session.exec(select(Metadata).where(Metadata.file_id == file_id)).one()
-    assert metadata.file_id == file_id
-    model = session.get(Model, file_row.model_id)
-    assert model is not None
-    assert model.thumbnail_file_id == file_id
-    assert model.thumbnail_path
-    assert get_backend().exists(model.thumbnail_path)
-    return file_row
-
-
 def test_ingest_orca_gcode_creates_db_blob_and_thumbnail(
     tmp_path: Path,
     client: TestClient,
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     gcode = (FIXTURES_DIR / "sample.gcode").read_bytes()
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/orca",
@@ -226,7 +193,7 @@ def test_ingest_orca_gcode_creates_db_blob_and_thumbnail(
         ),
     )
     file_id = payload["file_id"]
-    _assert_file_created(db_session, file_id, FileType.GCODE)
+    assert_file_created(db_session, file_id, FileType.GCODE)
 
     download = client.get(f"/api/v1/files/{file_id}/download", headers=auth_headers)
     assert download.status_code == 200, download.text
@@ -256,9 +223,9 @@ def test_ingest_orca_accepts_payload_over_nginx_default_limit(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/orca",
@@ -285,7 +252,7 @@ def test_ingest_orca_stages_upload_in_threadpool(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     called: dict[str, str] = {}
 
     async def fake_threadpool(
@@ -313,9 +280,9 @@ def test_ingest_stl_creates_db_blob_and_thumbnail(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -325,7 +292,7 @@ def test_ingest_stl_creates_db_blob_and_thumbnail(
         ),
     )
     file_id = payload["file_id"]
-    _assert_file_created(db_session, file_id, FileType.STL)
+    assert_file_created(db_session, file_id, FileType.STL)
 
     download = client.get(f"/api/v1/files/{file_id}/download", headers=auth_headers)
     assert download.status_code == 200, download.text
@@ -343,7 +310,7 @@ def test_ingest_publishes_terminal_only_after_fresh_durability_check(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     checkpoints: list[str] = []
     observed_job_ids: list[str] = []
     original_verify = ingestion_service.verify_durable_artifact
@@ -389,7 +356,7 @@ def test_exception_after_commit_is_a_durable_partial_result(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
     def inject(stage: str, _job_id: str) -> None:
         if stage == "after_commit":
@@ -421,13 +388,13 @@ def test_ingest_model_accepts_payload_over_nginx_default_limit(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     monkeypatch.setattr(
         "app.services.mesh_processing.analyze_mesh",
         lambda _path, report=None: ({"bbox_x_mm": 1.0}, None),
     )
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -454,10 +421,10 @@ def test_issue_67_over_cap_stl_persists_authenticated_webp_fallback(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -491,7 +458,7 @@ def test_issue_67_upload_survives_pruning_completed_inbox_job(
     monkeypatch,
 ) -> None:
     """A stale terminal inbox link must not turn the next upload into a 500."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     owner = db_session.exec(select(User).where(User.username == "test-writer")).one()
     old_job = BackgroundJob(
         id="expired-inbox-job",
@@ -528,9 +495,9 @@ def test_reuploading_deleted_model_restores_it(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
-    first = _completed_job(
+    first = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -548,7 +515,7 @@ def test_reuploading_deleted_model_restores_it(
         == 404
     )
 
-    second = _completed_job(
+    second = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -573,9 +540,9 @@ def test_trash_can_restore_and_purge_model(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -629,7 +596,7 @@ def test_purge_expired_trash_uses_retention_setting(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _overlay["trash_retention_days"] = 30
     old_model = Model(
         name="Old Cube",
@@ -713,9 +680,9 @@ def test_force_rebuild_refreshes_existing_mesh_thumbnail(
 ) -> None:
     from PIL import Image
 
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -856,7 +823,7 @@ def test_ingest_model_rejects_unsupported_suffix(
 def test_ingest_model_requires_collection_for_non_superuser(
     tmp_path: Path, client: TestClient, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     user = _regular_user(db_session)
     response = client.post(
         "/api/v1/ingest/model",
@@ -870,7 +837,7 @@ def test_ingest_model_requires_collection_for_non_superuser(
 def test_ingest_model_unknown_collection_denied_for_non_superuser(
     tmp_path: Path, client: TestClient, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     user = _regular_user(db_session)
     response = client.post(
         "/api/v1/ingest/model",
@@ -885,7 +852,7 @@ def test_ingest_model_unknown_collection_denied_for_non_superuser(
 def test_ingest_model_requires_role_on_existing_collection(
     tmp_path: Path, client: TestClient, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     user = _regular_user(db_session)
     collection = Collection(name="Brackets", slug="brackets", path="brackets")
     db_session.add(collection)
@@ -904,7 +871,7 @@ def test_ingest_model_requires_role_on_existing_collection(
 def test_ingest_model_succeeds_with_granted_collection_role(
     tmp_path: Path, client: TestClient, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     user = _regular_user(db_session)
     collection = Collection(name="Brackets", slug="brackets", path="brackets")
     db_session.add(collection)
@@ -917,7 +884,7 @@ def test_ingest_model_succeeds_with_granted_collection_role(
     )
     db_session.commit()
 
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -932,7 +899,7 @@ def test_ingest_model_succeeds_with_granted_collection_role(
 def test_ingest_model_rejects_disabled_target_library(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     response = client.post(
         "/api/v1/ingest/model",
         headers=auth_headers,
@@ -949,8 +916,8 @@ def test_ingest_jobs_list_and_get_scoped_to_owner(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
-    payload = _completed_job(
+    use_local_storage(tmp_path)
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/model",
@@ -982,7 +949,7 @@ def test_ingest_orca_rejects_a_source_hash_that_is_not_a_sha256(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     """The hash names an inbox item's bytes, so a malformed one is a client bug."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
     response = client.post(
         "/api/v1/ingest/orca",
@@ -1001,7 +968,7 @@ def test_ingest_refuses_an_upload_when_staging_is_full(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
 
     response = client.post(
@@ -1021,7 +988,7 @@ def test_ingest_removes_the_staged_file_when_staging_is_full(
     auth_headers: dict[str, str],
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
 
     client.post(
@@ -1048,7 +1015,7 @@ def test_ingest_fails_the_job_when_the_staging_lease_cannot_be_taken(
 ) -> None:
     from app.api.v1 import ingest as ingest_api
 
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     created: list[str] = []
     real_create = ingest_api.registry.create
 

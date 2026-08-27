@@ -23,17 +23,12 @@ from app.db.models import (
 from app.db.scopes import live
 from app.services import external_library, runtime_config
 from app.services.ingestion import ingest_orca_gcode
+from tests._env import use_local_storage
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
 
 
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    (tmp_path / "thumbs").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "staging" / "_incoming").mkdir(parents=True, exist_ok=True)
 
 
 def _enable_feature(session: Session) -> None:
@@ -58,7 +53,7 @@ def _drop_gcode(dest_dir: Path, name: str) -> Path:
 def test_scan_indexes_new_files_and_mirrors_collections(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas / "functional", "bracket.gcode")
@@ -87,7 +82,7 @@ def test_scan_indexes_new_files_and_mirrors_collections(
 
 
 def test_rescan_is_idempotent(tmp_path: Path, db_session: Session) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "a.gcode")
@@ -104,7 +99,7 @@ def test_rescan_is_idempotent(tmp_path: Path, db_session: Session) -> None:
 def test_scan_coalesces_while_another_claim_is_active(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "a.gcode")
     lib = _make_library(db_session, nas)
@@ -123,7 +118,7 @@ def test_scan_coalesces_while_another_claim_is_active(
 def test_changed_content_reindexes_same_row(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "a.gcode")
@@ -153,7 +148,7 @@ def test_reindex_metadata_failure_does_not_confirm_new_signature(
     db_session: Session,
     monkeypatch,
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "atomic.gcode")
     lib = _make_library(db_session, nas)
@@ -189,7 +184,7 @@ def test_reindex_metadata_failure_does_not_confirm_new_signature(
 def test_removed_file_is_trashed_and_model_soft_deleted(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "gone.gcode")
@@ -220,7 +215,7 @@ def test_removed_file_is_trashed_and_model_soft_deleted(
 def test_unmounted_root_aborts_without_deleting(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "keep.gcode")
@@ -246,7 +241,7 @@ def test_unmounted_root_aborts_without_deleting(
 def test_empty_root_with_indexed_files_aborts(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "keep.gcode")
@@ -266,7 +261,7 @@ def test_empty_root_with_indexed_files_aborts(
 
 
 def test_write_back_lands_in_nas_folder(tmp_path: Path, db_session: Session) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     nas.mkdir(parents=True)
@@ -378,7 +373,7 @@ def test_detect_fs_kind_and_should_watch(tmp_path: Path) -> None:
 def test_feature_disabled_keeps_uploads_in_vault(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     # Feature OFF (default). Even with a target_library_id the blob stays in vault.
     nas = tmp_path / "nas"
     nas.mkdir(parents=True)

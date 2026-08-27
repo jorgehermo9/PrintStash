@@ -31,6 +31,7 @@ from app.services.ingestion import (
     ingest_orca_gcode,
 )
 from app.services.jobs import registry
+from tests._env import use_local_storage
 from tests.paths import TESTDATA_DIR
 
 # --------------------------------------------------------------------------- #
@@ -54,13 +55,6 @@ def _requires(path: Path):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    (tmp_path / "files").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "thumbs").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "staging" / "_incoming").mkdir(parents=True, exist_ok=True)
 
 
 def _stage_copy(src: Path) -> Path:
@@ -125,7 +119,7 @@ def _ingest_gcode(
 def test_ingest_real_stl_extracts_geometry_and_thumbnail(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     model, f = _ingest_mesh(
         db_session, CUBE_STL, FileType.STL, model_name="Calibration Cube"
     )
@@ -149,7 +143,7 @@ def test_ingest_real_stl_extracts_geometry_and_thumbnail(
 
 @_requires(SPATULA_3MF)
 def test_ingest_real_3mf_extracts_geometry(tmp_path: Path, db_session: Session) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     model, f = _ingest_mesh(
         db_session, SPATULA_3MF, FileType.THREE_MF, model_name="Spatula"
     )
@@ -171,7 +165,7 @@ def test_ingest_real_3mf_extracts_geometry(tmp_path: Path, db_session: Session) 
 def test_ingest_real_gcode_parses_slicer_metadata(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     model, f = _ingest_gcode(
         db_session, CUBE_GCODE, model_name="Calibration Cube GCode"
     )
@@ -191,7 +185,7 @@ def test_ingest_real_gcode_parses_slicer_metadata(
 def test_ingest_real_prusa_gcode_extracts_embedded_thumbnail(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     model, f = _ingest_gcode(db_session, SPATULA_GCODE, model_name="Spatula GCode")
 
     md = _metadata_for(db_session, f.id)
@@ -210,7 +204,7 @@ def test_ingest_real_prusa_gcode_extracts_embedded_thumbnail(
 def test_reingesting_identical_real_file_dedups_to_one_model(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     model_a, file_v1 = _ingest_mesh(
         db_session, CUBE_STL, FileType.STL, model_name="Cube"
     )
@@ -240,7 +234,7 @@ def test_reingesting_identical_real_file_dedups_to_one_model(
 def test_real_gcode_revisions_version_and_keep_first_recommended(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     model, first = _ingest_gcode(db_session, BENCHY_GCODE_A, model_name="3DBenchy")
     assert first.is_recommended is True
 
@@ -279,7 +273,7 @@ def test_real_gcode_revisions_version_and_keep_first_recommended(
 def test_marking_new_real_revision_recommended_clears_previous(
     tmp_path: Path, db_session: Session
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     model, first = _ingest_gcode(db_session, BENCHY_GCODE_A, model_name="3DBenchy B")
 
     second = add_gcode_revision_to_model(

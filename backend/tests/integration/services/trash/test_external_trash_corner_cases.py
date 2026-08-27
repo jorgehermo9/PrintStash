@@ -28,18 +28,12 @@ from app.services import external_library, runtime_config, trash
 from app.services.ingestion import ingest_orca_gcode
 from app.services.storage_backend import get_backend
 from app.services.storage_deletion import process_storage_delete_intents
+from tests._env import use_local_storage
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
 
 
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    (tmp_path / "files").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "thumbs").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "staging" / "_incoming").mkdir(parents=True, exist_ok=True)
 
 
 def _enable_feature(session: Session) -> None:
@@ -86,7 +80,7 @@ def _make_mixed_model(
     are then discovered by a scan and, because the content hash matches, attach
     as a second (external) File on the very same Model.
     """
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     payload = FIXTURE_GCODE.read_bytes()
 
@@ -212,7 +206,7 @@ def test_scan_dedups_identical_nas_files_into_one_model(
 ) -> None:
     """Two NAS files with identical content index as two linked Files under a
     single deduplicated Model — not two models, not one dropped file."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     payload = FIXTURE_GCODE.read_bytes()
     nas = tmp_path / "nas"
@@ -239,7 +233,7 @@ def test_scan_removing_one_duplicate_keeps_model_until_all_gone(
 ) -> None:
     """When duplicate-content files share a model, removing one from disk trashes
     only that File; the model is trashed only once every linked File is gone."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     _enable_feature(db_session)
     payload = FIXTURE_GCODE.read_bytes()
     nas = tmp_path / "nas"

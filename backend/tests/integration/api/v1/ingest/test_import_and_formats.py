@@ -21,12 +21,7 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.db.models import Collection, File, FileType, Model
-
-
-def _configure_storage(tmp_path: Path) -> None:
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
+from tests._env import use_local_storage
 
 
 def _mesh_bytes(ext: str, size: tuple[float, float, float] = (10, 10, 10)) -> bytes:
@@ -51,7 +46,7 @@ def _completed(client: TestClient, resp, headers: dict[str, str]) -> dict:
 def test_ingest_obj_creates_model(
     tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     payload = _completed(
         client,
         client.post(
@@ -70,7 +65,7 @@ def test_ingest_obj_creates_model(
 def test_ingest_3mf_creates_model(
     tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     payload = _completed(
         client,
         client.post(
@@ -96,7 +91,7 @@ def test_ingest_step_is_accepted_and_typed(
     still persists the source file typed as STEP. End-to-end STEP tessellation
     (mesh + thumbnail) is exercised once a safe fixture is contributed.
     """
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     resp = client.post(
         "/api/v1/ingest/model",
         headers=auth_headers,
@@ -113,7 +108,7 @@ def test_ingest_step_is_accepted_and_typed(
 def test_ingest_rejects_unsupported_type(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     resp = client.post(
         "/api/v1/ingest/model",
         headers=auth_headers,
@@ -132,7 +127,7 @@ def test_ingest_rejects_unsupported_type(
 def test_import_zip_archive_creates_models(
     tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("parts/part_a.stl", _mesh_bytes("stl", (10, 10, 10)))
@@ -178,7 +173,7 @@ def test_import_zip_archive_creates_models(
 def test_import_archive_select_unknown_id_404(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     resp = client.post(
         "/api/v1/ingest/archive/does-not-exist/select",
         headers=auth_headers,
@@ -196,7 +191,7 @@ def test_import_archive_select_unknown_id_404(
 def test_import_from_url_single_file(
     tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
 
     async def _fake_download(url: str):
         staging = Path(_overlay["staging_dir"])
@@ -236,7 +231,7 @@ def test_import_from_url_blocks_private_host(
     tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     """SSRF guard: a loopback/private target is rejected before any fetch."""
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     resp = client.post(
         "/api/v1/ingest/url",
         headers=auth_headers,

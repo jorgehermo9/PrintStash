@@ -15,17 +15,17 @@ from sqlmodel import Session
 
 from app.db.models import FileType
 from app.services import auth
-from tests.integration.api.v1.ingest.test_ingest_api import (
-    _assert_file_created,
-    _completed_job,
-    _configure_storage,
+from tests._env import use_local_storage
+from tests.integration.api.v1._ingest_assertions import (
+    assert_file_created,
+    completed_job,
 )
 from tests.paths import FIXTURES_DIR
 
 
 def _ingest_gcode(client: TestClient, auth_headers: dict[str, str]) -> int:
     gcode = (FIXTURES_DIR / "sample.gcode").read_bytes()
-    payload = _completed_job(
+    payload = completed_job(
         client,
         client.post(
             "/api/v1/ingest/orca",
@@ -43,9 +43,9 @@ def test_slicer_url_returns_token_and_downloads_without_auth(
     db_session: Session,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     file_id = _ingest_gcode(client, auth_headers)
-    _assert_file_created(db_session, file_id, FileType.GCODE)
+    assert_file_created(db_session, file_id, FileType.GCODE)
 
     # Minting the URL requires auth + VIEW access.
     resp = client.get(f"/api/v1/files/{file_id}/slicer-url", headers=auth_headers)
@@ -68,7 +68,7 @@ def test_download_without_auth_or_token_is_rejected(
     client: TestClient,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     file_id = _ingest_gcode(client, auth_headers)
 
     resp = client.get(f"/api/v1/files/{file_id}/download")
@@ -80,7 +80,7 @@ def test_slicer_url_requires_auth(
     client: TestClient,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     file_id = _ingest_gcode(client, auth_headers)
 
     resp = client.get(f"/api/v1/files/{file_id}/slicer-url")
@@ -92,7 +92,7 @@ def test_token_for_wrong_file_is_rejected(
     client: TestClient,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     file_id = _ingest_gcode(client, auth_headers)
 
     # A token minted for a different file id must not unlock this one.
@@ -106,7 +106,7 @@ def test_garbage_token_is_rejected(
     client: TestClient,
     auth_headers: dict[str, str],
 ) -> None:
-    _configure_storage(tmp_path)
+    use_local_storage(tmp_path)
     file_id = _ingest_gcode(client, auth_headers)
 
     resp = client.get(f"/api/v1/files/{file_id}/slicer/not-a-jwt/sample.gcode")
