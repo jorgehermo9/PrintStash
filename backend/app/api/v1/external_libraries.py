@@ -19,7 +19,7 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.core.http import get_or_404
 from app.core.security import require_superuser
-from app.core.time import utcnow
+from app.core.time import ensure_utc, utcnow
 from app.db.models import (
     ExternalLibrary,
     ExternalLibraryCollectionMode,
@@ -299,7 +299,11 @@ def scan_now(
     if (
         library.scan_claim_token
         and library.scan_claim_expires_at
-        and library.scan_claim_expires_at > utcnow()
+        # SQLite hands a DateTime column back naive; ``utcnow()`` is aware.
+        # Comparing them directly raised TypeError, which became a 500 on the
+        # common case this branch exists to serve: a second scan request while
+        # one is still running.
+        and ensure_utc(library.scan_claim_expires_at) > utcnow()
         and library.scan_job_id
     ):
         return IngestResponse(

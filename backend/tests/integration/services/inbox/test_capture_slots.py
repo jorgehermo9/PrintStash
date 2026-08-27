@@ -478,10 +478,57 @@ def test_delete_intent_processor_retries_backend_failure_and_blocks_mismatch(
 def test_capture_source_mismatch_rejects_before_slot_write(db_session: Session) -> None:
     owner = _user(db_session, "slot-source")
     raw = _slot_payload().model_dump(mode="json")
-    raw["capture_source"]["canonical_url"] = "https://printables.com/model/1"
+    # Two different pages on the same provider: the request says it is uploading
+    # for model 1234 while the captured source declares model 9999, so the bytes
+    # would be attributed to a model the user never captured.
+    #
+    # `source_item_id` has to be absent for this guard to be the one that fires.
+    # When an item id is present the canonical URL is bound to it, and a
+    # mismatched page is rejected a step earlier by the canonicalizer — a
+    # stronger check on a narrower input. This is the residual case: no item id,
+    # so both URLs canonicalize cleanly and only comparing them catches it.
+    raw["capture_source"]["source_item_id"] = None
+    raw["capture_source"]["canonical_url"] = (
+        "https://makerworld.com/en/models/9999-other"
+    )
     with pytest.raises(
         inbox.importer.ImportError_, match="capture_source_url_mismatch"
     ):
+        inbox.create_capture_upload_slots(
+            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+        )
+    assert db_session.exec(select(InboxItem)).all() == []
+
+
+def test_capture_source_from_another_provider_rejects_before_slot_write(
+    db_session: Session,
+) -> None:
+    owner = _user(db_session, "slot-source-provider")
+    raw = _slot_payload().model_dump(mode="json")
+    raw["capture_source"]["canonical_url"] = "https://printables.com/model/1"
+
+    # A URL that does not belong to the declared provider at all is refused when
+    # the source is parsed: provider and URL are bound, so there is no canonical
+    # form of a Printables URL under `makerworld`.
+    with pytest.raises(inbox.importer.ImportError_, match="capture_source_invalid"):
+        inbox.create_capture_upload_slots(
+            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+        )
+    assert db_session.exec(select(InboxItem)).all() == []
+
+
+def test_capture_source_page_of_another_item_rejects_before_slot_write(
+    db_session: Session,
+) -> None:
+    owner = _user(db_session, "slot-source-item")
+    raw = _slot_payload().model_dump(mode="json")
+    raw["capture_source"]["canonical_url"] = (
+        "https://makerworld.com/en/models/9999-other"
+    )
+
+    # Item id 1234 with model 9999's page: the canonical URL is bound to the
+    # item, so this never reaches the URL comparison.
+    with pytest.raises(inbox.importer.ImportError_, match="capture_source_invalid"):
         inbox.create_capture_upload_slots(
             db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
         )
@@ -721,6 +768,11 @@ def test_capture_cover_attaches_before_raw_slot_receipt_is_released(
     source = ModelProvenanceSource(
         model_id=model.id,
         provider="makerworld",
+        # All three of provider, item id and canonical URL have to match the
+        # captured manifest: the cover is attached to *exactly one* provenance
+        # source, and an attach that matched zero or two would silently skip
+        # publication instead of raising.
+        source_item_id="1234",
         canonical_url="https://makerworld.com/en/models/1234-widget",
         identity_key=uuid.uuid4().hex * 2,
     )

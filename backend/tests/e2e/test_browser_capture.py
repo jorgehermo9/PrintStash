@@ -18,7 +18,7 @@ from app.db.models import (
     Model,
     User,
 )
-from app.services import inbox
+from app.services import import_resolvers, inbox
 from app.services.auth import create_api_key
 from app.services.hashing import sha256_file
 from tests.paths import FIXTURES_DIR
@@ -110,9 +110,16 @@ async def test_offline_capture_import_recapture_deduplicates_durable_artifact(
     async def _fixture_capture(_url: str) -> CaptureManifestV2:
         return manifest
 
+    # `context` is required, not defaulted: it carries the owner the resolution
+    # runs as, and a stand-in that quietly tolerated its absence is what let this
+    # signature drift out of step with production in the first place.
     async def _fixture_resolved(
-        _url: str, _manifest: CaptureManifestV2, _ids: list[str]
+        _url: str,
+        _manifest: CaptureManifestV2,
+        _ids: list[str],
+        context: import_resolvers.ProviderResolutionContext,
     ):
+        assert context.owner_user_id is not None
         return [_stage_fixture_asset(tmp_path, manifest).resolved]
 
     async def _fixture_stage(resolved: ResolvedAsset) -> list[StagedAsset]:
@@ -145,7 +152,7 @@ async def test_offline_capture_import_recapture_deduplicates_durable_artifact(
         ).json()
 
     first = await capture_and_import()
-    assert first["state"] == "completed"
+    assert first["state"] == "completed", first.get("error_code")
     assert first["results"][0]["state"] == "imported"
     assert len(e2e_db.exec(select(File)).all()) == 1
     assert len(e2e_db.exec(select(ArtifactProvenanceLink)).all()) == 1
@@ -199,8 +206,12 @@ async def test_offline_capture_partial_result_retries_only_failed_selection(
         return manifest
 
     async def _fixture_resolved(
-        _url: str, _manifest: CaptureManifestV2, selected_ids: list[str]
+        _url: str,
+        _manifest: CaptureManifestV2,
+        selected_ids: list[str],
+        context: import_resolvers.ProviderResolutionContext,
     ) -> list[ResolvedAsset]:
+        assert context.owner_user_id is not None
         resolution_calls.append(selected_ids)
         return [
             ResolvedAsset(

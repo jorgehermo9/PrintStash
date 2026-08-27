@@ -677,7 +677,21 @@ def test_expired_replacement_intent_keeps_existing_cover_when_old_bytes_remain(
 def test_finish_import_uses_only_intent_and_final_sqlite_commits(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Cover publication must not open a second writer behind Inbox flushes."""
+    """Cover publication must not open a second writer behind Inbox flushes.
+
+    Two commits and no more: the cover's durable intent (its own engine-bound
+    transaction, which has to land *before* any byte is published so a crash is
+    recoverable) and the final Inbox terminalization. A third would mean cover
+    publication opened a writer while the terminalizing transaction was still
+    open, which on SQLite is a `database is locked` under any concurrency.
+
+    The manifest below carries a full `source` block — provider, item id and
+    canonical URL. That is load-bearing rather than incidental: the cover is
+    attached by matching the manifest against exactly one
+    `ModelProvenanceSource`, so a manifest missing any of the three makes the
+    attach refuse, and the test would then be counting the commits of a code
+    path that never published a cover at all.
+    """
     engine = create_engine(
         f"sqlite:///{tmp_path / 'finish-import.sqlite'}",
         connect_args={"check_same_thread": False},
@@ -706,6 +720,7 @@ def test_finish_import_uses_only_intent_and_final_sqlite_commits(
         source = ModelProvenanceSource(
             model_id=model.id,
             provider="test",
+            source_item_id="finish-item",
             canonical_url="https://example.test/finish",
             identity_key=uuid.uuid4().hex * 2,
         )
@@ -715,7 +730,13 @@ def test_finish_import_uses_only_intent_and_final_sqlite_commits(
             source_url=source.canonical_url,
             state="importing",
             manifest_json=json.dumps(
-                {"source": {"canonical_url": source.canonical_url}}
+                {
+                    "source": {
+                        "provider": source.provider,
+                        "source_item_id": source.source_item_id,
+                        "canonical_url": source.canonical_url,
+                    }
+                }
             ),
         )
         setup.add_all([source, row])

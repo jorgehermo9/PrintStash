@@ -50,6 +50,17 @@ def _static_cap_only():
         _overlay["mesh_memory_budget_fraction"] = prev
 
 
+def _slicer_preview_png(width: int = 8, height: int = 8) -> bytes:
+    """A real, decodable PNG standing in for a slicer's plate preview."""
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (width, height), (90, 140, 210, 255)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 # --------------------------------------------------------------------------- #
 # Resident-memory helpers (Linux /proc; skip the memory assertions elsewhere).
 # --------------------------------------------------------------------------- #
@@ -132,9 +143,14 @@ def test_real_compression_bomb_3mf_is_not_decompressed(
     # A real ZIP whose .model deflates from a few KB on disk to a huge mesh. The
     # estimate reads the *uncompressed* size from the zip directory and skips it,
     # so trimesh never decompresses the bomb. The embedded preview still stands in.
+    #
+    # The preview has to be a *real* PNG: the early-thumbnail path decodes every
+    # candidate (issue #82) rather than trusting the magic bytes, so a stub of
+    # `_PNG_MAGIC + b"..."` is correctly rejected and would leave this test
+    # asserting the bomb guard against no thumbnail at all.
     monkeypatch.setitem(_overlay, "mesh_max_load_mb", 0)
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
-    png = mesh_processing._PNG_MAGIC + b"slicer-preview"
+    png = _slicer_preview_png()
     p = tmp_path / "bomb.3mf"
     with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("3D/3dmodel.model", b"<triangle/>" * 2_000_000)  # tiny on disk

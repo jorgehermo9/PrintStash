@@ -15,12 +15,14 @@ overwrite it. A scan path is confined to the root for the same reason.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import _overlay
+from app.core.time import utcnow
 from app.db.models import (
     ExternalLibrary,
     File,
@@ -337,6 +339,49 @@ class TestScanNow:
         job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers)
         assert job.status_code == 200
         assert job.json()["state"] == "completed", job.json()
+
+    def test_coalesces_onto_the_scan_that_is_already_running(
+        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+    ) -> None:
+        _configure_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        _drop_gcode(nas, "a.gcode")
+        lib = _make_library(db_session, nas)
+        lib.scan_claim_token = "held-by-a-running-scan"
+        lib.scan_claim_expires_at = utcnow() + timedelta(minutes=30)
+        lib.scan_job_id = "running-job"
+        db_session.add(lib)
+        db_session.commit()
+
+        resp = client.post(f"/api/v1/libraries/{lib.id}/scan", headers=auth_headers)
+
+        # A scan of a large NAS folder takes minutes, so clicking "scan" again
+        # while one is running is the common case, not an edge one. The caller
+        # gets the running job's id rather than a second scan of the same tree.
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["job_id"] == "running-job"
+
+    def test_starts_a_new_scan_once_the_claim_has_expired(
+        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+    ) -> None:
+        _configure_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        _drop_gcode(nas, "a.gcode")
+        lib = _make_library(db_session, nas)
+        lib.scan_claim_token = "left-behind-by-a-killed-process"
+        lib.scan_claim_expires_at = utcnow() - timedelta(minutes=1)
+        lib.scan_job_id = "abandoned-job"
+        db_session.add(lib)
+        db_session.commit()
+
+        resp = client.post(f"/api/v1/libraries/{lib.id}/scan", headers=auth_headers)
+
+        # Otherwise a process killed mid-scan would lock the library out of
+        # scanning until somebody edited the database by hand.
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["job_id"] != "abandoned-job"
 
     def test_scan_now_unknown_library_404(
         self, client, db_session: Session, auth_headers: dict
