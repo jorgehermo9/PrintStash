@@ -235,3 +235,215 @@ def test_factory_builds_runtime_protocol_client() -> None:
         ElegooCentauriConfig("192.168.1.50", "elegoo_centauri_carbon")
     )
     assert isinstance(client, PrinterClient)
+
+
+class TestConnect:
+    """The real `_connect`, which is where credentials and errors are decided."""
+
+    def test_second_generation_requires_an_access_code(self) -> None:
+        from printstash_core.printers.models import ProviderError
+
+        # Refused when the *config* is built, not when the connection is opened —
+        # which is earlier and better: the failure lands in the settings form
+        # rather than mid-queue, and no connection is spent discovering it.
+        with pytest.raises(ProviderError) as caught:
+            ElegooCentauriConfig(
+                host="printer.invalid",
+                model="elegoo_centauri_carbon_2",
+                access_code=None,
+                mainboard_id=None,
+            )
+
+        assert "credentials_missing" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_maps_an_auth_shaped_printer_error_to_an_auth_code(
+        self, monkeypatch
+    ) -> None:
+        async def refuse(*_args: object, **_kwargs: object):
+            raise PrinterError("access code rejected")
+
+        monkeypatch.setattr(Printer, "connect", staticmethod(refuse))
+        client = ElegooCentauriClient(
+            ElegooCentauriConfig(
+                host="printer.invalid",
+                model="elegoo_centauri_carbon",
+                access_code=None,
+                mainboard_id=None,
+            )
+        )
+
+        # From the user's side a wrong access code and a refusing printer are the
+        # same thing to fix, so both surface as an authentication failure — which
+        # is the code that prompts for credentials exactly once.
+        with pytest.raises(ElegooCentauriError) as caught:
+            await client.query_status()
+
+        assert caught.value.code == "provider_authentication_failed"
+
+    @pytest.mark.asyncio
+    async def test_maps_any_other_printer_error_to_a_transport_code(
+        self, monkeypatch
+    ) -> None:
+        async def refuse(*_args: object, **_kwargs: object):
+            raise PrinterError("mainboard busy")
+
+        monkeypatch.setattr(Printer, "connect", staticmethod(refuse))
+        client = ElegooCentauriClient(
+            ElegooCentauriConfig(
+                host="printer.invalid",
+                model="elegoo_centauri_carbon",
+                access_code=None,
+                mainboard_id=None,
+            )
+        )
+
+        # Not an auth problem: prompting for credentials here would send the user
+        # to fix something that is already correct.
+        with pytest.raises(ElegooCentauriError) as caught:
+            await client.query_status()
+
+        assert caught.value.code == "provider_transport_error"
+
+    @pytest.mark.asyncio
+    async def test_reports_a_network_failure_as_a_provider_error(
+        self, monkeypatch
+    ) -> None:
+        async def unreachable(*_args: object, **_kwargs: object):
+            raise OSError("no route to host")
+
+        monkeypatch.setattr(Printer, "connect", staticmethod(unreachable))
+        client = ElegooCentauriClient(
+            ElegooCentauriConfig(
+                host="printer.invalid",
+                model="elegoo_centauri_carbon",
+                access_code=None,
+                mainboard_id=None,
+            )
+        )
+
+        with pytest.raises(ElegooCentauriError):
+            await client.query_status()
+
+    @pytest.mark.asyncio
+    async def test_reports_a_timeout_as_a_provider_error(self, monkeypatch) -> None:
+        async def too_slow(*_args: object, **_kwargs: object):
+            raise asyncio.TimeoutError
+
+        monkeypatch.setattr(Printer, "connect", staticmethod(too_slow))
+        client = ElegooCentauriClient(
+            ElegooCentauriConfig(
+                host="printer.invalid",
+                model="elegoo_centauri_carbon",
+                access_code=None,
+                mainboard_id=None,
+            )
+        )
+
+        with pytest.raises(ElegooCentauriError):
+            await client.query_status()
+
+
+class TestWithConnection:
+    """Whatever happens, the connection closes — the printer grants few of them."""
+
+    def _client(self, connection) -> ElegooCentauriClient:
+        async def connector(_enable_control: bool):
+            return connection
+
+        return ElegooCentauriClient(
+            ElegooCentauriConfig(
+                host="printer.invalid",
+                model="elegoo_centauri_carbon",
+                access_code=None,
+                mainboard_id=None,
+            ),
+            connector=connector,
+        )
+
+    @pytest.mark.asyncio
+    async def test_closes_the_connection_after_a_read(self) -> None:
+        connection = FakeConnection()
+
+        await self._client(connection).query_status()
+
+        # Leaking a connection leaves the printer unreachable until it is
+        # power-cycled, which the user experiences as broken hardware.
+        assert connection.closed is True
+
+    @pytest.mark.asyncio
+    async def test_closes_the_connection_after_a_failed_action(self) -> None:
+        connection = FakeConnection(enable_control=False)
+        client = self._client(connection)
+
+        with pytest.raises(ElegooCentauriError):
+            await client.pause()
+
+        assert connection.closed is True
+
+    @pytest.mark.asyncio
+    async def test_swallows_a_failure_raised_by_the_close_itself(self) -> None:
+        class UncloseableConnection(FakeConnection):
+            async def close(self) -> None:
+                raise RuntimeError("socket already gone")
+
+        connection = UncloseableConnection()
+
+        # A close error must not mask the result of an operation that already
+        # succeeded — the caller has a valid status either way.
+        snapshot = await self._client(connection).query_snapshot()
+
+        assert isinstance(snapshot, PrinterSnapshot)
+
+    @pytest.mark.asyncio
+    async def test_reports_a_network_drop_mid_action(self) -> None:
+        class DroppingConnection(FakeConnection):
+            async def pause(self) -> dict[str, Any]:
+                raise OSError("connection reset")
+
+        connection = DroppingConnection()
+        client = self._client(connection)
+
+        with pytest.raises(ElegooCentauriError):
+            await client.pause()
+
+        assert connection.closed is True
+
+
+class TestUnsupportedActions:
+    """A beta provider says what it cannot do rather than failing obscurely."""
+
+    def _client(self) -> ElegooCentauriClient:
+        async def connector(_enable_control: bool):
+            return FakeConnection()
+
+        return ElegooCentauriClient(
+            ElegooCentauriConfig(
+                host="printer.invalid",
+                model="elegoo_centauri_carbon",
+                access_code=None,
+                mainboard_id=None,
+            ),
+            connector=connector,
+        )
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            pytest.param("list_files", id="list-files"),
+            pytest.param("delete_file", id="delete-file"),
+            pytest.param("run_gcode", id="run-gcode"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_refuses_an_action_the_printer_does_not_expose(
+        self, action: str
+    ) -> None:
+        client = self._client()
+        target = getattr(client, action)
+
+        # The capability block already tells the UI to hide these, so reaching
+        # one means something bypassed it — which must be an explicit refusal,
+        # not a silent no-op that looks like success.
+        with pytest.raises(ElegooCentauriError):
+            await (target("x") if action != "list_files" else target())

@@ -300,6 +300,45 @@ def test_the_duplicate_builder_list_has_no_stale_entries() -> None:
     )
 
 
+# Test names containing `_and_`. Some are two behaviours in one test, which the
+# skill forbids because a failure cannot say which half broke; others describe a
+# single invariant that happens to need the word. Both are worth reducing, and
+# neither is worth a mechanical split — that produces duplicated setup and
+# assertions in the wrong test. So the count is capped and may only fall.
+MAX_CONJUNCTION_NAMES = 323
+
+
+def test_no_new_test_names_join_two_behaviours() -> None:
+    """A test whose name needs "and" usually asserts two things.
+
+    When it does, a failure cannot say which half broke, and the fix is two
+    tests. This does not split the existing ones — it stops the count growing,
+    and every one removed lowers the cap.
+    """
+    offenders = []
+    for module in _test_modules():
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+                and "_and_" in node.name
+            ):
+                offenders.append(f"{_relative(module)}::{node.name}")
+
+    assert len(offenders) <= MAX_CONJUNCTION_NAMES, (
+        f"{len(offenders)} test names contain `_and_`, over the cap of "
+        f'{MAX_CONJUNCTION_NAMES}. A name needing "and" usually means two '
+        "behaviours in one test — split it, so a failure says which half broke. "
+        "New: " + ", ".join(sorted(offenders)[:5])
+    )
+    if len(offenders) < MAX_CONJUNCTION_NAMES:
+        raise AssertionError(
+            f"{len(offenders)} names now, cap is {MAX_CONJUNCTION_NAMES}. Lower "
+            "MAX_CONJUNCTION_NAMES to match so the cap keeps meaning something."
+        )
+
+
 def test_the_pending_list_has_no_stale_entries() -> None:
     """A migrated file must be removed from the ratchet in the same commit.
 

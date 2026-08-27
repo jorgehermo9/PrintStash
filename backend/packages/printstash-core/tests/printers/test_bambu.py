@@ -136,7 +136,9 @@ def test_ftps_retries_one_transport_reset_but_not_authentication(
         PermissionError(13, "Permission denied", "/srv/auth/cache.gcode")
     )
     assert local_auth_path.action_code == "bambu_ftps_local_error"
-    assert BambuClient._classify_ftps_exception(ConnectionResetError()).retryable is True
+    assert (
+        BambuClient._classify_ftps_exception(ConnectionResetError()).retryable is True
+    )
 
 
 def test_ftps_retries_eof_once(tmp_path: Path) -> None:
@@ -156,24 +158,39 @@ def test_ftps_retries_eof_once(tmp_path: Path) -> None:
 
 
 def test_ftps_classification_exposes_actionable_codes() -> None:
-    assert BambuClient._classify_ftps_exception(
-        error_perm("550 file unavailable")
-    ).action_code == "bambu_ftps_not_found"
-    assert BambuClient._classify_ftps_exception(
-        error_perm("552 storage exceeded")
-    ).action_code == "bambu_ftps_too_large"
-    assert BambuClient._classify_ftps_exception(
-        error_perm("450 file unavailable")
-    ).action_code == "bambu_ftps_not_found"
+    assert (
+        BambuClient._classify_ftps_exception(
+            error_perm("550 file unavailable")
+        ).action_code
+        == "bambu_ftps_not_found"
+    )
+    assert (
+        BambuClient._classify_ftps_exception(
+            error_perm("552 storage exceeded")
+        ).action_code
+        == "bambu_ftps_too_large"
+    )
+    assert (
+        BambuClient._classify_ftps_exception(
+            error_perm("450 file unavailable")
+        ).action_code
+        == "bambu_ftps_not_found"
+    )
     assert BambuClient._classify_ftps_exception(TimeoutError()).action_code == (
         "bambu_ftps_timeout"
     )
-    assert BambuClient._classify_ftps_exception(
-        error_reply("501 command syntax error")
-    ).action_code == "bambu_ftps_server_rejected"
-    assert BambuClient._classify_ftps_exception(
-        error_reply("452 insufficient storage")
-    ).action_code == "bambu_ftps_server_rejected"
+    assert (
+        BambuClient._classify_ftps_exception(
+            error_reply("501 command syntax error")
+        ).action_code
+        == "bambu_ftps_server_rejected"
+    )
+    assert (
+        BambuClient._classify_ftps_exception(
+            error_reply("452 insufficient storage")
+        ).action_code
+        == "bambu_ftps_server_rejected"
+    )
 
 
 def test_provider_error_defaults_action_code_to_safe_coarse_code() -> None:
@@ -274,11 +291,11 @@ def test_ftps_non_retryable_codes_and_path_guards(tmp_path: Path) -> None:
     assert not_found.value.action_code == "bambu_ftps_not_found"
     assert calls == 1
 
-    too_large = make_client(
-        ftps_client_factory=lambda: FakeFtpsClient(remote_size=99)
-    )
+    too_large = make_client(ftps_client_factory=lambda: FakeFtpsClient(remote_size=99))
     with pytest.raises(ProviderError) as size_limit:
-        too_large._download_via_ftps("benchy.3mf", tmp_path / "too-large.3mf", max_bytes=4)
+        too_large._download_via_ftps(
+            "benchy.3mf", tmp_path / "too-large.3mf", max_bytes=4
+        )
     assert size_limit.value.action_code == "bambu_ftps_too_large"
 
     response_calls = 0
@@ -305,7 +322,9 @@ def test_ftps_non_retryable_codes_and_path_guards(tmp_path: Path) -> None:
 
     invalid = make_client()
     with pytest.raises(ProviderError) as invalid_path:
-        invalid._download_via_ftps("cache/../benchy.3mf", tmp_path / "invalid", max_bytes=4)
+        invalid._download_via_ftps(
+            "cache/../benchy.3mf", tmp_path / "invalid", max_bytes=4
+        )
     assert invalid_path.value.action_code == "bambu_ftps_path_invalid"
 
     unknown_calls = 0

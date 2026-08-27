@@ -71,10 +71,7 @@ def test_first_download_url_prefers_keyed_url_over_bare_fallback() -> None:
         "files": ["https://cdn.test/fallback.stl"],
         "nested": {"downloadUrl": "https://cdn.test/preferred.zip"},
     }
-    assert (
-        resolvers.first_download_url(payload)
-        == "https://cdn.test/preferred.zip"
-    )
+    assert resolvers.first_download_url(payload) == "https://cdn.test/preferred.zip"
     assert resolvers.first_download_url({"url": "/relative.stl"}) is None
 
 
@@ -94,7 +91,9 @@ def test_challenge_and_next_data_detection() -> None:
         f"{json.dumps(payload)}</script>"
     )
     assert resolvers.extract_next_data(html) == payload
-    assert resolvers.extract_next_data("<script id='__NEXT_DATA__'>{bad}</script>") is None
+    assert (
+        resolvers.extract_next_data("<script id='__NEXT_DATA__'>{bad}</script>") is None
+    )
 
 
 def test_printables_pack_and_link_payload_selection() -> None:
