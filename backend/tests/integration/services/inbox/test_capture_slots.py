@@ -264,87 +264,6 @@ def test_capture_cover_service_temp_is_cleaned_when_processing_fails(
     )
 
 
-def test_capture_slot_lease_uses_slot_owner_for_dismiss(db_session: Session) -> None:
-    """Dismiss finds the lease through the same capture-slot identity that created it."""
-    owner = build_user(db_session, "slot-dismiss-owner", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-
-    inbox.dismiss(db_session, row)
-
-    dismissed = db_session.get(InboxItem, row.id)
-    assert dismissed is not None
-    assert dismissed.state == InboxItemState.DISMISSED
-    assert (
-        db_session.exec(
-            select(StagingLease).where(
-                StagingLease.capture_upload_slot_id == slots[0].id
-            )
-        ).all()
-        == []
-    )
-
-
-def test_dismiss_durably_releases_uploaded_capture_slot_bytes(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-dismiss-uploaded", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    assert slot.storage_key is not None
-
-    inbox.dismiss(db_session, row)
-
-    assert db_session.get(CaptureUploadSlot, slot.id) is None
-    assert (
-        db_session.exec(
-            select(StagingLease).where(StagingLease.capture_upload_slot_id == slot.id)
-        ).all()
-        == []
-    )
-    intent = db_session.exec(select(StorageDeleteIntent)).one()
-    assert (intent.resource_kind, intent.resource_id, intent.key) == (
-        "capture_upload_slot",
-        slot.id,
-        slot.storage_key,
-    )
-
-
-def test_dismiss_keeps_capture_slot_when_delete_intent_cannot_be_enqueued(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    owner = build_user(db_session, "slot-dismiss-retry", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    monkeypatch.setattr(
-        inbox,
-        "enqueue_creation_receipt",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("intent unavailable")),
-    )
-
-    with pytest.raises(HTTPException, match="staging_cleanup_failed"):
-        inbox.dismiss(db_session, row)
-    db_session.commit()
-    db_session.expire_all()
-
-    retained = db_session.get(InboxItem, row.id)
-    assert retained is not None
-    assert retained.state == InboxItemState.CAPTURED
-    assert db_session.get(CaptureUploadSlot, slot.id) is not None
-    assert db_session.exec(
-        select(StagingLease).where(StagingLease.capture_upload_slot_id == slot.id)
-    ).one()
-
-
 def test_capture_slot_cleanup_enqueues_before_post_commit_delete(
     db_session: Session,
 ) -> None:
@@ -620,55 +539,6 @@ def test_capture_slot_restart_reconciles_published_object_without_receipt(
     assert not backend.exists(slot.storage_key)
 
 
-def test_capture_slot_dismiss_preserves_unadoptable_collision(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-collision-preserved", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = slots[0]
-    assert slot.storage_key is not None
-    backend = inbox.get_backend()
-    backend.create_bytes(b"foreign-bytes", slot.storage_key)
-
-    with pytest.raises(HTTPException, match="staging_cleanup_failed"):
-        inbox.dismiss(db_session, row)
-    assert backend.read_bytes(slot.storage_key) == b"foreign-bytes"
-    assert db_session.get(CaptureUploadSlot, slot.id) is not None
-
-
-def test_retry_returns_transferred_capture_slot_leases_to_review(
-    db_session: Session,
-) -> None:
-    """A failed durable capture can be retried after its import job owned slots."""
-    owner = build_user(db_session, "slot-retry-after-transfer", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    row.state = InboxItemState.FAILED
-    row.retryable = True
-    job = BackgroundJob(id="slot-retry-after-transfer-job", owner_user_id=owner.id)
-    db_session.add(job)
-    db_session.flush()
-    row.background_job_id = job.id
-    inbox.staging_leases.transfer_capture_slots_to_job(
-        db_session, inbox_item_id=row.id, job_id=job.id
-    )
-    db_session.commit()
-
-    retried = inbox.retry(db_session, row)
-
-    assert retried.state == InboxItemState.REVIEW
-    lease = db_session.exec(
-        select(StagingLease).where(StagingLease.capture_upload_slot_id == slots[0].id)
-    ).one()
-    assert lease.background_job_id is None
-    assert lease.capture_upload_slot_origin_id is None
-
-
 def test_capture_slot_cleanup_later_failure_preserves_all_slot_ownership(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -929,109 +799,261 @@ def test_import_route_rejects_invalid_v2_selection_before_scheduling(
     assert db_session.exec(select(BackgroundJob)).all() == jobs_before
 
 
-def test_retry_item_schedules_resolve_when_returned_to_captured(
-    client: TestClient, db_session: Session, monkeypatch
-) -> None:
-    headers = _headers(db_session, "retry-success", admin=True)
-    owner = build_user(db_session, "retry-success-owner", superuser=True)
-    row = _make_item(
-        db_session,
-        owner,
-        state=InboxItemState.FAILED,
-        retryable=True,
-        manifest_json="",
-    )
-    calls: list[int] = []
+class TestResolve:
+    def test_retry_item_schedules_resolve_when_returned_to_captured(
+        self, client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        headers = _headers(db_session, "retry-success", admin=True)
+        owner = build_user(db_session, "retry-success-owner", superuser=True)
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.FAILED,
+            retryable=True,
+            manifest_json="",
+        )
+        calls: list[int] = []
 
-    async def fake_resolve(item_id: int) -> None:
-        calls.append(item_id)
+        async def fake_resolve(item_id: int) -> None:
+            calls.append(item_id)
 
-    monkeypatch.setattr(inbox, "resolve", fake_resolve)
+        monkeypatch.setattr(inbox, "resolve", fake_resolve)
 
-    response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
+        response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
 
-    assert response.status_code == 200
-    assert response.json()["state"] == "captured"
-    assert calls == [row.id]
-
-
-def test_retry_partial_schedules_failed_selection_only(
-    client: TestClient, db_session: Session, monkeypatch
-) -> None:
-    owner = build_user(db_session, "retry-partial-api", superuser=True)
-    row = _make_item(
-        db_session,
-        owner,
-        state=InboxItemState.COMPLETED,
-        completion="partial",
-        retryable=True,
-        manifest_json='{"kind":"model_files","selected_ids":["bad"]}',
-    )
-    result = InboxItemResult(
-        inbox_item_id=row.id,
-        source_selection_id="bad",
-        result_key="self",
-        original_filename="bad.stl",
-        state=InboxItemResultState.FAILED,
-        error_code="captured_artifact_trashed",
-        retryable=True,
-    )
-    db_session.add(result)
-    db_session.commit()
-    calls: list[tuple[int, list[str]]] = []
-
-    async def fake_run_import(item_id: int, selected_ids: list[str], _factory) -> None:
-        calls.append((item_id, selected_ids))
-
-    monkeypatch.setattr(inbox, "run_import", fake_run_import)
-    headers = {
-        "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
-    }
-
-    response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
-
-    assert response.status_code == 200
-    assert response.json()["state"] == "review"
-    assert calls == [(row.id, ["bad"])]
+        assert response.status_code == 200
+        assert response.json()["state"] == "captured"
+        assert calls == [row.id]
 
 
-def test_retry_route_rejects_invalid_v2_selection_before_scheduling(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "retry-selection-route", superuser=True)
-    row = _make_item(
-        db_session,
-        owner,
-        source_url="https://makerworld.com/en/models/1234-widget",
-        source_hostname="makerworld.com",
-        state=InboxItemState.FAILED,
-        retryable=True,
-        manifest_json=json.dumps(
-            {
-                "schema_version": 2,
-                "kind": "model_files",
-                "source": _capture_source(),
-                "files": [
-                    {"id": "ok", "name": "ok.stl", "file_type": "stl", "size": 1}
-                ],
-                "selected_ids": ["missing"],
-            }
-        ),
-    )
-    assert row.id is not None
-    background = _BackgroundTaskRecorder()
-    jobs_before = db_session.exec(select(BackgroundJob)).all()
+class TestRetry:
+    def test_retry_returns_transferred_capture_slot_leases_to_review(
+        self,
+        db_session: Session,
+    ) -> None:
+        """A failed durable capture can be retried after its import job owned slots."""
+        owner = build_user(db_session, "slot-retry-after-transfer", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        row.state = InboxItemState.FAILED
+        row.retryable = True
+        job = BackgroundJob(id="slot-retry-after-transfer-job", owner_user_id=owner.id)
+        db_session.add(job)
+        db_session.flush()
+        row.background_job_id = job.id
+        inbox.staging_leases.transfer_capture_slots_to_job(
+            db_session, inbox_item_id=row.id, job_id=job.id
+        )
+        db_session.commit()
 
-    with pytest.raises(HTTPException) as exc_info:
-        inbox_api.retry_item(
-            row.id,
-            cast(BackgroundTasks, background),
-            current_user=owner,
-            session=db_session,
-            session_factory=get_session_factory(),
+        retried = inbox.retry(db_session, row)
+
+        assert retried.state == InboxItemState.REVIEW
+        lease = db_session.exec(
+            select(StagingLease).where(
+                StagingLease.capture_upload_slot_id == slots[0].id
+            )
+        ).one()
+        assert lease.background_job_id is None
+        assert lease.capture_upload_slot_origin_id is None
+
+    def test_retry_partial_schedules_failed_selection_only(
+        self, client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        owner = build_user(db_session, "retry-partial-api", superuser=True)
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.COMPLETED,
+            completion="partial",
+            retryable=True,
+            manifest_json='{"kind":"model_files","selected_ids":["bad"]}',
+        )
+        result = InboxItemResult(
+            inbox_item_id=row.id,
+            source_selection_id="bad",
+            result_key="self",
+            original_filename="bad.stl",
+            state=InboxItemResultState.FAILED,
+            error_code="captured_artifact_trashed",
+            retryable=True,
+        )
+        db_session.add(result)
+        db_session.commit()
+        calls: list[tuple[int, list[str]]] = []
+
+        async def fake_run_import(
+            item_id: int, selected_ids: list[str], _factory
+        ) -> None:
+            calls.append((item_id, selected_ids))
+
+        monkeypatch.setattr(inbox, "run_import", fake_run_import)
+        headers = {
+            "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
+        }
+
+        response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["state"] == "review"
+        assert calls == [(row.id, ["bad"])]
+
+    def test_retry_route_rejects_invalid_v2_selection_before_scheduling(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "retry-selection-route", superuser=True)
+        row = _make_item(
+            db_session,
+            owner,
+            source_url="https://makerworld.com/en/models/1234-widget",
+            source_hostname="makerworld.com",
+            state=InboxItemState.FAILED,
+            retryable=True,
+            manifest_json=json.dumps(
+                {
+                    "schema_version": 2,
+                    "kind": "model_files",
+                    "source": _capture_source(),
+                    "files": [
+                        {"id": "ok", "name": "ok.stl", "file_type": "stl", "size": 1}
+                    ],
+                    "selected_ids": ["missing"],
+                }
+            ),
+        )
+        assert row.id is not None
+        background = _BackgroundTaskRecorder()
+        jobs_before = db_session.exec(select(BackgroundJob)).all()
+
+        with pytest.raises(HTTPException) as exc_info:
+            inbox_api.retry_item(
+                row.id,
+                cast(BackgroundTasks, background),
+                current_user=owner,
+                session=db_session,
+                session_factory=get_session_factory(),
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail == "file_selection_invalid"
+        assert background.tasks == []
+        assert db_session.exec(select(BackgroundJob)).all() == jobs_before
+
+
+class TestDismiss:
+    def test_capture_slot_lease_uses_slot_owner_for_dismiss(
+        self, db_session: Session
+    ) -> None:
+        """Dismiss finds the lease through the same capture-slot identity that created it."""
+        owner = build_user(db_session, "slot-dismiss-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
         )
 
-    assert exc_info.value.status_code == 422
-    assert exc_info.value.detail == "file_selection_invalid"
-    assert background.tasks == []
-    assert db_session.exec(select(BackgroundJob)).all() == jobs_before
+        inbox.dismiss(db_session, row)
+
+        dismissed = db_session.get(InboxItem, row.id)
+        assert dismissed is not None
+        assert dismissed.state == InboxItemState.DISMISSED
+        assert (
+            db_session.exec(
+                select(StagingLease).where(
+                    StagingLease.capture_upload_slot_id == slots[0].id
+                )
+            ).all()
+            == []
+        )
+
+    def test_dismiss_durably_releases_uploaded_capture_slot_bytes(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-dismiss-uploaded", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        assert slot.storage_key is not None
+
+        inbox.dismiss(db_session, row)
+
+        assert db_session.get(CaptureUploadSlot, slot.id) is None
+        assert (
+            db_session.exec(
+                select(StagingLease).where(
+                    StagingLease.capture_upload_slot_id == slot.id
+                )
+            ).all()
+            == []
+        )
+        intent = db_session.exec(select(StorageDeleteIntent)).one()
+        assert (intent.resource_kind, intent.resource_id, intent.key) == (
+            "capture_upload_slot",
+            slot.id,
+            slot.storage_key,
+        )
+
+    def test_dismiss_keeps_capture_slot_when_delete_intent_cannot_be_enqueued(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        owner = build_user(db_session, "slot-dismiss-retry", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        monkeypatch.setattr(
+            inbox,
+            "enqueue_creation_receipt",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("intent unavailable")
+            ),
+        )
+
+        with pytest.raises(HTTPException, match="staging_cleanup_failed"):
+            inbox.dismiss(db_session, row)
+        db_session.commit()
+        db_session.expire_all()
+
+        retained = db_session.get(InboxItem, row.id)
+        assert retained is not None
+        assert retained.state == InboxItemState.CAPTURED
+        assert db_session.get(CaptureUploadSlot, slot.id) is not None
+        assert db_session.exec(
+            select(StagingLease).where(StagingLease.capture_upload_slot_id == slot.id)
+        ).one()
+
+    def test_capture_slot_dismiss_preserves_unadoptable_collision(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-collision-preserved", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = slots[0]
+        assert slot.storage_key is not None
+        backend = inbox.get_backend()
+        backend.create_bytes(b"foreign-bytes", slot.storage_key)
+
+        with pytest.raises(HTTPException, match="staging_cleanup_failed"):
+            inbox.dismiss(db_session, row)
+        assert backend.read_bytes(slot.storage_key) == b"foreign-bytes"
+        assert db_session.get(CaptureUploadSlot, slot.id) is not None

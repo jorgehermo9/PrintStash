@@ -120,36 +120,6 @@ def test_effective_role_is_still_correct_per_row(db_session: Session) -> None:
     assert roles["T"] == CollectionRole.VIEW
 
 
-def test_facets_are_consolidated_into_one_query(db_session: Session) -> None:
-    user = build_user(db_session, "facet-query-count", superuser=True)
-    _seed_models(db_session, 3, collection_id=None)
-    _ = user.is_superuser  # refresh the expired fixture row outside the counter
-
-    count = _count_queries(
-        db_session,
-        lambda: model_views.facets(db_session, user, ModelFilters()),
-    )
-
-    assert count == 1
-
-
-def test_vault_stats_counts_are_consolidated_into_one_query(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    user = build_user(db_session, "stats-query-count", superuser=True)
-    monkeypatch.setattr(
-        model_views,
-        "_cached_storage_usage",
-        lambda: {"backend": "local", "ok": True},
-    )
-
-    count = _count_queries(
-        db_session, lambda: model_views.vault_stats(db_session, user)
-    )
-
-    assert count == 1
-
-
 def test_cursor_total_is_counted_only_on_the_first_page(db_session: Session) -> None:
     user = build_user(db_session, "cursor-count", superuser=True)
     _seed_models(db_session, 4, collection_id=None)
@@ -181,3 +151,35 @@ def test_cursor_total_is_counted_only_on_the_first_page(db_session: Session) -> 
     )
 
     assert second_queries == first_queries - 1
+
+
+class TestFacets:
+    def test_facets_are_consolidated_into_one_query(self, db_session: Session) -> None:
+        user = build_user(db_session, "facet-query-count", superuser=True)
+        _seed_models(db_session, 3, collection_id=None)
+        _ = user.is_superuser  # refresh the expired fixture row outside the counter
+
+        count = _count_queries(
+            db_session,
+            lambda: model_views.facets(db_session, user, ModelFilters()),
+        )
+
+        assert count == 1
+
+
+class TestVaultStats:
+    def test_vault_stats_counts_are_consolidated_into_one_query(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        user = build_user(db_session, "stats-query-count", superuser=True)
+        monkeypatch.setattr(
+            model_views,
+            "_cached_storage_usage",
+            lambda: {"backend": "local", "ok": True},
+        )
+
+        count = _count_queries(
+            db_session, lambda: model_views.vault_stats(db_session, user)
+        )
+
+        assert count == 1

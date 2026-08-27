@@ -268,22 +268,6 @@ def test_extract_normalizes_unexpected_footer_errors(
         extract_embedded_gcode(path)
 
 
-def test_safe_member_name_rejects_all_noncanonical_variants() -> None:
-    from app.services import three_mf_preview
-
-    for name in (
-        "",
-        "a\\b",
-        "/absolute",
-        "Metadata/./plate_1.gcode",
-        "Metadata//plate_1.gcode",
-        "Metadata/../plate_1.gcode",
-        "Metadata/plate_1.gcode\x00",
-        "Metadata/plate_e\u0301.gcode",
-    ):
-        assert three_mf_preview._safe_member_name(name) is False
-
-
 def test_remote_archive_success_closes_stream_and_removes_temp_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -606,40 +590,58 @@ def test_zip_read_faults_have_stable_malformed_code(
     assert failure.value.code == "embedded_gcode_malformed"
 
 
-def test_preview_capacity_fails_fast_before_second_inflate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = _archive(tmp_path / "busy.3mf", {"Metadata/plate_1.gcode": b"G28\n"})
-    monkeypatch.setattr(settings._frozen, "three_mf_preview_max_concurrent", 1)
-    entered = Event()
-    release = Event()
-    original = extract_embedded_gcode
+class TestPreviewCapacity:
+    def test_preview_capacity_fails_fast_before_second_inflate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = _archive(tmp_path / "busy.3mf", {"Metadata/plate_1.gcode": b"G28\n"})
+        monkeypatch.setattr(settings._frozen, "three_mf_preview_max_concurrent", 1)
+        entered = Event()
+        release = Event()
+        original = extract_embedded_gcode
 
-    def blocking_extract(*args, **kwargs):
-        entered.set()
-        assert release.wait(2)
-        return original(*args, **kwargs)
+        def blocking_extract(*args, **kwargs):
+            entered.set()
+            assert release.wait(2)
+            return original(*args, **kwargs)
 
-    monkeypatch.setattr(
-        "app.services.three_mf_preview.extract_embedded_gcode", blocking_extract
-    )
+        monkeypatch.setattr(
+            "app.services.three_mf_preview.extract_embedded_gcode", blocking_extract
+        )
 
-    class LocalBackend:
-        def stat_size(self, _key: str) -> int:
-            return path.stat().st_size
+        class LocalBackend:
+            def stat_size(self, _key: str) -> int:
+                return path.stat().st_size
 
-        def direct_path(self, _key: str) -> Path:
-            return path
+            def direct_path(self, _key: str) -> Path:
+                return path
 
-    worker = Thread(
-        target=read_embedded_gcode,
-        args=(LocalBackend(), "busy.3mf"),  # type: ignore[arg-type]
-    )
-    worker.start()
-    assert entered.wait(2)
-    with pytest.raises(EmbeddedGcodeError) as failure:
-        read_embedded_gcode(LocalBackend(), "busy.3mf")  # type: ignore[arg-type]
-    assert failure.value.code == "embedded_gcode_busy"
-    release.set()
-    worker.join(timeout=2)
-    assert not worker.is_alive()
+        worker = Thread(
+            target=read_embedded_gcode,
+            args=(LocalBackend(), "busy.3mf"),  # type: ignore[arg-type]
+        )
+        worker.start()
+        assert entered.wait(2)
+        with pytest.raises(EmbeddedGcodeError) as failure:
+            read_embedded_gcode(LocalBackend(), "busy.3mf")  # type: ignore[arg-type]
+        assert failure.value.code == "embedded_gcode_busy"
+        release.set()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+
+class TestSafeMemberName:
+    def test_safe_member_name_rejects_all_noncanonical_variants(self) -> None:
+        from app.services import three_mf_preview
+
+        for name in (
+            "",
+            "a\\b",
+            "/absolute",
+            "Metadata/./plate_1.gcode",
+            "Metadata//plate_1.gcode",
+            "Metadata/../plate_1.gcode",
+            "Metadata/plate_1.gcode\x00",
+            "Metadata/plate_e\u0301.gcode",
+        ):
+            assert three_mf_preview._safe_member_name(name) is False

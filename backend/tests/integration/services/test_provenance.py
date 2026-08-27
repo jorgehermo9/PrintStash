@@ -184,76 +184,6 @@ def test_user_override_creates_field_when_capture_omits_allowlisted_field(
     )
 
 
-def test_clear_user_override_is_idempotent_for_absent_capture_field(
-    db_session: Session,
-) -> None:
-    model = _model(db_session)
-    captured = provenance.upsert_capture(
-        db_session, model_id=model.id, manifest=_capture_without_title()
-    )
-    row = provenance.set_user_override(
-        db_session,
-        provenance_source_id=captured.source.id,
-        field_name="title",
-        value="Local title",
-    )
-    db_session.commit()
-    user_updated_at = row.user_updated_at
-
-    first = provenance.clear_user_override(
-        db_session,
-        provenance_source_id=captured.source.id,
-        field_name="title",
-    )
-    second = provenance.clear_user_override(
-        db_session,
-        provenance_source_id=captured.source.id,
-        field_name="title",
-    )
-    db_session.commit()
-
-    assert first is row
-    assert second is row
-    assert row.user_override_set is False
-    assert row.user_value_json is None
-    assert row.captured_value_json == '""'
-    assert provenance.effective_value(row) == ""
-    assert row.user_updated_at is not None and row.user_updated_at >= user_updated_at
-
-
-def test_clear_user_override_is_noop_when_field_row_is_absent(
-    db_session: Session,
-) -> None:
-    model = _model(db_session)
-    captured = provenance.upsert_capture(
-        db_session, model_id=model.id, manifest=_capture_without_title()
-    )
-
-    first = provenance.clear_user_override(
-        db_session,
-        provenance_source_id=captured.source.id,
-        field_name="title",
-    )
-    second = provenance.clear_user_override(
-        db_session,
-        provenance_source_id=captured.source.id,
-        field_name="title",
-    )
-    db_session.commit()
-
-    assert first is None
-    assert second is None
-    assert (
-        db_session.exec(
-            select(ModelProvenanceField).where(
-                ModelProvenanceField.provenance_source_id == captured.source.id,
-                ModelProvenanceField.field_name == "title",
-            )
-        ).all()
-        == []
-    )
-
-
 def test_stable_source_id_promotes_and_merges_legacy_url_source(
     db_session: Session,
 ) -> None:
@@ -505,32 +435,6 @@ def test_portable_attach_keeps_existing_capture_and_local_override(
     )
 
 
-def test_import_key_is_stable_and_distinguishes_blob_bytes() -> None:
-    capture = _capture()
-    assert provenance.import_key(
-        capture,
-        source_file_id="file-a",
-        source_filename="part.stl",
-        blob_sha256="b" * 64,
-    ) == provenance.import_key(
-        capture,
-        source_file_id="file-a",
-        source_filename="renamed.stl",
-        blob_sha256="b" * 64,
-    )
-    assert provenance.import_key(
-        capture,
-        source_file_id="file-a",
-        source_filename="part.stl",
-        blob_sha256="b" * 64,
-    ) != provenance.import_key(
-        capture,
-        source_file_id="file-a",
-        source_filename="part.stl",
-        blob_sha256="c" * 64,
-    )
-
-
 def test_inbox_result_stores_lowercase_state_values(db_session: Session) -> None:
     user = User(username="provenance-owner", hashed_password="not-used")
     db_session.add(user)
@@ -692,3 +596,104 @@ def test_live_reuse_trash_restore_and_hard_delete_follow_provenance_lifecycle(
         intent.resource_kind
         for intent in db_session.exec(select(StorageDeleteIntent)).all()
     } <= {"file_thumbnail", "file_thumbnail_legacy"}
+
+
+class TestImportKey:
+    def test_import_key_is_stable_and_distinguishes_blob_bytes(self) -> None:
+        capture = _capture()
+        assert provenance.import_key(
+            capture,
+            source_file_id="file-a",
+            source_filename="part.stl",
+            blob_sha256="b" * 64,
+        ) == provenance.import_key(
+            capture,
+            source_file_id="file-a",
+            source_filename="renamed.stl",
+            blob_sha256="b" * 64,
+        )
+        assert provenance.import_key(
+            capture,
+            source_file_id="file-a",
+            source_filename="part.stl",
+            blob_sha256="b" * 64,
+        ) != provenance.import_key(
+            capture,
+            source_file_id="file-a",
+            source_filename="part.stl",
+            blob_sha256="c" * 64,
+        )
+
+
+class TestClearUserOverride:
+    def test_clear_user_override_is_idempotent_for_absent_capture_field(
+        self,
+        db_session: Session,
+    ) -> None:
+        model = _model(db_session)
+        captured = provenance.upsert_capture(
+            db_session, model_id=model.id, manifest=_capture_without_title()
+        )
+        row = provenance.set_user_override(
+            db_session,
+            provenance_source_id=captured.source.id,
+            field_name="title",
+            value="Local title",
+        )
+        db_session.commit()
+        user_updated_at = row.user_updated_at
+
+        first = provenance.clear_user_override(
+            db_session,
+            provenance_source_id=captured.source.id,
+            field_name="title",
+        )
+        second = provenance.clear_user_override(
+            db_session,
+            provenance_source_id=captured.source.id,
+            field_name="title",
+        )
+        db_session.commit()
+
+        assert first is row
+        assert second is row
+        assert row.user_override_set is False
+        assert row.user_value_json is None
+        assert row.captured_value_json == '""'
+        assert provenance.effective_value(row) == ""
+        assert (
+            row.user_updated_at is not None and row.user_updated_at >= user_updated_at
+        )
+
+    def test_clear_user_override_is_noop_when_field_row_is_absent(
+        self,
+        db_session: Session,
+    ) -> None:
+        model = _model(db_session)
+        captured = provenance.upsert_capture(
+            db_session, model_id=model.id, manifest=_capture_without_title()
+        )
+
+        first = provenance.clear_user_override(
+            db_session,
+            provenance_source_id=captured.source.id,
+            field_name="title",
+        )
+        second = provenance.clear_user_override(
+            db_session,
+            provenance_source_id=captured.source.id,
+            field_name="title",
+        )
+        db_session.commit()
+
+        assert first is None
+        assert second is None
+        assert (
+            db_session.exec(
+                select(ModelProvenanceField).where(
+                    ModelProvenanceField.provenance_source_id == captured.source.id,
+                    ModelProvenanceField.field_name == "title",
+                )
+            ).all()
+            == []
+        )

@@ -68,9 +68,10 @@ def test_dead_subscriber_is_dropped():
     asyncio.run(_run())
 
 
-def test_publish_to_empty_channel_is_a_noop():
-    async def _run():
-        bus = InProcessBus()
-        await bus.publish("printer:999", {"x": 1})  # must not raise
+class TestPublish:
+    def test_publish_to_empty_channel_is_a_noop(self):
+        async def _run():
+            bus = InProcessBus()
+            await bus.publish("printer:999", {"x": 1})  # must not raise
 
-    asyncio.run(_run())
+        asyncio.run(_run())

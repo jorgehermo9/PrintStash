@@ -292,34 +292,6 @@ def test_write_back_lands_in_nas_folder(tmp_path: Path, db_session: Session) -> 
     assert summary["skipped"] == 1
 
 
-def test_is_due_cron_logic() -> None:
-    from datetime import datetime, timezone
-
-    now = datetime(2026, 6, 15, 12, 30, tzinfo=timezone.utc)
-    hourly = "0 * * * *"
-
-    # Never scanned + valid schedule → due.
-    assert external_library.is_due(hourly, None, now) is True
-    # Last scan was last hour, a boundary (12:00) has passed → due.
-    assert (
-        external_library.is_due(
-            hourly, datetime(2026, 6, 15, 11, 0, tzinfo=timezone.utc), now
-        )
-        is True
-    )
-    # Last scan was 10 min ago, no new boundary since → not due.
-    assert (
-        external_library.is_due(
-            hourly, datetime(2026, 6, 15, 12, 20, tzinfo=timezone.utc), now
-        )
-        is False
-    )
-    # Empty schedule = manual only → never due.
-    assert external_library.is_due("", None, now) is False
-    # Invalid cron → never due (defensive).
-    assert external_library.is_due("nope", None, now) is False
-
-
 def test_watch_mode_persisted_as_enum_name(tmp_path: Path, db_session: Session) -> None:
     """Guard the storage contract: SQLAlchemy persists the enum *name* ("AUTO"),
     so the migration's server_default must match — storing the lowercase value
@@ -336,31 +308,6 @@ def test_watch_mode_persisted_as_enum_name(tmp_path: Path, db_session: Session) 
         {"id": lib.id},
     ).scalar_one()
     assert raw == "AUTO"  # stored by NAME, not the "auto" value
-
-
-def test_detect_fs_kind_and_should_watch(tmp_path: Path) -> None:
-    from app.db.models import ExternalLibraryWatchMode as WM
-
-    # tmp_path is a local filesystem on the test host.
-    # CI can place pytest temp files on a mounted Windows/network filesystem.
-    assert external_library.detect_fs_kind(tmp_path) in {"local", "network", "unknown"}
-
-    lib = ExternalLibrary(name="x", root_path=str(tmp_path))
-
-    # AUTO watches only local filesystems.
-    lib.watch_mode = WM.AUTO
-    assert external_library.should_watch(lib, "local") is True
-    assert external_library.should_watch(lib, "network") is False
-    assert external_library.should_watch(lib, "unknown") is False
-    # EVENTS forces watching regardless of fs; OFF never watches.
-    lib.watch_mode = WM.EVENTS
-    assert external_library.should_watch(lib, "network") is True
-    lib.watch_mode = WM.OFF
-    assert external_library.should_watch(lib, "local") is False
-    # Disabled libraries are never watched.
-    lib.watch_mode = WM.EVENTS
-    lib.enabled = False
-    assert external_library.should_watch(lib, "local") is False
 
 
 def test_feature_disabled_keeps_uploads_in_vault(
@@ -407,3 +354,62 @@ def test_to_read_handles_corrupt_scan_summary_json(
 
     read = _to_read(lib)
     assert read.last_scan_summary is None
+
+
+class TestDetectFsKind:
+    def test_detect_fs_kind_and_should_watch(self, tmp_path: Path) -> None:
+        from app.db.models import ExternalLibraryWatchMode as WM
+
+        # tmp_path is a local filesystem on the test host.
+        # CI can place pytest temp files on a mounted Windows/network filesystem.
+        assert external_library.detect_fs_kind(tmp_path) in {
+            "local",
+            "network",
+            "unknown",
+        }
+
+        lib = ExternalLibrary(name="x", root_path=str(tmp_path))
+
+        # AUTO watches only local filesystems.
+        lib.watch_mode = WM.AUTO
+        assert external_library.should_watch(lib, "local") is True
+        assert external_library.should_watch(lib, "network") is False
+        assert external_library.should_watch(lib, "unknown") is False
+        # EVENTS forces watching regardless of fs; OFF never watches.
+        lib.watch_mode = WM.EVENTS
+        assert external_library.should_watch(lib, "network") is True
+        lib.watch_mode = WM.OFF
+        assert external_library.should_watch(lib, "local") is False
+        # Disabled libraries are never watched.
+        lib.watch_mode = WM.EVENTS
+        lib.enabled = False
+        assert external_library.should_watch(lib, "local") is False
+
+
+class TestIsDue:
+    def test_is_due_cron_logic(self) -> None:
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 6, 15, 12, 30, tzinfo=timezone.utc)
+        hourly = "0 * * * *"
+
+        # Never scanned + valid schedule → due.
+        assert external_library.is_due(hourly, None, now) is True
+        # Last scan was last hour, a boundary (12:00) has passed → due.
+        assert (
+            external_library.is_due(
+                hourly, datetime(2026, 6, 15, 11, 0, tzinfo=timezone.utc), now
+            )
+            is True
+        )
+        # Last scan was 10 min ago, no new boundary since → not due.
+        assert (
+            external_library.is_due(
+                hourly, datetime(2026, 6, 15, 12, 20, tzinfo=timezone.utc), now
+            )
+            is False
+        )
+        # Empty schedule = manual only → never due.
+        assert external_library.is_due("", None, now) is False
+        # Invalid cron → never due (defensive).
+        assert external_library.is_due("nope", None, now) is False

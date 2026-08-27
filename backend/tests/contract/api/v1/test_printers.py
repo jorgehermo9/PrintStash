@@ -192,54 +192,6 @@ def test_diagnostics_hits_real_moonraker_http_server(
         assert server.state.status_requests == 1
 
 
-def test_send_to_printer_uploads_real_file_and_records_inventory(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-    tmp_path: Path,
-) -> None:
-    file_row = _stored_gcode(db_session, tmp_path)
-    with moonraker_server() as server:
-        printer = build_printer(
-            db_session, name="Real Moonraker", moonraker_url=server.base_url
-        )
-
-        resp = client.post(
-            f"/api/v1/printers/{printer.id}/send",
-            json={
-                "file_id": file_row.id,
-                "start_print": True,
-                "remote_filename": "jobs/bracket-release.gcode",
-            },
-            headers=auth_headers,
-        )
-
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["state"] == "started"
-        assert server.state.upload_requests == 1
-        assert "multipart/form-data" in server.state.last_upload_content_type
-        assert b'filename="jobs/bracket-release.gcode"' in server.state.last_upload_body
-        assert b'name="print"' in server.state.last_upload_body
-        # Provider-neutral send uploads first, then starts explicitly. Bambu
-        # needs this split and Moonraker retains equivalent observable behavior.
-        assert b"false" in server.state.last_upload_body
-        assert server.state.start_requests == ["jobs/bracket-release.gcode"]
-        assert b"G28\nG1 X1 Y1\n" in server.state.last_upload_body
-
-        job = db_session.exec(
-            select(PrintJob).where(PrintJob.printer_id == printer.id)
-        ).one()
-        assert job.file_id == file_row.id
-        assert job.remote_filename == "jobs/bracket-release.gcode"
-
-        inventory = db_session.exec(
-            select(PrinterFile).where(PrinterFile.printer_id == printer.id)
-        ).one()
-        assert inventory.file_id == file_row.id
-        assert inventory.remote_filename == "jobs/bracket-release.gcode"
-        assert inventory.matched_by == "upload_history"
-
-
 def test_start_existing_printer_file_calls_real_moonraker_start_endpoint(
     client: TestClient,
     auth_headers: dict[str, str],
@@ -330,3 +282,56 @@ def test_sync_printer_files_reports_real_provider_http_failure(
         assert resp.json() == {"detail": "provider_transport_error"}
         db_session.refresh(printer)
         assert "moonraker 503" in (printer.last_error or "")
+
+
+class TestSendToPrinter:
+    def test_send_to_printer_uploads_real_file_and_records_inventory(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        tmp_path: Path,
+    ) -> None:
+        file_row = _stored_gcode(db_session, tmp_path)
+        with moonraker_server() as server:
+            printer = build_printer(
+                db_session, name="Real Moonraker", moonraker_url=server.base_url
+            )
+
+            resp = client.post(
+                f"/api/v1/printers/{printer.id}/send",
+                json={
+                    "file_id": file_row.id,
+                    "start_print": True,
+                    "remote_filename": "jobs/bracket-release.gcode",
+                },
+                headers=auth_headers,
+            )
+
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["state"] == "started"
+            assert server.state.upload_requests == 1
+            assert "multipart/form-data" in server.state.last_upload_content_type
+            assert (
+                b'filename="jobs/bracket-release.gcode"'
+                in server.state.last_upload_body
+            )
+            assert b'name="print"' in server.state.last_upload_body
+            # Provider-neutral send uploads first, then starts explicitly. Bambu
+            # needs this split and Moonraker retains equivalent observable behavior.
+            assert b"false" in server.state.last_upload_body
+            assert server.state.start_requests == ["jobs/bracket-release.gcode"]
+            assert b"G28\nG1 X1 Y1\n" in server.state.last_upload_body
+
+            job = db_session.exec(
+                select(PrintJob).where(PrintJob.printer_id == printer.id)
+            ).one()
+            assert job.file_id == file_row.id
+            assert job.remote_filename == "jobs/bracket-release.gcode"
+
+            inventory = db_session.exec(
+                select(PrinterFile).where(PrinterFile.printer_id == printer.id)
+            ).one()
+            assert inventory.file_id == file_row.id
+            assert inventory.remote_filename == "jobs/bracket-release.gcode"
+            assert inventory.matched_by == "upload_history"

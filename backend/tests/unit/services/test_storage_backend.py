@@ -22,67 +22,6 @@ class _FakeSettings:
     storage_identity: str = "test-installation"
 
 
-def test_unchecked_move_is_disabled_and_preserves_source(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    src = tmp_path / "staged.stl"
-    src.write_bytes(b"solid")
-    dest = tmp_path / "nested" / "dir" / "final.stl"
-
-    with pytest.raises(RuntimeError, match="unchecked_storage_move_disabled"):
-        backend.move(str(src), str(dest))
-
-    assert src.read_bytes() == b"solid"
-    assert not dest.exists()
-
-
-def test_stat_size_and_read_bytes(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    blob = tmp_path / "part.stl"
-    blob.write_bytes(b"0123456789")
-
-    assert backend.stat_size(str(blob)) == 10
-    assert backend.read_bytes(str(blob)) == b"0123456789"
-
-
-def test_stream_chunks_yields_full_content(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    blob = tmp_path / "part.stl"
-    blob.write_bytes(b"a" * 5000)
-
-    chunks = list(backend.stream_chunks(str(blob), chunk_size=2000))
-
-    assert len(chunks) == 3
-    assert b"".join(chunks) == b"a" * 5000
-
-
-def test_download_to_path_copies_and_creates_parents(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    src = tmp_path / "source.stl"
-    src.write_bytes(b"solid")
-    dest = tmp_path / "nested" / "copy.stl"
-
-    result = backend.download_to_path(str(src), dest)
-
-    assert result == dest
-    assert dest.read_bytes() == b"solid"
-    assert src.exists()  # copy, not move
-
-
-def test_download_to_path_collision_preserves_existing_destination(
-    tmp_path: Path,
-) -> None:
-    backend = LocalStorageBackend()
-    src = tmp_path / "source.stl"
-    src.write_bytes(b"new")
-    dest = tmp_path / "copy.stl"
-    dest.write_bytes(b"user-owned")
-
-    with pytest.raises(StorageCollisionError):
-        backend.download_to_path(str(src), dest)
-
-    assert dest.read_bytes() == b"user-owned"
-
-
 def test_download_failure_never_publishes_partial_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -115,165 +54,6 @@ def test_download_failure_never_publishes_partial_destination(
         backend.download_to_path(str(src), dest)
 
     assert not dest.exists()
-
-
-def test_upload_file_copies_into_key_path(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    src = tmp_path / "source.stl"
-    src.write_bytes(b"solid")
-    dest_key = tmp_path / "nested" / "uploaded.stl"
-
-    backend.upload_file(src, str(dest_key))
-
-    assert dest_key.read_bytes() == b"solid"
-    assert src.exists()
-
-
-def test_unchecked_delete_is_disabled_and_preserves_file(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    blob = tmp_path / "part.stl"
-    blob.write_bytes(b"solid")
-
-    with pytest.raises(RuntimeError, match="unchecked_storage_delete_disabled"):
-        backend.delete(str(blob))
-    assert blob.read_bytes() == b"solid"
-
-
-def test_list_keys_and_walk_keys_find_files_recursively(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    (tmp_path / "a").mkdir()
-    (tmp_path / "a" / "one.stl").write_bytes(b"1")
-    (tmp_path / "a" / "b").mkdir()
-    (tmp_path / "a" / "b" / "two.stl").write_bytes(b"22")
-
-    listed = backend.list_keys(str(tmp_path / "a"))
-    walked = list(backend.walk_keys(str(tmp_path / "a")))
-
-    assert len(listed) == 2
-    assert len(walked) == 2
-    assert {Path(p).name for p in listed} == {"one.stl", "two.stl"}
-
-
-def test_list_keys_and_walk_keys_return_empty_for_missing_root(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    missing = tmp_path / "does-not-exist"
-
-    assert backend.list_keys(str(missing)) == []
-    assert list(backend.walk_keys(str(missing))) == []
-
-
-def test_usage_totals_size_and_count(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    root = tmp_path / "vault"
-    root.mkdir()
-    (root / "one.stl").write_bytes(b"12345")
-    (root / "two.stl").write_bytes(b"12")
-
-    result = backend.usage(str(root))
-
-    assert result["object_count"] == 2
-    assert result["total_size_bytes"] == 7
-    assert result["backend"] == "local"
-
-
-def test_usage_missing_root_returns_zero(tmp_path: Path) -> None:
-    backend = LocalStorageBackend()
-    result = backend.usage(str(tmp_path / "nowhere"))
-    assert result == {
-        "backend": "local",
-        "prefix": str(tmp_path / "nowhere"),
-        "object_count": 0,
-        "total_size_bytes": 0,
-    }
-
-
-def test_presigned_download_url_is_unsupported_locally() -> None:
-    backend = LocalStorageBackend()
-    assert backend.presigned_download_url("any-key", "file.stl") is None
-
-
-def test_health_probe_reports_ok_when_both_dirs_exist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_dir = tmp_path / "files"
-    thumb_dir = tmp_path / "thumbs"
-    data_dir.mkdir()
-    thumb_dir.mkdir()
-    monkeypatch.setattr(storage_backend, "settings", _FakeSettings(data_dir, thumb_dir))
-
-    result = LocalStorageBackend().health_probe()
-
-    assert result == {
-        "backend": "local",
-        "ok": True,
-        "data_dir": str(data_dir),
-        "thumb_dir": str(thumb_dir),
-    }
-
-
-def test_health_probe_reports_not_ok_when_a_dir_is_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_dir = tmp_path / "files"
-    data_dir.mkdir()
-    thumb_dir = tmp_path / "thumbs-missing"
-    monkeypatch.setattr(storage_backend, "settings", _FakeSettings(data_dir, thumb_dir))
-
-    result = LocalStorageBackend().health_probe()
-
-    assert result["ok"] is False
-
-
-def test_ensure_setup_creates_data_and_thumb_dirs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_dir = tmp_path / "files"
-    thumb_dir = tmp_path / "thumbs"
-    monkeypatch.setattr(storage_backend, "settings", _FakeSettings(data_dir, thumb_dir))
-
-    LocalStorageBackend().ensure_setup()
-
-    assert data_dir.is_dir()
-    assert thumb_dir.is_dir()
-
-
-def test_create_stream_is_atomic_create_only_and_receipted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_dir = tmp_path / "files"
-    thumb_dir = tmp_path / "thumbs"
-    data_dir.mkdir()
-    thumb_dir.mkdir()
-    monkeypatch.setattr(storage_backend, "settings", _FakeSettings(data_dir, thumb_dir))
-    backend = LocalStorageBackend()
-    destination = data_dir / "model" / "v1" / "part.stl"
-
-    receipt = backend.create_stream(BytesIO(b"owned"), str(destination))
-
-    assert receipt.key == str(destination)
-    assert receipt.size == 5
-    assert destination.read_bytes() == b"owned"
-    with pytest.raises(StorageCollisionError):
-        backend.create_stream(BytesIO(b"attacker"), str(destination))
-    assert destination.read_bytes() == b"owned"
-
-
-def test_rollback_receipt_cannot_delete_a_replaced_destination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_dir = tmp_path / "files"
-    thumb_dir = tmp_path / "thumbs"
-    data_dir.mkdir()
-    thumb_dir.mkdir()
-    monkeypatch.setattr(storage_backend, "settings", _FakeSettings(data_dir, thumb_dir))
-    backend = LocalStorageBackend()
-    destination = data_dir / "part.stl"
-    receipt = backend.create_bytes(b"created", str(destination))
-    destination.unlink()
-    destination.write_bytes(b"replacement")
-
-    assert backend.rollback_create(receipt) is False
-    assert destination.read_bytes() == b"replacement"
 
 
 def test_rollback_race_after_quarantine_preserves_new_destination(
@@ -371,26 +151,273 @@ def test_managed_create_rejects_symlink_escape(
     assert not (outside / "part.stl").exists()
 
 
-def test_failed_create_stream_never_publishes_partial_destination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_dir = tmp_path / "files"
-    thumb_dir = tmp_path / "thumbs"
-    data_dir.mkdir()
-    thumb_dir.mkdir()
-    monkeypatch.setattr(storage_backend, "settings", _FakeSettings(data_dir, thumb_dir))
-    destination = data_dir / "partial.bin"
+class TestCreateStream:
+    def test_create_stream_is_atomic_create_only_and_receipted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data_dir = tmp_path / "files"
+        thumb_dir = tmp_path / "thumbs"
+        data_dir.mkdir()
+        thumb_dir.mkdir()
+        monkeypatch.setattr(
+            storage_backend, "settings", _FakeSettings(data_dir, thumb_dir)
+        )
+        backend = LocalStorageBackend()
+        destination = data_dir / "model" / "v1" / "part.stl"
 
-    class _FailingStream:
-        calls = 0
+        receipt = backend.create_stream(BytesIO(b"owned"), str(destination))
 
-        def read(self, _size: int) -> bytes:
-            self.calls += 1
-            if self.calls == 1:
-                return b"partial"
-            raise OSError("source failed")
+        assert receipt.key == str(destination)
+        assert receipt.size == 5
+        assert destination.read_bytes() == b"owned"
+        with pytest.raises(StorageCollisionError):
+            backend.create_stream(BytesIO(b"attacker"), str(destination))
+        assert destination.read_bytes() == b"owned"
 
-    with pytest.raises(OSError, match="source failed"):
-        LocalStorageBackend().create_stream(_FailingStream(), str(destination))
+    def test_failed_create_stream_never_publishes_partial_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data_dir = tmp_path / "files"
+        thumb_dir = tmp_path / "thumbs"
+        data_dir.mkdir()
+        thumb_dir.mkdir()
+        monkeypatch.setattr(
+            storage_backend, "settings", _FakeSettings(data_dir, thumb_dir)
+        )
+        destination = data_dir / "partial.bin"
 
-    assert not destination.exists()
+        class _FailingStream:
+            calls = 0
+
+            def read(self, _size: int) -> bytes:
+                self.calls += 1
+                if self.calls == 1:
+                    return b"partial"
+                raise OSError("source failed")
+
+        with pytest.raises(OSError, match="source failed"):
+            LocalStorageBackend().create_stream(_FailingStream(), str(destination))
+
+        assert not destination.exists()
+
+
+class TestMove:
+    def test_unchecked_move_is_disabled_and_preserves_source(
+        self, tmp_path: Path
+    ) -> None:
+        backend = LocalStorageBackend()
+        src = tmp_path / "staged.stl"
+        src.write_bytes(b"solid")
+        dest = tmp_path / "nested" / "dir" / "final.stl"
+
+        with pytest.raises(RuntimeError, match="unchecked_storage_move_disabled"):
+            backend.move(str(src), str(dest))
+
+        assert src.read_bytes() == b"solid"
+        assert not dest.exists()
+
+
+class TestReadBytes:
+    def test_stat_size_and_read_bytes(self, tmp_path: Path) -> None:
+        backend = LocalStorageBackend()
+        blob = tmp_path / "part.stl"
+        blob.write_bytes(b"0123456789")
+
+        assert backend.stat_size(str(blob)) == 10
+        assert backend.read_bytes(str(blob)) == b"0123456789"
+
+
+class TestStreamChunks:
+    def test_stream_chunks_yields_full_content(self, tmp_path: Path) -> None:
+        backend = LocalStorageBackend()
+        blob = tmp_path / "part.stl"
+        blob.write_bytes(b"a" * 5000)
+
+        chunks = list(backend.stream_chunks(str(blob), chunk_size=2000))
+
+        assert len(chunks) == 3
+        assert b"".join(chunks) == b"a" * 5000
+
+
+class TestDownloadToPath:
+    def test_download_to_path_copies_and_creates_parents(self, tmp_path: Path) -> None:
+        backend = LocalStorageBackend()
+        src = tmp_path / "source.stl"
+        src.write_bytes(b"solid")
+        dest = tmp_path / "nested" / "copy.stl"
+
+        result = backend.download_to_path(str(src), dest)
+
+        assert result == dest
+        assert dest.read_bytes() == b"solid"
+        assert src.exists()  # copy, not move
+
+    def test_download_to_path_collision_preserves_existing_destination(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        backend = LocalStorageBackend()
+        src = tmp_path / "source.stl"
+        src.write_bytes(b"new")
+        dest = tmp_path / "copy.stl"
+        dest.write_bytes(b"user-owned")
+
+        with pytest.raises(StorageCollisionError):
+            backend.download_to_path(str(src), dest)
+
+        assert dest.read_bytes() == b"user-owned"
+
+
+class TestUploadFile:
+    def test_upload_file_copies_into_key_path(self, tmp_path: Path) -> None:
+        backend = LocalStorageBackend()
+        src = tmp_path / "source.stl"
+        src.write_bytes(b"solid")
+        dest_key = tmp_path / "nested" / "uploaded.stl"
+
+        backend.upload_file(src, str(dest_key))
+
+        assert dest_key.read_bytes() == b"solid"
+        assert src.exists()
+
+
+class TestEnsureSetup:
+    def test_ensure_setup_creates_data_and_thumb_dirs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data_dir = tmp_path / "files"
+        thumb_dir = tmp_path / "thumbs"
+        monkeypatch.setattr(
+            storage_backend, "settings", _FakeSettings(data_dir, thumb_dir)
+        )
+
+        LocalStorageBackend().ensure_setup()
+
+        assert data_dir.is_dir()
+        assert thumb_dir.is_dir()
+
+
+class TestDelete:
+    def test_unchecked_delete_is_disabled_and_preserves_file(
+        self, tmp_path: Path
+    ) -> None:
+        backend = LocalStorageBackend()
+        blob = tmp_path / "part.stl"
+        blob.write_bytes(b"solid")
+
+        with pytest.raises(RuntimeError, match="unchecked_storage_delete_disabled"):
+            backend.delete(str(blob))
+        assert blob.read_bytes() == b"solid"
+
+    def test_rollback_receipt_cannot_delete_a_replaced_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data_dir = tmp_path / "files"
+        thumb_dir = tmp_path / "thumbs"
+        data_dir.mkdir()
+        thumb_dir.mkdir()
+        monkeypatch.setattr(
+            storage_backend, "settings", _FakeSettings(data_dir, thumb_dir)
+        )
+        backend = LocalStorageBackend()
+        destination = data_dir / "part.stl"
+        receipt = backend.create_bytes(b"created", str(destination))
+        destination.unlink()
+        destination.write_bytes(b"replacement")
+
+        assert backend.rollback_create(receipt) is False
+        assert destination.read_bytes() == b"replacement"
+
+
+class TestListKeys:
+    def test_list_keys_and_walk_keys_find_files_recursively(
+        self, tmp_path: Path
+    ) -> None:
+        backend = LocalStorageBackend()
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "one.stl").write_bytes(b"1")
+        (tmp_path / "a" / "b").mkdir()
+        (tmp_path / "a" / "b" / "two.stl").write_bytes(b"22")
+
+        listed = backend.list_keys(str(tmp_path / "a"))
+        walked = list(backend.walk_keys(str(tmp_path / "a")))
+
+        assert len(listed) == 2
+        assert len(walked) == 2
+        assert {Path(p).name for p in listed} == {"one.stl", "two.stl"}
+
+    def test_list_keys_and_walk_keys_return_empty_for_missing_root(
+        self, tmp_path: Path
+    ) -> None:
+        backend = LocalStorageBackend()
+        missing = tmp_path / "does-not-exist"
+
+        assert backend.list_keys(str(missing)) == []
+        assert list(backend.walk_keys(str(missing))) == []
+
+
+class TestUsage:
+    def test_usage_totals_size_and_count(self, tmp_path: Path) -> None:
+        backend = LocalStorageBackend()
+        root = tmp_path / "vault"
+        root.mkdir()
+        (root / "one.stl").write_bytes(b"12345")
+        (root / "two.stl").write_bytes(b"12")
+
+        result = backend.usage(str(root))
+
+        assert result["object_count"] == 2
+        assert result["total_size_bytes"] == 7
+        assert result["backend"] == "local"
+
+    def test_usage_missing_root_returns_zero(self, tmp_path: Path) -> None:
+        backend = LocalStorageBackend()
+        result = backend.usage(str(tmp_path / "nowhere"))
+        assert result == {
+            "backend": "local",
+            "prefix": str(tmp_path / "nowhere"),
+            "object_count": 0,
+            "total_size_bytes": 0,
+        }
+
+
+class TestPresignedDownloadUrl:
+    def test_presigned_download_url_is_unsupported_locally(self) -> None:
+        backend = LocalStorageBackend()
+        assert backend.presigned_download_url("any-key", "file.stl") is None
+
+
+class TestHealthProbe:
+    def test_health_probe_reports_ok_when_both_dirs_exist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data_dir = tmp_path / "files"
+        thumb_dir = tmp_path / "thumbs"
+        data_dir.mkdir()
+        thumb_dir.mkdir()
+        monkeypatch.setattr(
+            storage_backend, "settings", _FakeSettings(data_dir, thumb_dir)
+        )
+
+        result = LocalStorageBackend().health_probe()
+
+        assert result == {
+            "backend": "local",
+            "ok": True,
+            "data_dir": str(data_dir),
+            "thumb_dir": str(thumb_dir),
+        }
+
+    def test_health_probe_reports_not_ok_when_a_dir_is_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data_dir = tmp_path / "files"
+        data_dir.mkdir()
+        thumb_dir = tmp_path / "thumbs-missing"
+        monkeypatch.setattr(
+            storage_backend, "settings", _FakeSettings(data_dir, thumb_dir)
+        )
+
+        result = LocalStorageBackend().health_probe()
+
+        assert result["ok"] is False

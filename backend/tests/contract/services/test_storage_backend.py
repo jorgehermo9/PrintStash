@@ -65,10 +65,6 @@ def s3_backend() -> Iterator[S3StorageBackend]:
             _overlay.pop(field, None)
 
 
-def test_capture_upload_slot_key_uses_s3_prefix(s3_backend: S3StorageBackend):
-    assert s3_backend.capture_upload_slot_key("slot-1").endswith("capture-slots/slot-1")
-
-
 def test_round_trips_bytes(s3_backend: S3StorageBackend):
     key = "models/round-trip.txt"
     assert not s3_backend.exists(key)
@@ -84,201 +80,224 @@ def test_round_trips_bytes(s3_backend: S3StorageBackend):
     assert info.etag
 
 
-def test_upload_file_then_download_to_path(
-    s3_backend: S3StorageBackend, tmp_path: Path
-):
-    src = tmp_path / "source.bin"
-    src.write_bytes(b"payload bytes")
-    key = "models/uploaded.bin"
-
-    s3_backend.upload_file(src, key)
-    assert s3_backend.exists(key)
-
-    dest = tmp_path / "downloaded.bin"
-    s3_backend.download_to_path(key, dest)
-    assert dest.read_bytes() == b"payload bytes"
-
-
-def test_move_in_uploads_and_removes_staged_file(
-    s3_backend: S3StorageBackend, tmp_path: Path
-):
-    staged = tmp_path / "staged.bin"
-    staged.write_bytes(b"staged content")
-    key = "models/moved.bin"
-
-    s3_backend.move_in(staged, key)
-
-    assert s3_backend.exists(key)
-    assert s3_backend.read_bytes(key) == b"staged content"
-    assert not staged.exists()
-
-
-def test_delete_removes_object(s3_backend: S3StorageBackend):
-    key = "models/to-delete.txt"
-    receipt = s3_backend.create_bytes(b"gone soon", key)
-    assert s3_backend.exists(key)
-
-    if receipt.version_id:
-        assert s3_backend.rollback_create(receipt) is True
-        assert not s3_backend.exists(key)
-    else:
-        # Compatible stores without immutable VersionId cannot authorize an
-        # exact delete. Preserve the bytes and leave the outbox intent blocked.
-        assert s3_backend.rollback_create(receipt) is False
-        assert s3_backend.exists(key)
-
-
-def test_exists_false_on_missing_key(s3_backend: S3StorageBackend):
-    assert not s3_backend.exists("models/never-written.txt")
-
-
-def test_write_stream_above_multipart_threshold_round_trips(
-    s3_backend: S3StorageBackend, tmp_path: Path
-):
-    # Force the multipart path (default threshold is 50MB) with a small payload.
-    _overlay["s3_multipart_threshold_mb"] = 1
-    try:
-        payload = os.urandom(2 * 1024 * 1024)
-        src = tmp_path / "big.bin"
-        src.write_bytes(payload)
-        key = "models/multipart.bin"
-
-        with src.open("rb") as f:
-            size = s3_backend.write_stream(f, key)
-
-        assert size == len(payload)
-        assert s3_backend.stat_size(key) == len(payload)
-        assert s3_backend.read_bytes(key) == payload
-    finally:
-        _overlay.pop("s3_multipart_threshold_mb", None)
-
-
-def test_upload_file_above_multipart_threshold_round_trips(
-    s3_backend: S3StorageBackend, tmp_path: Path
-):
-    _overlay["s3_multipart_threshold_mb"] = 1
-    try:
-        payload = os.urandom(2 * 1024 * 1024)
-        src = tmp_path / "big-upload.bin"
-        src.write_bytes(payload)
-        key = "models/multipart-upload.bin"
-
-        s3_backend.upload_file(src, key)
-
-        assert s3_backend.read_bytes(key) == payload
-    finally:
-        _overlay.pop("s3_multipart_threshold_mb", None)
-
-
-def test_unchecked_move_is_disabled_and_preserves_source(s3_backend: S3StorageBackend):
-    s3_backend.write_bytes(b"move me", "models/move-src.txt")
-
-    with pytest.raises(RuntimeError, match="unchecked_storage_move_disabled"):
-        s3_backend.move("models/move-src.txt", "models/move-dest.txt")
-
-    assert s3_backend.read_bytes("models/move-src.txt") == b"move me"
-    assert not s3_backend.exists("models/move-dest.txt")
-
-
-def test_stream_chunks_reassembles_full_content(s3_backend: S3StorageBackend):
-    payload = b"x" * 5000
-    s3_backend.write_bytes(payload, "models/chunked.bin")
-
-    chunks = list(s3_backend.stream_chunks("models/chunked.bin", chunk_size=1024))
-
-    assert len(chunks) == 5  # 4 full 1024-byte chunks + one 904-byte remainder
-    assert b"".join(chunks) == payload
-
-
-def test_list_keys_and_walk_keys_and_usage(s3_backend: S3StorageBackend):
-    s3_backend.write_bytes(b"a", "models/list-1.txt")
-    s3_backend.write_bytes(b"bb", "models/list-2.txt")
-
-    listed = s3_backend.list_keys(prefix="models/")
-    walked = list(s3_backend.walk_keys(prefix="models/"))
-    assert set(listed) == set(walked) == {"models/list-1.txt", "models/list-2.txt"}
-
-    usage = s3_backend.usage(prefix="models/")
-    assert usage["backend"] == "s3"
-    assert usage["object_count"] == 2
-    assert usage["total_size_bytes"] == 3
-
-
-def test_presigned_download_url_is_fetchable(s3_backend: S3StorageBackend):
-    import httpx
-
-    s3_backend.write_bytes(b"presigned content", "models/presigned.txt")
-
-    url = s3_backend.presigned_download_url("models/presigned.txt", "download.txt")
-
-    assert url is not None
-    resp = httpx.get(url)
-    assert resp.status_code == 200
-    assert resp.content == b"presigned content"
-    assert 'filename="download.txt"' in resp.headers.get("content-disposition", "")
-
-
-def test_health_probe_reports_ok_for_reachable_bucket(s3_backend: S3StorageBackend):
-    probe = s3_backend.health_probe()
-    assert probe == {
-        "backend": "s3",
-        "ok": True,
-        "bucket": s3_backend._bucket,
-        "endpoint": _ENDPOINT,
-    }
-
-
-def test_health_probe_reports_error_for_missing_bucket(s3_backend: S3StorageBackend):
-    real_bucket = s3_backend._bucket
-    s3_backend._bucket = f"does-not-exist-{uuid.uuid4().hex[:12]}"
-    try:
-        probe = s3_backend.health_probe()
-        assert probe["ok"] is False
-        assert probe["backend"] == "s3"
-        assert "error" in probe
-    finally:
-        # The fixture's teardown lists/deletes against s3_backend._bucket —
-        # leaving it pointed at a bucket that was never created would break
-        # that cleanup, not this test.
-        s3_backend._bucket = real_bucket
-
-
-def test_ensure_setup_never_mutates_bucket_lifecycle_automatically(
-    s3_backend: S3StorageBackend,
-):
-    _overlay["s3_lifecycle_expiration_days"] = 30
-    try:
-        s3_backend.ensure_setup()  # must not raise against a real S3-compatible bucket
-
-        import botocore.exceptions
-
-        with pytest.raises(botocore.exceptions.ClientError):
-            s3_backend._client.get_bucket_lifecycle_configuration(
-                Bucket=s3_backend._bucket
-            )
-    finally:
-        _overlay.pop("s3_lifecycle_expiration_days", None)
-
-
-def test_exists_raises_on_non_404_client_error(s3_backend: S3StorageBackend):
-    """A credential/permission failure must surface, not be swallowed as 'missing'."""
-    import botocore.exceptions
-
-    original_head_object = s3_backend._client.head_object
-
-    def _forbidden(**kwargs: object) -> object:
-        raise botocore.exceptions.ClientError(
-            {"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject"
+class TestCaptureUploadSlotKey:
+    def test_capture_upload_slot_key_uses_s3_prefix(self, s3_backend: S3StorageBackend):
+        assert s3_backend.capture_upload_slot_key("slot-1").endswith(
+            "capture-slots/slot-1"
         )
 
-    s3_backend._client.head_object = _forbidden
-    try:
-        with pytest.raises(botocore.exceptions.ClientError):
-            s3_backend.exists("models/anything.txt")
-    finally:
-        s3_backend._client.head_object = original_head_object
+
+class TestExists:
+    def test_exists_false_on_missing_key(self, s3_backend: S3StorageBackend):
+        assert not s3_backend.exists("models/never-written.txt")
+
+    def test_exists_raises_on_non_404_client_error(self, s3_backend: S3StorageBackend):
+        """A credential/permission failure must surface, not be swallowed as 'missing'."""
+        import botocore.exceptions
+
+        original_head_object = s3_backend._client.head_object
+
+        def _forbidden(**kwargs: object) -> object:
+            raise botocore.exceptions.ClientError(
+                {"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject"
+            )
+
+        s3_backend._client.head_object = _forbidden
+        try:
+            with pytest.raises(botocore.exceptions.ClientError):
+                s3_backend.exists("models/anything.txt")
+        finally:
+            s3_backend._client.head_object = original_head_object
 
 
-def test_unchecked_delete_is_disabled(s3_backend: S3StorageBackend):
-    with pytest.raises(RuntimeError, match="unchecked_storage_delete_disabled"):
-        s3_backend.delete("models/never-existed.txt")
+class TestWriteStream:
+    def test_write_stream_above_multipart_threshold_round_trips(
+        self, s3_backend: S3StorageBackend, tmp_path: Path
+    ):
+        # Force the multipart path (default threshold is 50MB) with a small payload.
+        _overlay["s3_multipart_threshold_mb"] = 1
+        try:
+            payload = os.urandom(2 * 1024 * 1024)
+            src = tmp_path / "big.bin"
+            src.write_bytes(payload)
+            key = "models/multipart.bin"
+
+            with src.open("rb") as f:
+                size = s3_backend.write_stream(f, key)
+
+            assert size == len(payload)
+            assert s3_backend.stat_size(key) == len(payload)
+            assert s3_backend.read_bytes(key) == payload
+        finally:
+            _overlay.pop("s3_multipart_threshold_mb", None)
+
+
+class TestMove:
+    def test_unchecked_move_is_disabled_and_preserves_source(
+        self, s3_backend: S3StorageBackend
+    ):
+        s3_backend.write_bytes(b"move me", "models/move-src.txt")
+
+        with pytest.raises(RuntimeError, match="unchecked_storage_move_disabled"):
+            s3_backend.move("models/move-src.txt", "models/move-dest.txt")
+
+        assert s3_backend.read_bytes("models/move-src.txt") == b"move me"
+        assert not s3_backend.exists("models/move-dest.txt")
+
+
+class TestStreamChunks:
+    def test_stream_chunks_reassembles_full_content(self, s3_backend: S3StorageBackend):
+        payload = b"x" * 5000
+        s3_backend.write_bytes(payload, "models/chunked.bin")
+
+        chunks = list(s3_backend.stream_chunks("models/chunked.bin", chunk_size=1024))
+
+        assert len(chunks) == 5  # 4 full 1024-byte chunks + one 904-byte remainder
+        assert b"".join(chunks) == payload
+
+
+class TestDownloadToPath:
+    def test_upload_file_then_download_to_path(
+        self, s3_backend: S3StorageBackend, tmp_path: Path
+    ):
+        src = tmp_path / "source.bin"
+        src.write_bytes(b"payload bytes")
+        key = "models/uploaded.bin"
+
+        s3_backend.upload_file(src, key)
+        assert s3_backend.exists(key)
+
+        dest = tmp_path / "downloaded.bin"
+        s3_backend.download_to_path(key, dest)
+        assert dest.read_bytes() == b"payload bytes"
+
+
+class TestUploadFile:
+    def test_upload_file_above_multipart_threshold_round_trips(
+        self, s3_backend: S3StorageBackend, tmp_path: Path
+    ):
+        _overlay["s3_multipart_threshold_mb"] = 1
+        try:
+            payload = os.urandom(2 * 1024 * 1024)
+            src = tmp_path / "big-upload.bin"
+            src.write_bytes(payload)
+            key = "models/multipart-upload.bin"
+
+            s3_backend.upload_file(src, key)
+
+            assert s3_backend.read_bytes(key) == payload
+        finally:
+            _overlay.pop("s3_multipart_threshold_mb", None)
+
+
+class TestEnsureSetup:
+    def test_ensure_setup_never_mutates_bucket_lifecycle_automatically(
+        self,
+        s3_backend: S3StorageBackend,
+    ):
+        _overlay["s3_lifecycle_expiration_days"] = 30
+        try:
+            s3_backend.ensure_setup()  # must not raise against a real S3-compatible bucket
+
+            import botocore.exceptions
+
+            with pytest.raises(botocore.exceptions.ClientError):
+                s3_backend._client.get_bucket_lifecycle_configuration(
+                    Bucket=s3_backend._bucket
+                )
+        finally:
+            _overlay.pop("s3_lifecycle_expiration_days", None)
+
+
+class TestDelete:
+    def test_delete_removes_object(self, s3_backend: S3StorageBackend):
+        key = "models/to-delete.txt"
+        receipt = s3_backend.create_bytes(b"gone soon", key)
+        assert s3_backend.exists(key)
+
+        if receipt.version_id:
+            assert s3_backend.rollback_create(receipt) is True
+            assert not s3_backend.exists(key)
+        else:
+            # Compatible stores without immutable VersionId cannot authorize an
+            # exact delete. Preserve the bytes and leave the outbox intent blocked.
+            assert s3_backend.rollback_create(receipt) is False
+            assert s3_backend.exists(key)
+
+    def test_unchecked_delete_is_disabled(self, s3_backend: S3StorageBackend):
+        with pytest.raises(RuntimeError, match="unchecked_storage_delete_disabled"):
+            s3_backend.delete("models/never-existed.txt")
+
+
+class TestListKeys:
+    def test_list_keys_and_walk_keys_and_usage(self, s3_backend: S3StorageBackend):
+        s3_backend.write_bytes(b"a", "models/list-1.txt")
+        s3_backend.write_bytes(b"bb", "models/list-2.txt")
+
+        listed = s3_backend.list_keys(prefix="models/")
+        walked = list(s3_backend.walk_keys(prefix="models/"))
+        assert set(listed) == set(walked) == {"models/list-1.txt", "models/list-2.txt"}
+
+        usage = s3_backend.usage(prefix="models/")
+        assert usage["backend"] == "s3"
+        assert usage["object_count"] == 2
+        assert usage["total_size_bytes"] == 3
+
+
+class TestPresignedDownloadUrl:
+    def test_presigned_download_url_is_fetchable(self, s3_backend: S3StorageBackend):
+        import httpx
+
+        s3_backend.write_bytes(b"presigned content", "models/presigned.txt")
+
+        url = s3_backend.presigned_download_url("models/presigned.txt", "download.txt")
+
+        assert url is not None
+        resp = httpx.get(url)
+        assert resp.status_code == 200
+        assert resp.content == b"presigned content"
+        assert 'filename="download.txt"' in resp.headers.get("content-disposition", "")
+
+
+class TestHealthProbe:
+    def test_health_probe_reports_ok_for_reachable_bucket(
+        self, s3_backend: S3StorageBackend
+    ):
+        probe = s3_backend.health_probe()
+        assert probe == {
+            "backend": "s3",
+            "ok": True,
+            "bucket": s3_backend._bucket,
+            "endpoint": _ENDPOINT,
+        }
+
+    def test_health_probe_reports_error_for_missing_bucket(
+        self, s3_backend: S3StorageBackend
+    ):
+        real_bucket = s3_backend._bucket
+        s3_backend._bucket = f"does-not-exist-{uuid.uuid4().hex[:12]}"
+        try:
+            probe = s3_backend.health_probe()
+            assert probe["ok"] is False
+            assert probe["backend"] == "s3"
+            assert "error" in probe
+        finally:
+            # The fixture's teardown lists/deletes against s3_backend._bucket —
+            # leaving it pointed at a bucket that was never created would break
+            # that cleanup, not this test.
+            s3_backend._bucket = real_bucket
+
+
+class TestMoveIn:
+    def test_move_in_uploads_and_removes_staged_file(
+        self, s3_backend: S3StorageBackend, tmp_path: Path
+    ):
+        staged = tmp_path / "staged.bin"
+        staged.write_bytes(b"staged content")
+        key = "models/moved.bin"
+
+        s3_backend.move_in(staged, key)
+
+        assert s3_backend.exists(key)
+        assert s3_backend.read_bytes(key) == b"staged content"
+        assert not staged.exists()

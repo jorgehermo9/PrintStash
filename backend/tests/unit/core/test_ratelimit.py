@@ -47,14 +47,6 @@ def test_window_expires_old_hits():
     assert limiter.check("1.2.3.4") is True
 
 
-def test_reset_clears_all_keys():
-    limiter = RateLimiter(limit=1, window_s=60.0)
-    limiter.check("1.2.3.4")
-    assert limiter.check("1.2.3.4") is False
-    limiter.reset()
-    assert limiter.check("1.2.3.4") is True
-
-
 def test_key_cardinality_is_bounded_under_ip_churn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -81,3 +73,12 @@ def test_expired_keys_are_removed_before_capacity_eviction(
     limiter.check("new")
 
     assert limiter.key_count == 1
+
+
+class TestReset:
+    def test_reset_clears_all_keys(self):
+        limiter = RateLimiter(limit=1, window_s=60.0)
+        limiter.check("1.2.3.4")
+        assert limiter.check("1.2.3.4") is False
+        limiter.reset()
+        assert limiter.check("1.2.3.4") is True

@@ -67,171 +67,173 @@ def _fresh_archive(env: BackupEnv) -> tuple[Path, dict[str, bytes], dict]:
     return archive, contents, manifest
 
 
-def test_verify_backup_flags_unsafe_member_name(backup_env: BackupEnv) -> None:
-    archive, contents, _ = _fresh_archive(backup_env)
-    contents["../escape.txt"] = b"evil"
-    _write(archive, contents)
+class TestUnsafeMemberName:
+    def test_verify_backup_flags_unsafe_member_name(
+        self, backup_env: BackupEnv
+    ) -> None:
+        archive, contents, _ = _fresh_archive(backup_env)
+        contents["../escape.txt"] = b"evil"
+        _write(archive, contents)
 
-    result = backup.verify_backup(_id_from(archive))
+        result = backup.verify_backup(_id_from(archive))
 
-    assert result.valid is False
-    assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
-
-
-def test_verify_backup_flags_symlink_member(backup_env: BackupEnv) -> None:
-    archive, contents, _ = _fresh_archive(backup_env)
-    _write(archive, contents, extra_symlink="sneaky-link")
-
-    result = backup.verify_backup(_id_from(archive))
-
-    assert result.valid is False
-    assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
+        assert result.valid is False
+        assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
 
 
-def test_verify_backup_flags_missing_manifest(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    archive, contents, _ = _fresh_archive(backup_env)
-    del contents["manifest.json"]
-    _write(archive, contents)
+class TestVerifyBackup:
+    def test_verify_backup_flags_symlink_member(self, backup_env: BackupEnv) -> None:
+        archive, contents, _ = _fresh_archive(backup_env)
+        _write(archive, contents, extra_symlink="sneaky-link")
 
-    result = _verify_direct(archive, monkeypatch)
+        result = backup.verify_backup(_id_from(archive))
 
-    assert result.valid is False
-    assert any(
-        f["code"] == "backup_manifest_invalid" and f["member"] == "manifest.json"
-        for f in result.findings
-    )
-    assert result.app_compatible is False
+        assert result.valid is False
+        assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
 
+    def test_verify_backup_flags_missing_manifest(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        archive, contents, _ = _fresh_archive(backup_env)
+        del contents["manifest.json"]
+        _write(archive, contents)
 
-def test_verify_backup_flags_corrupt_manifest_json(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    archive, contents, _ = _fresh_archive(backup_env)
-    contents["manifest.json"] = b"{not valid json"
-    _write(archive, contents)
+        result = _verify_direct(archive, monkeypatch)
 
-    result = _verify_direct(archive, monkeypatch)
+        assert result.valid is False
+        assert any(
+            f["code"] == "backup_manifest_invalid" and f["member"] == "manifest.json"
+            for f in result.findings
+        )
+        assert result.app_compatible is False
 
-    assert result.valid is False
-    assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
+    def test_verify_backup_flags_corrupt_manifest_json(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        archive, contents, _ = _fresh_archive(backup_env)
+        contents["manifest.json"] = b"{not valid json"
+        _write(archive, contents)
 
+        result = _verify_direct(archive, monkeypatch)
 
-def test_verify_backup_flags_non_dict_manifest(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    archive, contents, _ = _fresh_archive(backup_env)
-    contents["manifest.json"] = json.dumps(["not", "a", "dict"]).encode("utf-8")
-    _write(archive, contents)
+        assert result.valid is False
+        assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
 
-    result = _verify_direct(archive, monkeypatch)
+    def test_verify_backup_flags_non_dict_manifest(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        archive, contents, _ = _fresh_archive(backup_env)
+        contents["manifest.json"] = json.dumps(["not", "a", "dict"]).encode("utf-8")
+        _write(archive, contents)
 
-    assert result.valid is False
-    assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
+        result = _verify_direct(archive, monkeypatch)
 
+        assert result.valid is False
+        assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
 
-def test_verify_backup_flags_missing_db_file(backup_env: BackupEnv) -> None:
-    archive, contents, _ = _fresh_archive(backup_env)
-    del contents["db.sqlite3"]
-    _write(archive, contents)
+    def test_verify_backup_flags_missing_db_file(self, backup_env: BackupEnv) -> None:
+        archive, contents, _ = _fresh_archive(backup_env)
+        del contents["db.sqlite3"]
+        _write(archive, contents)
 
-    result = backup.verify_backup(_id_from(archive))
+        result = backup.verify_backup(_id_from(archive))
 
-    assert result.valid is False
-    assert any(
-        f["code"] == "backup_member_missing" and f["member"] == "db.sqlite3"
-        for f in result.findings
-    )
+        assert result.valid is False
+        assert any(
+            f["code"] == "backup_member_missing" and f["member"] == "db.sqlite3"
+            for f in result.findings
+        )
 
+    def test_verify_backup_flags_files_entry_not_a_list(
+        self, backup_env: BackupEnv
+    ) -> None:
+        archive, contents, manifest = _fresh_archive(backup_env)
+        manifest["files"] = "not-a-list"
+        contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
+        _write(archive, contents)
 
-def test_verify_backup_flags_files_entry_not_a_list(backup_env: BackupEnv) -> None:
-    archive, contents, manifest = _fresh_archive(backup_env)
-    manifest["files"] = "not-a-list"
-    contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
-    _write(archive, contents)
+        result = backup.verify_backup(_id_from(archive))
 
-    result = backup.verify_backup(_id_from(archive))
+        assert result.valid is False
+        assert any(
+            f["code"] == "backup_manifest_invalid" and f["member"] == "files"
+            for f in result.findings
+        )
 
-    assert result.valid is False
-    assert any(
-        f["code"] == "backup_manifest_invalid" and f["member"] == "files"
-        for f in result.findings
-    )
+    def test_verify_backup_flags_malformed_file_entry(
+        self, backup_env: BackupEnv
+    ) -> None:
+        archive, contents, manifest = _fresh_archive(backup_env)
+        manifest["files"] = [{"no_arc_key": True}]
+        contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
+        _write(archive, contents)
 
+        result = backup.verify_backup(_id_from(archive))
 
-def test_verify_backup_flags_malformed_file_entry(backup_env: BackupEnv) -> None:
-    archive, contents, manifest = _fresh_archive(backup_env)
-    manifest["files"] = [{"no_arc_key": True}]
-    contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
-    _write(archive, contents)
+        assert result.valid is False
+        assert any(
+            f["code"] == "backup_manifest_invalid" and f["member"] == "files"
+            for f in result.findings
+        )
 
-    result = backup.verify_backup(_id_from(archive))
+    def test_verify_backup_flags_file_entry_missing_from_archive(
+        self,
+        backup_env: BackupEnv,
+    ) -> None:
+        archive, contents, manifest = _fresh_archive(backup_env)
+        manifest["files"].append({"arc": "files/ghost.stl", "size": 5})
+        contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
+        _write(archive, contents)
 
-    assert result.valid is False
-    assert any(
-        f["code"] == "backup_manifest_invalid" and f["member"] == "files"
-        for f in result.findings
-    )
+        result = backup.verify_backup(_id_from(archive))
 
+        assert result.valid is False
+        assert any(
+            f["code"] == "backup_member_missing" and f["member"] == "files/ghost.stl"
+            for f in result.findings
+        )
 
-def test_verify_backup_flags_file_entry_missing_from_archive(
-    backup_env: BackupEnv,
-) -> None:
-    archive, contents, manifest = _fresh_archive(backup_env)
-    manifest["files"].append({"arc": "files/ghost.stl", "size": 5})
-    contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
-    _write(archive, contents)
+    def test_verify_backup_flags_file_size_mismatch(
+        self, backup_env: BackupEnv
+    ) -> None:
+        archive, contents, manifest = _fresh_archive(backup_env)
+        entry = manifest["files"][0]
+        entry["size"] = entry["size"] + 999
+        contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
+        _write(archive, contents)
 
-    result = backup.verify_backup(_id_from(archive))
+        result = backup.verify_backup(_id_from(archive))
 
-    assert result.valid is False
-    assert any(
-        f["code"] == "backup_member_missing" and f["member"] == "files/ghost.stl"
-        for f in result.findings
-    )
+        assert result.valid is False
+        assert any(f["code"] == "backup_member_size_mismatch" for f in result.findings)
 
+    def test_verify_backup_flags_incompatible_manifest_version(
+        self,
+        backup_env: BackupEnv,
+    ) -> None:
+        archive, contents, manifest = _fresh_archive(backup_env)
+        manifest["version"] = "999"
+        contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
+        _write(archive, contents)
 
-def test_verify_backup_flags_file_size_mismatch(backup_env: BackupEnv) -> None:
-    archive, contents, manifest = _fresh_archive(backup_env)
-    entry = manifest["files"][0]
-    entry["size"] = entry["size"] + 999
-    contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
-    _write(archive, contents)
+        result = backup.verify_backup(_id_from(archive))
 
-    result = backup.verify_backup(_id_from(archive))
+        assert result.app_compatible is False
+        assert any(
+            f["code"] == "backup_manifest_invalid" and f["member"] == "version"
+            for f in result.findings
+        )
 
-    assert result.valid is False
-    assert any(f["code"] == "backup_member_size_mismatch" for f in result.findings)
+    def test_verify_backup_flags_unreadable_archive(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        archive, _contents, _manifest = _fresh_archive(backup_env)
+        archive.write_bytes(b"not a gzip file at all")
 
+        result = _verify_direct(archive, monkeypatch)
 
-def test_verify_backup_flags_incompatible_manifest_version(
-    backup_env: BackupEnv,
-) -> None:
-    archive, contents, manifest = _fresh_archive(backup_env)
-    manifest["version"] = "999"
-    contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
-    _write(archive, contents)
-
-    result = backup.verify_backup(_id_from(archive))
-
-    assert result.app_compatible is False
-    assert any(
-        f["code"] == "backup_manifest_invalid" and f["member"] == "version"
-        for f in result.findings
-    )
-
-
-def test_verify_backup_flags_unreadable_archive(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    archive, _contents, _manifest = _fresh_archive(backup_env)
-    archive.write_bytes(b"not a gzip file at all")
-
-    result = _verify_direct(archive, monkeypatch)
-
-    assert result.valid is False
-    assert any(
-        f["code"] == "backup_manifest_invalid" and f["member"] == "archive"
-        for f in result.findings
-    )
+        assert result.valid is False
+        assert any(
+            f["code"] == "backup_manifest_invalid" and f["member"] == "archive"
+            for f in result.findings
+        )

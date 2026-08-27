@@ -226,25 +226,6 @@ async def test_cults_rejects_creation_url_for_a_different_slug() -> None:
 
 
 @pytest.mark.anyio
-async def test_cults_rejects_opaque_id_matching_slug_without_canonical_url() -> None:
-    transport = RecordingTransport(
-        [
-            httpx.Response(
-                200,
-                json={"data": {"creation": {"id": "fixture", "name": "Fixture"}}},
-            )
-        ]
-    )
-
-    with pytest.raises(ProviderConnectionError) as exc:
-        await CultsMetadataClient(transport).creation_metadata(
-            "fixture", CultsCredentials("user", "password")
-        )
-
-    assert exc.value.code == "provider_response_invalid"
-
-
-@pytest.mark.anyio
 async def test_connection_errors_are_safe_and_typed() -> None:
     transport = RecordingTransport(
         [httpx.Response(401, json={"error": "secret response"})]
@@ -552,3 +533,25 @@ class TestText:
         # A provider sending `""` for a title means "no title", not a model
         # named nothing.
         assert connections_module._text(value) is None
+
+
+class TestOpaqueId:
+    @pytest.mark.anyio
+    async def test_cults_rejects_opaque_id_matching_slug_without_canonical_url(
+        self,
+    ) -> None:
+        transport = RecordingTransport(
+            [
+                httpx.Response(
+                    200,
+                    json={"data": {"creation": {"id": "fixture", "name": "Fixture"}}},
+                )
+            ]
+        )
+
+        with pytest.raises(ProviderConnectionError) as exc:
+            await CultsMetadataClient(transport).creation_metadata(
+                "fixture", CultsCredentials("user", "password")
+            )
+
+        assert exc.value.code == "provider_response_invalid"

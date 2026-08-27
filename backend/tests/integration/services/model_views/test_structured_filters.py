@@ -72,44 +72,6 @@ def test_structured_filters_require_metadata_on_same_artifact(
     assert [row.id for row in rows] == [same.id]
 
 
-def test_facets_count_distinct_models(db_session: Session) -> None:
-    user = User(username="facet-admin", hashed_password="x", is_superuser=True)
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    model = build_model(db_session, "Facet")
-    build_file(
-        db_session,
-        model,
-        filename="one.stl",
-        file_type=FileType.STL,
-        metadata={"material_type": "PLA"},
-    )
-    build_file(
-        db_session,
-        model,
-        filename="two.stl",
-        file_type=FileType.STL,
-        status=FileRevisionStatus.KNOWN_GOOD,
-        metadata={"material_type": "PLA"},
-    )
-    result = model_views.facets(db_session, user, ModelFilters())
-    assert next(item.count for item in result.material_type if item.value == "PLA") == 1
-    assert [item.model_dump() for item in result.file_type] == [
-        {"value": "stl", "count": 1}
-    ]
-    assert [item.model_dump() for item in result.revision_status] == [
-        {"value": "known_good", "count": 1}
-    ]
-    assert [item.model_dump() for item in result.storage] == [
-        {"value": "vault", "count": 1}
-    ]
-    assert [item.model_dump() for item in result.printed] == [
-        {"value": "yes", "count": 0},
-        {"value": "no", "count": 1},
-    ]
-
-
 # --------------------------------------------------------------------------- #
 # _apply_structured_filters — storage / uploaded window / slicer / printer_model
 # --------------------------------------------------------------------------- #
@@ -398,44 +360,91 @@ def test_printer_presence_any_matches_models_present_on_a_printer(
 # --------------------------------------------------------------------------- #
 
 
-def test_list_items_picks_newest_version_mesh_file_for_preview(
-    db_session: Session,
-) -> None:
-    user = build_user(db_session, "mesh-admin", superuser=True)
-    model = build_model(db_session, "MeshPreview")
-    v1 = File(
-        model_id=model.id,
-        path="v1.stl",
-        original_filename="v1.stl",
-        file_type=FileType.STL,
-        version=1,
-        size_bytes=1,
-        sha256="1" * 64,
-    )
-    v2 = build_file(
-        db_session,
-        model,
-        path="v2.stl",
-        filename="v2.stl",
-        file_type=FileType.STL,
-        version=2,
-        size_bytes=1,
-        sha256="2" * 64,
-    )
-    db_session.add(v1)
-    db_session.commit()
-    db_session.refresh(v2)
-
-    rows = model_views.list_items(db_session, user, limit=100)
-    row = next(r for r in rows if r.id == model.id)
-    assert row.mesh_file_id == v2.id
-
-
 # --------------------------------------------------------------------------- #
 # print_statistics — invalid period falls back to "30d"
 # --------------------------------------------------------------------------- #
 
 
-def test_print_statistics_invalid_period_defaults_to_30d(db_session: Session) -> None:
-    result = model_views.print_statistics(db_session, "not-a-real-period")
-    assert result.period == "30d"
+class TestFacets:
+    def test_facets_count_distinct_models(self, db_session: Session) -> None:
+        user = User(username="facet-admin", hashed_password="x", is_superuser=True)
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+        model = build_model(db_session, "Facet")
+        build_file(
+            db_session,
+            model,
+            filename="one.stl",
+            file_type=FileType.STL,
+            metadata={"material_type": "PLA"},
+        )
+        build_file(
+            db_session,
+            model,
+            filename="two.stl",
+            file_type=FileType.STL,
+            status=FileRevisionStatus.KNOWN_GOOD,
+            metadata={"material_type": "PLA"},
+        )
+        result = model_views.facets(db_session, user, ModelFilters())
+        assert (
+            next(item.count for item in result.material_type if item.value == "PLA")
+            == 1
+        )
+        assert [item.model_dump() for item in result.file_type] == [
+            {"value": "stl", "count": 1}
+        ]
+        assert [item.model_dump() for item in result.revision_status] == [
+            {"value": "known_good", "count": 1}
+        ]
+        assert [item.model_dump() for item in result.storage] == [
+            {"value": "vault", "count": 1}
+        ]
+        assert [item.model_dump() for item in result.printed] == [
+            {"value": "yes", "count": 0},
+            {"value": "no", "count": 1},
+        ]
+
+
+class TestListItems:
+    def test_list_items_picks_newest_version_mesh_file_for_preview(
+        self,
+        db_session: Session,
+    ) -> None:
+        user = build_user(db_session, "mesh-admin", superuser=True)
+        model = build_model(db_session, "MeshPreview")
+        v1 = File(
+            model_id=model.id,
+            path="v1.stl",
+            original_filename="v1.stl",
+            file_type=FileType.STL,
+            version=1,
+            size_bytes=1,
+            sha256="1" * 64,
+        )
+        v2 = build_file(
+            db_session,
+            model,
+            path="v2.stl",
+            filename="v2.stl",
+            file_type=FileType.STL,
+            version=2,
+            size_bytes=1,
+            sha256="2" * 64,
+        )
+        db_session.add(v1)
+        db_session.commit()
+        db_session.refresh(v2)
+
+        rows = model_views.list_items(db_session, user, limit=100)
+        row = next(r for r in rows if r.id == model.id)
+        assert row.mesh_file_id == v2.id
+
+
+class TestPrintStatistics:
+    def test_print_statistics_invalid_period_defaults_to_30d(
+        self, db_session: Session
+    ) -> None:
+        result = model_views.print_statistics(db_session, "not-a-real-period")
+        assert result.period == "30d"

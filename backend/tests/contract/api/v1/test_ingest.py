@@ -277,39 +277,6 @@ async def test_download_to_staging_rejects_private_host(
 # --------------------------------------------------------------------------- #
 # Full /ingest/url path — real download + real ingest, only SSRF relaxed
 # --------------------------------------------------------------------------- #
-@_requires(BENCHY_STL)
-def test_ingest_url_downloads_and_ingests_for_real(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-    http_server: tuple[str, dict[str, dict]],
-) -> None:
-    use_local_storage(tmp_path)
-    base, routes = http_server
-    routes["/3dbenchy.stl"] = {
-        "headers": {"Content-Type": "model/stl"},
-        "body": BENCHY_STL.read_bytes(),
-    }
-    url = f"{base}/3dbenchy.stl"
-
-    with patch.object(url_safety, "is_public_ip", return_value=True):
-        payload = _job(
-            client,
-            client.post(
-                "/api/v1/ingest/url",
-                headers=auth_headers,
-                json={"url": url},
-            ),
-            auth_headers,
-        )
-
-    assert payload["state"] == "completed", payload
-    model = db_session.get(Model, payload["model_id"])
-    assert model is not None and model.source_url == url
-    file_row = db_session.exec(select(File).where(File.model_id == model.id)).first()
-    assert file_row is not None and file_row.file_type == FileType.STL
-    assert file_row.size_bytes == BENCHY_STL.stat().st_size
 
 
 # --------------------------------------------------------------------------- #
@@ -356,45 +323,6 @@ def test_import_real_benchy_from_printables_url_records_source(
     assert file_row.size_bytes == BENCHY_STL.stat().st_size
     # The staged copy was moved into the vault; the testdata original is intact.
     assert BENCHY_STL.exists()
-
-
-@_requires(BENCHY_STL)
-def test_import_from_url_names_model_from_download(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    """A URL import names the resulting model from the download's filename stem.
-
-    URL imports no longer accept a ``model_name`` override — the name comes from
-    the resolved file (or page) instead.
-    """
-    use_local_storage(tmp_path)
-    staged = _stage_bytes(BENCHY_STL.read_bytes(), ".stl")
-
-    with (
-        patch("app.api.v1.ingest.importer.validate_public_url", return_value=None),
-        _patch_resolver("https://files.printables.test/3dbenchy.stl"),
-        patch(
-            "app.api.v1.ingest.importer.download_to_staging",
-            new=_fake_download(staged, "3dbenchy.stl"),
-        ),
-    ):
-        payload = _job(
-            client,
-            client.post(
-                "/api/v1/ingest/url",
-                headers=auth_headers,
-                json={"url": PRINTABLES_URL},
-            ),
-            auth_headers,
-        )
-
-    assert payload["state"] == "completed", payload
-    model = db_session.get(Model, payload["model_id"])
-    assert model is not None
-    assert model.name == "3dbenchy"
 
 
 # --------------------------------------------------------------------------- #
@@ -879,3 +807,83 @@ def test_model_page_files_manifest_then_select(
         m.source_url == "https://www.printables.com/model/1660232-springy-cat"
         for m in models
     )
+
+
+class TestImportFromUrl:
+    @_requires(BENCHY_STL)
+    def test_import_from_url_names_model_from_download(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """A URL import names the resulting model from the download's filename stem.
+
+        URL imports no longer accept a ``model_name`` override — the name comes from
+        the resolved file (or page) instead.
+        """
+        use_local_storage(tmp_path)
+        staged = _stage_bytes(BENCHY_STL.read_bytes(), ".stl")
+
+        with (
+            patch("app.api.v1.ingest.importer.validate_public_url", return_value=None),
+            _patch_resolver("https://files.printables.test/3dbenchy.stl"),
+            patch(
+                "app.api.v1.ingest.importer.download_to_staging",
+                new=_fake_download(staged, "3dbenchy.stl"),
+            ),
+        ):
+            payload = _job(
+                client,
+                client.post(
+                    "/api/v1/ingest/url",
+                    headers=auth_headers,
+                    json={"url": PRINTABLES_URL},
+                ),
+                auth_headers,
+            )
+
+        assert payload["state"] == "completed", payload
+        model = db_session.get(Model, payload["model_id"])
+        assert model is not None
+        assert model.name == "3dbenchy"
+
+
+class TestIngestUrl:
+    @_requires(BENCHY_STL)
+    def test_ingest_url_downloads_and_ingests_for_real(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+        http_server: tuple[str, dict[str, dict]],
+    ) -> None:
+        use_local_storage(tmp_path)
+        base, routes = http_server
+        routes["/3dbenchy.stl"] = {
+            "headers": {"Content-Type": "model/stl"},
+            "body": BENCHY_STL.read_bytes(),
+        }
+        url = f"{base}/3dbenchy.stl"
+
+        with patch.object(url_safety, "is_public_ip", return_value=True):
+            payload = _job(
+                client,
+                client.post(
+                    "/api/v1/ingest/url",
+                    headers=auth_headers,
+                    json={"url": url},
+                ),
+                auth_headers,
+            )
+
+        assert payload["state"] == "completed", payload
+        model = db_session.get(Model, payload["model_id"])
+        assert model is not None and model.source_url == url
+        file_row = db_session.exec(
+            select(File).where(File.model_id == model.id)
+        ).first()
+        assert file_row is not None and file_row.file_type == FileType.STL
+        assert file_row.size_bytes == BENCHY_STL.stat().st_size

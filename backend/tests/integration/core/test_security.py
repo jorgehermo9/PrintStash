@@ -17,11 +17,12 @@ def test_current_user_rejects_missing_or_non_numeric_subject(
     assert get_current_user({"sub": "not-an-id"}, db_session) is None
 
 
-def test_require_auth_rejects_authenticated_user_without_write_scope() -> None:
-    user = User(username="reader", hashed_password="unused", is_active=True)
+class TestRequireAuth:
+    def test_require_auth_rejects_authenticated_user_without_write_scope(self) -> None:
+        user = User(username="reader", hashed_password="unused", is_active=True)
 
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(require_auth(user, {"scope": "read"}))
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(require_auth(user, {"scope": "read"}))
 
-    assert exc_info.value.status_code == 401
-    assert exc_info.value.detail == "insufficient_scope"
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "insufficient_scope"

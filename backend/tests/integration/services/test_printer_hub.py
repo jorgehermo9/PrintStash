@@ -209,47 +209,6 @@ def test_material_slot_enrichment_resolves_inventory_and_degrades_cleanly(
     ]
 
 
-def test_hub_material_config_helpers_and_snapshot_attach(hub: PrinterHub) -> None:
-    assert printer_hub_module._reported_int("bad") is None
-    assert printer_hub_module._reported_float(object()) is None
-
-    with patch.object(
-        printer_hub_module.runtime_config, "spoolman_enabled", return_value=False
-    ):
-        assert hub._spoolman_config() is None
-    with (
-        patch.object(
-            printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
-        ),
-        patch.object(
-            printer_hub_module.runtime_config,
-            "spoolman_config",
-            return_value={"base_url": "", "api_key": None},
-        ),
-    ):
-        assert hub._spoolman_config() is None
-    with (
-        patch.object(
-            printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
-        ),
-        patch.object(
-            printer_hub_module.runtime_config,
-            "spoolman_config",
-            return_value={"base_url": "http://spoolman", "api_key": "secret"},
-        ),
-    ):
-        assert hub._spoolman_config() == ("http://spoolman", "secret")
-
-    websocket = MagicMock()
-    websocket.send_json = AsyncMock()
-    hub.snapshots[3] = {"print_stats": {"state": "ready"}}
-    asyncio.run(hub.attach(3, websocket))
-    websocket.send_json.assert_awaited_once()
-    websocket.send_json.side_effect = RuntimeError("disconnected")
-    asyncio.run(hub.attach(3, websocket))
-    asyncio.run(hub.detach(3, websocket))
-
-
 def test_external_capture_failure_paths_are_persistent(
     hub: PrinterHub, db_session
 ) -> None:
@@ -1270,3 +1229,47 @@ class TestGetHubDependency:
         tc = TestClient(test_app)
         resp = tc.get("/test")
         assert resp.json()["type"] == "PrinterHub"
+
+
+class TestAttach:
+    def test_hub_material_config_helpers_and_snapshot_attach(
+        self, hub: PrinterHub
+    ) -> None:
+        assert printer_hub_module._reported_int("bad") is None
+        assert printer_hub_module._reported_float(object()) is None
+
+        with patch.object(
+            printer_hub_module.runtime_config, "spoolman_enabled", return_value=False
+        ):
+            assert hub._spoolman_config() is None
+        with (
+            patch.object(
+                printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
+            ),
+            patch.object(
+                printer_hub_module.runtime_config,
+                "spoolman_config",
+                return_value={"base_url": "", "api_key": None},
+            ),
+        ):
+            assert hub._spoolman_config() is None
+        with (
+            patch.object(
+                printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
+            ),
+            patch.object(
+                printer_hub_module.runtime_config,
+                "spoolman_config",
+                return_value={"base_url": "http://spoolman", "api_key": "secret"},
+            ),
+        ):
+            assert hub._spoolman_config() == ("http://spoolman", "secret")
+
+        websocket = MagicMock()
+        websocket.send_json = AsyncMock()
+        hub.snapshots[3] = {"print_stats": {"state": "ready"}}
+        asyncio.run(hub.attach(3, websocket))
+        websocket.send_json.assert_awaited_once()
+        websocket.send_json.side_effect = RuntimeError("disconnected")
+        asyncio.run(hub.attach(3, websocket))
+        asyncio.run(hub.detach(3, websocket))

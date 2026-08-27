@@ -58,27 +58,6 @@ def test_review_lease_rejects_replaced_path_without_unlink(
     assert db_session.get(StagingLease, lease.id) is None
 
 
-def test_prune_expired_unlinks_exact_file(db_session: Session, tmp_path: Path) -> None:
-    user = build_user(db_session, "lease-user")
-    inbox = _inbox(db_session, user)
-    staged = tmp_path / "capture.gcode"
-    staged.write_bytes(b"staged")
-    lease = staging_leases.create_review_lease(
-        db_session,
-        inbox_item_id=inbox.id,
-        owner_user_id=user.id,
-        path=staged,
-        size_bytes=6,
-        sha256="b" * 64,
-    )
-    lease.expires_at = utcnow() - timedelta(seconds=1)
-    db_session.commit()
-    assert staging_leases.prune_expired(db_session) == (1, 1)
-    db_session.commit()
-    assert not staged.exists()
-    assert db_session.get(StagingLease, lease.id) is None
-
-
 def test_fc15_upgrade_and_downgrade_preserve_job_lease_data(tmp_path: Path) -> None:
     config = Config(str(ALEMBIC_INI))
     config.set_main_option("script_location", str(ALEMBIC_DIR))
@@ -202,3 +181,27 @@ def test_inbox_delete_cascades_review_lease(
     db_session.exec(delete(InboxItem).where(InboxItem.id == inbox.id))
     db_session.commit()
     assert db_session.get(StagingLease, lease_id) is None
+
+
+class TestPruneExpired:
+    def test_prune_expired_unlinks_exact_file(
+        self, db_session: Session, tmp_path: Path
+    ) -> None:
+        user = build_user(db_session, "lease-user")
+        inbox = _inbox(db_session, user)
+        staged = tmp_path / "capture.gcode"
+        staged.write_bytes(b"staged")
+        lease = staging_leases.create_review_lease(
+            db_session,
+            inbox_item_id=inbox.id,
+            owner_user_id=user.id,
+            path=staged,
+            size_bytes=6,
+            sha256="b" * 64,
+        )
+        lease.expires_at = utcnow() - timedelta(seconds=1)
+        db_session.commit()
+        assert staging_leases.prune_expired(db_session) == (1, 1)
+        db_session.commit()
+        assert not staged.exists()
+        assert db_session.get(StagingLease, lease.id) is None

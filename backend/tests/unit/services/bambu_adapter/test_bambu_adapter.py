@@ -29,49 +29,49 @@ def test_constructor_maps_legacy_arguments_to_immutable_core_config() -> None:
     assert provider.capabilities is BambuClient.capabilities
 
 
-def test_build_maps_orm_fields_without_retaining_the_row() -> None:
-    printer = Printer(
-        name="Bambu",
-        provider=PrinterProvider.BAMBU_LAN,
-        bambu_host="192.0.2.20",
-        bambu_serial="SERIAL-2",
-        bambu_access_code="code-2",
-    )
-
-    provider = BambuLanProvider.build(printer)
-
-    assert provider.config.host == "192.0.2.20"
-    assert provider.config.serial == "SERIAL-2"
-    assert provider.config.access_code == "code-2"
-    assert provider.host == "192.0.2.20"
-    assert not hasattr(provider, "printer")
-
-
-@pytest.mark.parametrize(
-    "field",
-    ["bambu_host", "bambu_serial", "bambu_access_code"],
-)
-def test_build_uses_core_credential_validation(field: str) -> None:
-    values = {
-        "bambu_host": "192.0.2.20",
-        "bambu_serial": "SERIAL-2",
-        "bambu_access_code": "code-2",
-    }
-    values[field] = ""
-    printer = Printer(
-        name="Bambu",
-        provider=PrinterProvider.BAMBU_LAN,
-        **values,
-    )
-
-    with pytest.raises(ProviderError) as error:
-        BambuLanProvider.build(printer)
-
-    assert error.value.detail == "provider_credentials_missing"
-    assert error.value.code == "provider_credentials_missing"
-
-
 def test_class_level_ftps_factory_remains_compatible() -> None:
     client = BambuLanProvider._ftps_client()
 
     assert client.__class__.__name__ == "_ImplicitFTP_TLS"
+
+
+class TestBuild:
+    def test_build_maps_orm_fields_without_retaining_the_row(self) -> None:
+        printer = Printer(
+            name="Bambu",
+            provider=PrinterProvider.BAMBU_LAN,
+            bambu_host="192.0.2.20",
+            bambu_serial="SERIAL-2",
+            bambu_access_code="code-2",
+        )
+
+        provider = BambuLanProvider.build(printer)
+
+        assert provider.config.host == "192.0.2.20"
+        assert provider.config.serial == "SERIAL-2"
+        assert provider.config.access_code == "code-2"
+        assert provider.host == "192.0.2.20"
+        assert not hasattr(provider, "printer")
+
+    @pytest.mark.parametrize(
+        "field",
+        ["bambu_host", "bambu_serial", "bambu_access_code"],
+    )
+    def test_build_uses_core_credential_validation(self, field: str) -> None:
+        values = {
+            "bambu_host": "192.0.2.20",
+            "bambu_serial": "SERIAL-2",
+            "bambu_access_code": "code-2",
+        }
+        values[field] = ""
+        printer = Printer(
+            name="Bambu",
+            provider=PrinterProvider.BAMBU_LAN,
+            **values,
+        )
+
+        with pytest.raises(ProviderError) as error:
+            BambuLanProvider.build(printer)
+
+        assert error.value.detail == "provider_credentials_missing"
+        assert error.value.code == "provider_credentials_missing"

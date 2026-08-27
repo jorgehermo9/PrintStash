@@ -67,127 +67,6 @@ def _paginate_ids(fn, page_size: int) -> list[int]:
     return seen
 
 
-def test_list_items_pagination_is_complete_and_unique_with_tied_timestamps(
-    db_session: Session, superuser: User
-) -> None:
-    tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    created = set(_make_models(db_session, count=25, ts=tied))
-
-    seen = _paginate_ids(
-        lambda limit, offset: mv.list_items(
-            db_session, superuser, limit=limit, offset=offset
-        ),
-        page_size=10,
-    )
-
-    # No row appears twice across page boundaries...
-    assert len(seen) == len(set(seen)), "a model was duplicated across pages"
-    # ...and every model we created shows up exactly once.
-    assert created <= set(seen)
-    assert sum(1 for i in seen if i in created) == 25
-
-
-def test_list_items_order_is_stable_and_id_tiebroken(
-    db_session: Session, superuser: User
-) -> None:
-    tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    created = set(_make_models(db_session, count=15, ts=tied))
-
-    first = [m.id for m in mv.list_items(db_session, superuser, limit=100)]
-    second = [m.id for m in mv.list_items(db_session, superuser, limit=100)]
-    assert first == second, "ordering must be deterministic across calls"
-
-    # Among the tied-timestamp models, order is strictly id-descending.
-    mine = [i for i in first if i in created]
-    assert mine == sorted(mine, reverse=True)
-
-
-def test_list_items_search_is_case_insensitive(
-    db_session: Session, superuser: User
-) -> None:
-    m = build_model(db_session, name="Articulated Dragon", slug="dragon", hash="d" * 64)
-
-    for query in ("dragon", "DRAGON", "Dragon", "drAGon"):
-        found = {item.id for item in mv.list_items(db_session, superuser, q=query)}
-        assert m.id in found, f"case-insensitive search failed for {query!r}"
-
-    # A non-matching query must not return it.
-    miss = {item.id for item in mv.list_items(db_session, superuser, q="griffin")}
-    assert m.id not in miss
-
-
-def test_list_items_excludes_external_sentinel(
-    db_session: Session, superuser: User
-) -> None:
-    """The seeded ``__external__`` sentinel model must never surface in the grid
-    (regression: it leaked into the library browse after a container restart)."""
-    from app.db.models import SENTINEL_MODEL_HASH
-
-    _make_models(db_session, count=3, ts=datetime(2026, 1, 1, tzinfo=timezone.utc))
-
-    items = mv.list_items(db_session, superuser, limit=100)
-    assert all(it.slug != "__external__" for it in items)
-    # And the sentinel row really does exist in the DB, so this is a filter, not
-    # an absence.
-    from sqlmodel import select
-
-    assert (
-        db_session.exec(select(Model).where(Model.hash == SENTINEL_MODEL_HASH)).first()
-        is not None
-    )
-
-
-def test_list_items_includes_daily_workflow_print_outcomes(
-    db_session: Session, superuser: User
-) -> None:
-    model = build_model(db_session, name="Outcome", slug="outcome", hash="o" * 64)
-    artifact = build_file(
-        db_session,
-        model,
-        path="outcome.gcode",
-        filename="outcome.gcode",
-        file_type=FileType.GCODE,
-        size_bytes=10,
-        sha256="f" * 64,
-    )
-    finished = datetime(2026, 2, 1, tzinfo=timezone.utc)
-    db_session.add_all(
-        [
-            PrintJob(
-                model_id=model.id,
-                file_id=artifact.id,
-                remote_filename="outcome.gcode",
-                state=PrintJobState.COMPLETED,
-                actual_duration_s=120,
-                cost=1.25,
-                finished_at=finished,
-            ),
-            PrintJob(
-                model_id=model.id,
-                file_id=artifact.id,
-                remote_filename="outcome.gcode",
-                state=PrintJobState.FAILED,
-                actual_duration_s=60,
-                cost=0.25,
-                finished_at=finished,
-            ),
-        ]
-    )
-    db_session.commit()
-
-    item = next(
-        row
-        for row in mv.list_items(db_session, superuser, limit=100)
-        if row.id == model.id
-    )
-
-    assert item.print_summary is not None
-    assert item.print_summary.success_rate == 0.5
-    assert item.print_summary.average_duration_s == 90
-    assert item.print_summary.total_cost == 1.5
-    assert item.print_summary.last_printed_at == finished
-
-
 def _cursor_page_ids(
     db_session: Session,
     superuser: User,
@@ -348,28 +227,153 @@ def test_cursor_page_rejects_sort_mismatch(
         )
 
 
-def test_list_trashed_pagination_is_complete_and_unique(
-    db_session: Session, superuser: User
-) -> None:
-    tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    created: set[int] = set()
-    for i in range(20):
-        m = build_model(
-            db_session,
-            name=f"Trashed {i:02d}",
-            slug=f"trashed-{i:02d}",
-            hash=f"{i + 1000:064d}",
-            deleted_at=tied,
+class TestListItems:
+    def test_list_items_pagination_is_complete_and_unique_with_tied_timestamps(
+        self, db_session: Session, superuser: User
+    ) -> None:
+        tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        created = set(_make_models(db_session, count=25, ts=tied))
+
+        seen = _paginate_ids(
+            lambda limit, offset: mv.list_items(
+                db_session, superuser, limit=limit, offset=offset
+            ),
+            page_size=10,
         )
-        created.add(m.id)
 
-    seen = _paginate_ids(
-        lambda limit, offset: mv.list_trashed(
-            db_session, superuser, limit=limit, offset=offset, retention_days=30
-        ),
-        page_size=7,
-    )
+        # No row appears twice across page boundaries...
+        assert len(seen) == len(set(seen)), "a model was duplicated across pages"
+        # ...and every model we created shows up exactly once.
+        assert created <= set(seen)
+        assert sum(1 for i in seen if i in created) == 25
 
-    assert len(seen) == len(set(seen)), "a trashed model was duplicated across pages"
-    assert created <= set(seen)
-    assert sum(1 for i in seen if i in created) == 20
+    def test_list_items_order_is_stable_and_id_tiebroken(
+        self, db_session: Session, superuser: User
+    ) -> None:
+        tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        created = set(_make_models(db_session, count=15, ts=tied))
+
+        first = [m.id for m in mv.list_items(db_session, superuser, limit=100)]
+        second = [m.id for m in mv.list_items(db_session, superuser, limit=100)]
+        assert first == second, "ordering must be deterministic across calls"
+
+        # Among the tied-timestamp models, order is strictly id-descending.
+        mine = [i for i in first if i in created]
+        assert mine == sorted(mine, reverse=True)
+
+    def test_list_items_search_is_case_insensitive(
+        self, db_session: Session, superuser: User
+    ) -> None:
+        m = build_model(
+            db_session, name="Articulated Dragon", slug="dragon", hash="d" * 64
+        )
+
+        for query in ("dragon", "DRAGON", "Dragon", "drAGon"):
+            found = {item.id for item in mv.list_items(db_session, superuser, q=query)}
+            assert m.id in found, f"case-insensitive search failed for {query!r}"
+
+        # A non-matching query must not return it.
+        miss = {item.id for item in mv.list_items(db_session, superuser, q="griffin")}
+        assert m.id not in miss
+
+    def test_list_items_excludes_external_sentinel(
+        self, db_session: Session, superuser: User
+    ) -> None:
+        """The seeded ``__external__`` sentinel model must never surface in the grid
+        (regression: it leaked into the library browse after a container restart)."""
+        from app.db.models import SENTINEL_MODEL_HASH
+
+        _make_models(db_session, count=3, ts=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+        items = mv.list_items(db_session, superuser, limit=100)
+        assert all(it.slug != "__external__" for it in items)
+        # And the sentinel row really does exist in the DB, so this is a filter, not
+        # an absence.
+        from sqlmodel import select
+
+        assert (
+            db_session.exec(
+                select(Model).where(Model.hash == SENTINEL_MODEL_HASH)
+            ).first()
+            is not None
+        )
+
+    def test_list_items_includes_daily_workflow_print_outcomes(
+        self, db_session: Session, superuser: User
+    ) -> None:
+        model = build_model(db_session, name="Outcome", slug="outcome", hash="o" * 64)
+        artifact = build_file(
+            db_session,
+            model,
+            path="outcome.gcode",
+            filename="outcome.gcode",
+            file_type=FileType.GCODE,
+            size_bytes=10,
+            sha256="f" * 64,
+        )
+        finished = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        db_session.add_all(
+            [
+                PrintJob(
+                    model_id=model.id,
+                    file_id=artifact.id,
+                    remote_filename="outcome.gcode",
+                    state=PrintJobState.COMPLETED,
+                    actual_duration_s=120,
+                    cost=1.25,
+                    finished_at=finished,
+                ),
+                PrintJob(
+                    model_id=model.id,
+                    file_id=artifact.id,
+                    remote_filename="outcome.gcode",
+                    state=PrintJobState.FAILED,
+                    actual_duration_s=60,
+                    cost=0.25,
+                    finished_at=finished,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        item = next(
+            row
+            for row in mv.list_items(db_session, superuser, limit=100)
+            if row.id == model.id
+        )
+
+        assert item.print_summary is not None
+        assert item.print_summary.success_rate == 0.5
+        assert item.print_summary.average_duration_s == 90
+        assert item.print_summary.total_cost == 1.5
+        assert item.print_summary.last_printed_at == finished
+
+
+class TestListTrashed:
+    def test_list_trashed_pagination_is_complete_and_unique(
+        self, db_session: Session, superuser: User
+    ) -> None:
+        tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        created: set[int] = set()
+        for i in range(20):
+            m = build_model(
+                db_session,
+                name=f"Trashed {i:02d}",
+                slug=f"trashed-{i:02d}",
+                hash=f"{i + 1000:064d}",
+                deleted_at=tied,
+            )
+            created.add(m.id)
+
+        seen = _paginate_ids(
+            lambda limit, offset: mv.list_trashed(
+                db_session, superuser, limit=limit, offset=offset, retention_days=30
+            ),
+            page_size=7,
+        )
+
+        assert len(seen) == len(set(seen)), (
+            "a trashed model was duplicated across pages"
+        )
+        assert created <= set(seen)
+        assert sum(1 for i in seen if i in created) == 20

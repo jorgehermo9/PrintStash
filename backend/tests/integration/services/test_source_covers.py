@@ -78,28 +78,6 @@ def _receipt(key: str = "opaque/covers/1.webp", token: str = "new") -> CreationR
     )
 
 
-def test_create_publish_failure_leaves_no_cover_lease_or_proof(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    backend = _backend()
-    backend.create_bytes.side_effect = RuntimeError("publish failed")
-
-    with pytest.raises(RuntimeError, match="publish failed"):
-        source_covers.put(
-            db_session,
-            backend,
-            provenance_source_id=source.id,
-            actor_id=None,
-            data=_png(),
-            content_type="image/png",
-        )
-
-    assert db_session.exec(select(ModelSourceCover)).all() == []
-    assert db_session.exec(select(StagingLease)).all() == []
-    assert db_session.exec(select(OwnedStorageObject)).all() == []
-
-
 def test_create_rolls_back_published_bytes_when_recording_the_receipt_fails(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -370,57 +348,6 @@ def test_hard_delete_enqueues_one_required_proof_intent_for_cover(
     assert len(intents) == 1
     assert intents[0].key == result.cover.storage_key
     assert intents[0].resource_id == str(result.cover.id)
-
-
-def test_cover_lease_requires_cover_as_its_only_owner_and_cascades(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    cover = ModelSourceCover(
-        provenance_source_id=source.id,
-        storage_key="opaque/covers/cascade.webp",
-        size_bytes=3,
-    )
-    db_session.add(cover)
-    db_session.flush()
-    assert cover.id is not None
-    lease = staging_leases.create_cover_lease(
-        db_session,
-        model_source_cover_id=cover.id,
-        owner_user_id=None,
-        destination_key=cover.storage_key,
-        size_bytes=3,
-        sha256="a" * 64,
-    )
-    lease_id = lease.id
-    db_session.commit()
-    db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
-    db_session.delete(cover)
-    db_session.commit()
-    assert db_session.get(StagingLease, lease_id) is None
-
-    replacement = ModelSourceCover(
-        provenance_source_id=source.id,
-        storage_key="opaque/covers/conflict.webp",
-        size_bytes=1,
-    )
-    job = BackgroundJob(id="cover-owner-conflict")
-    db_session.add_all([replacement, job])
-    db_session.commit()
-    assert replacement.id is not None
-    invalid = StagingLease(
-        id="cover-owner-conflict",
-        path="cover:invalid",
-        background_job_id=job.id,
-        model_source_cover_id=replacement.id,
-        size_bytes=1,
-        sha256="a" * 64,
-        expires_at=cover.created_at,
-    )
-    db_session.add(invalid)
-    with pytest.raises(IntegrityError):
-        db_session.commit()
-    db_session.rollback()
 
 
 def test_restart_reconciles_cover_published_before_receipt_commit(
@@ -794,3 +721,78 @@ def test_finish_import_uses_only_intent_and_final_sqlite_commits(
             .storage_key.startswith("opaque/cover/")
         )
     engine.dispose()
+
+
+class TestCoverLease:
+    def test_create_publish_failure_leaves_no_cover_lease_or_proof(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        backend = _backend()
+        backend.create_bytes.side_effect = RuntimeError("publish failed")
+
+        with pytest.raises(RuntimeError, match="publish failed"):
+            source_covers.put(
+                db_session,
+                backend,
+                provenance_source_id=source.id,
+                actor_id=None,
+                data=_png(),
+                content_type="image/png",
+            )
+
+        assert db_session.exec(select(ModelSourceCover)).all() == []
+        assert db_session.exec(select(StagingLease)).all() == []
+        assert db_session.exec(select(OwnedStorageObject)).all() == []
+
+    def test_cover_lease_requires_cover_as_its_only_owner_and_cascades(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        cover = ModelSourceCover(
+            provenance_source_id=source.id,
+            storage_key="opaque/covers/cascade.webp",
+            size_bytes=3,
+        )
+        db_session.add(cover)
+        db_session.flush()
+        assert cover.id is not None
+        lease = staging_leases.create_cover_lease(
+            db_session,
+            model_source_cover_id=cover.id,
+            owner_user_id=None,
+            destination_key=cover.storage_key,
+            size_bytes=3,
+            sha256="a" * 64,
+        )
+        lease_id = lease.id
+        db_session.commit()
+        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
+        db_session.delete(cover)
+        db_session.commit()
+        assert db_session.get(StagingLease, lease_id) is None
+
+        replacement = ModelSourceCover(
+            provenance_source_id=source.id,
+            storage_key="opaque/covers/conflict.webp",
+            size_bytes=1,
+        )
+        job = BackgroundJob(id="cover-owner-conflict")
+        db_session.add_all([replacement, job])
+        db_session.commit()
+        assert replacement.id is not None
+        invalid = StagingLease(
+            id="cover-owner-conflict",
+            path="cover:invalid",
+            background_job_id=job.id,
+            model_source_cover_id=replacement.id,
+            size_bytes=1,
+            sha256="a" * 64,
+            expires_at=cover.created_at,
+        )
+        db_session.add(invalid)
+        with pytest.raises(IntegrityError):
+            db_session.commit()
+        db_session.rollback()

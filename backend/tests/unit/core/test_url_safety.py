@@ -43,21 +43,6 @@ def test_is_public_ip(ip, expected):
 
 
 @pytest.mark.parametrize(
-    "url,expected",
-    [
-        ("ftp://example.com/x", False),  # non-http scheme
-        ("http:///nohost", False),  # missing host
-        ("http://127.0.0.1/hook", False),  # literal loopback — no DNS needed
-        ("http://169.254.169.254/latest/meta-data", False),  # metadata endpoint
-        ("https://10.1.2.3/hook", False),  # literal private
-    ],
-)
-def test_is_public_url_blocks(url, expected):
-    # Literal-IP and scheme/host cases resolve without touching real DNS.
-    assert is_public_url(url) is expected
-
-
-@pytest.mark.parametrize(
     "url",
     [
         "http://user:secret@example.com/spoolman",
@@ -85,35 +70,6 @@ def _fake_getaddrinfo(*answers: str):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (answers[idx], port or 80))]
 
     return _resolver
-
-
-def test_resolve_public_target_rejects_private_answer(monkeypatch):
-    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("127.0.0.1"))
-    with pytest.raises(UnsafeUrlError) as exc:
-        resolve_public_target("http://rebind.example/hook")
-    assert exc.value.reason == "url_target_not_public"
-
-
-def test_resolve_public_target_rejects_mixed_answers(monkeypatch):
-    """A host answering with a public *and* a private address is an attack."""
-
-    def _resolver(host, port, *args, **kwargs):
-        return [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port)),
-        ]
-
-    monkeypatch.setattr(socket, "getaddrinfo", _resolver)
-    with pytest.raises(UnsafeUrlError):
-        resolve_public_target("http://mixed.example/hook")
-
-
-def test_resolve_public_target_pins_the_validated_address(monkeypatch):
-    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
-    target = resolve_public_target("https://good.example/hook")
-    assert target.ip == "93.184.216.34"
-    assert target.host == "good.example"
-    assert target.port == 443
 
 
 @pytest.mark.anyio
@@ -167,3 +123,47 @@ def test_pinned_sync_transport_dials_validated_ip_after_dns_flips(monkeypatch):
             client.get(target.url)
 
     assert dialled == [("93.184.216.34", 80)]
+
+
+class TestResolvePublicTarget:
+    def test_resolve_public_target_rejects_private_answer(self, monkeypatch):
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("127.0.0.1"))
+        with pytest.raises(UnsafeUrlError) as exc:
+            resolve_public_target("http://rebind.example/hook")
+        assert exc.value.reason == "url_target_not_public"
+
+    def test_resolve_public_target_rejects_mixed_answers(self, monkeypatch):
+        """A host answering with a public *and* a private address is an attack."""
+
+        def _resolver(host, port, *args, **kwargs):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port)),
+            ]
+
+        monkeypatch.setattr(socket, "getaddrinfo", _resolver)
+        with pytest.raises(UnsafeUrlError):
+            resolve_public_target("http://mixed.example/hook")
+
+    def test_resolve_public_target_pins_the_validated_address(self, monkeypatch):
+        monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+        target = resolve_public_target("https://good.example/hook")
+        assert target.ip == "93.184.216.34"
+        assert target.host == "good.example"
+        assert target.port == 443
+
+
+class TestIsPublicUrl:
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            ("ftp://example.com/x", False),  # non-http scheme
+            ("http:///nohost", False),  # missing host
+            ("http://127.0.0.1/hook", False),  # literal loopback — no DNS needed
+            ("http://169.254.169.254/latest/meta-data", False),  # metadata endpoint
+            ("https://10.1.2.3/hook", False),  # literal private
+        ],
+    )
+    def test_is_public_url_blocks(self, url, expected):
+        # Literal-IP and scheme/host cases resolve without touching real DNS.
+        assert is_public_url(url) is expected

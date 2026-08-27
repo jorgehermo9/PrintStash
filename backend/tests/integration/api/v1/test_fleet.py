@@ -884,140 +884,6 @@ def test_enqueue_400_for_non_gcode_file(
     assert resp.json()["detail"] == "file_not_gcode"
 
 
-def test_patch_queue_job_404_for_missing_job(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.patch(
-        "/api/v1/fleet/queue/99999",
-        headers=auth_headers,
-        json={"queue_position": 1},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "queue_job_not_found"
-
-
-def test_patch_queue_job_409_when_not_editable(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    build_printer(
-        db_session,
-        name="Editable",
-        moonraker_url="http://editable",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-
-    job = db_session.get(PrintJob, queued["id"])
-    job.state = PrintJobState.PRINTING
-    db_session.add(job)
-    db_session.commit()
-
-    resp = client.patch(
-        f"/api/v1/fleet/queue/{queued['id']}",
-        headers=auth_headers,
-        json={"queue_position": 1},
-    )
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "queue_job_not_editable"
-
-
-def test_patch_queue_job_409_on_stale_expected_updated_at(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    build_printer(
-        db_session,
-        name="Stale",
-        moonraker_url="http://stale",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-
-    resp = client.patch(
-        f"/api/v1/fleet/queue/{queued['id']}",
-        headers=auth_headers,
-        json={
-            "queue_position": 1,
-            "expected_updated_at": "2000-01-01T00:00:00Z",
-        },
-    )
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "queue_job_changed"
-
-
-def test_patch_queue_job_400_manual_strategy_requires_printer_id(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    build_printer(
-        db_session,
-        name="Manual",
-        moonraker_url="http://manual",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-
-    resp = client.patch(
-        f"/api/v1/fleet/queue/{queued['id']}",
-        headers=auth_headers,
-        json={"strategy": "manual"},
-    )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "printer_id_required"
-
-
-def test_delete_queue_job_404_for_missing_job(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.delete("/api/v1/fleet/queue/99999", headers=auth_headers)
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "queue_job_not_found"
-
-
-def test_retry_queue_job_404_for_missing_job(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.post("/api/v1/fleet/queue/99999/retry", headers=auth_headers)
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "queue_job_not_found"
-
-
-def test_retry_queue_job_400_when_not_retryable(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    build_printer(
-        db_session,
-        name="NotRetryable",
-        moonraker_url="http://not-retryable",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-
-    resp = client.post(
-        f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
-    )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "queue_job_not_retryable"
-
-
 def test_patch_routing_404_for_missing_printer(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
@@ -1028,51 +894,6 @@ def test_patch_routing_404_for_missing_printer(
     )
     assert resp.status_code == 404
     assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_get_maintenance_windows_404_for_missing_printer(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.get(
-        "/api/v1/fleet/printers/99999/maintenance-windows", headers=auth_headers
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_post_maintenance_window_404_for_missing_printer(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    now = utcnow()
-    resp = client.post(
-        "/api/v1/fleet/printers/99999/maintenance-windows",
-        headers=auth_headers,
-        json={
-            "starts_at": now.isoformat(),
-            "ends_at": (now + timedelta(minutes=30)).isoformat(),
-        },
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_patch_maintenance_window_404_for_missing_window(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="WindowMissing",
-        moonraker_url="http://window-missing",
-        status=PrinterStatus.READY,
-    )
-
-    resp = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/99999",
-        headers=auth_headers,
-        json={"reason": "Nope"},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "maintenance_window_not_found"
 
 
 def test_delete_maintenance_window_404_for_missing_window(
@@ -1091,47 +912,6 @@ def test_delete_maintenance_window_404_for_missing_window(
     )
     assert resp.status_code == 404
     assert resp.json()["detail"] == "maintenance_window_not_found"
-
-
-def test_get_maintenance_log_404_for_missing_printer(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.get(
-        "/api/v1/fleet/printers/99999/maintenance-log", headers=auth_headers
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_post_maintenance_log_404_for_missing_printer(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.post(
-        "/api/v1/fleet/printers/99999/maintenance-log",
-        headers=auth_headers,
-        json={"category": "nozzle", "note": "test"},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_patch_maintenance_log_404_for_missing_log(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="LogMissing",
-        moonraker_url="http://log-missing",
-        status=PrinterStatus.READY,
-    )
-
-    resp = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-log/99999",
-        headers=auth_headers,
-        json={"note": "Nope"},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "maintenance_log_not_found"
 
 
 def test_delete_maintenance_log_404_for_missing_log(
@@ -1212,44 +992,6 @@ def test_enqueue_rejects_binary_gcode(
     assert resp.json()["detail"] == "binary_gcode_not_printable"
 
 
-def test_patch_queue_job_strategy_change_reroutes(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    first = Printer(
-        name="RerouteA", moonraker_url="http://reroute-a", status=PrinterStatus.READY
-    )
-    second = build_printer(
-        db_session,
-        name="RerouteB",
-        moonraker_url="http://reroute-b",
-        status=PrinterStatus.READY,
-    )
-    db_session.add_all([first, second])
-    db_session.commit()
-    db_session.refresh(first)
-    db_session.refresh(second)
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={
-            "file_id": artifact.id,
-            "strategy": "manual",
-            "printer_id": first.id,
-        },
-    ).json()
-    assert queued["printer_id"] == first.id
-
-    resp = client.patch(
-        f"/api/v1/fleet/queue/{queued['id']}",
-        headers=auth_headers,
-        json={"strategy": "manual", "printer_id": second.id},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["printer_id"] == second.id
-    assert resp.json()["routing_strategy"] == "manual"
-
-
 def test_patch_routing_clears_drain_reason_when_disabling_drain(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
@@ -1308,74 +1050,6 @@ def test_list_maintenance_windows_returns_created_window(
     assert listed.json()[0]["reason"] == "Cleaning"
 
 
-def test_patch_maintenance_window_updates_fields(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="WindowEdit",
-        moonraker_url="http://window-edit",
-        status=PrinterStatus.READY,
-    )
-    now = utcnow()
-    created = client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=auth_headers,
-        json={
-            "starts_at": now.isoformat(),
-            "ends_at": (now + timedelta(minutes=30)).isoformat(),
-        },
-    ).json()
-
-    # Both bounds are supplied tz-aware so the comparison never falls back to
-    # `row.starts_at`/`row.ends_at` read back from the DB (SQLite loses the
-    # tzinfo on round-trip; see genuine bug note below).
-    resp = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/{created['id']}",
-        headers=auth_headers,
-        json={
-            "starts_at": now.isoformat(),
-            "ends_at": (now + timedelta(hours=1)).isoformat(),
-            "reason": "Extended",
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.json()["reason"] == "Extended"
-
-
-def test_patch_maintenance_window_invalid_range_404(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="WindowInvalid",
-        moonraker_url="http://window-invalid",
-        status=PrinterStatus.READY,
-    )
-    now = utcnow()
-    created = client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=auth_headers,
-        json={
-            "starts_at": now.isoformat(),
-            "ends_at": (now + timedelta(minutes=30)).isoformat(),
-        },
-    ).json()
-
-    # Both bounds supplied tz-aware, same reason as above, to isolate the
-    # `ends_at <= starts_at` check from the naive/aware DB round-trip bug.
-    resp = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/{created['id']}",
-        headers=auth_headers,
-        json={
-            "starts_at": now.isoformat(),
-            "ends_at": (now - timedelta(hours=1)).isoformat(),
-        },
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "maintenance_window_invalid"
-
-
 def _user_headers(
     db_session: Session, username: str, *, is_superuser: bool = False
 ) -> dict[str, str]:
@@ -1396,240 +1070,6 @@ def _grant_printer(
     user = db_session.exec(select(User).where(User.username == username)).one()
     db_session.add(PrinterPermission(user_id=user.id, printer_id=printer.id, role=role))
     db_session.commit()
-
-
-def test_create_queue_job_403_for_non_superuser_non_manual_strategy(
-    client: TestClient, db_session: Session
-) -> None:
-    headers = _user_headers(db_session, "queue-member")
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-
-    resp = client.post(
-        "/api/v1/fleet/queue",
-        headers=headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    )
-
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "printer_permission_denied"
-
-
-def test_create_queue_job_allows_non_superuser_with_printer_role(
-    client: TestClient, db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="MemberManual",
-        moonraker_url="http://member-manual",
-        status=PrinterStatus.READY,
-    )
-
-    collection = build_collection(
-        db_session, name="Member vault", slug="member-vault", path="member-vault"
-    )
-    model = build_model(
-        db_session,
-        name="Member cube",
-        slug="member-cube",
-        hash="9" * 64,
-        collection_id=collection.id,
-    )
-    artifact = build_file(
-        db_session,
-        model,
-        path="queue/member-cube.gcode",
-        filename="member-cube.gcode",
-        file_type=FileType.GCODE,
-        version=1,
-        size_bytes=42,
-        sha256="8" * 64,
-    )
-
-    headers = _user_headers(db_session, "manual-member")
-    _grant_printer(db_session, "manual-member", printer, PrinterRole.PRINT)
-    member = db_session.exec(select(User).where(User.username == "manual-member")).one()
-    db_session.add(
-        CollectionPermission(
-            user_id=member.id, collection_id=collection.id, role=CollectionRole.EDIT
-        )
-    )
-    db_session.commit()
-
-    resp = client.post(
-        "/api/v1/fleet/queue",
-        headers=headers,
-        json={"file_id": artifact.id, "strategy": "manual", "printer_id": printer.id},
-    )
-
-    assert resp.status_code == 201
-    assert resp.json()["printer_id"] == printer.id
-
-
-def test_queue_error_maps_fleet_queue_job_not_found_to_404(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
-) -> None:
-    build_printer(
-        db_session,
-        name="QueueErrorMapping",
-        moonraker_url="http://queue-error-mapping",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-
-    # _require_queue_job_role already guarantees the job/printer exist by the
-    # time the router reaches fleet.retry_queue_job, so a "queue_job_not_found"
-    # FleetError from the service layer itself is otherwise unreachable through
-    # the HTTP API. Force it to exercise the router's `_queue_error` 404 branch.
-    def _raise(*_args, **_kwargs):
-        raise fleet.FleetError("queue_job_not_found")
-
-    monkeypatch.setattr(fleet, "retry_queue_job", _raise)
-    job = db_session.get(PrintJob, queued["id"])
-    job.state = PrintJobState.FAILED
-    job.retryable = True
-    db_session.add(job)
-    db_session.commit()
-
-    resp = client.post(
-        f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
-    )
-
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "queue_job_not_found"
-
-
-def test_delete_queue_job_409_when_not_editable(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    build_printer(
-        db_session,
-        name="DeleteNotEditable",
-        moonraker_url="http://delete-not-editable",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    ).json()
-
-    job = db_session.get(PrintJob, queued["id"])
-    job.state = PrintJobState.PRINTING
-    db_session.add(job)
-    db_session.commit()
-
-    resp = client.delete(f"/api/v1/fleet/queue/{queued['id']}", headers=auth_headers)
-
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "queue_job_not_editable"
-
-
-def test_retry_queue_job_404_when_manual_printer_soft_deleted(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="RetryPrinterGone",
-        moonraker_url="http://retry-printer-gone",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "manual", "printer_id": printer.id},
-    ).json()
-
-    job = db_session.get(PrintJob, queued["id"])
-    job.state = PrintJobState.FAILED
-    job.retryable = True
-    db_session.add(job)
-    printer.deleted_at = utcnow()
-    db_session.add(printer)
-    db_session.commit()
-
-    resp = client.post(
-        f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
-    )
-
-    # _require_queue_job_role validates job.printer_id via printer_rbac before
-    # the retry route ever calls fleet.retry_queue_job, so a soft-deleted
-    # printer 404s here rather than reaching the service layer.
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_require_queue_job_role_returns_unassigned_job_for_superuser(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "default"},
-    ).json()
-    assert queued["printer_id"] is None  # no default printer configured
-
-    resp = client.delete(f"/api/v1/fleet/queue/{queued['id']}", headers=auth_headers)
-
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "cancelled"
-    assert client.get("/api/v1/fleet/queue", headers=auth_headers).json() == []
-
-
-def test_require_queue_job_role_404_for_non_superuser_on_unassigned_job(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "default"},
-    ).json()
-    assert queued["printer_id"] is None
-
-    member = _user_headers(db_session, "unassigned-member")
-    resp = client.delete(f"/api/v1/fleet/queue/{queued['id']}", headers=member)
-
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "queue_job_not_found"
-
-
-def test_patch_queue_job_403_for_non_superuser_strategy_change(
-    client: TestClient, db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="MemberStrategy",
-        moonraker_url="http://member-strategy",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-
-    admin_headers = _user_headers(db_session, "strategy-admin", is_superuser=True)
-    queued = client.post(
-        "/api/v1/fleet/queue",
-        headers=admin_headers,
-        json={"file_id": artifact.id, "strategy": "manual", "printer_id": printer.id},
-    ).json()
-
-    member_headers = _user_headers(db_session, "strategy-member")
-    _grant_printer(db_session, "strategy-member", printer, PrinterRole.PRINT)
-
-    resp = client.patch(
-        f"/api/v1/fleet/queue/{queued['id']}",
-        headers=member_headers,
-        json={"strategy": "least_busy"},
-    )
-
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "printer_permission_denied"
 
 
 def test_patch_routing_maps_fleet_error_to_404(
@@ -1888,3 +1328,587 @@ class TestCreateBatch:
         )
 
         assert response.status_code == 401, response.text
+
+
+class TestCreateQueueJob:
+    def test_create_queue_job_403_for_non_superuser_non_manual_strategy(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        headers = _user_headers(db_session, "queue-member")
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+
+        resp = client.post(
+            "/api/v1/fleet/queue",
+            headers=headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "printer_permission_denied"
+
+    def test_create_queue_job_allows_non_superuser_with_printer_role(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="MemberManual",
+            moonraker_url="http://member-manual",
+            status=PrinterStatus.READY,
+        )
+
+        collection = build_collection(
+            db_session, name="Member vault", slug="member-vault", path="member-vault"
+        )
+        model = build_model(
+            db_session,
+            name="Member cube",
+            slug="member-cube",
+            hash="9" * 64,
+            collection_id=collection.id,
+        )
+        artifact = build_file(
+            db_session,
+            model,
+            path="queue/member-cube.gcode",
+            filename="member-cube.gcode",
+            file_type=FileType.GCODE,
+            version=1,
+            size_bytes=42,
+            sha256="8" * 64,
+        )
+
+        headers = _user_headers(db_session, "manual-member")
+        _grant_printer(db_session, "manual-member", printer, PrinterRole.PRINT)
+        member = db_session.exec(
+            select(User).where(User.username == "manual-member")
+        ).one()
+        db_session.add(
+            CollectionPermission(
+                user_id=member.id, collection_id=collection.id, role=CollectionRole.EDIT
+            )
+        )
+        db_session.commit()
+
+        resp = client.post(
+            "/api/v1/fleet/queue",
+            headers=headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["printer_id"] == printer.id
+
+
+class TestQueueError:
+    def test_queue_error_maps_fleet_queue_job_not_found_to_404(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        monkeypatch,
+    ) -> None:
+        build_printer(
+            db_session,
+            name="QueueErrorMapping",
+            moonraker_url="http://queue-error-mapping",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+
+        # _require_queue_job_role already guarantees the job/printer exist by the
+        # time the router reaches fleet.retry_queue_job, so a "queue_job_not_found"
+        # FleetError from the service layer itself is otherwise unreachable through
+        # the HTTP API. Force it to exercise the router's `_queue_error` 404 branch.
+        def _raise(*_args, **_kwargs):
+            raise fleet.FleetError("queue_job_not_found")
+
+        monkeypatch.setattr(fleet, "retry_queue_job", _raise)
+        job = db_session.get(PrintJob, queued["id"])
+        job.state = PrintJobState.FAILED
+        job.retryable = True
+        db_session.add(job)
+        db_session.commit()
+
+        resp = client.post(
+            f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "queue_job_not_found"
+
+
+class TestRequireQueueJobRole:
+    def test_require_queue_job_role_returns_unassigned_job_for_superuser(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "default"},
+        ).json()
+        assert queued["printer_id"] is None  # no default printer configured
+
+        resp = client.delete(
+            f"/api/v1/fleet/queue/{queued['id']}", headers=auth_headers
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "cancelled"
+        assert client.get("/api/v1/fleet/queue", headers=auth_headers).json() == []
+
+    def test_require_queue_job_role_404_for_non_superuser_on_unassigned_job(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "default"},
+        ).json()
+        assert queued["printer_id"] is None
+
+        member = _user_headers(db_session, "unassigned-member")
+        resp = client.delete(f"/api/v1/fleet/queue/{queued['id']}", headers=member)
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "queue_job_not_found"
+
+
+class TestPatchQueueJob:
+    def test_patch_queue_job_404_for_missing_job(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.patch(
+            "/api/v1/fleet/queue/99999",
+            headers=auth_headers,
+            json={"queue_position": 1},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "queue_job_not_found"
+
+    def test_patch_queue_job_409_when_not_editable(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Editable",
+            moonraker_url="http://editable",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+
+        job = db_session.get(PrintJob, queued["id"])
+        job.state = PrintJobState.PRINTING
+        db_session.add(job)
+        db_session.commit()
+
+        resp = client.patch(
+            f"/api/v1/fleet/queue/{queued['id']}",
+            headers=auth_headers,
+            json={"queue_position": 1},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "queue_job_not_editable"
+
+    def test_patch_queue_job_409_on_stale_expected_updated_at(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Stale",
+            moonraker_url="http://stale",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+
+        resp = client.patch(
+            f"/api/v1/fleet/queue/{queued['id']}",
+            headers=auth_headers,
+            json={
+                "queue_position": 1,
+                "expected_updated_at": "2000-01-01T00:00:00Z",
+            },
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "queue_job_changed"
+
+    def test_patch_queue_job_400_manual_strategy_requires_printer_id(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Manual",
+            moonraker_url="http://manual",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+
+        resp = client.patch(
+            f"/api/v1/fleet/queue/{queued['id']}",
+            headers=auth_headers,
+            json={"strategy": "manual"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "printer_id_required"
+
+    def test_patch_queue_job_strategy_change_reroutes(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        first = Printer(
+            name="RerouteA",
+            moonraker_url="http://reroute-a",
+            status=PrinterStatus.READY,
+        )
+        second = build_printer(
+            db_session,
+            name="RerouteB",
+            moonraker_url="http://reroute-b",
+            status=PrinterStatus.READY,
+        )
+        db_session.add_all([first, second])
+        db_session.commit()
+        db_session.refresh(first)
+        db_session.refresh(second)
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": first.id,
+            },
+        ).json()
+        assert queued["printer_id"] == first.id
+
+        resp = client.patch(
+            f"/api/v1/fleet/queue/{queued['id']}",
+            headers=auth_headers,
+            json={"strategy": "manual", "printer_id": second.id},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["printer_id"] == second.id
+        assert resp.json()["routing_strategy"] == "manual"
+
+    def test_patch_queue_job_403_for_non_superuser_strategy_change(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="MemberStrategy",
+            moonraker_url="http://member-strategy",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+
+        admin_headers = _user_headers(db_session, "strategy-admin", is_superuser=True)
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=admin_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        ).json()
+
+        member_headers = _user_headers(db_session, "strategy-member")
+        _grant_printer(db_session, "strategy-member", printer, PrinterRole.PRINT)
+
+        resp = client.patch(
+            f"/api/v1/fleet/queue/{queued['id']}",
+            headers=member_headers,
+            json={"strategy": "least_busy"},
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "printer_permission_denied"
+
+
+class TestDeleteQueueJob:
+    def test_delete_queue_job_404_for_missing_job(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.delete("/api/v1/fleet/queue/99999", headers=auth_headers)
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "queue_job_not_found"
+
+    def test_delete_queue_job_409_when_not_editable(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        build_printer(
+            db_session,
+            name="DeleteNotEditable",
+            moonraker_url="http://delete-not-editable",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+
+        job = db_session.get(PrintJob, queued["id"])
+        job.state = PrintJobState.PRINTING
+        db_session.add(job)
+        db_session.commit()
+
+        resp = client.delete(
+            f"/api/v1/fleet/queue/{queued['id']}", headers=auth_headers
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "queue_job_not_editable"
+
+
+class TestRetryQueueJob:
+    def test_retry_queue_job_404_for_missing_job(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.post("/api/v1/fleet/queue/99999/retry", headers=auth_headers)
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "queue_job_not_found"
+
+    def test_retry_queue_job_400_when_not_retryable(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        build_printer(
+            db_session,
+            name="NotRetryable",
+            moonraker_url="http://not-retryable",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
+
+        resp = client.post(
+            f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "queue_job_not_retryable"
+
+    def test_retry_queue_job_404_when_manual_printer_soft_deleted(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="RetryPrinterGone",
+            moonraker_url="http://retry-printer-gone",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        ).json()
+
+        job = db_session.get(PrintJob, queued["id"])
+        job.state = PrintJobState.FAILED
+        job.retryable = True
+        db_session.add(job)
+        printer.deleted_at = utcnow()
+        db_session.add(printer)
+        db_session.commit()
+
+        resp = client.post(
+            f"/api/v1/fleet/queue/{queued['id']}/retry", headers=auth_headers
+        )
+
+        # _require_queue_job_role validates job.printer_id via printer_rbac before
+        # the retry route ever calls fleet.retry_queue_job, so a soft-deleted
+        # printer 404s here rather than reaching the service layer.
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+
+class TestGetMaintenanceWindows:
+    def test_get_maintenance_windows_404_for_missing_printer(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.get(
+            "/api/v1/fleet/printers/99999/maintenance-windows", headers=auth_headers
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+
+class TestPostMaintenanceWindow:
+    def test_post_maintenance_window_404_for_missing_printer(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        now = utcnow()
+        resp = client.post(
+            "/api/v1/fleet/printers/99999/maintenance-windows",
+            headers=auth_headers,
+            json={
+                "starts_at": now.isoformat(),
+                "ends_at": (now + timedelta(minutes=30)).isoformat(),
+            },
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+
+class TestPatchMaintenanceWindow:
+    def test_patch_maintenance_window_404_for_missing_window(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="WindowMissing",
+            moonraker_url="http://window-missing",
+            status=PrinterStatus.READY,
+        )
+
+        resp = client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/99999",
+            headers=auth_headers,
+            json={"reason": "Nope"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "maintenance_window_not_found"
+
+    def test_patch_maintenance_window_updates_fields(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="WindowEdit",
+            moonraker_url="http://window-edit",
+            status=PrinterStatus.READY,
+        )
+        now = utcnow()
+        created = client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+            json={
+                "starts_at": now.isoformat(),
+                "ends_at": (now + timedelta(minutes=30)).isoformat(),
+            },
+        ).json()
+
+        # Both bounds are supplied tz-aware so the comparison never falls back to
+        # `row.starts_at`/`row.ends_at` read back from the DB (SQLite loses the
+        # tzinfo on round-trip; see genuine bug note below).
+        resp = client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/{created['id']}",
+            headers=auth_headers,
+            json={
+                "starts_at": now.isoformat(),
+                "ends_at": (now + timedelta(hours=1)).isoformat(),
+                "reason": "Extended",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "Extended"
+
+    def test_patch_maintenance_window_invalid_range_404(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="WindowInvalid",
+            moonraker_url="http://window-invalid",
+            status=PrinterStatus.READY,
+        )
+        now = utcnow()
+        created = client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+            json={
+                "starts_at": now.isoformat(),
+                "ends_at": (now + timedelta(minutes=30)).isoformat(),
+            },
+        ).json()
+
+        # Both bounds supplied tz-aware, same reason as above, to isolate the
+        # `ends_at <= starts_at` check from the naive/aware DB round-trip bug.
+        resp = client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/{created['id']}",
+            headers=auth_headers,
+            json={
+                "starts_at": now.isoformat(),
+                "ends_at": (now - timedelta(hours=1)).isoformat(),
+            },
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "maintenance_window_invalid"
+
+
+class TestGetMaintenanceLog:
+    def test_get_maintenance_log_404_for_missing_printer(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.get(
+            "/api/v1/fleet/printers/99999/maintenance-log", headers=auth_headers
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+
+class TestPostMaintenanceLog:
+    def test_post_maintenance_log_404_for_missing_printer(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.post(
+            "/api/v1/fleet/printers/99999/maintenance-log",
+            headers=auth_headers,
+            json={"category": "nozzle", "note": "test"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+
+class TestPatchMaintenanceLog:
+    def test_patch_maintenance_log_404_for_missing_log(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="LogMissing",
+            moonraker_url="http://log-missing",
+            status=PrinterStatus.READY,
+        )
+
+        resp = client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-log/99999",
+            headers=auth_headers,
+            json={"note": "Nope"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "maintenance_log_not_found"

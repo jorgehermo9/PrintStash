@@ -206,56 +206,57 @@ def test_import_archive_select_unknown_id_404(
 # --------------------------------------------------------------------------- #
 
 
-def test_import_from_url_single_file(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
+class TestImportFromUrl:
+    def test_import_from_url_single_file(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
 
-    async def _fake_download(url: str):
-        staging = Path(_overlay["staging_dir"])
-        staging.mkdir(parents=True, exist_ok=True)
-        staged = staging / "remote-cube.stl"
-        staged.write_bytes(_mesh_bytes("stl"))
-        return staged, "remote-cube.stl"
+        async def _fake_download(url: str):
+            staging = Path(_overlay["staging_dir"])
+            staging.mkdir(parents=True, exist_ok=True)
+            staged = staging / "remote-cube.stl"
+            staged.write_bytes(_mesh_bytes("stl"))
+            return staged, "remote-cube.stl"
 
-    with (
-        patch("app.api.v1.ingest.importer.validate_public_url", return_value=None),
-        patch(
-            "app.api.v1.ingest.importer.download_to_staging",
-            new=AsyncMock(side_effect=_fake_download),
-        ),
-    ):
-        payload = _completed(
-            client,
-            client.post(
-                "/api/v1/ingest/url",
-                headers=auth_headers,
-                json={"url": "https://example.com/remote-cube.stl"},
+        with (
+            patch("app.api.v1.ingest.importer.validate_public_url", return_value=None),
+            patch(
+                "app.api.v1.ingest.importer.download_to_staging",
+                new=AsyncMock(side_effect=_fake_download),
             ),
-            auth_headers,
+        ):
+            payload = _completed(
+                client,
+                client.post(
+                    "/api/v1/ingest/url",
+                    headers=auth_headers,
+                    json={"url": "https://example.com/remote-cube.stl"},
+                ),
+                auth_headers,
+            )
+
+        # The archive/URL import pipeline reports model_id on the parent job; the
+        # per-file file_id lives in result["items"].
+        assert payload["state"] == "completed", payload
+        assert payload["model_id"] is not None
+        file_row = db_session.exec(
+            select(File).where(File.model_id == payload["model_id"])
+        ).first()
+        assert file_row is not None and file_row.file_type == FileType.STL
+
+    def test_import_from_url_blocks_private_host(
+        self, tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        """SSRF guard: a loopback/private target is rejected before any fetch."""
+        use_local_storage(tmp_path)
+        resp = client.post(
+            "/api/v1/ingest/url",
+            headers=auth_headers,
+            json={"url": "http://127.0.0.1:7125/secret.stl"},
         )
-
-    # The archive/URL import pipeline reports model_id on the parent job; the
-    # per-file file_id lives in result["items"].
-    assert payload["state"] == "completed", payload
-    assert payload["model_id"] is not None
-    file_row = db_session.exec(
-        select(File).where(File.model_id == payload["model_id"])
-    ).first()
-    assert file_row is not None and file_row.file_type == FileType.STL
-
-
-def test_import_from_url_blocks_private_host(
-    tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    """SSRF guard: a loopback/private target is rejected before any fetch."""
-    use_local_storage(tmp_path)
-    resp = client.post(
-        "/api/v1/ingest/url",
-        headers=auth_headers,
-        json={"url": "http://127.0.0.1:7125/secret.stl"},
-    )
-    assert resp.status_code == 400, resp.text
+        assert resp.status_code == 400, resp.text
