@@ -21,6 +21,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.api.v1.external_libraries import _to_read
 from app.core.config import _overlay
 from app.core.time import utcnow
 from app.db.models import (
@@ -523,3 +524,25 @@ class TestOverlapGuards:
         # Indexing the database as if a user had put it there, and then writing
         # back over it, is how a library eats itself.
         assert response.status_code == 400, response.text
+
+
+class TestToRead:
+    """Serialising a library row the scanner may have left in a bad state."""
+
+    def test_reports_no_summary_for_a_row_holding_unparseable_json(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        nas = tmp_path / "nas"
+        nas.mkdir()
+        library = build_external_library(db_session, nas, name="nas")
+        library.last_scan_summary = "{not valid json"
+        db_session.add(library)
+        db_session.commit()
+
+        read = _to_read(library)
+
+        # The summary is a JSON blob written by a scan; a crash mid-write leaves
+        # a truncated one. Raising here would 500 the whole libraries listing
+        # over a cosmetic field, locking the user out of the page that would let
+        # them rescan and fix it.
+        assert read.last_scan_summary is None

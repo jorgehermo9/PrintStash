@@ -2,9 +2,9 @@
 lifecycle — the places where the "NAS bytes are sacred" and dedup invariants
 interact and a mistake would mean silent data loss.
 
-These complement ``test_external_libraries.py`` (focused unit tests) and
-``test_external_libraries_integration.py`` (workflows) by pinning down the
-*mixed model* and *duplicate-content* boundaries those don't cover:
+These complement the per-unit files under
+``integration/services/external_library/`` by pinning down the *mixed model* and
+*duplicate-content* boundaries none of them cover:
 
 * A Model can own BOTH a vault-owned file and a NAS-linked file (dedup unifies a
   web upload and an identical file discovered on a NAS). Removing the library, or
