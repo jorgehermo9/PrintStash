@@ -198,6 +198,22 @@ class TestUpdateUser:
         assert resp.status_code == 200
         assert resp.json()["is_active"] is False
 
+    def test_allows_an_edit_that_leaves_a_superuser_a_superuser(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _user(db_session, "admin-still-super")
+
+        response = client.patch(
+            f"/api/v1/admin/users/{admin.id}",
+            headers=_headers(admin),
+            json={"is_superuser": True, "is_active": True},
+        )
+
+        # The last-superuser guard only fires on an edit that would remove the
+        # last one; re-affirming the flags must not trip it.
+        assert response.status_code == 200, response.text
+        assert response.json()["is_superuser"] is True
+
 
 class TestResetPassword:
     def test_reset_password_not_found(
@@ -556,6 +572,116 @@ class TestAdminDeleteResource:
         db_session.expire_all()
         assert db_session.get(File, file_id) is None
         assert nas_path.read_bytes() == original
+
+    def test_hard_deletes_a_document(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.db.models import Document, DocumentKind
+
+        admin = _user(db_session, "admin-doc-hard")
+        document = Document(name="Manual", kind=DocumentKind.MARKDOWN, body="# Manual")
+        db_session.add(document)
+        db_session.commit()
+        db_session.refresh(document)
+        document_id = document.id
+
+        response = client.delete(
+            f"/api/v1/admin/documents/{document_id}?hard=true",
+            headers=_headers(admin),
+        )
+
+        assert response.status_code == 204, response.text
+        db_session.expire_all()
+        assert db_session.get(Document, document_id) is None
+
+    def test_hard_deletes_a_model(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _user(db_session, "admin-model-hard")
+        model = Model(name="Doomed", slug="doomed-admin", hash="c" * 64)
+        db_session.add(model)
+        db_session.commit()
+        db_session.refresh(model)
+        model_id = model.id
+
+        response = client.delete(
+            f"/api/v1/admin/models/{model_id}?hard=true", headers=_headers(admin)
+        )
+
+        assert response.status_code == 204, response.text
+        db_session.expire_all()
+        assert db_session.get(Model, model_id) is None
+
+    def test_hard_deletes_a_row_with_no_storage_of_its_own(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.db.models import Printer
+
+        admin = _user(db_session, "admin-printer-hard")
+        printer = Printer(name="Retired", moonraker_url="http://retired.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        printer_id = printer.id
+
+        response = client.delete(
+            f"/api/v1/admin/printers/{printer_id}?hard=true", headers=_headers(admin)
+        )
+
+        # Most resources own no blobs; the generic branch just drops the row.
+        assert response.status_code == 204, response.text
+        db_session.expire_all()
+        assert db_session.get(Printer, printer_id) is None
+
+    def test_refuses_a_hard_delete_when_storage_ownership_is_unproven(
+        self, client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.services.storage_ownership import UnsafeStorageDeleteError
+
+        admin = _user(db_session, "admin-unproven")
+        model = Model(name="Unowned", slug="unowned-admin", hash="b" * 64)
+        db_session.add(model)
+        db_session.commit()
+        db_session.refresh(model)
+        model_id = model.id
+
+        def unproven(*_args: object, **_kwargs: object):
+            raise UnsafeStorageDeleteError("storage_ownership_unverified")
+
+        monkeypatch.setattr(admin_api, "hard_delete_model", unproven)
+
+        response = client.delete(
+            f"/api/v1/admin/models/{model_id}?hard=true", headers=_headers(admin)
+        )
+
+        # The bytes could be somebody's external library; refuse rather than guess.
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "storage_ownership_unverified"
+
+    def test_keeps_the_row_when_a_hard_delete_is_refused(
+        self, client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.services.storage_ownership import UnsafeStorageDeleteError
+
+        admin = _user(db_session, "admin-unproven-kept")
+        model = Model(name="Unowned kept", slug="unowned-kept", hash="a" * 64)
+        db_session.add(model)
+        db_session.commit()
+        db_session.refresh(model)
+        model_id = model.id
+
+        def unproven(session, row):
+            session.delete(row)
+            raise UnsafeStorageDeleteError("storage_ownership_unverified")
+
+        monkeypatch.setattr(admin_api, "hard_delete_model", unproven)
+
+        client.delete(
+            f"/api/v1/admin/models/{model_id}?hard=true", headers=_headers(admin)
+        )
+
+        db_session.expire_all()
+        assert db_session.get(Model, model_id) is not None
 
 
 class TestRestoreResource:

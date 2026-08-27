@@ -259,9 +259,7 @@ def test_queued_jobs_can_be_reordered_and_deleted(
     assert returned_to_lane.status_code == 200
     assert returned_to_lane.json()["queue_position"] == 2
 
-    deleted = client.delete(
-        f"/api/v1/fleet/queue/{first['id']}", headers=auth_headers
-    )
+    deleted = client.delete(f"/api/v1/fleet/queue/{first['id']}", headers=auth_headers)
     assert deleted.status_code == 200
     assert deleted.json()["state"] == "cancelled"
     queue = client.get("/api/v1/fleet/queue", headers=auth_headers).json()
@@ -483,14 +481,17 @@ def test_fleet_summary_counts_queue_drain_and_maintenance(
 
     assert summary.status_code == 200
     payload = summary.json()
-    assert {key: payload[key] for key in (
-        "total_printers",
-        "queued_jobs",
-        "active_jobs",
-        "draining_printers",
-        "maintenance_printers",
-        "attention_jobs",
-    )} == {
+    assert {
+        key: payload[key]
+        for key in (
+            "total_printers",
+            "queued_jobs",
+            "active_jobs",
+            "draining_printers",
+            "maintenance_printers",
+            "attention_jobs",
+        )
+    } == {
         "total_printers": 1,
         "queued_jobs": 1,
         "active_jobs": 0,
@@ -1770,3 +1771,188 @@ def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
     )
     assert resp.status_code == 404
     assert resp.json()["detail"] == "printer_not_found"
+
+
+def _fleet_printer(session: Session, name: str) -> Printer:
+    """A registered printer, for the endpoints that need one named in the body."""
+    row = Printer(name=name, moonraker_url=f"http://{name.lower().replace(' ', '-')}")
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+class TestCheckCompatibility:
+    """`POST /fleet/compatibility` — can these printers print this file?"""
+
+    def test_reports_a_file_that_does_not_exist(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        printer = _fleet_printer(db_session, "Compatibility target")
+
+        response = client.post(
+            "/api/v1/fleet/compatibility",
+            headers=auth_headers,
+            json={"file_id": 999_999, "printer_ids": [printer.id]},
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "file_not_found"
+
+    def test_reports_a_file_whose_model_is_in_the_trash(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        artifact = _gcode(db_session)
+        model = db_session.get(Model, artifact.model_id)
+        assert model is not None
+        model.deleted_at = utcnow()
+        db_session.add(model)
+        db_session.commit()
+
+        printer = _fleet_printer(db_session, "Trashed model target")
+
+        response = client.post(
+            "/api/v1/fleet/compatibility",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "printer_ids": [printer.id]},
+        )
+
+        # The bytes are still there; the library row is not, so neither is the file.
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "file_not_found"
+
+    def test_reports_a_printer_whose_material_state_cannot_be_read(
+        self, client: TestClient, auth_headers, db_session: Session, monkeypatch
+    ) -> None:
+        from app.api.v1 import fleet as fleet_api
+
+        artifact = _gcode(db_session)
+
+        def unreadable(*_args: object, **_kwargs: object):
+            raise fleet_api.materials.MaterialStateError("printer_not_found")
+
+        monkeypatch.setattr(fleet_api.materials, "compatibility_report", unreadable)
+        printer = _fleet_printer(db_session, "Unreadable state")
+
+        response = client.post(
+            "/api/v1/fleet/compatibility",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "printer_ids": [printer.id]},
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "printer_not_found"
+
+
+class TestCreateBatch:
+    """`POST /fleet/batches` — queue N copies of one file across the fleet."""
+
+    def test_refuses_an_automatic_strategy_from_a_non_superuser(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        headers = _user_headers(db_session, "batch-member")
+        artifact = _gcode(db_session)
+
+        response = client.post(
+            "/api/v1/fleet/batches",
+            headers=headers,
+            json={"file_id": artifact.id, "quantity": 1, "strategy": "least_busy"},
+        )
+
+        # Automatic routing can pick any printer in the fleet, including ones the
+        # caller has no rights on, so it is a superuser-only strategy.
+        assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "printer_permission_denied"
+
+    def test_refuses_a_manual_batch_with_no_printer_from_a_non_superuser(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        headers = _user_headers(db_session, "batch-no-printer")
+        artifact = _gcode(db_session)
+
+        response = client.post(
+            "/api/v1/fleet/batches",
+            headers=headers,
+            json={"file_id": artifact.id, "quantity": 1, "strategy": "manual"},
+        )
+
+        assert response.status_code in (400, 403, 422), response.text
+
+    def test_refuses_a_printer_the_caller_may_not_print_on(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        headers = _user_headers(db_session, "batch-viewer")
+        artifact = _gcode(db_session)
+        printer = Printer(name="Not mine", moonraker_url="http://notmine.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        _grant_printer(db_session, "batch-viewer", printer, PrinterRole.VIEW)
+
+        response = client.post(
+            "/api/v1/fleet/batches",
+            headers=headers,
+            json={
+                "file_id": artifact.id,
+                "quantity": 1,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        )
+
+        assert response.status_code == 403, response.text
+
+    def test_checks_the_printer_role_even_for_a_superuser(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        headers = _user_headers(db_session, "batch-admin", is_superuser=True)
+        artifact = _gcode(db_session)
+
+        response = client.post(
+            "/api/v1/fleet/batches",
+            headers=headers,
+            json={
+                "file_id": artifact.id,
+                "quantity": 1,
+                "strategy": "manual",
+                "printer_id": 999_999,
+            },
+        )
+
+        # A superuser naming a printer still goes through the same lookup, so an
+        # id that does not exist is a 404 rather than a batch queued into nothing.
+        assert response.status_code == 404, response.text
+
+    def test_refuses_a_batch_the_loaded_material_cannot_print(
+        self, client: TestClient, auth_headers, db_session: Session, monkeypatch
+    ) -> None:
+        from app.api.v1 import fleet as fleet_api
+
+        artifact = _gcode(db_session)
+
+        def mismatch(*_args: object, **_kwargs: object):
+            raise fleet_api.fleet.FleetError("material_mismatch_confirmation_required")
+
+        monkeypatch.setattr(fleet_api.fleet, "create_batch", mismatch)
+
+        response = client.post(
+            "/api/v1/fleet/batches",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "quantity": 1, "strategy": "least_busy"},
+        )
+
+        # 409, not 400: the request is well formed and an override would accept it.
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "material_mismatch_confirmation_required"
+
+    def test_rejects_an_unauthenticated_caller(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        artifact = _gcode(db_session)
+
+        response = client.post(
+            "/api/v1/fleet/batches",
+            json={"file_id": artifact.id, "quantity": 1, "strategy": "least_busy"},
+        )
+
+        assert response.status_code == 401, response.text
