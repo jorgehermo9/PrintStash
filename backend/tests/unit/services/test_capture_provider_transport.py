@@ -288,3 +288,254 @@ async def test_pooled_clients_close_at_the_transport_lifecycle_boundary(
 
 async def _no_sleep() -> None:
     pass
+
+
+class TestNormalizedHost:
+    """Host-wide traffic limits only work if two spellings of a host are one key."""
+
+    @pytest.mark.parametrize(
+        "value",
+        ["EXAMPLE.TEST", "example.test.", " example.test ", "Example.Test."],
+        ids=["uppercase", "trailing-dot", "whitespace", "mixed"],
+    )
+    def test_folds_every_spelling_of_one_host_together(self, value: str) -> None:
+        # A limiter keyed on the raw string would let a provider bypass its own
+        # concurrency cap by varying the case of its hostname.
+        assert transport_module._normalized_host(value) == "example.test"
+
+    def test_normalises_an_international_host_to_punycode(self) -> None:
+        assert transport_module._normalized_host("exämple.test").startswith("xn--")
+
+    def test_falls_back_when_a_host_cannot_be_encoded(self) -> None:
+        # An unencodable host still gets *a* key, so it is still rate-limited,
+        # rather than escaping the limiter entirely.
+        assert transport_module._normalized_host("A" * 300) == "a" * 300
+
+
+class TestHostLimiter:
+    def test_reuses_one_limiter_per_host(self) -> None:
+        first = transport_module._get_host_limiter("limiter.example")
+        second = transport_module._get_host_limiter("limiter.example")
+
+        assert first is second
+
+    def test_reuses_it_across_spellings_of_the_same_host(self) -> None:
+        first = transport_module._get_host_limiter("Spellings.Example")
+        second = transport_module._get_host_limiter("spellings.example.")
+
+        assert first is second
+
+    def test_gives_a_different_host_its_own_limiter(self) -> None:
+        first = transport_module._get_host_limiter("one.example")
+        second = transport_module._get_host_limiter("two.example")
+
+        assert first is not second
+
+
+@pytest.mark.anyio
+async def test_refuses_a_body_whose_declared_length_is_over_the_cap() -> None:
+    """Refuse before reading, when the server tells us how big the body is."""
+    stream = _ChunkStream([b"never read"])
+
+    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Length": "1000"},
+            stream=stream,
+            request=request,
+        )
+
+    transport = ProviderTransport(
+        resolver=_target, sender=send, max_attempts=1, max_response_bytes=5
+    )
+
+    with pytest.raises(ProviderTransportError, match="provider_response_too_large"):
+        await transport.request("GET", "https://api.example/big")
+    assert stream.yielded == 0
+
+
+@pytest.mark.anyio
+async def test_ignores_a_declared_length_it_cannot_parse() -> None:
+    """A malformed header is not a reason to trust the body — the loop still caps it."""
+    stream = _ChunkStream([b"1234", b"5678"])
+
+    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Length": "not-a-number"},
+            stream=stream,
+            request=request,
+        )
+
+    transport = ProviderTransport(
+        resolver=_target, sender=send, max_attempts=1, max_response_bytes=5
+    )
+
+    with pytest.raises(ProviderTransportError, match="provider_response_too_large"):
+        await transport.request("GET", "https://api.example/lying")
+
+
+@pytest.mark.anyio
+async def test_closes_the_stream_when_reading_it_fails() -> None:
+    """A connection that drops mid-body must not leak its pooled connection."""
+
+    class _Failing(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def __aiter__(self):
+            yield b"1"
+            raise httpx.ReadError("connection reset")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = _Failing()
+
+    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream, request=request)
+
+    transport = ProviderTransport(
+        resolver=_target, sender=send, max_attempts=1, max_response_bytes=1000
+    )
+
+    with pytest.raises(ProviderTransportError):
+        await transport.request("GET", "https://api.example/drops")
+    assert stream.closed is True
+
+
+@pytest.mark.anyio
+async def test_returns_a_buffered_response_the_caller_can_read_twice() -> None:
+    """The streamed response is replaced, not handed on, so its connection is freed."""
+    stream = _ChunkStream([b"12", b"34"])
+
+    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream, request=request)
+
+    transport = ProviderTransport(
+        resolver=_target, sender=send, max_attempts=1, max_response_bytes=1000
+    )
+
+    response = await transport.request("GET", "https://api.example/ok")
+
+    assert response.content == b"1234"
+    assert response.content == b"1234"
+    assert stream.closed is True
+
+
+class TestConstructorValidation:
+    """The transport's own limits are validated at construction, not at call time."""
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            pytest.param({"max_attempts": 0}, id="attempts-zero"),
+            pytest.param({"max_attempts": 4}, id="attempts-over-cap"),
+            pytest.param({"concurrency": 0}, id="concurrency-zero"),
+            pytest.param({"concurrency": 5}, id="concurrency-over-cap"),
+            pytest.param({"retry_after_max_seconds": -1}, id="retry-after-negative"),
+            pytest.param({"retry_after_max_seconds": 11}, id="retry-after-over-cap"),
+            pytest.param({"max_response_bytes": 0}, id="body-cap-zero"),
+        ],
+    )
+    def test_refuses_a_limit_outside_its_bounds(self, override: dict) -> None:
+        # Caught at construction, so a misconfigured transport cannot reach a
+        # provider at all rather than reaching it three hundred times.
+        with pytest.raises(ValueError):
+            ProviderTransport(resolver=_target, sender=_sender([])[0], **override)
+
+
+class TestRetryAfter:
+    """Reading a provider's `Retry-After`, in either of the two forms it takes."""
+
+    def test_reads_a_delay_in_seconds(self) -> None:
+        assert transport_module._retry_after_seconds("5") == 5.0
+
+    def test_reads_a_delay_given_as_a_date(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        from email.utils import format_datetime
+
+        later = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+        value = transport_module._retry_after_seconds(format_datetime(later))
+
+        assert value is not None
+        assert 0 < value <= 31
+
+    def test_never_returns_a_negative_delay(self) -> None:
+        # A date in the past means "now", not "go back in time".
+        assert transport_module._retry_after_seconds("-5") == 0.0
+
+    @pytest.mark.parametrize(
+        "value", ["", "soon", "not a date"], ids=["empty", "prose", "bad-date"]
+    )
+    def test_says_it_could_not_read_one(self, value: str) -> None:
+        assert transport_module._retry_after_seconds(value) is None
+
+
+@pytest.mark.anyio
+async def test_refuses_a_redirect_with_no_location() -> None:
+    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, request=request)
+
+    transport = ProviderTransport(resolver=_target, sender=send, max_attempts=2)
+
+    # A redirect with nowhere to go is a broken provider, not a retry.
+    with pytest.raises(ProviderTransportError, match="provider_redirect_invalid"):
+        await transport.request("GET", "https://api.example/redirect")
+
+
+@pytest.mark.anyio
+async def test_gives_up_on_a_redirect_chain_that_is_too_long() -> None:
+    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302, headers={"Location": "https://api.example/again"}, request=request
+        )
+
+    transport = ProviderTransport(resolver=_target, sender=send, max_attempts=1)
+
+    with pytest.raises(ProviderTransportError, match="provider_retry_exhausted"):
+        await transport.request("GET", "https://api.example/loop")
+
+
+@pytest.mark.anyio
+async def test_turns_a_303_redirect_into_a_get() -> None:
+    seen: list[tuple[str, str]] = []
+
+    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, target.url))
+        if len(seen) == 1:
+            return httpx.Response(
+                303, headers={"Location": "https://api.example/result"}, request=request
+            )
+        return httpx.Response(200, content=b"{}", request=request)
+
+    transport = ProviderTransport(resolver=_target, sender=send, max_attempts=2)
+
+    await transport.request("POST", "https://api.example/submit", json={"a": 1})
+
+    # A 303 means "look over there with a GET"; replaying the POST body would
+    # submit the same thing twice.
+    assert [method for method, _url in seen] == ["POST", "GET"]
+
+
+@pytest.mark.anyio
+async def test_refuses_a_url_outside_an_explicit_allowlist() -> None:
+    transport = ProviderTransport(resolver=_target, sender=_sender([])[0])
+
+    with pytest.raises(ProviderTransportError, match="provider_endpoint_not_allowed"):
+        await transport.request(
+            "GET",
+            "https://elsewhere.example/x",
+            allowed_hosts=frozenset({"api.example"}),
+        )
+
+
+@pytest.mark.anyio
+async def test_refuses_a_url_with_no_host_against_an_allowlist() -> None:
+    transport = ProviderTransport(resolver=_target, sender=_sender([])[0])
+
+    with pytest.raises(ProviderTransportError, match="provider_endpoint_not_allowed"):
+        await transport.request(
+            "GET", "not-a-url", allowed_hosts=frozenset({"api.example"})
+        )

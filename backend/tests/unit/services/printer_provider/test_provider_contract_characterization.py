@@ -60,7 +60,9 @@ async def test_moonraker_status_contract_preserves_canonical_wire_shape() -> Non
 
 
 @pytest.mark.asyncio
-async def test_bambu_status_contract_is_sparse_and_preserves_external_metadata() -> None:
+async def test_bambu_status_contract_is_sparse_and_preserves_external_metadata() -> (
+    None
+):
     report = {
         "print": {
             "gcode_state": "RUNNING",
@@ -370,9 +372,7 @@ def test_artifact_capture_is_an_optional_bambu_only_extension() -> None:
             OctoPrintClient("http://octoprint.invalid", api_key="test-key")
         ),
         PrinterProvider.ELEGOO_CENTAURI: ElegooCentauriProvider(
-            ElegooCentauriClient(
-                "192.0.2.20", model="elegoo_centauri_carbon"
-            )
+            ElegooCentauriClient("192.0.2.20", model="elegoo_centauri_carbon")
         ),
     }
 
@@ -425,6 +425,4 @@ async def test_bambu_download_artifact_extension_delegates_with_byte_limit(
         )
 
     assert result is None
-    download.assert_called_once_with(
-        "/cache/benchy.3mf", destination, max_bytes=4096
-    )
+    download.assert_called_once_with("/cache/benchy.3mf", destination, max_bytes=4096)

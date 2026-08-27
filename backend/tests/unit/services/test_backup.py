@@ -22,7 +22,9 @@ from tests.integration.services.test_backup import (  # noqa: F811 — fixture r
 __all__ = ["backup_env"]
 
 
-def _verify_direct(archive: Path, monkeypatch: pytest.MonkeyPatch) -> "backup.BackupVerification":
+def _verify_direct(
+    archive: Path, monkeypatch: pytest.MonkeyPatch
+) -> "backup.BackupVerification":
     """Bypass discovery (_list_local_backups re-reads the manifest to find the
     backup by id) and validate *archive* directly — some corruptions here also
     break discovery, which isn't what these tests are checking."""
@@ -44,7 +46,9 @@ def _extract(archive: Path) -> tuple[dict[str, bytes], dict]:
     return contents, manifest
 
 
-def _write(archive: Path, contents: dict[str, bytes], *, extra_symlink: str | None = None) -> None:
+def _write(
+    archive: Path, contents: dict[str, bytes], *, extra_symlink: str | None = None
+) -> None:
     with gzip.open(archive, "wb") as gz, tarfile.open(fileobj=gz, mode="w:") as tar:
         for name, data in contents.items():
             info = tarfile.TarInfo(name=name)
@@ -90,7 +94,9 @@ def test_verify_backup_flags_symlink_member(backup_env: BackupEnv) -> None:
     assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
 
 
-def test_verify_backup_flags_missing_manifest(backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verify_backup_flags_missing_manifest(
+    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
     archive, contents, _ = _fresh_archive(backup_env)
     del contents["manifest.json"]
     _write(archive, contents)
@@ -105,7 +111,9 @@ def test_verify_backup_flags_missing_manifest(backup_env: BackupEnv, monkeypatch
     assert result.app_compatible is False
 
 
-def test_verify_backup_flags_corrupt_manifest_json(backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verify_backup_flags_corrupt_manifest_json(
+    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
     archive, contents, _ = _fresh_archive(backup_env)
     contents["manifest.json"] = b"{not valid json"
     _write(archive, contents)
@@ -116,7 +124,9 @@ def test_verify_backup_flags_corrupt_manifest_json(backup_env: BackupEnv, monkey
     assert any(f["code"] == "backup_manifest_invalid" for f in result.findings)
 
 
-def test_verify_backup_flags_non_dict_manifest(backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verify_backup_flags_non_dict_manifest(
+    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
     archive, contents, _ = _fresh_archive(backup_env)
     contents["manifest.json"] = json.dumps(["not", "a", "dict"]).encode("utf-8")
     _write(archive, contents)
@@ -171,7 +181,9 @@ def test_verify_backup_flags_malformed_file_entry(backup_env: BackupEnv) -> None
     )
 
 
-def test_verify_backup_flags_file_entry_missing_from_archive(backup_env: BackupEnv) -> None:
+def test_verify_backup_flags_file_entry_missing_from_archive(
+    backup_env: BackupEnv,
+) -> None:
     archive, contents, manifest = _fresh_archive(backup_env)
     manifest["files"].append({"arc": "files/ghost.stl", "size": 5})
     contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
@@ -199,7 +211,9 @@ def test_verify_backup_flags_file_size_mismatch(backup_env: BackupEnv) -> None:
     assert any(f["code"] == "backup_member_size_mismatch" for f in result.findings)
 
 
-def test_verify_backup_flags_incompatible_manifest_version(backup_env: BackupEnv) -> None:
+def test_verify_backup_flags_incompatible_manifest_version(
+    backup_env: BackupEnv,
+) -> None:
     archive, contents, manifest = _fresh_archive(backup_env)
     manifest["version"] = "999"
     contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
@@ -214,7 +228,9 @@ def test_verify_backup_flags_incompatible_manifest_version(backup_env: BackupEnv
     )
 
 
-def test_verify_backup_flags_unreadable_archive(backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verify_backup_flags_unreadable_archive(
+    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
     archive, _contents, _manifest = _fresh_archive(backup_env)
     archive.write_bytes(b"not a gzip file at all")
 

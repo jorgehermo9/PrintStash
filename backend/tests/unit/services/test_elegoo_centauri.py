@@ -38,7 +38,9 @@ class FakeConnection:
     that doesn't itself assert on the connector's argument.
     """
 
-    def __init__(self, status: Status | None = None, *, enable_control: bool = True) -> None:
+    def __init__(
+        self, status: Status | None = None, *, enable_control: bool = True
+    ) -> None:
         self.current_status = status or _status()
         self.closed = False
         self.enable_control = enable_control
@@ -59,7 +61,9 @@ class FakeConnection:
         self.calls.append(("start", (filename, kwargs)))
         return {}
 
-    async def upload_file(self, local_path: Any, *, remote_name: str | None = None) -> str:
+    async def upload_file(
+        self, local_path: Any, *, remote_name: str | None = None
+    ) -> str:
         self._require_control("upload_file")
         self.calls.append(("upload_file", (local_path, remote_name)))
         return remote_name or str(local_path)
@@ -162,7 +166,9 @@ async def test_upload_uses_control_enabled_connection_and_returns_remote_name() 
     )
     result = await client.upload(Path("/tmp/cube.gcode"), "cube.gcode")
     assert result == {"result": "cube.gcode"}
-    assert connection.calls == [("upload_file", (Path("/tmp/cube.gcode"), "cube.gcode"))]
+    assert connection.calls == [
+        ("upload_file", (Path("/tmp/cube.gcode"), "cube.gcode"))
+    ]
     assert connection.closed is True
 
 
@@ -269,7 +275,9 @@ async def test_cc2_without_access_code_raises_credentials_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_connect_wraps_printer_error_as_authentication_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_connect_wraps_printer_error_as_authentication_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_connect(*args: Any, **kwargs: Any) -> Any:
         raise PrinterError("access denied by printer")
 
@@ -282,7 +290,9 @@ async def test_connect_wraps_printer_error_as_authentication_failed(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_connect_wraps_printer_error_as_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_connect_wraps_printer_error_as_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_connect(*args: Any, **kwargs: Any) -> Any:
         raise PrinterError("socket closed unexpectedly")
 
@@ -313,7 +323,9 @@ async def test_with_connection_reraises_elegoo_error_unchanged() -> None:
     connection = FakeConnection()
 
     async def failing_status() -> Status:
-        raise ElegooCentauriError("already wrapped", code="provider_credentials_missing")
+        raise ElegooCentauriError(
+            "already wrapped", code="provider_credentials_missing"
+        )
 
     connection.status = failing_status  # type: ignore[method-assign]
 

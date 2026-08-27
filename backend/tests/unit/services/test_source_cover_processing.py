@@ -121,7 +121,8 @@ def test_rejects_payload_over_byte_limit_before_decoding(
         32,
     )
     monkeypatch.setattr(
-        "PIL.Image.open", lambda _data: pytest.fail("oversized source was decoded"),
+        "PIL.Image.open",
+        lambda _data: pytest.fail("oversized source was decoded"),
     )
 
     with pytest.raises(source_cover_processing.SourceCoverProcessingError) as exc:
@@ -161,7 +162,9 @@ def test_redacts_pillow_decompression_bomb_warning(
     assert str(exc.value) == "source_cover_invalid"
 
 
-@pytest.mark.parametrize("payload", [_image_bytes()[:-16], _image_bytes()[:8] + b"\xff" * 64])
+@pytest.mark.parametrize(
+    "payload", [_image_bytes()[:-16], _image_bytes()[:8] + b"\xff" * 64]
+)
 def test_redacts_truncated_decode_failures(payload: bytes) -> None:
     with pytest.raises(source_cover_processing.SourceCoverProcessingError) as exc:
         source_cover_processing.process_source_cover_upload(payload, "image/png")

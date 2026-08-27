@@ -207,7 +207,9 @@ class TestProviderFactory:
             provider_variant="elegoo_centauri_carbon",
             elegoo_centauri_host="192.168.1.50",
         )
-        assert isinstance(get_provider_client(p, registry=self.registry), ElegooCentauriProvider)
+        assert isinstance(
+            get_provider_client(p, registry=self.registry), ElegooCentauriProvider
+        )
 
     def test_centauri_carbon_2_requires_access_code(self):
         p = Printer(

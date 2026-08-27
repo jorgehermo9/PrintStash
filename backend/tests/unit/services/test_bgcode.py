@@ -18,11 +18,7 @@ from app.services import bgcode, thumbnail
 from app.services.gcode_parser import parse
 from tests.paths import TESTDATA_DIR
 
-_REAL_FIXTURE = (
-    TESTDATA_DIR
-    / "benchy"
-    / "BenchyRules_PLA_14m.bgcode"
-)
+_REAL_FIXTURE = TESTDATA_DIR / "benchy" / "BenchyRules_PLA_14m.bgcode"
 
 # Block types.
 _FILE_META, _GCODE, _SLICER_META, _PRINTER_META, _PRINT_META, _THUMBNAIL = (
