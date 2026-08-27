@@ -5,7 +5,10 @@
  * attacker-shaped by construction and the two URL rows are the security half:
  * only `http`/`https` links render as links, and a canonical source URL is
  * normalized before it becomes an anchor. A `javascript:` URL that reached the
- * DOM here is stored XSS triggered by clicking a model's source link.
+ * DOM here is stored XSS triggered by clicking a model's source link. What each
+ * URL shape is judged to be is `safeHttpUrl`'s own contract, tested next to it in
+ * `source-url.test.ts`; what is asserted here is that this tab consults it before
+ * rendering an anchor.
  *
  * The i18n rows are the other axis, and the rule is the same as everywhere: the
  * *interface* is translated, the captured values are not. A provider name, a tag,
@@ -24,8 +27,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelProvenanceRead, ProvenanceFieldRead } from "@/types";
 import { SourceTab, type SourceTabApi } from "@/components/model-detail/source-tab";
-import { safeHttpUrl } from "@/components/model-detail/source-url";
 import { I18nProvider, messageCatalogs } from "@/lib/i18n";
+
+/** Written as a code point so the fixture survives every editor and diff tool. */
+const NUL = String.fromCharCode(0);
 
 const deleteCover = vi.fn<SourceTabApi["deleteCover"]>();
 const getCover = vi.fn<SourceTabApi["getCover"]>();
@@ -111,42 +116,27 @@ describe("SourceTab", () => {
     });
   });
 
-  it("accepts only safe HTTP(S) provenance links", () => {
-    expect(safeHttpUrl("https://example.test/creator")).toBe("https://example.test/creator");
-    expect(safeHttpUrl("http://example.test/license")).toBe("http://example.test/license");
-    for (const unsafe of [
-      "javascript:alert(1)",
-      "data:text/html,boom",
-      "file:///etc/passwd",
-      "https://user:secret@example.test/",
-      "https://example.test/\u0000trick",
-    ]) {
-      expect(safeHttpUrl(unsafe)).toBeNull();
-    }
+  it.each([
+    ["a javascript: URL", "javascript:alert(1)"],
+    ["a data: URL", "data:text/html,boom"],
+    ["a file: URL", "file:///etc/passwd"],
+    ["credentials hiding the real host", "https://user:secret@example.test/"],
+    ["a control character smuggled into the path", `https://example.test/${NUL}trick`],
+  ])("shows %s as text rather than as a link", async (_case, canonicalUrl) => {
+    getProvenance.mockResolvedValue({
+      sources: [{ ...provenance.sources[0], canonical_url: canonicalUrl }],
+    });
+
+    render(<SourceTab modelId={1} canEdit={false} api={api} />);
+
+    expect((await screen.findByText(canonicalUrl)).closest("a")).toBeNull();
   });
 
-  it("renders only safe canonical source URLs as normalized links", async () => {
-    const unsafeCanonicalUrls = [
-      "javascript:alert(1)",
-      "data:text/html,boom",
-      "file:///etc/passwd",
-      "https://user:secret@example.test/",
-      "https://example.test/\u0000trick",
-    ];
-
-    for (const canonicalUrl of unsafeCanonicalUrls) {
-      getProvenance.mockResolvedValue({
-        sources: [{ ...provenance.sources[0], canonical_url: canonicalUrl }],
-      });
-      const { unmount } = render(<SourceTab modelId={1} canEdit={false} api={api} />);
-
-      expect((await screen.findByText(canonicalUrl)).closest("a")).toBeNull();
-      unmount();
-    }
-
+  it("normalizes a safe canonical URL into its link", async () => {
     getProvenance.mockResolvedValue({
       sources: [{ ...provenance.sources[0], canonical_url: "HTTPS://EXAMPLE.TEST/canonical" }],
     });
+
     render(<SourceTab modelId={1} canEdit={false} api={api} />);
 
     expect(

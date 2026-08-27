@@ -53,14 +53,14 @@ const SUITES = [
     name: "app",
     summary: "coverage/coverage-summary.json",
     command: "pnpm test:coverage",
-    total: { statements: 36.0, branches: 30.5 },
+    total: { statements: 36.0, branches: 30.9 },
     areas: [
       // The tested core: formatters, stores, query hooks, the api client. This is
       // the area where a unit test is the right tier, so it carries the real floor.
       { prefix: "src/lib/", statements: 86.6, branches: 77.0 },
       // The bulk of the app, and the debt. Route-level behaviour is covered by
       // Playwright; component-level behaviour mostly is not covered anywhere.
-      { prefix: "src/components/", statements: 21.3, branches: 21.75 },
+      { prefix: "src/components/", statements: 21.9, branches: 22.2 },
       // Pages are exercised end-to-end by tests/e2e/*.spec.ts, which this cannot
       // see. The floor records what vitest reaches, not what is tested.
       { prefix: "src/pages/", statements: 42.8, branches: 38.1 },
@@ -73,8 +73,8 @@ const SUITES = [
     name: "@printstash/domain",
     summary: "packages/domain/coverage/coverage-summary.json",
     command: "pnpm --filter @printstash/domain test:coverage",
-    total: { statements: 88.0, branches: 82.0 },
-    areas: [{ prefix: "src/", statements: 88.0, branches: 82.0 }],
+    total: { statements: 94.5, branches: 91.7 },
+    areas: [{ prefix: "src/", statements: 94.5, branches: 91.7 }],
   },
   {
     // The primitives DESIGN.md requires every component to compose. Being the

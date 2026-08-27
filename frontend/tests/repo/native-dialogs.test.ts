@@ -21,7 +21,7 @@ function sourceFiles(root: string): string[] {
 
 describe("nativeDialogUsage", () => {
   it("never uses browser-native prompt, alert, or confirm dialogs", () => {
-    const root = path.resolve(__dirname, "../..");
+    const root = path.resolve(__dirname, "../../src");
     const findings = sourceFiles(root).flatMap((file) => {
       const source = fs.readFileSync(file, "utf8");
       return /window\.(prompt|alert|confirm)\s*\(/.test(source) ? [path.relative(root, file)] : [];

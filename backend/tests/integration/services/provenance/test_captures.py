@@ -114,7 +114,13 @@ def _capture_without_title() -> CaptureManifestV2:
     return CaptureManifestV2.from_dict(data)
 
 
-class TestCanonicalizeUrl:
+class TestSnapshotIdentity:
+    """What makes two captures of the same page the same capture.
+
+    `canonicalize_url`'s own rules live next door in `test_values.py`; what these
+    assert is that a whole manifest reduces through it to one stable identity.
+    """
+
     def test_canonicalizes_a_source_url(self) -> None:
         capture = _capture()
 

@@ -519,19 +519,30 @@ tier directory:
 | `backend/packages/printstash-core/src/printstash_core/gcode/parser.py` | `backend/packages/printstash-core/tests/gcode/test_parser.py` |
 | `frontend/src/lib/auth-store.ts` | `frontend/src/lib/__tests__/auth-store.test.ts` |
 | `frontend/src/components/printers-list.tsx` | `frontend/src/components/__tests__/printers-list.test.tsx` |
+| `frontend/src/lib/api/models.ts` (too big for one file) | the folder `frontend/src/lib/api/__tests__/models/` with `browse.test.ts`, `batch.test.ts`, … split by endpoint group |
+| `frontend/packages/domain/src/format.ts` | `frontend/packages/domain/src/__tests__/format.test.ts` — in the package that **defines** it; the app's `src/lib/format.ts` re-export shim is not a second home |
 | a UI feature area (route/page) | `frontend/tests/e2e-real/<feature>.spec.ts` |
 
 Everything that is not a mirror has one home: `backend/tests/fixtures/` (data
 files), `backend/tests/fakes/` (emulators and contract fakes, shared by
-`contract/` and `e2e/`), `backend/tests/repo/` (repo-level invariants:
-OpenAPI snapshot, CI config, import boundaries), `backend/tests/e2e/` (flows,
-`test_<flow>.py`). Every test directory is a package (`__init__.py`) so
+`contract/` and `e2e/`), `backend/tests/repo/` and `frontend/tests/repo/`
+(repo-level invariants: OpenAPI snapshot, CI config, import boundaries, the
+suite's own shape, translation coverage), `backend/tests/e2e/` (flows,
+`test_<flow>.py`). Every backend test directory is a package (`__init__.py`) so
 `integration/services/test_auth.py` and `e2e/test_auth.py` coexist.
 
 The mirror is load-bearing for the matrix: "does `app/services/trash.py` have
 tests?" is answered by one `ls`, and an audit of a module is an audit of one
 file. A test that can't be placed by this rule is testing something that
 isn't a unit — find the unit first.
+
+**A topic name is the failure mode this prevents.** `send-to-queue.test.tsx`,
+`small-clients.test.ts`, `inbox-navigation.test.tsx` each defended a real module,
+and none of them could be found from it. That is what turns a coverage matrix
+into guesswork: nobody can tell an untested module from one whose tests live
+under a name they did not think of. Both suites enforce the mirror mechanically —
+`backend/tests/repo/test_test_hygiene.py` and
+`frontend/tests/repo/suite-hygiene.test.ts`.
 
 ## Inside a test file
 

@@ -21,7 +21,7 @@ import {
   readCardMetrics,
   writeCardMetrics,
   type CardMetrics,
-} from "@/lib/card-metrics";
+} from "../card-metrics";
 
 describe("readCardMetrics", () => {
   it("returns defaults when nothing is stored", () => {

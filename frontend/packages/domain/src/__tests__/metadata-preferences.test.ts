@@ -18,7 +18,7 @@ import {
   METADATA_PREFERENCE_STORAGE_KEY,
   readMetadataPreferences,
   writeMetadataPreferences,
-} from "@/lib/metadata-preferences";
+} from "../metadata-preferences";
 
 describe("readMetadataPreferences", () => {
   it("defaults every field to visible", () => {
@@ -54,6 +54,14 @@ describe("readMetadataPreferences", () => {
 
   it("falls back to defaults on malformed JSON", () => {
     window.localStorage.setItem(METADATA_PREFERENCE_STORAGE_KEY, "broken");
+    expect(readMetadataPreferences()).toEqual(DEFAULT_METADATA_PREFERENCES);
+  });
+
+  it("falls back to defaults for valid JSON that is not an object", () => {
+    // Hand-edited storage, or a value from an older schema. It parses, so the
+    // malformed-JSON guard never sees it.
+    window.localStorage.setItem(METADATA_PREFERENCE_STORAGE_KEY, "5");
+
     expect(readMetadataPreferences()).toEqual(DEFAULT_METADATA_PREFERENCES);
   });
 });

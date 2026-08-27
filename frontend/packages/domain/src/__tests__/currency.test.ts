@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency";
+import { CURRENCY_OPTIONS, formatCurrency } from "../currency";
 
 describe("formatCurrency", () => {
   it("renders an em dash for null/undefined (not a misleading $0.00)", () => {

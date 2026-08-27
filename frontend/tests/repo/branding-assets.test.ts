@@ -13,7 +13,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const root = resolve(import.meta.dirname, "../../..");
+const root = resolve(import.meta.dirname, "../..");
 
 describe("faviconFor", () => {
   it("uses current blue brand in dark mode and versioned asset URLs", () => {

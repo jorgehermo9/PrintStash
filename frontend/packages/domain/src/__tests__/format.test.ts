@@ -27,7 +27,7 @@ import {
   formatTemperature,
   timeAgo,
   timeAgoShort,
-} from "@/lib/format";
+} from "../format";
 
 describe("formatBytes", () => {
   it("renders an em dash for null/undefined", () => {
@@ -137,5 +137,13 @@ describe("timeAgo", () => {
     expect(timeAgoShort("2026-06-14T06:00:00Z")).toBe("Today");
     expect(timeAgoShort("2026-06-13T06:00:00Z")).toBe("Yesterday");
     expect(timeAgoShort("2026-06-11T12:00:00Z")).toBe("3 days ago");
+  });
+
+  it("timeAgoShort falls back to a date past the week it counts in days", () => {
+    // Beyond a week "N days ago" stops being something a reader can place, so
+    // the absolute date takes over.
+    freezeAt("2026-06-14T12:00:00Z");
+
+    expect(timeAgoShort("2026-05-01T12:00:00Z")).toBe("May 1");
   });
 });

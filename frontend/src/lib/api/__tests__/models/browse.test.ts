@@ -1,44 +1,33 @@
 /**
- * The models API client: browsing the library, editing it, and emptying its trash.
+ * The read side of `api/models`: the grid, the outliner tree, the facet counts.
  *
- * The filter query is the interesting half. Every facet the grid offers becomes a query
- * parameter, and the multi-value ones — tags, file types, materials, slicers, printer
- * models, revision statuses, print outcomes, storage — are **repeated keys**, not
- * comma-joined strings, because the backend reads them as lists and a joined string
- * silently filters for one tag literally named `a,b`. That translation is invisible in
- * TypeScript and only fails against a running server, so it is pinned here.
+ * The filter query is the whole contract, and its one dangerous translation is
+ * invisible in TypeScript. Every multi-value facet — tags, file types, materials,
+ * slicers, printer models, revision statuses, print outcomes, storage — travels as
+ * **repeated keys**, because the backend reads them as lists. Comma-joining them
+ * type-checks perfectly and filters for one tag literally named `a,b`, which
+ * returns an empty grid the user reads as "I have no models like this".
  *
- * An empty filter set must also produce a bare path with no trailing `?`, or every cache
- * key in the app doubles.
+ * An empty filter set has to produce a bare path with no trailing `?`, or every
+ * cache key in the app doubles: the same query arrives under two spellings and
+ * each one refetches.
+ *
+ * Facets are pinned on the same filters as the listing for a related reason — the
+ * counts have to be computed over exactly what the grid is showing, or the numbers
+ * beside each filter do not match the list beneath them.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  batchDeleteModels,
-  batchMoveModels,
-  batchSetRevisionLabels,
-  batchTagModels,
-  deleteModel,
-  getArtifactOutcomes,
-  getModel,
   getModelFacets,
-  getModelPrintJobs,
-  getModelPrinterFiles,
   getVaultStats,
   listModelPage,
   listModels,
   listOutlinerModels,
-  listTrash,
-  purgeExpiredTrash,
-  purgeModel,
-  restoreModel,
-  starModel,
-  unstarModel,
-  updateModel,
 } from "@/lib/api/models";
 import { invalidateApiCache } from "@/lib/api/request";
 
-import { expectRequest, fetchMock, lastBody, lastCall, respondWith } from "./_wire";
+import { expectRequest, fetchMock, lastCall, respondWith } from "../_wire";
 
 type ListParams = NonNullable<Parameters<typeof listModels>[0]>;
 
@@ -217,157 +206,6 @@ describe("getModelFacets", () => {
     expect(url).toContain("collection=functional");
     expect(url).toContain("printer_presence=any");
     expect(url).toContain("uploaded_before=2026-02-01");
-  });
-});
-
-describe("one model", () => {
-  it("reads it", async () => {
-    respondWith({ id: 1 });
-
-    await getModel(1);
-
-    expectRequest("/api/v1/models/1");
-  });
-
-  it("PATCHes only what changed", async () => {
-    respondWith({ id: 1 });
-
-    await updateModel(1, { name: "Renamed" });
-
-    expectRequest("/api/v1/models/1", "PATCH");
-    expect(lastBody()).toEqual({ name: "Renamed" });
-  });
-
-  it("trashes it", async () => {
-    respondWith(null, 204);
-
-    await deleteModel(1);
-
-    expectRequest("/api/v1/models/1", "DELETE");
-  });
-
-  it("stars it", async () => {
-    respondWith({ model_id: 1, starred: true });
-
-    await starModel(1);
-
-    expectRequest("/api/v1/models/1/star", "PUT");
-  });
-
-  it("unstars it", async () => {
-    respondWith({ model_id: 1, starred: false });
-
-    await unstarModel(1);
-
-    expectRequest("/api/v1/models/1/star", "DELETE");
-  });
-});
-
-describe("model sub-resources", () => {
-  it("lists the printers holding its revisions", async () => {
-    respondWith([]);
-
-    await getModelPrinterFiles(1);
-
-    expectRequest("/api/v1/models/1/printer-files");
-  });
-
-  it("lists its print history", async () => {
-    respondWith([]);
-
-    await getModelPrintJobs(1);
-
-    expectRequest("/api/v1/models/1/print-jobs");
-  });
-
-  it("compares several revisions in one request", async () => {
-    respondWith([]);
-
-    await getArtifactOutcomes(1, [2, 3]);
-
-    // One round trip for the comparison table the UI renders.
-    expect(lastCall().url).toContain("file_id=2&file_id=3");
-  });
-});
-
-describe("batch actions", () => {
-  it("moves several models", async () => {
-    respondWith({ succeeded_ids: [] });
-
-    await batchMoveModels([1, 2], "functional");
-
-    expectRequest("/api/v1/models/batch/move", "POST");
-    expect(lastBody()).toEqual({ model_ids: [1, 2], collection: "functional" });
-  });
-
-  it("adds and removes tags in one request", async () => {
-    respondWith({ succeeded_ids: [] });
-
-    await batchTagModels([1], ["new"], ["old"]);
-
-    // One request, so the whole change is atomic on the server.
-    expect(lastBody()).toEqual({ model_ids: [1], add: ["new"], remove: ["old"] });
-  });
-
-  it("PATCHes revision labels", async () => {
-    respondWith({ succeeded_ids: [] });
-
-    await batchSetRevisionLabels([4], "PETG fast");
-
-    expectRequest("/api/v1/models/batch/revision-labels", "PATCH");
-    expect(lastBody()).toEqual({ file_ids: [4], revision_label: "PETG fast" });
-  });
-
-  it("clears revision labels with an explicit null", async () => {
-    respondWith({ succeeded_ids: [] });
-
-    await batchSetRevisionLabels([4], null);
-
-    // `null` rather than an omitted key: "clear it" and "leave it" are
-    // different requests.
-    expect(lastBody()).toEqual({ file_ids: [4], revision_label: null });
-  });
-
-  it("trashes several models", async () => {
-    respondWith({ succeeded_ids: [] });
-
-    await batchDeleteModels([1, 2]);
-
-    expectRequest("/api/v1/models/batch/delete", "POST");
-  });
-});
-
-describe("trash", () => {
-  it("lists what is in it", async () => {
-    respondWith([]);
-
-    await listTrash();
-
-    expectRequest("/api/v1/models/trash");
-  });
-
-  it("restores a model", async () => {
-    respondWith({ id: 1 });
-
-    await restoreModel(1);
-
-    expectRequest("/api/v1/models/1/restore", "POST");
-  });
-
-  it("purges one model", async () => {
-    respondWith({ purged_model_ids: [1], purged_count: 1 });
-
-    await purgeModel(1);
-
-    expectRequest("/api/v1/models/1/purge", "DELETE");
-  });
-
-  it("purges everything past its retention", async () => {
-    respondWith({ purged_model_ids: [], purged_count: 0 });
-
-    await purgeExpiredTrash();
-
-    expectRequest("/api/v1/models/trash/expired", "DELETE");
   });
 });
 

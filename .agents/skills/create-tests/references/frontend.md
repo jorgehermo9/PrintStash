@@ -10,16 +10,35 @@ Conventions for `frontend/src/**/__tests__/**` and
   `src/<dir>/__tests__/<module>.test.ts(x)`. One test file per module; a
   component folder (`src/components/model-detail/`) gets its own `__tests__/`.
   Workspace packages own theirs (`packages/ui/src/__tests__/`,
-  `packages/domain/src/__tests__/`). A test file whose basename matches no
-  source module is testing something that isn't a unit — find the unit.
+  `packages/domain/src/__tests__/`), and a module's tests live in the package
+  that *defines* it — a re-export shim in `src/lib/` is not a second home.
+  A test file whose basename matches no source module is testing something that
+  isn't a unit — find the unit.
+- **Too big for one file → a folder named for the module**, split by endpoint or
+  method group: `src/lib/api/__tests__/models/{browse,model,batch,ingest,transfer}.test.ts`
+  all mirror `src/lib/api/models.ts`. The folder name is the mirror; the file
+  names inside are the groups.
+- **Repo-level invariants go to `frontend/tests/repo/`**, the analogue of
+  `backend/tests/repo/`: the suite's own shape, translation coverage, the ban on
+  native dialogs, brand assets. These defend the repository rather than a module,
+  so there is no mirror to name them after. It is the *only* exempt directory —
+  `tests/e2e*`/`tests/performance` are Playwright's, and everything else mirrors.
+  `vite.config.ts` lists `tests/repo/**` in `include` explicitly, and `tsconfig`
+  includes `tests`, so these are typechecked like everything else.
+- `tests/repo/suite-hygiene.test.ts` enforces all of this by reading the suite:
+  contract header, every test inside a `describe`, the mirror, and a falling cap
+  on names joining two behaviours with "and". It sweeps `src`, `tests`, and
+  `packages`.
 - `pnpm test` runs the root project and both packages; a package test that
   isn't under `src/**/*.{test,spec}.{ts,tsx}` is silently skipped.
 - `vitest.fast.config.ts` is an **audited** shared-worker lane for pure files
   (no DOM globals, no module mocks, no fake timers, no process-global state).
   Add a file there only after it passes repeat + shuffle in isolation; the
   authoritative suite stays `vite.config.ts`.
-- Design-system snapshots: only for `@printstash/ui` primitives
-  (`public-api.test.tsx`). Never snapshot a page.
+- Never snapshot a page. `packages/ui/src/__tests__/index.test.tsx` is the
+  barrel's own test: it asserts against the filesystem that every component and
+  lib module is re-exported, because the app imports from `@printstash/ui` and
+  never from a path inside it.
 
 ## Environment
 

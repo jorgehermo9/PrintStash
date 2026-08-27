@@ -19,6 +19,12 @@ turned into something that fails loudly instead:
   passes against nothing.
 * No two files define a row builder with the same name. That is the divergence
   that made the identical call mean different things in different files.
+* Every test module is named for the production module it defends. A test named
+  for a *topic* — `test_staging_lease_ownership`, `test_provenance_helpers`,
+  `test_storage_ownership_quarantine` — cannot be found from the module it
+  covers, so "is this module tested?" stops being one `ls` and becomes a search.
+  That is what makes a coverage matrix guesswork: nobody can tell an untested
+  module from one whose tests live under a name they did not think of.
 
 Each rule names the fix in its failure message, because the person who trips it is
 usually not the person who read the guidance.
@@ -88,6 +94,49 @@ PENDING_DUPLICATE_BUILDERS = {
 
 CORE_TESTS_ROOT = TESTS_ROOT.parent / "packages" / "printstash-core" / "tests"
 
+# Where a test tree's production modules live. A test under `<tests>/<tier>/<path>`
+# mirrors `<source root>/<path>`.
+MIRROR_ROOTS = {
+    TESTS_ROOT: TESTS_ROOT.parent / "app",
+    CORE_TESTS_ROOT: CORE_TESTS_ROOT.parent / "src" / "printstash_core",
+}
+
+# The tier directories a mirror is measured under. `e2e/` is deliberately absent:
+# its files are named for a *flow* (`test_ingest.py`), which is the whole point of
+# that tier — an e2e test crosses every module rather than defending one.
+MIRRORED_TIERS = ("unit", "integration", "contract")
+
+# Directories that mirror something that is not a production module, each for a
+# stated reason. This is not a backlog: nothing here will ever acquire a mirror.
+NON_MIRRORED_DIRS = {
+    # Repo-level invariants — this file included.
+    "tests/repo": "defends the repository, not a module",
+    "packages/printstash-core/tests/repo": "defends the package, not a module",
+    # Support code rather than tests.
+    "tests/fakes": "emulators and contract fakes",
+    "tests/fixtures": "data files",
+    "tests/factories": "row builders",
+    # The migration chain lives in `alembic/versions/`, not in `app/`, and its
+    # tests are named for the migration or the invariant they exercise.
+    "tests/integration/db/migrations": "mirrors the alembic chain",
+    # A dialect is not a module. These re-run cross-cutting behaviour against a
+    # real PostgreSQL, gated by the `postgres` marker.
+    "tests/integration/postgres": "mirrors a dialect, not a module",
+    # `printstash_core_testkit` is a sibling top-level package under the same
+    # `src/`; naming the directory after it would not make the mirror any clearer.
+    "packages/printstash-core/tests/testkit": "mirrors the sibling testkit package",
+}
+
+# The last genuine violations. **This list may only shrink.** Each entry is a file
+# whose name describes a topic rather than the module it defends; the fix is to
+# rename it, or to move it into a folder named for that module when one file would
+# be too long.
+PENDING_UNMIRRORED_MODULES = {
+    # Duplicates the URL half of `imports/contracts.py`'s own tests, which is why
+    # it needs a merge rather than a rename.
+    "packages/printstash-core/tests/imports/test_canonical_urls.py",
+}
+
 
 def _test_modules() -> list[Path]:
     return sorted(
@@ -137,6 +186,64 @@ def _is_allowed(path: Path) -> bool:
     return any(fragment in _relative(path) for fragment in CONSTRUCTION_ALLOWED)
 
 
+def _mirror_of(module: Path) -> Path | None:
+    """The production module this test file defends, or None when nothing matches.
+
+    Four shapes count, and each exists for a reason:
+
+    * `<tier>/<pkg>/test_<mod>.py` → `<src>/<pkg>/<mod>.py` — the ordinary case.
+    * `<tier>/<pkg>/test_<mod>.py` → `<src>/<pkg>/<mod>/__init__.py` — a module
+      implemented as a package.
+    * `<tier>/<pkg>/<mod>/test_<group>.py` → `<src>/<pkg>/<mod>.py` — the split a
+      module too large for one test file gets. The *directory* is the mirror; the
+      file names inside it are endpoint or method groups.
+    * `<tier>/<pkg>/test_<pkg>.py` → `<src>/<pkg>/__init__.py` — a package whose
+      code lives in its own `__init__`, named for itself.
+    """
+    for tests_root, source_root in MIRROR_ROOTS.items():
+        if not module.is_relative_to(tests_root):
+            continue
+        relative = module.relative_to(tests_root)
+        if tests_root is TESTS_ROOT:
+            if relative.parts[0] not in MIRRORED_TIERS:
+                return None
+            relative = Path(*relative.parts[1:])
+        stem = relative.name.removeprefix("test_").removesuffix(".py")
+        candidates = [
+            source_root / relative.parent / f"{stem}.py",
+            source_root / relative.parent / stem / "__init__.py",
+            source_root / relative.parent.with_suffix(".py"),
+        ]
+        if stem == relative.parent.name:
+            candidates.append(source_root / relative.parent / "__init__.py")
+        return next((path for path in candidates if path.exists()), None)
+    return None
+
+
+def _mirror_checked_modules() -> list[Path]:
+    """Test modules the mirror rule applies to.
+
+    Filtered rather than skipped, for the same reason as the factory rule: an entry
+    in `NON_MIRRORED_DIRS` is a file the rule does not apply to, and reporting it as
+    a skip would claim a test declined to run when none ever could. The
+    `PENDING_UNMIRRORED_MODULES` entries are filtered here for the same reason — a
+    recorded violation is tracked by the staleness test below, not by a skip.
+    """
+    checked = []
+    for module in _all_test_modules():
+        relative = _relative(module)
+        if relative in PENDING_UNMIRRORED_MODULES:
+            continue
+        if any(relative.startswith(f"{directory}/") for directory in NON_MIRRORED_DIRS):
+            continue
+        if module.is_relative_to(TESTS_ROOT) and (
+            relative.split("/")[1] not in MIRRORED_TIERS
+        ):
+            continue
+        checked.append(module)
+    return checked
+
+
 class TestSuiteHygiene:
     @pytest.mark.parametrize("module", _all_test_modules(), ids=_relative)
     def test_every_test_belongs_to_a_group(self, module: Path) -> None:
@@ -179,6 +286,43 @@ class TestSuiteHygiene:
             f"{_relative(module)} has no module docstring. Open it with a few lines "
             "on what this file defends and why it matters when it goes red — see "
             "Inside a test file in .agents/skills/create-tests/SKILL.md"
+        )
+
+    @pytest.mark.parametrize("module", _mirror_checked_modules(), ids=_relative)
+    def test_every_module_is_named_for_the_module_it_defends(
+        self, module: Path
+    ) -> None:
+        """A test file is found by translating a production path, never by guessing.
+
+        `test_staging_lease_ownership.py`, `test_provenance_helpers.py` and
+        `test_storage_ownership_quarantine.py` each defended a real service and none
+        of them could be found from it. That is the failure this catches: an audit of
+        `app/services/trash.py` has to be an audit of one file, and "does this module
+        have tests?" has to be one `ls`, or the coverage matrix is guesswork.
+
+        When one file would be too long, the answer is a *folder* named for the
+        module — `integration/services/storage_backend/{test_objects,test_ownership}.py`
+        — not a second file named for a topic.
+        """
+        assert _mirror_of(module) is not None, (
+            f"{_relative(module)} names no production module. Rename it after the "
+            "module it defends, or move it into a folder named for that module "
+            "when one file would be too long. If it defends the repository rather "
+            "than a module, it belongs in tests/repo/ — see "
+            "Where tests live in .agents/skills/create-tests/SKILL.md"
+        )
+
+    def test_the_unmirrored_list_has_no_stale_entries(self) -> None:
+        """A file that acquired its mirror leaves the list in the same commit."""
+        resolved = sorted(
+            entry
+            for entry in PENDING_UNMIRRORED_MODULES
+            if _mirror_of(TESTS_ROOT.parent / entry) is not None
+        )
+
+        assert not resolved, (
+            f"now mirrored: {resolved}. Remove them from "
+            "PENDING_UNMIRRORED_MODULES so the list keeps meaning something."
         )
 
     @pytest.mark.parametrize("module", _test_modules(), ids=_relative)

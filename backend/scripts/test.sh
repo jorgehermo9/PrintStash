@@ -68,6 +68,14 @@ done
 
 parallel=(-n auto --dist worksteal)
 
+# `${a[@]+"${a[@]}"}` rather than `"${a[@]}"` everywhere below. bash 3.2 — still
+# the default shell on macOS — treats `"${empty[@]}"` under `set -u` as an unbound
+# variable and aborts, so every lane died on its own `exec` line whenever the
+# caller passed no extra pytest arguments, which is exactly how
+# `./scripts/test.sh coverage` is documented to be run. CI is bash 5, where the
+# same expansion is legal, which is why it stayed hidden. The `+` form expands to
+# nothing at all when the array is empty, on both.
+
 # Prepend the lane's paths only when the caller did not name a target of their own.
 lane_paths=()
 add_paths() {
@@ -79,19 +87,19 @@ add_paths() {
 case "$lane" in
   fast)
     add_paths tests/unit tests/integration
-    exec uv run pytest "${parallel[@]}" -m "not slow and not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not slow and not coverage_gate" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   contract)
     add_paths tests/contract
-    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   e2e)
     add_paths tests/e2e
-    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   full)
     add_paths tests
-    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   coverage)
     # Two invocations on purpose. The gate reads `coverage.json`, and that file is
@@ -103,7 +111,7 @@ case "$lane" in
     add_paths tests
     uv run pytest "${parallel[@]}" -m "not coverage_gate" \
       --cov --cov-report=term-missing --cov-report=json --cov-report=html \
-      "${lane_paths[@]}" "${pytest_args[@]}"
+      ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     echo
     echo "HTML report: $(pwd)/.coverage-html/index.html"
     echo
@@ -111,11 +119,11 @@ case "$lane" in
     ;;
   affected)
     add_paths tests
-    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" --testmon "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" --testmon ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   serial)
     add_paths tests
-    exec uv run pytest -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest -m "not coverage_gate" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   *)
     echo "unknown lane: $lane" >&2

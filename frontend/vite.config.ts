@@ -41,12 +41,18 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     // Unit tests run in jsdom (localStorage, window) and exclude the Playwright
-    // e2e suite, which has its own runner.
+    // suites, which have their own runner.
+    //
+    // `tests/repo/` is the frontend's `backend/tests/repo/`: invariants over the
+    // repository itself — the suite's own shape, translation coverage, the ban on
+    // native dialogs — which mirror no production module and so have no home under
+    // `src/`. It is listed explicitly rather than by widening to `tests/**`, which
+    // would swallow the Playwright specs.
     globals: true,
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
-    include: ["src/**/*.{test,spec}.{ts,tsx}"],
-    exclude: ["tests/e2e/**", "node_modules/**"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}", "tests/repo/**/*.{test,spec}.{ts,tsx}"],
+    exclude: ["tests/e2e/**", "tests/e2e-real/**", "tests/performance/**", "node_modules/**"],
     coverage: {
       provider: "v8",
       // `json-summary` is what scripts/coverage-gate.mjs reads; `html` is what you
