@@ -86,6 +86,43 @@ This matters **more** for local than for remote, not less: a self-hoster's
 
 **Local is never migrated to OpenDAL.** Not in this change, not later.
 
+#### …but local's capabilities are probed, not assumed
+
+The corollary bites an install we already ship. A self-hoster whose library
+lives on a NAS or Nextcloud today mounts the share into the container — NFS,
+SMB/CIFS, `sshfs`, `rclone mount`, `davfs2` — points `VAULT_DATA_DIR` at it, and
+runs `LocalStorageBackend` on top. Every primitive above then rests on a
+filesystem that may not provide it:
+
+- **Hardlinks.** SMB/CIFS, `davfs2`, and `rclone mount` generally do not support
+  `link(2)`, so the atomic no-replace publication is unavailable.
+- **Directory `fsync`.** Frequently a no-op on FUSE and network filesystems, so
+  the durability step silently does nothing.
+- **Inode stability.** FUSE layers synthesize inode numbers and several reassign
+  them per mount session. Receipts persist (`CaptureUploadSlot.receipt_json`),
+  so after a restart a stored receipt can stop matching the object it describes
+  — `creation_matches` then returns `False` for the remainder of that object's
+  life, and every verification and rollback path fails closed permanently.
+
+Nothing detects any of this today: `LocalStorageBackend.ensure_setup()` performs
+two `mkdir`s, and `docs/known-limitations.md` carries no warning. PrintStash
+reports the backend as `local` and behaves as though every guarantee holds.
+
+Therefore `LocalStorageBackend.capabilities()` is **probed at
+`ensure_setup()`**, not hardcoded: attempt a hardlink inside the data dir,
+attempt an `O_DIRECTORY` fsync on it, and detect a network or FUSE filesystem
+(`statfs` `f_type`, `/proc/mounts`) whose inode numbers may not survive a
+remount. A mounted-share install then reports Guarded or Unguarded honestly
+instead of claiming Verified.
+
+This is the highest-value item in the ADR for existing installs, it needs no
+OpenDAL, and it reframes what OpenDAL is for. Over a mount, PrintStash claims
+Verified and cannot deliver it. Over an OpenDAL WebDAV adapter it claims
+Unguarded and delivers exactly that, plus the ledger's conditional create
+(decision 3). **Correctly labelled Unguarded is a stronger real position than
+mislabelled Verified** — the labelling, not the protocol, is what this ADR
+actually buys.
+
 ### 2. Capability axes, with tiers derived from them
 
 Not a `AtomicStorageBackend` / `BestEffortStorageBackend` hierarchy. Two
@@ -325,19 +362,49 @@ Independent of OpenDAL, and worth doing on its own merits:
   `s3:GetLifecycleConfiguration`, already degrades to `[]` on any error, and it
   is the one that protects users.
 
-This shrinks the boto3 surface to a single optional read-only call, which is
-what makes a later S3 data-plane migration a real option rather than a
-dependency shuffle.
+This shrinks the storage layer's boto3 surface to a single optional read-only
+call. It does **not** remove the dependency: `app/services/backup.py` builds its
+own boto3 client (`_get_backup_s3`) against a different bucket with different
+credentials (`backup_s3_*`), doing `put_object`, `head_object`, `delete_object`
+and `list_objects` for backup archives. boto3 stays for backup regardless of
+anything decided about storage, and the two are correctly decoupled — different
+credentials, different blast radius.
 
-### 9. Sequencing: the S3 data plane migrates last, or not at all
+### 9. S3 stays native on boto3. This is a decision, not a deferral
 
-OpenDAL's S3 service can express the whole data plane — `if_not_exists`,
-`if_match`, `user_metadata`, `chunk`/`concurrent` for the multipart threshold,
-`delete` with a version, presigned reads. Migration is therefore *viable* once
-decision 8 lands. It is deliberately **not** part of this work:
-`S3StorageBackend` is tested, in the field, and the most safety-critical code in
-the repository. It migrates only after the OpenDAL adapter has a release of real
-use behind it, and only if unification then looks worth the churn.
+OpenDAL's S3 service looks like it could express the whole data plane —
+`if_not_exists`, `if_match`, `user_metadata`, `chunk`/`concurrent` for the
+multipart threshold, versioned delete, presigned reads. Measured against the
+published Python binding, it cannot express the part that matters.
+
+**`Operator.write()` returns `None` in `opendal` 0.47.6.** The Rust core returns
+`Result<Metadata>`, but that has not reached the Python binding, so a create
+yields no etag and no `version_id`. `stat()` does expose `.version`, but a
+follow-up stat is racy by construction: it reports whichever version is current,
+which may be someone else's write. That is precisely the substitution
+`CreationReceipt` exists to make impossible, and without it
+`S3StorageBackend.rollback_create` has nothing to verify against.
+
+**An OpenDAL-backed S3 adapter therefore lands in Guarded, not Verified.**
+Migrating would demote a backend that is Verified today. Measured against what
+the migration would buy:
+
+| | boto3 (today) | OpenDAL |
+|---|---|---|
+| Tier for a versioned bucket | **Verified** | Guarded — no write-side version identity |
+| Installed size | 22.7 MB | 39.4 MB (single 38.6 MB `.so`, not trimmable) |
+| `import` + client construction | ~0.3–0.6 s | ~0.01 s |
+| Bulk transfer | network-bound | network-bound |
+
+Faster startup and one fewer code path do not buy a tier demotion on the most
+safety-critical code in the repository. **S3 remains a hand-written boto3
+adapter.** This is not "later" — revisiting it requires a specific upstream
+change (the Python binding returning write metadata including `version_id`),
+and until that lands there is nothing to weigh.
+
+The local backend is excluded for the reasons in decision 1, which no upstream
+release can change. So OpenDAL's scope is exactly the backends PrintStash has no
+adapter for, and that scope is not expected to grow.
 
 ## Consequences
 
@@ -361,16 +428,27 @@ use behind it, and only if unification then looks worth the churn.
 
 **Risks**
 
-- **A declared capability can be wrong.** `write_with_if_not_exists` has shipped
-  as declared-but-unenforced, reported against azblob *and* s3/MinIO. Therefore
-  capabilities are never trusted on declaration alone: the `contract/` tier must
-  prove conditional create against a real server per supported scheme, and the
-  adapter pins an exact `opendal` version.
-- **Write-returns-metadata coverage is still landing per service.** If a scheme
-  does not populate `version_id`, it lands in Guarded rather than Verified —
-  degradation by design, not breakage, but it means the tier of a given scheme
-  can improve across upstream releases and must be reported at runtime rather
-  than documented as a constant.
+- **A declared capability can be wrong, and has been silently wrong.** Measured
+  on the published wheels: in `opendal` **0.45.1**, `Operator.write()` took
+  untyped `**kwargs` and **silently swallowed `if_not_exists=True`** — a second
+  write to the same key overwrote the first with no error, and `Capability`
+  exposed no `write_with_if_not_exists` attribute to gate on. In **0.47.6** the
+  option is enforced (`ConditionNotMatch`), unknown kwargs raise `TypeError`, and
+  the capability flags are present. Separately, `write_with_if_not_exists` has
+  been reported as declared-but-unenforced against azblob and s3/MinIO. So there
+  exists a released window in which the primitive this whole design rests on was
+  a no-op that no capability probe could detect. Therefore: the adapter **pins an
+  exact `opendal` version**, and the `contract/` tier must prove conditional
+  create rejects a second write against a real server per supported scheme. That
+  coverage is the only thing standing between us and a silent clobber; it is not
+  optional and not replaceable by reading the capability flags.
+- **Write-returns-metadata has not reached the Python binding at all.**
+  `write()` returns `None` as of 0.47.6, so *every* OpenDAL-backed scheme is
+  capped at Guarded today regardless of what the underlying service supports.
+  This is degradation by design rather than breakage, but it means a scheme's
+  tier can improve across upstream releases and must therefore be **reported at
+  runtime, never documented as a constant** — and it is the direct cause of
+  decision 9.
 - **Ledger drift.** A ledger that disagrees with the store causes a sweep to
   target a live object. Mitigated by insert-then-write ordering, by
   re-verification immediately before any sweep delete, and by the sweep being
