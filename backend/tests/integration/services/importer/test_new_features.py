@@ -55,18 +55,6 @@ def _zip_bytes(entries: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
-def test_archive_entries_have_stable_selection_ids(tmp_path):
-    from app.services import importer
-
-    archive = tmp_path / "ids.zip"
-    archive.write_bytes(_zip_bytes({"a.stl": b"a", "b.stl": b"bb"}))
-
-    entries = importer.inspect_archive(archive)
-
-    assert len({entry.entry_id for entry in entries}) == 2
-    assert all(entry.entry_id.count(":") == 2 for entry in entries)
-
-
 # ---------------------------------------------------------------------------
 # Printer hub: measured filament/duration + auto known-good
 # ---------------------------------------------------------------------------
@@ -360,6 +348,17 @@ class TestInspectArchive:
 
         with pytest.raises(importer.ImportError_, match="archive_duplicate_entry"):
             importer.inspect_archive(archive)
+
+    def test_archive_entries_have_stable_selection_ids(self, tmp_path):
+        from app.services import importer
+
+        archive = tmp_path / "ids.zip"
+        archive.write_bytes(_zip_bytes({"a.stl": b"a", "b.stl": b"bb"}))
+
+        entries = importer.inspect_archive(archive)
+
+        assert len({entry.entry_id for entry in entries}) == 2
+        assert all(entry.entry_id.count(":") == 2 for entry in entries)
 
 
 class TestExtractSelected:

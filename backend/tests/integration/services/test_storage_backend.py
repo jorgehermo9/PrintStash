@@ -77,113 +77,118 @@ def _s3_backend_raising(error_code: str) -> S3StorageBackend:
     return backend
 
 
-def test_s3_get_object_preserves_non_missing_client_error() -> None:
-    import botocore.exceptions
+class TestS3GetObject:
+    def test_s3_get_object_preserves_non_missing_client_error(self) -> None:
+        import botocore.exceptions
 
-    class _Client:
-        def get_object(self, **_kwargs):
-            raise botocore.exceptions.ClientError(
-                {"Error": {"Code": "AccessDenied", "Message": "forbidden"}},
-                "GetObject",
-            )
-
-    backend = object.__new__(S3StorageBackend)
-    backend._client = _Client()  # type: ignore[attr-defined]
-    backend._bucket = "test-bucket"  # type: ignore[attr-defined]
-
-    with pytest.raises(botocore.exceptions.ClientError):
-        list(backend.stream_chunks("some/key"))
-
-
-def test_s3_create_is_conditional_and_rollback_requires_operation_token() -> None:
-    import botocore.exceptions
-
-    class _Client:
-        def __init__(self) -> None:
-            self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
-
-        def put_object(self, **kwargs):
-            key = kwargs["Key"]
-            assert kwargs["IfNoneMatch"] == "*"
-            if key in self.objects:
+        class _Client:
+            def get_object(self, **_kwargs):
                 raise botocore.exceptions.ClientError(
-                    {
-                        "Error": {"Code": "PreconditionFailed"},
-                        "ResponseMetadata": {"HTTPStatusCode": 412},
-                    },
-                    "PutObject",
+                    {"Error": {"Code": "AccessDenied", "Message": "forbidden"}},
+                    "GetObject",
                 )
-            body = kwargs["Body"]
-            data = body.read() if hasattr(body, "read") else bytes(body)
-            etag = '"etag-1"'
-            self.objects[key] = (data, kwargs["Metadata"], etag)
-            return {"ETag": etag}
 
-        def head_object(self, **kwargs):
-            data, metadata, etag = self.objects[kwargs["Key"]]
-            return {"ContentLength": len(data), "Metadata": metadata, "ETag": etag}
+        backend = object.__new__(S3StorageBackend)
+        backend._client = _Client()  # type: ignore[attr-defined]
+        backend._bucket = "test-bucket"  # type: ignore[attr-defined]
 
-        def delete_object(self, **kwargs):
-            assert kwargs["IfMatch"] == self.objects[kwargs["Key"]][2]
-            del self.objects[kwargs["Key"]]
-
-    backend = object.__new__(S3StorageBackend)
-    backend._client = _Client()  # type: ignore[attr-defined]
-    backend._bucket = "vault"  # type: ignore[attr-defined]
-
-    receipt = backend.create_bytes(b"owned", "vault-data/files/part.stl")
-    with pytest.raises(StorageCollisionError):
-        backend.create_bytes(b"replacement", receipt.key)
-
-    data, _metadata, etag = backend._client.objects[receipt.key]  # type: ignore[attr-defined]
-    backend._client.objects[receipt.key] = (  # type: ignore[attr-defined]
-        data,
-        {"printstash-create-token": "another-operation"},
-        etag,
-    )
-    assert backend.rollback_create(receipt) is False
-    assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
+        with pytest.raises(botocore.exceptions.ClientError):
+            list(backend.stream_chunks("some/key"))
 
 
-def test_s3_rollback_deletes_exact_version_and_preserves_same_etag_replacement() -> (
-    None
-):
-    class _Client:
-        versions = {
-            "old": {
-                "ContentLength": 5,
-                "Metadata": {"printstash-create-token": "owned-token"},
-                "ETag": '"same-etag"',
-            },
-            "new": {
-                "ContentLength": 5,
-                "Metadata": {"printstash-create-token": "new-token"},
-                "ETag": '"same-etag"',
-            },
-        }
+class TestS3CreateStream:
+    def test_s3_create_is_conditional_and_rollback_requires_operation_token(
+        self,
+    ) -> None:
+        import botocore.exceptions
 
-        def head_object(self, **kwargs):
-            return self.versions[kwargs.get("VersionId", "new")]
+        class _Client:
+            def __init__(self) -> None:
+                self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
 
-        def delete_object(self, **kwargs):
-            del self.versions[kwargs["VersionId"]]
+            def put_object(self, **kwargs):
+                key = kwargs["Key"]
+                assert kwargs["IfNoneMatch"] == "*"
+                if key in self.objects:
+                    raise botocore.exceptions.ClientError(
+                        {
+                            "Error": {"Code": "PreconditionFailed"},
+                            "ResponseMetadata": {"HTTPStatusCode": 412},
+                        },
+                        "PutObject",
+                    )
+                body = kwargs["Body"]
+                data = body.read() if hasattr(body, "read") else bytes(body)
+                etag = '"etag-1"'
+                self.objects[key] = (data, kwargs["Metadata"], etag)
+                return {"ETag": etag}
 
-    backend = object.__new__(S3StorageBackend)
-    backend._client = _Client()  # type: ignore[attr-defined]
-    backend._bucket = "vault"  # type: ignore[attr-defined]
-    receipt = CreationReceipt(
-        key="vault-data/files/part.stl",
-        size=5,
-        token="owned-token",
-        backend="s3",
-        namespace="vault/vault-data/",
-        etag='"same-etag"',
-        version_id="old",
-    )
+            def head_object(self, **kwargs):
+                data, metadata, etag = self.objects[kwargs["Key"]]
+                return {"ContentLength": len(data), "Metadata": metadata, "ETag": etag}
 
-    assert backend.rollback_create(receipt) is True
-    assert "old" not in backend._client.versions  # type: ignore[attr-defined]
-    assert "new" in backend._client.versions  # type: ignore[attr-defined]
+            def delete_object(self, **kwargs):
+                assert kwargs["IfMatch"] == self.objects[kwargs["Key"]][2]
+                del self.objects[kwargs["Key"]]
+
+        backend = object.__new__(S3StorageBackend)
+        backend._client = _Client()  # type: ignore[attr-defined]
+        backend._bucket = "vault"  # type: ignore[attr-defined]
+
+        receipt = backend.create_bytes(b"owned", "vault-data/files/part.stl")
+        with pytest.raises(StorageCollisionError):
+            backend.create_bytes(b"replacement", receipt.key)
+
+        data, _metadata, etag = backend._client.objects[receipt.key]  # type: ignore[attr-defined]
+        backend._client.objects[receipt.key] = (  # type: ignore[attr-defined]
+            data,
+            {"printstash-create-token": "another-operation"},
+            etag,
+        )
+        assert backend.rollback_create(receipt) is False
+        assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
+
+
+class TestS3RollbackCreate:
+    def test_s3_rollback_deletes_exact_version_and_preserves_same_etag_replacement(
+        self,
+    ) -> None:
+        class _Client:
+            versions = {
+                "old": {
+                    "ContentLength": 5,
+                    "Metadata": {"printstash-create-token": "owned-token"},
+                    "ETag": '"same-etag"',
+                },
+                "new": {
+                    "ContentLength": 5,
+                    "Metadata": {"printstash-create-token": "new-token"},
+                    "ETag": '"same-etag"',
+                },
+            }
+
+            def head_object(self, **kwargs):
+                return self.versions[kwargs.get("VersionId", "new")]
+
+            def delete_object(self, **kwargs):
+                del self.versions[kwargs["VersionId"]]
+
+        backend = object.__new__(S3StorageBackend)
+        backend._client = _Client()  # type: ignore[attr-defined]
+        backend._bucket = "vault"  # type: ignore[attr-defined]
+        receipt = CreationReceipt(
+            key="vault-data/files/part.stl",
+            size=5,
+            token="owned-token",
+            backend="s3",
+            namespace="vault/vault-data/",
+            etag='"same-etag"',
+            version_id="old",
+        )
+
+        assert backend.rollback_create(receipt) is True
+        assert "old" not in backend._client.versions  # type: ignore[attr-defined]
+        assert "new" in backend._client.versions  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

@@ -58,33 +58,6 @@ async def _wait_for(condition, *, timeout: float = 5.0) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_real_file_create_triggers_a_scheduled_scan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[int] = []
-    monkeypatch.setattr(
-        lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id)
-    )
-
-    watcher = lw.LibraryWatcher()
-
-    async def _run() -> None:
-        await watcher._start_watcher(3, str(tmp_path), False)  # noqa: SLF001
-        # Give awatch a moment to start its inotify/polling loop before we
-        # write, or the very first event can be missed.
-        await asyncio.sleep(0.3)
-        await asyncio.to_thread((tmp_path / "new_model.stl").write_bytes, b"solid x\n")
-
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and not calls:
-            await asyncio.sleep(0.05)
-
-        await watcher._stop_watcher(3)  # noqa: SLF001
-
-    asyncio.run(_run())
-    assert calls == [3]
-
-
 # ---------------------------------------------------------------------------
 # refresh() reconciliation
 # ---------------------------------------------------------------------------
@@ -392,3 +365,31 @@ class TestDebouncedScan:
             assert calls == [9]
 
         asyncio.run(_run())
+
+    def test_real_file_create_triggers_a_scheduled_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[int] = []
+        monkeypatch.setattr(
+            lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id)
+        )
+
+        watcher = lw.LibraryWatcher()
+
+        async def _run() -> None:
+            await watcher._start_watcher(3, str(tmp_path), False)  # noqa: SLF001
+            # Give awatch a moment to start its inotify/polling loop before we
+            # write, or the very first event can be missed.
+            await asyncio.sleep(0.3)
+            await asyncio.to_thread(
+                (tmp_path / "new_model.stl").write_bytes, b"solid x\n"
+            )
+
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not calls:
+                await asyncio.sleep(0.05)
+
+            await watcher._stop_watcher(3)  # noqa: SLF001
+
+        asyncio.run(_run())
+        assert calls == [3]

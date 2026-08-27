@@ -24,13 +24,6 @@ from app.services.release_check import (
 )
 
 
-def test_release_versions_compare_semantically() -> None:
-    assert is_newer_release("0.10.1", "0.10.0") is True
-    assert is_newer_release("v1.0.0", "0.10.9") is True
-    assert is_newer_release("0.9.9", "0.10.0") is False
-    assert is_newer_release("not-a-version", "0.10.0") is False
-
-
 class TestFetchReleaseStatus:
     def test_fetch_release_status_reports_available_update(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -109,3 +102,9 @@ class TestGetReleaseStatus:
         # force=True bypasses the cache and re-fetches.
         asyncio.run(release_check.get_release_status("0.10.0", force=True))
         assert calls["n"] == 2
+
+    def test_release_versions_compare_semantically(self) -> None:
+        assert is_newer_release("0.10.1", "0.10.0") is True
+        assert is_newer_release("v1.0.0", "0.10.9") is True
+        assert is_newer_release("0.9.9", "0.10.0") is False
+        assert is_newer_release("not-a-version", "0.10.0") is False

@@ -29,31 +29,6 @@ from app.services.bambu_adapter import BambuLanProvider
 from tests.factories import printer_config
 
 
-def test_constructor_maps_legacy_arguments_to_immutable_core_config() -> None:
-    mqtt_factory = MagicMock()
-
-    provider = BambuLanProvider(
-        "192.0.2.10",
-        "TEST-SERIAL",
-        "test-code",
-        mqtt_client_factory=mqtt_factory,
-    )
-
-    assert isinstance(provider, BambuClient)
-    assert provider.config.host == "192.0.2.10"
-    assert provider.config.serial == "TEST-SERIAL"
-    assert provider.config.access_code == "test-code"
-    assert provider._mqtt_client_factory is mqtt_factory
-    assert provider.provider is PrinterProvider.BAMBU_LAN
-    assert provider.capabilities is BambuClient.capabilities
-
-
-def test_class_level_ftps_factory_remains_compatible() -> None:
-    client = BambuLanProvider._ftps_client()
-
-    assert client.__class__.__name__ == "_ImplicitFTP_TLS"
-
-
 class TestBuild:
     def test_build_maps_orm_fields_without_retaining_the_row(self) -> None:
         printer = printer_config(
@@ -94,3 +69,26 @@ class TestBuild:
 
         assert error.value.detail == "provider_credentials_missing"
         assert error.value.code == "provider_credentials_missing"
+
+    def test_constructor_maps_legacy_arguments_to_immutable_core_config(self) -> None:
+        mqtt_factory = MagicMock()
+
+        provider = BambuLanProvider(
+            "192.0.2.10",
+            "TEST-SERIAL",
+            "test-code",
+            mqtt_client_factory=mqtt_factory,
+        )
+
+        assert isinstance(provider, BambuClient)
+        assert provider.config.host == "192.0.2.10"
+        assert provider.config.serial == "TEST-SERIAL"
+        assert provider.config.access_code == "test-code"
+        assert provider._mqtt_client_factory is mqtt_factory
+        assert provider.provider is PrinterProvider.BAMBU_LAN
+        assert provider.capabilities is BambuClient.capabilities
+
+    def test_class_level_ftps_factory_remains_compatible(self) -> None:
+        client = BambuLanProvider._ftps_client()
+
+        assert client.__class__.__name__ == "_ImplicitFTP_TLS"

@@ -79,72 +79,83 @@ def clean_postgres(postgres_engine) -> None:
         connection.exec_driver_sql(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE")
 
 
-def test_fresh_bootstrap_is_at_head_with_partial_default_index(postgres_engine) -> None:
-    # `ALEMBIC_INI` rather than a path built here: alembic.ini lives at the
-    # backend root, and a wrong anchor yields a Config with no
-    # `script_location`, which fails as "No 'script_location' key found" —
-    # a long way from the actual mistake.
-    alembic_config = Config(str(ALEMBIC_INI))
-    expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
-    with postgres_engine.connect() as connection:
-        assert (
-            MigrationContext.configure(connection).get_current_revision()
-            == expected_head
-        )
-
-    index = next(
-        item
-        for item in inspect(postgres_engine).get_indexes("printers")
-        if item["name"] == "uq_printers_live_default"
-    )
-    assert index["unique"] is True
-    predicate = str(index["dialect_options"]["postgresql_where"])
-    assert "deleted_at IS NULL" in predicate
-
-
-def test_postgres_crud_enums_rbac_and_default_uniqueness(postgres_engine) -> None:
-    with Session(postgres_engine) as session:
-        user = build_user(session, "pg-user")
-        collection = build_collection(session, name="Parts", slug="parts", path="parts")
-        printer = build_printer(session, name="PG printer", is_default=True)
-        session.add_all([user, collection, printer])
-        session.commit()
-        session.refresh(user)
-        session.refresh(collection)
-        session.refresh(printer)
-
-        grant_collection_role(session, user, collection, CollectionRole.EDIT)
-        session.add(
-            PrinterPermission(
-                user_id=user.id,
-                printer_id=printer.id,
-                role=PrinterRole.PRINT,
+class TestBootstrap:
+    def test_fresh_bootstrap_is_at_head_with_partial_default_index(
+        self, postgres_engine
+    ) -> None:
+        # `ALEMBIC_INI` rather than a path built here: alembic.ini lives at the
+        # backend root, and a wrong anchor yields a Config with no
+        # `script_location`, which fails as "No 'script_location' key found" —
+        # a long way from the actual mistake.
+        alembic_config = Config(str(ALEMBIC_INI))
+        expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+        with postgres_engine.connect() as connection:
+            assert (
+                MigrationContext.configure(connection).get_current_revision()
+                == expected_head
             )
-        )
-        session.commit()
 
-        assert (
-            effective_collection_role(session, user, collection.id)
-            == CollectionRole.EDIT
+        index = next(
+            item
+            for item in inspect(postgres_engine).get_indexes("printers")
+            if item["name"] == "uq_printers_live_default"
         )
-        assert effective_printer_role(session, user, printer.id) == PrinterRole.PRINT
+        assert index["unique"] is True
+        predicate = str(index["dialect_options"]["postgresql_where"])
+        assert "deleted_at IS NULL" in predicate
 
-        session.add(printer_config("Conflicting default", is_default=True))
-        with pytest.raises(IntegrityError):
+
+class TestCrud:
+    def test_postgres_crud_enums_rbac_and_default_uniqueness(
+        self, postgres_engine
+    ) -> None:
+        with Session(postgres_engine) as session:
+            user = build_user(session, "pg-user")
+            collection = build_collection(
+                session, name="Parts", slug="parts", path="parts"
+            )
+            printer = build_printer(session, name="PG printer", is_default=True)
+            session.add_all([user, collection, printer])
+            session.commit()
+            session.refresh(user)
+            session.refresh(collection)
+            session.refresh(printer)
+
+            grant_collection_role(session, user, collection, CollectionRole.EDIT)
+            session.add(
+                PrinterPermission(
+                    user_id=user.id,
+                    printer_id=printer.id,
+                    role=PrinterRole.PRINT,
+                )
+            )
             session.commit()
 
+            assert (
+                effective_collection_role(session, user, collection.id)
+                == CollectionRole.EDIT
+            )
+            assert (
+                effective_printer_role(session, user, printer.id) == PrinterRole.PRINT
+            )
 
-@pytest.mark.asyncio
-async def test_psycopg_async_engine_executes_against_real_postgres() -> None:
-    if not _POSTGRES_URL:
-        pytest.skip("PRINTSTASH_TEST_POSTGRES_URL is not configured")
-    engine = create_async_engine_for_db(_POSTGRES_URL)
-    try:
-        async with AsyncSession(engine) as session:
-            result = await session.execute(text("SELECT 1"))
-            assert result.scalar_one() == 1
-    finally:
-        await engine.dispose()
+            session.add(printer_config("Conflicting default", is_default=True))
+            with pytest.raises(IntegrityError):
+                session.commit()
+
+
+class TestAsyncEngine:
+    @pytest.mark.asyncio
+    async def test_psycopg_async_engine_executes_against_real_postgres(self) -> None:
+        if not _POSTGRES_URL:
+            pytest.skip("PRINTSTASH_TEST_POSTGRES_URL is not configured")
+        engine = create_async_engine_for_db(_POSTGRES_URL)
+        try:
+            async with AsyncSession(engine) as session:
+                result = await session.execute(text("SELECT 1"))
+                assert result.scalar_one() == 1
+        finally:
+            await engine.dispose()
 
 
 class TestProvenance:

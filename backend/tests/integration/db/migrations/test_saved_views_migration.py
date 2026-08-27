@@ -27,26 +27,29 @@ def _config(db_path: Path) -> Config:
     return cfg
 
 
-def test_saved_views_migration_is_additive_and_reversible(tmp_path: Path) -> None:
-    db_path = tmp_path / "saved-views.sqlite"
-    cfg = _config(db_path)
-    command.upgrade(cfg, PREVIOUS)
-    engine = create_engine(f"sqlite:///{db_path}")
-    before = set(inspect(engine).get_table_names())
-    engine.dispose()
+class TestSavedViewsMigration:
+    def test_saved_views_migration_is_additive_and_reversible(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "saved-views.sqlite"
+        cfg = _config(db_path)
+        command.upgrade(cfg, PREVIOUS)
+        engine = create_engine(f"sqlite:///{db_path}")
+        before = set(inspect(engine).get_table_names())
+        engine.dispose()
 
-    command.upgrade(cfg, REVISION)
-    engine = create_engine(f"sqlite:///{db_path}")
-    upgraded = set(inspect(engine).get_table_names())
-    assert before <= upgraded
-    assert {"saved_views", "model_stars"} <= upgraded
-    assert {"user_id", "name", "filters_json"} <= {
-        column["name"] for column in inspect(engine).get_columns("saved_views")
-    }
-    engine.dispose()
+        command.upgrade(cfg, REVISION)
+        engine = create_engine(f"sqlite:///{db_path}")
+        upgraded = set(inspect(engine).get_table_names())
+        assert before <= upgraded
+        assert {"saved_views", "model_stars"} <= upgraded
+        assert {"user_id", "name", "filters_json"} <= {
+            column["name"] for column in inspect(engine).get_columns("saved_views")
+        }
+        engine.dispose()
 
-    command.downgrade(cfg, PREVIOUS)
-    engine = create_engine(f"sqlite:///{db_path}")
-    downgraded = set(inspect(engine).get_table_names())
-    engine.dispose()
-    assert downgraded == before
+        command.downgrade(cfg, PREVIOUS)
+        engine = create_engine(f"sqlite:///{db_path}")
+        downgraded = set(inspect(engine).get_table_names())
+        engine.dispose()
+        assert downgraded == before

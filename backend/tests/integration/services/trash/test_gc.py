@@ -82,198 +82,6 @@ def _open_namespace_escape(session: Session) -> None:
     session.commit()
 
 
-def test_gc_preserves_unclaimed_files_in_local_storage(
-    db_session: Session, storage
-) -> None:
-    """A configured local root may already contain user-managed files.
-
-    Absence from PrintStash's database is not proof that PrintStash owns a file,
-    even when its path resembles the vault layout.  Scheduled maintenance must
-    therefore never discover and delete local files by walking ``data_dir``.
-    """
-    existing_library_file = _write(
-        str(
-            Path(storage.blob_key("gone", 1, "gone.stl")).parents[2]
-            / "My Library"
-            / "part.stl"
-        )
-    )
-    printstash_shaped_file = _write(storage.blob_key("gone", 1, "gone.stl"))
-    document_shaped_file = _write(storage.document_file_key(999, "gone.pdf"))
-
-    removed = _cleanup_orphan_blobs(db_session)
-
-    assert Path(existing_library_file).exists()
-    assert Path(printstash_shaped_file).exists()
-    assert Path(document_shaped_file).exists()
-    assert removed == 0
-
-
-def test_gc_ignores_markdown_documents(db_session: Session, storage) -> None:
-    """Markdown docs own no blob — they must not contribute a bogus key."""
-    doc = Document(name="notes", kind=DocumentKind.MARKDOWN, body="# hi")
-    db_session.add(doc)
-    db_session.commit()
-
-    assert _cleanup_orphan_blobs(db_session) == 0
-
-
-def test_gc_hard_deletes_expired_artifact_and_its_derivatives(
-    db_session: Session, storage
-) -> None:
-    artifact = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "derived-expired", slug="derived-expired"),
-        filename="derived-expired.stl",
-    )
-    artifact_id = artifact.id
-    keys = (
-        artifact.path,
-        storage.thumbnail_key(artifact.id),
-        storage.legacy_thumbnail_key(artifact.id),
-        storage.stl_cache_key(artifact.sha256),
-    )
-    for key in keys[1:]:
-        store_owned_bytes(db_session, storage, key)
-    artifact.deleted_at = utcnow() - timedelta(days=1)
-    db_session.add(artifact)
-    db_session.commit()
-
-    gc_soft_deleted(retention_days=0)
-
-    assert all(not Path(key).exists() for key in keys)
-    db_session.expire_all()
-    assert db_session.get(File, artifact_id) is None
-
-
-def test_negative_retention_disables_gc_and_preserves_owned_bytes(
-    db_session: Session, storage
-) -> None:
-    artifact = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "retention-disabled", slug="retention-disabled"),
-        filename="retention-disabled.stl",
-    )
-    artifact.deleted_at = utcnow() - timedelta(days=365)
-    db_session.add(artifact)
-    db_session.commit()
-
-    result = gc_soft_deleted(retention_days=-1)
-
-    assert result == {"rows": 0, "orphan_blobs": 0}
-    assert Path(artifact.path).exists()
-    db_session.expire_all()
-    assert db_session.get(File, artifact.id) is not None
-
-
-def test_gc_skips_legacy_candidate_without_blocking_verifiable_candidates(
-    db_session: Session, storage
-) -> None:
-    first = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "owned-first", slug="owned-first"),
-        filename="owned-first.stl",
-    )
-    first.deleted_at = utcnow() - timedelta(days=1)
-    db_session.add(first)
-
-    legacy_model = build_model(
-        db_session, name="Legacy", slug="legacy", hash="legacy-hash"
-    )
-    legacy_path = storage.blob_key("legacy", 1, "legacy.stl")
-    _write(legacy_path, b"legacy-user-bytes")
-    legacy = build_file(
-        db_session,
-        legacy_model,
-        path=legacy_path,
-        filename="legacy.stl",
-        file_type=FileType.STL,
-        version=1,
-        size_bytes=17,
-        sha256="legacy-file-hash",
-        deleted_at=utcnow() - timedelta(days=1),
-    )
-    first_id = first.id
-    first_path = first.path
-
-    result = gc_soft_deleted(retention_days=0)
-
-    db_session.expire_all()
-    assert result["resources_blocked"] == 1
-    assert not Path(first_path).exists()
-    assert Path(legacy_path).read_bytes() == b"legacy-user-bytes"
-    assert db_session.get(File, first_id) is None
-    assert db_session.get(File, legacy.id) is not None
-
-
-def test_gc_adopts_and_purges_pre_ledger_artifact_with_matching_content(
-    db_session: Session, storage
-) -> None:
-    model = build_model(
-        db_session, name="Legacy owned", slug="legacy-owned", hash="legacy-owned-hash"
-    )
-    content = b"artifact created before the ownership ledger"
-    legacy_path = storage.blob_key("legacy-owned", 1, "legacy.stl")
-    _write(legacy_path, content)
-    artifact = build_file(
-        db_session,
-        model,
-        path=legacy_path,
-        filename="legacy.stl",
-        file_type=FileType.STL,
-        size_bytes=len(content),
-        sha256=hashlib.sha256(content).hexdigest(),
-    )
-    model.deleted_at = utcnow() - timedelta(days=1)
-    db_session.add(model)
-    db_session.commit()
-    model_id = model.id
-    artifact_id = artifact.id
-
-    result = gc_soft_deleted(retention_days=0)
-
-    assert result["rows"] == 1
-    assert result["storage_completed"] == 1
-    assert not Path(legacy_path).exists()
-    db_session.expire_all()
-    assert db_session.get(Model, model_id) is None
-    assert db_session.get(File, artifact_id) is None
-
-
-def test_gc_preserves_shared_stl_cache_until_last_artifact_is_purged(
-    db_session: Session, storage
-) -> None:
-    expired = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "cache-expired", slug="cache-expired"),
-        filename="cache-expired.stl",
-    )
-    survivor = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "cache-survivor", slug="cache-survivor"),
-        filename="cache-survivor.stl",
-    )
-    survivor.sha256 = expired.sha256
-    expired.deleted_at = utcnow() - timedelta(days=1)
-    db_session.add(expired)
-    db_session.add(survivor)
-    db_session.commit()
-    cache_key = store_owned_bytes(
-        db_session, storage, storage.stl_cache_key(expired.sha256)
-    ).key
-
-    gc_soft_deleted(retention_days=0)
-
-    assert Path(cache_key).exists()
-    db_session.expire_all()
-    assert db_session.get(File, survivor.id) is not None
-
-
 class TestGcSoftDeleted:
     """The interlock: an open namespace-escape finding stops the GC deleting.
 
@@ -363,8 +171,194 @@ class TestGcSoftDeleted:
         db_session.expire_all()
         assert db_session.get(Collection, collection.id) is not None
 
+    def test_gc_preserves_unclaimed_files_in_local_storage(
+        self, db_session: Session, storage
+    ) -> None:
+        """A configured local root may already contain user-managed files.
 
-class TestCollection:
+        Absence from PrintStash's database is not proof that PrintStash owns a file,
+        even when its path resembles the vault layout.  Scheduled maintenance must
+        therefore never discover and delete local files by walking ``data_dir``.
+        """
+        existing_library_file = _write(
+            str(
+                Path(storage.blob_key("gone", 1, "gone.stl")).parents[2]
+                / "My Library"
+                / "part.stl"
+            )
+        )
+        printstash_shaped_file = _write(storage.blob_key("gone", 1, "gone.stl"))
+        document_shaped_file = _write(storage.document_file_key(999, "gone.pdf"))
+
+        removed = _cleanup_orphan_blobs(db_session)
+
+        assert Path(existing_library_file).exists()
+        assert Path(printstash_shaped_file).exists()
+        assert Path(document_shaped_file).exists()
+        assert removed == 0
+
+    def test_gc_ignores_markdown_documents(self, db_session: Session, storage) -> None:
+        """Markdown docs own no blob — they must not contribute a bogus key."""
+        doc = Document(name="notes", kind=DocumentKind.MARKDOWN, body="# hi")
+        db_session.add(doc)
+        db_session.commit()
+
+        assert _cleanup_orphan_blobs(db_session) == 0
+
+    def test_gc_hard_deletes_expired_artifact_and_its_derivatives(
+        self, db_session: Session, storage
+    ) -> None:
+        artifact = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "derived-expired", slug="derived-expired"),
+            filename="derived-expired.stl",
+        )
+        artifact_id = artifact.id
+        keys = (
+            artifact.path,
+            storage.thumbnail_key(artifact.id),
+            storage.legacy_thumbnail_key(artifact.id),
+            storage.stl_cache_key(artifact.sha256),
+        )
+        for key in keys[1:]:
+            store_owned_bytes(db_session, storage, key)
+        artifact.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(artifact)
+        db_session.commit()
+
+        gc_soft_deleted(retention_days=0)
+
+        assert all(not Path(key).exists() for key in keys)
+        db_session.expire_all()
+        assert db_session.get(File, artifact_id) is None
+
+    def test_negative_retention_disables_gc_and_preserves_owned_bytes(
+        self, db_session: Session, storage
+    ) -> None:
+        artifact = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "retention-disabled", slug="retention-disabled"),
+            filename="retention-disabled.stl",
+        )
+        artifact.deleted_at = utcnow() - timedelta(days=365)
+        db_session.add(artifact)
+        db_session.commit()
+
+        result = gc_soft_deleted(retention_days=-1)
+
+        assert result == {"rows": 0, "orphan_blobs": 0}
+        assert Path(artifact.path).exists()
+        db_session.expire_all()
+        assert db_session.get(File, artifact.id) is not None
+
+    def test_gc_skips_legacy_candidate_without_blocking_verifiable_candidates(
+        self, db_session: Session, storage
+    ) -> None:
+        first = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "owned-first", slug="owned-first"),
+            filename="owned-first.stl",
+        )
+        first.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(first)
+
+        legacy_model = build_model(
+            db_session, name="Legacy", slug="legacy", hash="legacy-hash"
+        )
+        legacy_path = storage.blob_key("legacy", 1, "legacy.stl")
+        _write(legacy_path, b"legacy-user-bytes")
+        legacy = build_file(
+            db_session,
+            legacy_model,
+            path=legacy_path,
+            filename="legacy.stl",
+            file_type=FileType.STL,
+            version=1,
+            size_bytes=17,
+            sha256="legacy-file-hash",
+            deleted_at=utcnow() - timedelta(days=1),
+        )
+        first_id = first.id
+        first_path = first.path
+
+        result = gc_soft_deleted(retention_days=0)
+
+        db_session.expire_all()
+        assert result["resources_blocked"] == 1
+        assert not Path(first_path).exists()
+        assert Path(legacy_path).read_bytes() == b"legacy-user-bytes"
+        assert db_session.get(File, first_id) is None
+        assert db_session.get(File, legacy.id) is not None
+
+    def test_gc_adopts_and_purges_pre_ledger_artifact_with_matching_content(
+        self, db_session: Session, storage
+    ) -> None:
+        model = build_model(
+            db_session,
+            name="Legacy owned",
+            slug="legacy-owned",
+            hash="legacy-owned-hash",
+        )
+        content = b"artifact created before the ownership ledger"
+        legacy_path = storage.blob_key("legacy-owned", 1, "legacy.stl")
+        _write(legacy_path, content)
+        artifact = build_file(
+            db_session,
+            model,
+            path=legacy_path,
+            filename="legacy.stl",
+            file_type=FileType.STL,
+            size_bytes=len(content),
+            sha256=hashlib.sha256(content).hexdigest(),
+        )
+        model.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(model)
+        db_session.commit()
+        model_id = model.id
+        artifact_id = artifact.id
+
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["rows"] == 1
+        assert result["storage_completed"] == 1
+        assert not Path(legacy_path).exists()
+        db_session.expire_all()
+        assert db_session.get(Model, model_id) is None
+        assert db_session.get(File, artifact_id) is None
+
+    def test_gc_preserves_shared_stl_cache_until_last_artifact_is_purged(
+        self, db_session: Session, storage
+    ) -> None:
+        expired = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "cache-expired", slug="cache-expired"),
+            filename="cache-expired.stl",
+        )
+        survivor = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "cache-survivor", slug="cache-survivor"),
+            filename="cache-survivor.stl",
+        )
+        survivor.sha256 = expired.sha256
+        expired.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(expired)
+        db_session.add(survivor)
+        db_session.commit()
+        cache_key = store_owned_bytes(
+            db_session, storage, storage.stl_cache_key(expired.sha256)
+        ).key
+
+        gc_soft_deleted(retention_days=0)
+
+        assert Path(cache_key).exists()
+        db_session.expire_all()
+        assert db_session.get(File, survivor.id) is not None
+
     def test_gc_preserves_unreferenced_collection_images(
         self, db_session: Session, storage
     ) -> None:
@@ -437,8 +431,6 @@ class TestCollection:
 
         assert not Path(key).exists()
 
-
-class TestDocument:
     def test_gc_preserves_document_blobs(self, db_session: Session, storage) -> None:
         doc = _binary_document(db_session, storage)
         key = storage.document_file_key(doc.id, doc.filename)
@@ -493,8 +485,6 @@ class TestDocument:
         db_session.expire_all()
         assert db_session.get(Document, document_id) is None
 
-
-class TestModel:
     def test_gc_preserves_model_blobs(self, db_session: Session, storage) -> None:
         f = build_stored_file(
             db_session,
@@ -525,8 +515,6 @@ class TestModel:
 
         assert Path(f.path).exists()
 
-
-class TestExists:
     def test_gc_preserves_file_derivatives_while_artifact_exists(
         self, db_session: Session, storage
     ) -> None:
@@ -549,7 +537,7 @@ class TestExists:
         assert all(Path(key).exists() for key in keys)
 
 
-class TestDelete:
+class TestHardDelete:
     def test_hard_delete_aborts_when_owned_storage_is_suddenly_unmounted(
         self, db_session: Session, storage, tmp_path: Path
     ) -> None:
@@ -639,8 +627,6 @@ class TestDelete:
         assert db_session.get(Model, model.id) is None
         assert not Path(artifact.path).exists()
 
-
-class TestRollback:
     def test_hard_delete_late_storage_failure_leaks_remainder_without_db_rollback(
         self, db_session: Session, storage, monkeypatch: pytest.MonkeyPatch
     ) -> None:

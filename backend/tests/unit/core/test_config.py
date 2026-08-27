@@ -8,42 +8,6 @@ from pydantic import ValidationError
 from app.core.config import FrozenSettings
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("mesh_memory_budget_fraction", 0),
-        ("mesh_max_load_mb", 0),
-        ("max_render_jobs", 0),
-        ("bambu_external_capture_max_mb", 0),
-        ("s3_lifecycle_expiration_days", 0),
-        ("s3_lifecycle_transition_days", 0),
-        ("backup_retention_days", 0),
-        ("trash_retention_days", 0),
-    ],
-)
-def test_documented_zero_sentinels_remain_valid(field: str, value: int | float) -> None:
-    configured = FrozenSettings(_env_file=None, **{field: value})
-    assert getattr(configured, field) == value
-
-
-def test_archive_entry_limit_cannot_exceed_total_limit() -> None:
-    with pytest.raises(ValidationError, match="max_archive_entry_mb"):
-        FrozenSettings(
-            _env_file=None,
-            max_archive_entry_mb=100,
-            max_archive_uncompressed_mb=99,
-        )
-
-
-def test_s3_transition_must_precede_expiration_when_both_are_enabled() -> None:
-    with pytest.raises(ValidationError, match="s3_lifecycle_transition_days"):
-        FrozenSettings(
-            _env_file=None,
-            s3_lifecycle_transition_days=30,
-            s3_lifecycle_expiration_days=30,
-        )
-
-
 class TestSettings:
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -78,3 +42,38 @@ class TestSettings:
         # identifies the deployment's app registration.
         assert "client-id" not in rendered
         assert "client-secret" not in rendered
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("mesh_memory_budget_fraction", 0),
+            ("mesh_max_load_mb", 0),
+            ("max_render_jobs", 0),
+            ("bambu_external_capture_max_mb", 0),
+            ("s3_lifecycle_expiration_days", 0),
+            ("s3_lifecycle_transition_days", 0),
+            ("backup_retention_days", 0),
+            ("trash_retention_days", 0),
+        ],
+    )
+    def test_documented_zero_sentinels_remain_valid(
+        self, field: str, value: int | float
+    ) -> None:
+        configured = FrozenSettings(_env_file=None, **{field: value})
+        assert getattr(configured, field) == value
+
+    def test_archive_entry_limit_cannot_exceed_total_limit(self) -> None:
+        with pytest.raises(ValidationError, match="max_archive_entry_mb"):
+            FrozenSettings(
+                _env_file=None,
+                max_archive_entry_mb=100,
+                max_archive_uncompressed_mb=99,
+            )
+
+    def test_s3_transition_must_precede_expiration_when_both_are_enabled(self) -> None:
+        with pytest.raises(ValidationError, match="s3_lifecycle_transition_days"):
+            FrozenSettings(
+                _env_file=None,
+                s3_lifecycle_transition_days=30,
+                s3_lifecycle_expiration_days=30,
+            )

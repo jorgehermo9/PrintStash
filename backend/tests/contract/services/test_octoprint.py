@@ -116,31 +116,32 @@ async def _wait_job_state(
     raise AssertionError(f"job {job_id} never reached {states}")
 
 
-def test_send_print_completes(db_session: Session) -> None:
-    app, sim = create_app(
-        total_mm=1000.0, total_seconds=10.0, print_seconds=1.5, api_key=API_KEY
-    )
-    running = start_server(app)
-    try:
-        printer_id, job_id = _seed(db_session, running.base_url)
+class TestStart:
+    def test_send_print_completes(self, db_session: Session) -> None:
+        app, sim = create_app(
+            total_mm=1000.0, total_seconds=10.0, print_seconds=1.5, api_key=API_KEY
+        )
+        running = start_server(app)
+        try:
+            printer_id, job_id = _seed(db_session, running.base_url)
 
-        async def _drive() -> None:
-            with get_session_factory().session() as session:
-                provider = get_provider_client(
-                    session.get(Printer, printer_id), registry=REGISTRY
+            async def _drive() -> None:
+                with get_session_factory().session() as session:
+                    provider = get_provider_client(
+                        session.get(Printer, printer_id), registry=REGISTRY
+                    )
+                await provider.start(REMOTE)
+                await _run_hub(
+                    printer_id, lambda: _wait_job_state(job_id, PrintJobState.COMPLETED)
                 )
-            await provider.start(REMOTE)
-            await _run_hub(
-                printer_id, lambda: _wait_job_state(job_id, PrintJobState.COMPLETED)
-            )
 
-        asyncio.run(_drive())
+            asyncio.run(_drive())
 
-        with get_session_factory().session() as s:
-            job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
-            assert job.state == PrintJobState.COMPLETED
-    finally:
-        running.stop()
+            with get_session_factory().session() as s:
+                job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
+                assert job.state == PrintJobState.COMPLETED
+        finally:
+            running.stop()
 
 
 class TestCancel:

@@ -63,63 +63,65 @@ async def _upload_and_wait(api, headers, *, model_name: str) -> dict:
     return next(m for m in models if m["name"] == model_name)
 
 
-@pytest.mark.asyncio
-async def test_backup_wipe_restore_round_trips_through_the_real_api(
-    api, tmp_path, e2e_db
-):
-    headers = await _setup_and_login(api, tmp_path)
-    model = await _upload_and_wait(api, headers, model_name="Backup Benchy")
-    model_id = model["id"]
-    detail = (await api.get(f"/api/v1/models/{model_id}", headers=headers)).json()
-    file_id = detail["files"][0]["id"]
+class TestBackupRestore:
+    @pytest.mark.asyncio
+    async def test_backup_wipe_restore_round_trips_through_the_real_api(
+        self, api, tmp_path, e2e_db
+    ):
+        headers = await _setup_and_login(api, tmp_path)
+        model = await _upload_and_wait(api, headers, model_name="Backup Benchy")
+        model_id = model["id"]
+        detail = (await api.get(f"/api/v1/models/{model_id}", headers=headers)).json()
+        file_id = detail["files"][0]["id"]
 
-    original_blob = (
-        await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
-    ).content
-    assert original_blob == FIXTURE.read_bytes()
+        original_blob = (
+            await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
+        ).content
+        assert original_blob == FIXTURE.read_bytes()
 
-    created = await api.post("/api/v1/backups", headers=headers)
-    assert created.status_code == 202, created.text
-    backup_id = created.json()["backup_id"]
-    assert created.json()["file_count"] >= 1
+        created = await api.post("/api/v1/backups", headers=headers)
+        assert created.status_code == 202, created.text
+        backup_id = created.json()["backup_id"]
+        assert created.json()["file_count"] >= 1
 
-    listed = await api.get("/api/v1/backups", headers=headers)
-    assert any(b["backup_id"] == backup_id for b in listed.json())
+        listed = await api.get("/api/v1/backups", headers=headers)
+        assert any(b["backup_id"] == backup_id for b in listed.json())
 
-    # Simulate real data loss: drop the DB rows and delete the blob from disk,
-    # bypassing the app entirely (a disk/DB disaster, not a soft delete).
-    e2e_db.exec(delete(Metadata).where(Metadata.file_id == file_id))
-    e2e_db.exec(delete(File).where(File.id == file_id))
-    e2e_db.exec(delete(Model).where(Model.id == model_id))
-    e2e_db.commit()
-    shutil.rmtree(tmp_path / "files", ignore_errors=True)
-    (tmp_path / "files").mkdir(parents=True, exist_ok=True)
+        # Simulate real data loss: drop the DB rows and delete the blob from disk,
+        # bypassing the app entirely (a disk/DB disaster, not a soft delete).
+        e2e_db.exec(delete(Metadata).where(Metadata.file_id == file_id))
+        e2e_db.exec(delete(File).where(File.id == file_id))
+        e2e_db.exec(delete(Model).where(Model.id == model_id))
+        e2e_db.commit()
+        shutil.rmtree(tmp_path / "files", ignore_errors=True)
+        (tmp_path / "files").mkdir(parents=True, exist_ok=True)
 
-    gone = await api.get(f"/api/v1/models/{model_id}", headers=headers)
-    assert gone.status_code == 404
+        gone = await api.get(f"/api/v1/models/{model_id}", headers=headers)
+        assert gone.status_code == 404
 
-    restored = await api.post(f"/api/v1/backups/{backup_id}/restore", headers=headers)
-    assert restored.status_code == 200, restored.text
-    assert restored.json()["restored_files"] >= 1
+        restored = await api.post(
+            f"/api/v1/backups/{backup_id}/restore", headers=headers
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["restored_files"] >= 1
 
-    back = await api.get(f"/api/v1/models/{model_id}", headers=headers)
-    assert back.status_code == 200, back.text
-    assert back.json()["name"] == "Backup Benchy"
+        back = await api.get(f"/api/v1/models/{model_id}", headers=headers)
+        assert back.status_code == 200, back.text
+        assert back.json()["name"] == "Backup Benchy"
 
-    restored_blob = (
-        await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
-    ).content
-    assert restored_blob == FIXTURE.read_bytes()
+        restored_blob = (
+            await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
+        ).content
+        assert restored_blob == FIXTURE.read_bytes()
 
-
-@pytest.mark.asyncio
-async def test_restore_of_unknown_backup_id_is_404(api, tmp_path, e2e_db):
-    headers = await _setup_and_login(api, tmp_path)
-    resp = await api.post(
-        "/api/v1/backups/not-a-real-backup-id/restore", headers=headers
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "backup_not_found"
+    @pytest.mark.asyncio
+    async def test_restore_of_unknown_backup_id_is_404(self, api, tmp_path, e2e_db):
+        headers = await _setup_and_login(api, tmp_path)
+        resp = await api.post(
+            "/api/v1/backups/not-a-real-backup-id/restore", headers=headers
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "backup_not_found"
 
 
 class TestDelete:

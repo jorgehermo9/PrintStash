@@ -115,68 +115,11 @@ def _ingest_gcode(
 # --------------------------------------------------------------------------- #
 # Mesh ingestion — real STL / 3MF
 # --------------------------------------------------------------------------- #
-@_requires(CUBE_STL)
-def test_ingest_real_stl_extracts_geometry_and_thumbnail(
-    tmp_path: Path, db_session: Session
-) -> None:
-    use_local_storage(tmp_path)
-    model, f = _ingest_mesh(
-        db_session, CUBE_STL, FileType.STL, model_name="Calibration Cube"
-    )
-
-    assert f.file_type == FileType.STL
-    assert f.size_bytes == CUBE_STL.stat().st_size
-    assert f.is_external is False
-    assert f.path.startswith(str(_overlay["data_dir"]))  # copied into the vault
-
-    md = _metadata_for(db_session, f.id)
-    # A 20mm calibration cube, ~252 triangles.
-    assert md.bbox_x_mm == pytest.approx(20.0, abs=0.1)
-    assert md.bbox_y_mm == pytest.approx(20.0, abs=0.1)
-    assert md.bbox_z_mm == pytest.approx(20.0, abs=0.1)
-    assert md.triangle_count == 252
-    assert md.volume_mm3 == pytest.approx(7837, rel=0.02)
-    # A thumbnail was rendered and adopted by the model.
-    assert model.thumbnail_path is not None
-    assert model.thumbnail_file_id == f.id
-
-
-@_requires(SPATULA_3MF)
-def test_ingest_real_3mf_extracts_geometry(tmp_path: Path, db_session: Session) -> None:
-    use_local_storage(tmp_path)
-    model, f = _ingest_mesh(
-        db_session, SPATULA_3MF, FileType.THREE_MF, model_name="Spatula"
-    )
-
-    assert f.file_type == FileType.THREE_MF
-    md = _metadata_for(db_session, f.id)
-    # A flat ~126x54mm spatula, thin in Z.
-    assert md.bbox_x_mm == pytest.approx(126.0, abs=1.0)
-    assert md.bbox_y_mm == pytest.approx(54.0, abs=1.0)
-    assert md.bbox_z_mm == pytest.approx(4.43, abs=0.5)
-    assert md.triangle_count and md.triangle_count > 1000
-    assert model.thumbnail_path is not None
 
 
 # --------------------------------------------------------------------------- #
 # G-code ingestion — real slicer output
 # --------------------------------------------------------------------------- #
-
-
-@_requires(SPATULA_GCODE)
-def test_ingest_real_prusa_gcode_extracts_embedded_thumbnail(
-    tmp_path: Path, db_session: Session
-) -> None:
-    use_local_storage(tmp_path)
-    model, f = _ingest_gcode(db_session, SPATULA_GCODE, model_name="Spatula GCode")
-
-    md = _metadata_for(db_session, f.id)
-    assert md.printer_model == "MK4IS"
-    assert md.layer_height_mm == pytest.approx(0.15)
-    assert md.filament_weight_g == pytest.approx(10.55, abs=0.05)
-    # PrusaSlicer embeds a preview PNG; it should be extracted + adopted (as webp).
-    assert model.thumbnail_path is not None
-    assert model.thumbnail_file_id == f.id
 
 
 # --------------------------------------------------------------------------- #
@@ -187,33 +130,6 @@ def test_ingest_real_prusa_gcode_extracts_embedded_thumbnail(
 # --------------------------------------------------------------------------- #
 # Revisions — real benchy g-code variants
 # --------------------------------------------------------------------------- #
-
-
-@_requires(BENCHY_GCODE_A)
-@_requires(BENCHY_GCODE_B)
-def test_marking_new_real_revision_recommended_clears_previous(
-    tmp_path: Path, db_session: Session
-) -> None:
-    use_local_storage(tmp_path)
-    model, first = _ingest_gcode(db_session, BENCHY_GCODE_A, model_name="3DBenchy B")
-
-    second = add_gcode_revision_to_model(
-        session=db_session,
-        model=model,
-        staged_path=_stage_copy(BENCHY_GCODE_B),
-        original_filename=BENCHY_GCODE_B.name,
-        revision_label="faster",
-        revision_status=None,
-        revision_notes=None,
-        is_recommended=True,
-    )
-
-    db_session.expire_all()
-    refreshed_first = db_session.get(File, first.id)
-    refreshed_second = db_session.get(File, second.id)
-    # The new revision took the marker; the old one was cleared. Still exactly one.
-    assert refreshed_second.is_recommended is True
-    assert refreshed_first.is_recommended is False
 
 
 class TestMetadata:
@@ -235,6 +151,64 @@ class TestMetadata:
         assert md.layer_height_mm == pytest.approx(0.2)
         assert md.nozzle_diameter_mm == pytest.approx(0.4)
         assert md.filament_weight_g == pytest.approx(4.61, abs=0.05)
+
+    @_requires(CUBE_STL)
+    def test_ingest_real_stl_extracts_geometry_and_thumbnail(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        model, f = _ingest_mesh(
+            db_session, CUBE_STL, FileType.STL, model_name="Calibration Cube"
+        )
+
+        assert f.file_type == FileType.STL
+        assert f.size_bytes == CUBE_STL.stat().st_size
+        assert f.is_external is False
+        assert f.path.startswith(str(_overlay["data_dir"]))  # copied into the vault
+
+        md = _metadata_for(db_session, f.id)
+        # A 20mm calibration cube, ~252 triangles.
+        assert md.bbox_x_mm == pytest.approx(20.0, abs=0.1)
+        assert md.bbox_y_mm == pytest.approx(20.0, abs=0.1)
+        assert md.bbox_z_mm == pytest.approx(20.0, abs=0.1)
+        assert md.triangle_count == 252
+        assert md.volume_mm3 == pytest.approx(7837, rel=0.02)
+        # A thumbnail was rendered and adopted by the model.
+        assert model.thumbnail_path is not None
+        assert model.thumbnail_file_id == f.id
+
+    @_requires(SPATULA_3MF)
+    def test_ingest_real_3mf_extracts_geometry(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        model, f = _ingest_mesh(
+            db_session, SPATULA_3MF, FileType.THREE_MF, model_name="Spatula"
+        )
+
+        assert f.file_type == FileType.THREE_MF
+        md = _metadata_for(db_session, f.id)
+        # A flat ~126x54mm spatula, thin in Z.
+        assert md.bbox_x_mm == pytest.approx(126.0, abs=1.0)
+        assert md.bbox_y_mm == pytest.approx(54.0, abs=1.0)
+        assert md.bbox_z_mm == pytest.approx(4.43, abs=0.5)
+        assert md.triangle_count and md.triangle_count > 1000
+        assert model.thumbnail_path is not None
+
+    @_requires(SPATULA_GCODE)
+    def test_ingest_real_prusa_gcode_extracts_embedded_thumbnail(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        model, f = _ingest_gcode(db_session, SPATULA_GCODE, model_name="Spatula GCode")
+
+        md = _metadata_for(db_session, f.id)
+        assert md.printer_model == "MK4IS"
+        assert md.layer_height_mm == pytest.approx(0.15)
+        assert md.filament_weight_g == pytest.approx(10.55, abs=0.05)
+        # PrusaSlicer embeds a preview PNG; it should be extracted + adopted (as webp).
+        assert model.thumbnail_path is not None
+        assert model.thumbnail_file_id == f.id
 
 
 class TestModel:
@@ -264,6 +238,34 @@ class TestModel:
             select(File).where(File.model_id == model_a.id, live(File))
         ).all()
         assert len(files) == 2
+
+    @_requires(BENCHY_GCODE_A)
+    @_requires(BENCHY_GCODE_B)
+    def test_marking_new_real_revision_recommended_clears_previous(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        model, first = _ingest_gcode(
+            db_session, BENCHY_GCODE_A, model_name="3DBenchy B"
+        )
+
+        second = add_gcode_revision_to_model(
+            session=db_session,
+            model=model,
+            staged_path=_stage_copy(BENCHY_GCODE_B),
+            original_filename=BENCHY_GCODE_B.name,
+            revision_label="faster",
+            revision_status=None,
+            revision_notes=None,
+            is_recommended=True,
+        )
+
+        db_session.expire_all()
+        refreshed_first = db_session.get(File, first.id)
+        refreshed_second = db_session.get(File, second.id)
+        # The new revision took the marker; the old one was cleared. Still exactly one.
+        assert refreshed_second.is_recommended is True
+        assert refreshed_first.is_recommended is False
 
 
 class TestFirst:

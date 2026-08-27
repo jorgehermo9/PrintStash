@@ -38,31 +38,34 @@ def _use_threaded_db(threaded_hub_db: None) -> None:
 REMOTE = "demo.gcode"
 
 
-def test_mock_enforces_moonraker_http_and_websocket_api_key() -> None:
-    app, _state = create_app(api_key="secret")
-    running = start_server(app)
-    try:
+class TestMoonrakerEmulator:
+    def test_mock_enforces_moonraker_http_and_websocket_api_key(self) -> None:
+        app, _state = create_app(api_key="secret")
+        running = start_server(app)
+        try:
 
-        async def _run() -> None:
-            assert (await MoonrakerClient(running.base_url, "secret").info())["result"]
-            with pytest.raises(MoonrakerError, match="moonraker 401"):
-                await MoonrakerClient(running.base_url, "wrong").info()
+            async def _run() -> None:
+                assert (await MoonrakerClient(running.base_url, "secret").info())[
+                    "result"
+                ]
+                with pytest.raises(MoonrakerError, match="moonraker 401"):
+                    await MoonrakerClient(running.base_url, "wrong").info()
 
-            statuses: list[dict] = []
-            stop = asyncio.Event()
+                statuses: list[dict] = []
+                stop = asyncio.Event()
 
-            async def on_status(status: dict) -> None:
-                statuses.append(status)
-                stop.set()
+                async def on_status(status: dict) -> None:
+                    statuses.append(status)
+                    stop.set()
 
-            await MoonrakerClient(running.base_url, "secret").subscribe(
-                on_status, stop_event=stop
-            )
-            assert statuses
+                await MoonrakerClient(running.base_url, "secret").subscribe(
+                    on_status, stop_event=stop
+                )
+                assert statuses
 
-        asyncio.run(_run())
-    finally:
-        running.stop()
+            asyncio.run(_run())
+        finally:
+            running.stop()
 
 
 def _seed(db_session: Session, base_url: str) -> tuple[int, int]:
@@ -139,67 +142,71 @@ async def _wait_job_state(
     raise AssertionError(f"job {job_id} never reached {states}")
 
 
-def test_send_print_completes_and_decrements_spoolman(db_session: Session) -> None:
-    app, state = create_app(total_mm=1000.0, total_seconds=10.0, print_seconds=1.5)
-    running = start_server(app)
-    try:
-        printer_id, job_id = _seed(db_session, running.base_url)
-        start_weight = state.spools[1]["remaining_weight"]
+class TestStart:
+    def test_send_print_completes_and_decrements_spoolman(
+        self, db_session: Session
+    ) -> None:
+        app, state = create_app(total_mm=1000.0, total_seconds=10.0, print_seconds=1.5)
+        running = start_server(app)
+        try:
+            printer_id, job_id = _seed(db_session, running.base_url)
+            start_weight = state.spools[1]["remaining_weight"]
 
-        # Kick off the simulated print on the printer.
-        resp = httpx.post(
-            f"{running.base_url}/printer/print/start", params={"filename": REMOTE}
-        )
-        assert resp.status_code == 200
-
-        async def _drive() -> None:
-            await _run_hub(
-                printer_id,
-                lambda: _wait_job_state(job_id, PrintJobState.COMPLETED),
+            # Kick off the simulated print on the printer.
+            resp = httpx.post(
+                f"{running.base_url}/printer/print/start", params={"filename": REMOTE}
             )
+            assert resp.status_code == 200
 
-        asyncio.run(_drive())
+            async def _drive() -> None:
+                await _run_hub(
+                    printer_id,
+                    lambda: _wait_job_state(job_id, PrintJobState.COMPLETED),
+                )
 
-        with get_session_factory().session() as s:
-            job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
-            assert job.state == PrintJobState.COMPLETED
-            assert job.filament_used_mm == 1000.0
-            assert job.filament_used_g and job.filament_used_g > 0
+            asyncio.run(_drive())
 
-        assert state.spools[1]["remaining_weight"] < start_weight
-    finally:
-        running.stop()
+            with get_session_factory().session() as s:
+                job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
+                assert job.state == PrintJobState.COMPLETED
+                assert job.filament_used_mm == 1000.0
+                assert job.filament_used_g and job.filament_used_g > 0
+
+            assert state.spools[1]["remaining_weight"] < start_weight
+        finally:
+            running.stop()
 
 
-def test_pause_then_resume_runs_to_completion(db_session: Session) -> None:
-    """Pause mid-print is reflected as PAUSED; resuming runs through to COMPLETED."""
-    app, _state = create_app(total_mm=1000.0, total_seconds=10.0, print_seconds=4.0)
-    running = start_server(app)
-    try:
-        printer_id, job_id = _seed(db_session, running.base_url)
+class TestPause:
+    def test_pause_then_resume_runs_to_completion(self, db_session: Session) -> None:
+        """Pause mid-print is reflected as PAUSED; resuming runs through to COMPLETED."""
+        app, _state = create_app(total_mm=1000.0, total_seconds=10.0, print_seconds=4.0)
+        running = start_server(app)
+        try:
+            printer_id, job_id = _seed(db_session, running.base_url)
 
-        async def _drive() -> None:
-            async with httpx.AsyncClient(base_url=running.base_url) as http:
-                await http.post("/printer/print/start", params={"filename": REMOTE})
+            async def _drive() -> None:
+                async with httpx.AsyncClient(base_url=running.base_url) as http:
+                    await http.post("/printer/print/start", params={"filename": REMOTE})
 
-                async def body() -> None:
-                    # Pause immediately; the hub's WS stream should report PAUSED.
-                    await http.post("/printer/print/pause")
-                    await _wait_job_state(job_id, PrintJobState.PAUSED)
-                    # Resume and let the simulated print finish.
-                    await http.post("/printer/print/resume")
-                    await _wait_job_state(job_id, PrintJobState.COMPLETED)
+                    async def body() -> None:
+                        # Pause immediately; the hub's WS stream should report PAUSED.
+                        await http.post("/printer/print/pause")
+                        await _wait_job_state(job_id, PrintJobState.PAUSED)
+                        # Resume and let the simulated print finish.
+                        await http.post("/printer/print/resume")
+                        await _wait_job_state(job_id, PrintJobState.COMPLETED)
 
-                await _run_hub(printer_id, body)
+                    await _run_hub(printer_id, body)
 
-        asyncio.run(_drive())
+            asyncio.run(_drive())
 
-        with get_session_factory().session() as s:
-            job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
-            assert job.state == PrintJobState.COMPLETED
-            assert job.finished_at is not None
-    finally:
-        running.stop()
+            with get_session_factory().session() as s:
+                job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
+                assert job.state == PrintJobState.COMPLETED
+                assert job.finished_at is not None
+        finally:
+            running.stop()
 
 
 class TestCancel:

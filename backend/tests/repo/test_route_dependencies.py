@@ -50,57 +50,63 @@ def _assert_read_token_is_rejected(route: APIRoute) -> None:
         )
 
 
-def test_provider_connection_mutations_require_write_scope() -> None:
-    for path, method in (
-        ("/provider-connections/cults/connect", "POST"),
-        ("/provider-connections/myminifactory/authorize", "POST"),
-        ("/provider-connections/{provider}/disconnect", "DELETE"),
-    ):
-        _assert_read_token_is_rejected(
-            _route(provider_connections.router, path, method)
+class TestRouteDependencies:
+    """Every mutating route carries the dependency that gates it.
+
+    A missing scope check is invisible from inside the route: it returns the
+    right body for the right request and quietly accepts the wrong caller. So
+    this reads the dependency list off each route rather than exercising it, and
+    it is a repo invariant rather than a per-endpoint test because the failure
+    mode is a route somebody *forgot*, which no per-endpoint file would cover."""
+
+    def test_provider_connection_mutations_require_write_scope(self) -> None:
+        for path, method in (
+            ("/provider-connections/cults/connect", "POST"),
+            ("/provider-connections/myminifactory/authorize", "POST"),
+            ("/provider-connections/{provider}/disconnect", "DELETE"),
+        ):
+            _assert_read_token_is_rejected(
+                _route(provider_connections.router, path, method)
+            )
+
+    def test_browser_pairing_management_mutations_require_write_scope(self) -> None:
+        for path, method in (
+            ("/browser-pairings", "POST"),
+            ("/browser-pairings/{device_id}", "PATCH"),
+            ("/browser-pairings/{device_id}", "DELETE"),
+        ):
+            _assert_read_token_is_rejected(
+                _route(provider_connections.pairing_router, path, method)
+            )
+
+    def test_provenance_mutations_require_write_scope(self) -> None:
+        for path, method in (
+            ("/models/{model_id}/provenance/{source_id}", "PATCH"),
+            ("/models/{model_id}/provenance/{source_id}/cover", "PUT"),
+            ("/models/{model_id}/provenance/{source_id}/cover", "DELETE"),
+        ):
+            _assert_read_token_is_rejected(_route(models.router, path, method))
+
+    def test_browser_credentials_are_limited_to_capture_routes(self) -> None:
+        capture_routes = {
+            (route.path, next(iter(list(route.methods or set()))))
+            for route in _routes(inbox.router)
+            if _has_dependency(route, require_user_or_browser_import_user)
+        }
+
+        assert capture_routes == {
+            ("/inbox", "POST"),
+            ("/inbox/capture-upload-slots", "POST"),
+            ("/inbox/capture-upload-slots/{slot_id}", "PUT"),
+            ("/inbox/{item_id}/capture-upload-finalize", "POST"),
+            ("/inbox/browser-upload", "POST"),
+        }
+        assert not any(
+            _has_dependency(route, require_user_or_browser_import_user)
+            for router in (
+                models.router,
+                provider_connections.router,
+                provider_connections.pairing_router,
+            )
+            for route in _routes(router)
         )
-
-
-def test_browser_pairing_management_mutations_require_write_scope() -> None:
-    for path, method in (
-        ("/browser-pairings", "POST"),
-        ("/browser-pairings/{device_id}", "PATCH"),
-        ("/browser-pairings/{device_id}", "DELETE"),
-    ):
-        _assert_read_token_is_rejected(
-            _route(provider_connections.pairing_router, path, method)
-        )
-
-
-def test_provenance_mutations_require_write_scope() -> None:
-    for path, method in (
-        ("/models/{model_id}/provenance/{source_id}", "PATCH"),
-        ("/models/{model_id}/provenance/{source_id}/cover", "PUT"),
-        ("/models/{model_id}/provenance/{source_id}/cover", "DELETE"),
-    ):
-        _assert_read_token_is_rejected(_route(models.router, path, method))
-
-
-def test_browser_credentials_are_limited_to_capture_routes() -> None:
-    capture_routes = {
-        (route.path, next(iter(list(route.methods or set()))))
-        for route in _routes(inbox.router)
-        if _has_dependency(route, require_user_or_browser_import_user)
-    }
-
-    assert capture_routes == {
-        ("/inbox", "POST"),
-        ("/inbox/capture-upload-slots", "POST"),
-        ("/inbox/capture-upload-slots/{slot_id}", "PUT"),
-        ("/inbox/{item_id}/capture-upload-finalize", "POST"),
-        ("/inbox/browser-upload", "POST"),
-    }
-    assert not any(
-        _has_dependency(route, require_user_or_browser_import_user)
-        for router in (
-            models.router,
-            provider_connections.router,
-            provider_connections.pairing_router,
-        )
-        for route in _routes(router)
-    )

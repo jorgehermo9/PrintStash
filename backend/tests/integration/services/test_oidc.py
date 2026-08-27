@@ -56,60 +56,6 @@ def _enable_oidc() -> None:
     )
 
 
-def test_exchange_rejects_multi_audience_token_for_another_authorized_party(
-    monkeypatch,
-) -> None:
-    _enable_oidc()
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_jwk = json.loads(
-        jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())
-    )
-    public_jwk["kid"] = "signing-key"
-    now = datetime.now(timezone.utc)
-    token = jwt.encode(
-        {
-            "iss": _overlay["oidc_issuer_url"],
-            "sub": "signed-user",
-            "aud": ["printstash", "other-client"],
-            "azp": "other-client",
-            "iat": now,
-            "exp": now + timedelta(minutes=5),
-            "nonce": "expected-nonce",
-        },
-        private_key,
-        algorithm="RS256",
-        headers={"kid": "signing-key"},
-    )
-
-    async def discovery() -> dict:
-        return {
-            "issuer": _overlay["oidc_issuer_url"],
-            "authorization_endpoint": "https://id.example.test/authorize",
-            "token_endpoint": "https://id.example.test/token",
-            "jwks_uri": "https://id.example.test/jwks",
-        }
-
-    async def post_token(_url: str, _payload: dict, **_kwargs) -> dict:
-        return {"id_token": token}
-
-    async def get_json(_url: str) -> dict:
-        return {"keys": [public_jwk]}
-
-    monkeypatch.setattr(oidc, "_discovery", discovery)
-    monkeypatch.setattr(oidc, "_post_token", post_token)
-    monkeypatch.setattr(oidc, "_get_json", get_json)
-
-    with pytest.raises(oidc.OIDCError, match="oidc_invalid_authorized_party"):
-        asyncio.run(
-            oidc.exchange_code(
-                "code",
-                "https://stash.example.test/callback",
-                "verifier",
-                "expected-nonce",
-            )
-        )
-
-
 def db_session_count_users(client: TestClient) -> int:
     # A protected endpoint remaining unauthenticated also proves no session was minted.
     assert client.get("/api/v1/auth/me").status_code == 401
@@ -629,6 +575,60 @@ class TestExchangeCode:
             asyncio.run(
                 oidc.exchange_code(
                     "code", "https://stash.example.test/callback", "verifier", "nonce"
+                )
+            )
+
+    def test_exchange_rejects_multi_audience_token_for_another_authorized_party(
+        self,
+        monkeypatch,
+    ) -> None:
+        _enable_oidc()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_jwk = json.loads(
+            jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())
+        )
+        public_jwk["kid"] = "signing-key"
+        now = datetime.now(timezone.utc)
+        token = jwt.encode(
+            {
+                "iss": _overlay["oidc_issuer_url"],
+                "sub": "signed-user",
+                "aud": ["printstash", "other-client"],
+                "azp": "other-client",
+                "iat": now,
+                "exp": now + timedelta(minutes=5),
+                "nonce": "expected-nonce",
+            },
+            private_key,
+            algorithm="RS256",
+            headers={"kid": "signing-key"},
+        )
+
+        async def discovery() -> dict:
+            return {
+                "issuer": _overlay["oidc_issuer_url"],
+                "authorization_endpoint": "https://id.example.test/authorize",
+                "token_endpoint": "https://id.example.test/token",
+                "jwks_uri": "https://id.example.test/jwks",
+            }
+
+        async def post_token(_url: str, _payload: dict, **_kwargs) -> dict:
+            return {"id_token": token}
+
+        async def get_json(_url: str) -> dict:
+            return {"keys": [public_jwk]}
+
+        monkeypatch.setattr(oidc, "_discovery", discovery)
+        monkeypatch.setattr(oidc, "_post_token", post_token)
+        monkeypatch.setattr(oidc, "_get_json", get_json)
+
+        with pytest.raises(oidc.OIDCError, match="oidc_invalid_authorized_party"):
+            asyncio.run(
+                oidc.exchange_code(
+                    "code",
+                    "https://stash.example.test/callback",
+                    "verifier",
+                    "expected-nonce",
                 )
             )
 

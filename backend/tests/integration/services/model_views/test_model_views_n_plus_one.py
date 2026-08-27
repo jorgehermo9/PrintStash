@@ -50,92 +50,97 @@ def _count_queries(session: Session, fn: Callable[[], object]) -> int:
     return len(statements)
 
 
-@pytest.mark.parametrize("superuser", [False, True])
-def test_list_query_count_is_independent_of_page_size(
-    db_session: Session, superuser: bool
-) -> None:
-    collection = taxonomy.resolve_or_create_collection(db_session, "Parts")
-    assert collection is not None
-    user = build_user(db_session, f"lister-{superuser}", superuser=superuser)
-    if not superuser:
-        grant_collection_role(db_session, user, collection, CollectionRole.EDIT)
+class TestListItems:
+    @pytest.mark.parametrize("superuser", [False, True])
+    def test_list_query_count_is_independent_of_page_size(
+        self, db_session: Session, superuser: bool
+    ) -> None:
+        collection = taxonomy.resolve_or_create_collection(db_session, "Parts")
+        assert collection is not None
+        user = build_user(db_session, f"lister-{superuser}", superuser=superuser)
+        if not superuser:
+            grant_collection_role(db_session, user, collection, CollectionRole.EDIT)
 
-    _seed_models(db_session, 2, collection.id)
-    small = _count_queries(
-        db_session, lambda: model_views.list_items(db_session, user, limit=100)
-    )
+        _seed_models(db_session, 2, collection.id)
+        small = _count_queries(
+            db_session, lambda: model_views.list_items(db_session, user, limit=100)
+        )
 
-    _seed_models_more = 30
-    for i in range(_seed_models_more):
+        _seed_models_more = 30
+        for i in range(_seed_models_more):
+            build_model(
+                db_session,
+                name=f"Extra {i}",
+                slug=f"extra-{i}",
+                hash=f"e{i:063d}",
+                collection_id=collection.id,
+            )
+        db_session.commit()
+
+        large = _count_queries(
+            db_session, lambda: model_views.list_items(db_session, user, limit=100)
+        )
+
+        assert large == small, (
+            f"query count grew with page size ({small} -> {large}): a per-row lookup "
+            "is running inside the listing loop"
+        )
+
+    def test_effective_role_is_still_correct_per_row(self, db_session: Session) -> None:
+        """Batching must not flatten roles: each model reports its own inherited role."""
+        parts = taxonomy.resolve_or_create_collection(db_session, "Parts")
+        toys = taxonomy.resolve_or_create_collection(db_session, "Toys")
+        assert parts is not None and toys is not None
+        user = build_user(db_session, "mixed")
+        grant_collection_role(db_session, user, parts, CollectionRole.ADMIN)
+        grant_collection_role(db_session, user, toys, CollectionRole.VIEW)
+
         build_model(
-            db_session,
-            name=f"Extra {i}",
-            slug=f"extra-{i}",
-            hash=f"e{i:063d}",
-            collection_id=collection.id,
+            db_session, name="P", slug="p", hash="p" * 64, collection_id=parts.id
         )
-    db_session.commit()
-
-    large = _count_queries(
-        db_session, lambda: model_views.list_items(db_session, user, limit=100)
-    )
-
-    assert large == small, (
-        f"query count grew with page size ({small} -> {large}): a per-row lookup "
-        "is running inside the listing loop"
-    )
-
-
-def test_effective_role_is_still_correct_per_row(db_session: Session) -> None:
-    """Batching must not flatten roles: each model reports its own inherited role."""
-    parts = taxonomy.resolve_or_create_collection(db_session, "Parts")
-    toys = taxonomy.resolve_or_create_collection(db_session, "Toys")
-    assert parts is not None and toys is not None
-    user = build_user(db_session, "mixed")
-    grant_collection_role(db_session, user, parts, CollectionRole.ADMIN)
-    grant_collection_role(db_session, user, toys, CollectionRole.VIEW)
-
-    build_model(db_session, name="P", slug="p", hash="p" * 64, collection_id=parts.id)
-    build_model(db_session, name="T", slug="t", hash="t" * 64, collection_id=toys.id)
-
-    items = model_views.list_items(db_session, user, limit=100)
-    roles = {item.name: item.effective_role for item in items}
-
-    assert roles["P"] == CollectionRole.ADMIN
-    assert roles["T"] == CollectionRole.VIEW
-
-
-def test_cursor_total_is_counted_only_on_the_first_page(db_session: Session) -> None:
-    user = build_user(db_session, "cursor-count", superuser=True)
-    _seed_models(db_session, 4, collection_id=None)
-    _ = user.is_superuser
-    first_page = None
-
-    def load_first_page():
-        nonlocal first_page
-        first_page = model_views.page_items(
-            db_session,
-            user,
-            filters=ModelFilters(),
-            sort=ModelSort.NAME_ASC,
-            limit=2,
+        build_model(
+            db_session, name="T", slug="t", hash="t" * 64, collection_id=toys.id
         )
 
-    first_queries = _count_queries(db_session, load_first_page)
-    assert first_page is not None and first_page.next_cursor is not None
-    second_queries = _count_queries(
-        db_session,
-        lambda: model_views.page_items(
-            db_session,
-            user,
-            filters=ModelFilters(),
-            sort=ModelSort.NAME_ASC,
-            cursor=first_page.next_cursor,
-            limit=2,
-        ),
-    )
+        items = model_views.list_items(db_session, user, limit=100)
+        roles = {item.name: item.effective_role for item in items}
 
-    assert second_queries == first_queries - 1
+        assert roles["P"] == CollectionRole.ADMIN
+        assert roles["T"] == CollectionRole.VIEW
+
+    def test_cursor_total_is_counted_only_on_the_first_page(
+        self, db_session: Session
+    ) -> None:
+        user = build_user(db_session, "cursor-count", superuser=True)
+        _seed_models(db_session, 4, collection_id=None)
+        _ = user.is_superuser
+        first_page = None
+
+        def load_first_page():
+            nonlocal first_page
+            first_page = model_views.page_items(
+                db_session,
+                user,
+                filters=ModelFilters(),
+                sort=ModelSort.NAME_ASC,
+                limit=2,
+            )
+
+        first_queries = _count_queries(db_session, load_first_page)
+        assert first_page is not None and first_page.next_cursor is not None
+        second_queries = _count_queries(
+            db_session,
+            lambda: model_views.page_items(
+                db_session,
+                user,
+                filters=ModelFilters(),
+                sort=ModelSort.NAME_ASC,
+                cursor=first_page.next_cursor,
+                limit=2,
+            ),
+        )
+
+        assert second_queries == first_queries - 1
 
 
 class TestFacets:

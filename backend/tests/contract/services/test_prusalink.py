@@ -132,82 +132,86 @@ async def _wait_job_state(
     raise AssertionError(f"job {job_id} never reached {states}")
 
 
-@pytest.mark.parametrize("auth_mode", ["api_key", "digest"])
-def test_send_print_completes(db_session: Session, auth_mode: str) -> None:
-    kwargs = (
-        {"api_key": API_KEY}
-        if auth_mode == "api_key"
-        else {"username": USERNAME, "password": PASSWORD}
-    )
-    app, sim = create_app(
-        total_mm=1000.0,
-        total_seconds=10.0,
-        print_seconds=1.5,
-        auth_mode=auth_mode,
-        **kwargs,
-    )
-    running = start_server(app)
-    try:
-        printer_id, job_id = _seed(db_session, running.base_url, auth_mode=auth_mode)
-
-        async def _drive() -> None:
-            with get_session_factory().session() as session:
-                provider = get_provider_client(
-                    session.get(Printer, printer_id), registry=REGISTRY
-                )
-            await provider.start(REMOTE)
-            await _run_hub(
-                printer_id, lambda: _wait_job_state(job_id, PrintJobState.COMPLETED)
+class TestStart:
+    @pytest.mark.parametrize("auth_mode", ["api_key", "digest"])
+    def test_send_print_completes(self, db_session: Session, auth_mode: str) -> None:
+        kwargs = (
+            {"api_key": API_KEY}
+            if auth_mode == "api_key"
+            else {"username": USERNAME, "password": PASSWORD}
+        )
+        app, sim = create_app(
+            total_mm=1000.0,
+            total_seconds=10.0,
+            print_seconds=1.5,
+            auth_mode=auth_mode,
+            **kwargs,
+        )
+        running = start_server(app)
+        try:
+            printer_id, job_id = _seed(
+                db_session, running.base_url, auth_mode=auth_mode
             )
 
-        asyncio.run(_drive())
+            async def _drive() -> None:
+                with get_session_factory().session() as session:
+                    provider = get_provider_client(
+                        session.get(Printer, printer_id), registry=REGISTRY
+                    )
+                await provider.start(REMOTE)
+                await _run_hub(
+                    printer_id, lambda: _wait_job_state(job_id, PrintJobState.COMPLETED)
+                )
 
-        with get_session_factory().session() as s:
-            job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
-            assert job.state == PrintJobState.COMPLETED
-    finally:
-        running.stop()
+            asyncio.run(_drive())
+
+            with get_session_factory().session() as s:
+                job = s.exec(select(PrintJob).where(PrintJob.id == job_id)).one()
+                assert job.state == PrintJobState.COMPLETED
+        finally:
+            running.stop()
 
 
-@pytest.mark.parametrize(
-    "auth_mode,kwargs",
-    [
-        ("api_key", {"api_key": "wrong-key"}),
-        ("digest", {"username": USERNAME, "password": "wrong-password"}),
-    ],
-)
-def test_invalid_credentials_raise_authentication_error(
-    db_session: Session, auth_mode: str, kwargs: dict
-) -> None:
-    real_kwargs = (
-        {"api_key": API_KEY}
-        if auth_mode == "api_key"
-        else {"username": USERNAME, "password": PASSWORD}
+class TestClientSetup:
+    @pytest.mark.parametrize(
+        "auth_mode,kwargs",
+        [
+            ("api_key", {"api_key": "wrong-key"}),
+            ("digest", {"username": USERNAME, "password": "wrong-password"}),
+        ],
     )
-    app, _sim = create_app(
-        total_mm=1000.0, total_seconds=10.0, auth_mode=auth_mode, **real_kwargs
-    )
-    running = start_server(app)
-    try:
-        printer = printer_config(
-            "Bad creds",
-            provider=PrinterProvider.PRUSALINK,
-            prusalink_url=running.base_url,
-            prusalink_auth_mode=auth_mode,
-            prusalink_api_key=kwargs.get("api_key"),
-            prusalink_username=kwargs.get("username"),
-            prusalink_password=kwargs.get("password"),
+    def test_invalid_credentials_raise_authentication_error(
+        self, db_session: Session, auth_mode: str, kwargs: dict
+    ) -> None:
+        real_kwargs = (
+            {"api_key": API_KEY}
+            if auth_mode == "api_key"
+            else {"username": USERNAME, "password": PASSWORD}
         )
-        client = get_provider_client(printer, registry=REGISTRY)
+        app, _sim = create_app(
+            total_mm=1000.0, total_seconds=10.0, auth_mode=auth_mode, **real_kwargs
+        )
+        running = start_server(app)
+        try:
+            printer = printer_config(
+                "Bad creds",
+                provider=PrinterProvider.PRUSALINK,
+                prusalink_url=running.base_url,
+                prusalink_auth_mode=auth_mode,
+                prusalink_api_key=kwargs.get("api_key"),
+                prusalink_username=kwargs.get("username"),
+                prusalink_password=kwargs.get("password"),
+            )
+            client = get_provider_client(printer, registry=REGISTRY)
 
-        async def _query() -> None:
-            with pytest.raises(ProviderError) as exc_info:
-                await client.query_status()
-            assert exc_info.value.code == "provider_authentication_failed"
+            async def _query() -> None:
+                with pytest.raises(ProviderError) as exc_info:
+                    await client.query_status()
+                assert exc_info.value.code == "provider_authentication_failed"
 
-        asyncio.run(_query())
-    finally:
-        running.stop()
+            asyncio.run(_query())
+        finally:
+            running.stop()
 
 
 class TestCancel:

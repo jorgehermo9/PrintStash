@@ -23,28 +23,46 @@ REMOTE = "demo.gcode"
 REGISTRY = build_provider_registry()
 
 
-def test_cc1_real_sdcp_websocket_round_trip(monkeypatch) -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
-    running = start_cc1_server(sim)
-    monkeypatch.setattr(pycentauri_client, "WS_PORT", running.port)
-    provider = ElegooCentauriProvider(
-        ElegooCentauriClient("127.0.0.1", model="elegoo_centauri_carbon")
-    )
-    try:
+class TestStart:
+    def test_cc1_real_sdcp_websocket_round_trip(self, monkeypatch) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
+        running = start_cc1_server(sim)
+        monkeypatch.setattr(pycentauri_client, "WS_PORT", running.port)
+        provider = ElegooCentauriProvider(
+            ElegooCentauriClient("127.0.0.1", model="elegoo_centauri_carbon")
+        )
+        try:
+
+            async def _run() -> None:
+                await provider.start(REMOTE)
+                await _wait_state(provider, "printing")
+                await provider.pause()
+                await _wait_state(provider, "paused")
+                await provider.resume()
+                await _wait_state(provider, "printing")
+                await provider.cancel()
+                await _wait_state(provider, "cancelled")
+
+            asyncio.run(_run())
+        finally:
+            running.stop()
+
+    def test_send_print_completes(self) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=1.0)
+        provider, connection = _provider(sim)
 
         async def _run() -> None:
             await provider.start(REMOTE)
-            await _wait_state(provider, "printing")
-            await provider.pause()
-            await _wait_state(provider, "paused")
-            await provider.resume()
-            await _wait_state(provider, "printing")
-            await provider.cancel()
-            await _wait_state(provider, "cancelled")
+            assert connection.calls[0] == (
+                "start_print",
+                (
+                    REMOTE,
+                    {"storage": "local", "auto_leveling": True, "timelapse": False},
+                ),
+            )
+            await _wait_state(provider, "complete")
 
         asyncio.run(_run())
-    finally:
-        running.stop()
 
 
 def _provider(
@@ -70,35 +88,21 @@ async def _wait_state(provider, state: str, *, timeout: float = 10.0) -> None:
     raise AssertionError(f"never reached state {state!r}")
 
 
-def test_send_print_completes() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=1.0)
-    provider, connection = _provider(sim)
-
-    async def _run() -> None:
-        await provider.start(REMOTE)
-        assert connection.calls[0] == (
-            "start_print",
-            (REMOTE, {"storage": "local", "auto_leveling": True, "timelapse": False}),
+class TestConnect:
+    def test_carbon2_missing_access_code_rejected_at_build(self) -> None:
+        # This guard lives in ElegooCentauriProvider.build() (Printer-row level),
+        # not the client — a Carbon 2 printer row saved without an access code
+        # must never reach the network.
+        printer = printer_config(
+            "Carbon 2",
+            provider=PrinterProvider.ELEGOO_CENTAURI,
+            provider_variant="elegoo_centauri_carbon_2",
+            elegoo_centauri_host="192.0.2.10",
+            elegoo_centauri_access_code=None,
         )
-        await _wait_state(provider, "complete")
-
-    asyncio.run(_run())
-
-
-def test_carbon2_missing_access_code_rejected_at_build() -> None:
-    # This guard lives in ElegooCentauriProvider.build() (Printer-row level),
-    # not the client — a Carbon 2 printer row saved without an access code
-    # must never reach the network.
-    printer = printer_config(
-        "Carbon 2",
-        provider=PrinterProvider.ELEGOO_CENTAURI,
-        provider_variant="elegoo_centauri_carbon_2",
-        elegoo_centauri_host="192.0.2.10",
-        elegoo_centauri_access_code=None,
-    )
-    with pytest.raises(ProviderError) as exc_info:
-        get_provider_client(printer, registry=REGISTRY)
-    assert exc_info.value.code == "provider_credentials_missing"
+        with pytest.raises(ProviderError) as exc_info:
+            get_provider_client(printer, registry=REGISTRY)
+        assert exc_info.value.code == "provider_credentials_missing"
 
 
 class TestRaises:

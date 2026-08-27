@@ -50,29 +50,31 @@ _HAS_AIOSQLITE = find_spec("aiosqlite") is not None
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    "db_url",
-    [
-        "postgres://u:p@localhost/db?sslmode=require",
-        "postgresql://u:p@localhost/db?sslmode=require",
-        "postgresql+psycopg2://u:p@localhost/db?sslmode=require",
-        "postgresql+asyncpg://u:p@localhost/db?sslmode=require",
-        "postgresql+psycopg://u:p@localhost/db?sslmode=require",
-    ],
-)
-def test_postgres_urls_normalize_to_psycopg_for_sync_and_async(db_url: str) -> None:
-    expected = "postgresql+psycopg://u:p@localhost/db?sslmode=require"
-
-    assert normalize_database_url(db_url) == expected
-    assert normalize_async_database_url(db_url) == expected
-
-
-def test_sqlite_url_normalization() -> None:
-    assert normalize_database_url("sqlite:///vault.db") == "sqlite:///vault.db"
-    assert (
-        normalize_async_database_url("sqlite:///vault.db")
-        == "sqlite+aiosqlite:///vault.db"
+class TestNormalizeDbUrl:
+    @pytest.mark.parametrize(
+        "db_url",
+        [
+            "postgres://u:p@localhost/db?sslmode=require",
+            "postgresql://u:p@localhost/db?sslmode=require",
+            "postgresql+psycopg2://u:p@localhost/db?sslmode=require",
+            "postgresql+asyncpg://u:p@localhost/db?sslmode=require",
+            "postgresql+psycopg://u:p@localhost/db?sslmode=require",
+        ],
     )
+    def test_postgres_urls_normalize_to_psycopg_for_sync_and_async(
+        self, db_url: str
+    ) -> None:
+        expected = "postgresql+psycopg://u:p@localhost/db?sslmode=require"
+
+        assert normalize_database_url(db_url) == expected
+        assert normalize_async_database_url(db_url) == expected
+
+    def test_sqlite_url_normalization(self) -> None:
+        assert normalize_database_url("sqlite:///vault.db") == "sqlite:///vault.db"
+        assert (
+            normalize_async_database_url("sqlite:///vault.db")
+            == "sqlite+aiosqlite:///vault.db"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -80,29 +82,81 @@ def test_sqlite_url_normalization() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_sync_factory_does_not_implicitly_expose_async_sessions(tmp_path) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
-    factory = SQLiteSessionFactory(engine)
-    try:
-        assert isinstance(factory, SessionFactory)
-        assert not isinstance(factory, AsyncSessionFactory)
-        assert not hasattr(factory, "async_session")
-    finally:
+class TestSqliteSessionFactory:
+    def test_sync_factory_does_not_implicitly_expose_async_sessions(
+        self, tmp_path
+    ) -> None:
+        engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
+        factory = SQLiteSessionFactory(engine)
+        try:
+            assert isinstance(factory, SessionFactory)
+            assert not isinstance(factory, AsyncSessionFactory)
+            assert not hasattr(factory, "async_session")
+        finally:
+            engine.dispose()
+
+    @pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
+    @pytest.mark.asyncio
+    async def test_optional_sqlite_async_factory_executes_query(self, tmp_path) -> None:
+        factory = create_async_session_factory(f"sqlite:///{tmp_path / 'async.sqlite'}")
+        assert isinstance(factory, SQLAlchemyAsyncSessionFactory)
+        async_session = factory.async_session()
+        try:
+            result = await async_session.execute(text("SELECT 1"))
+            assert result.scalar_one() == 1
+        finally:
+            await async_session.close()
+            await factory.dispose()
+
+    def test_sqlite_session_factory_session_executes_queries(self, tmp_path) -> None:
+        engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
+        SQLModel.metadata.create_all(engine)
+        factory = SQLiteSessionFactory(engine)
+        session = factory.session()
+        try:
+            assert session.exec(select(1)).one() == 1
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_sqlite_session_factory_scoped_session_closes_on_exit(
+        self, tmp_path
+    ) -> None:
+        engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
+        SQLModel.metadata.create_all(engine)
+        factory = SQLiteSessionFactory(engine)
+
+        with factory.scoped_session() as session:
+            assert session.exec(select(1)).one() == 1
+            bound = session
+        # SQLModel's Session.close() doesn't flip a public "closed" flag we can
+        # assert on directly, but a second usable session proves the context
+        # manager didn't leak or explode on exit.
+        assert bound is not None
         engine.dispose()
 
+    def test_sqlite_async_without_extra_raises_explicit_capability_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(db_session_mod, "find_spec", lambda _module: None)
 
-@pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
-@pytest.mark.asyncio
-async def test_optional_sqlite_async_factory_executes_query(tmp_path) -> None:
-    factory = create_async_session_factory(f"sqlite:///{tmp_path / 'async.sqlite'}")
-    assert isinstance(factory, SQLAlchemyAsyncSessionFactory)
-    async_session = factory.async_session()
-    try:
-        result = await async_session.execute(text("SELECT 1"))
-        assert result.scalar_one() == 1
-    finally:
-        await async_session.close()
-        await factory.dispose()
+        with pytest.raises(AsyncDatabaseCapabilityError, match="async-db"):
+            create_async_engine_for_db("sqlite:///:memory:")
+
+    @pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
+    def test_async_session_factory_is_a_lazy_singleton(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(db_session_mod, "_default_async_factory", None)
+        monkeypatch.setitem(_overlay, "db_url", "sqlite:///:memory:")
+
+        first = get_async_session_factory()
+        second = get_async_session_factory()
+        assert first is second  # built once, cached thereafter
+
+        asyncio.run(first.dispose())
 
 
 # --------------------------------------------------------------------------- #
@@ -177,53 +231,6 @@ class TestCreateAsyncEngineForDb:
             normalize_async_database_url("mysql+aiomysql://u:p@localhost/db")
             == "mysql+aiomysql://u:p@localhost/db"
         )
-
-
-class TestAsyncSession:
-    @pytest.mark.skipif(not _HAS_AIOSQLITE, reason="requires the async-db extra")
-    def test_async_session_factory_is_a_lazy_singleton(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(db_session_mod, "_default_async_factory", None)
-        monkeypatch.setitem(_overlay, "db_url", "sqlite:///:memory:")
-
-        first = get_async_session_factory()
-        second = get_async_session_factory()
-        assert first is second  # built once, cached thereafter
-
-        asyncio.run(first.dispose())
-
-
-class TestSession:
-    def test_sqlite_session_factory_session_executes_queries(self, tmp_path) -> None:
-        engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
-        SQLModel.metadata.create_all(engine)
-        factory = SQLiteSessionFactory(engine)
-        session = factory.session()
-        try:
-            assert session.exec(select(1)).one() == 1
-        finally:
-            session.close()
-            engine.dispose()
-
-
-class TestScopedSession:
-    def test_sqlite_session_factory_scoped_session_closes_on_exit(
-        self, tmp_path
-    ) -> None:
-        engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
-        SQLModel.metadata.create_all(engine)
-        factory = SQLiteSessionFactory(engine)
-
-        with factory.scoped_session() as session:
-            assert session.exec(select(1)).one() == 1
-            bound = session
-        # SQLModel's Session.close() doesn't flip a public "closed" flag we can
-        # assert on directly, but a second usable session proves the context
-        # manager didn't leak or explode on exit.
-        assert bound is not None
-        engine.dispose()
 
 
 class TestOverrideSessionFactory:
@@ -368,14 +375,3 @@ class TestGetAsyncSession:
             if db_session_mod._default_async_factory is not None:
                 await db_session_mod._default_async_factory.dispose()
             engine.dispose()
-
-
-class TestRaises:
-    def test_sqlite_async_without_extra_raises_explicit_capability_error(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(db_session_mod, "find_spec", lambda _module: None)
-
-        with pytest.raises(AsyncDatabaseCapabilityError, match="async-db"):
-            create_async_engine_for_db("sqlite:///:memory:")

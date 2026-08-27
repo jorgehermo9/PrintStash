@@ -29,47 +29,6 @@ def _clean_overlay():
     _overlay.update(saved)
 
 
-def test_makerworld_legacy_token_helper_only_clears(db_session: Session) -> None:
-    status_before = runtime_config.makerworld_status(db_session)
-    assert status_before == {"connected": False, "updated_at": None}
-
-    runtime_config.set_makerworld_token(db_session, "session-token-xyz")
-    config = runtime_config.get_or_create(db_session)
-    assert config.makerworld_token is None
-    assert "makerworld_cookie" not in _overlay
-    assert runtime_config.makerworld_status(db_session) == {
-        "connected": False,
-        "updated_at": None,
-    }
-
-    runtime_config.clear_makerworld_token(db_session)
-    assert "makerworld_cookie" not in _overlay
-    assert runtime_config.makerworld_status(db_session)["connected"] is False
-
-
-def test_boolean_toggles_default_and_round_trip(db_session: Session) -> None:
-    assert runtime_config.auto_mark_known_good_enabled(db_session) is True
-    assert runtime_config.external_libraries_enabled(db_session) is False
-    assert runtime_config.notifications_enabled(db_session) is False
-    assert runtime_config.spoolman_enabled(db_session) is False
-    assert runtime_config.spoolman_write_enabled(db_session) is False
-    assert runtime_config.spoolman_write_force(db_session) is False
-
-    runtime_config.set_auto_mark_known_good(db_session, False)
-    runtime_config.set_external_libraries_enabled(db_session, True)
-    runtime_config.set_notifications_enabled(db_session, True)
-    runtime_config.set_spoolman_enabled(db_session, True)
-    runtime_config.set_spoolman_write_enabled(db_session, True)
-    runtime_config.set_spoolman_write_force(db_session, True)
-
-    assert runtime_config.auto_mark_known_good_enabled(db_session) is False
-    assert runtime_config.external_libraries_enabled(db_session) is True
-    assert runtime_config.notifications_enabled(db_session) is True
-    assert runtime_config.spoolman_enabled(db_session) is True
-    assert runtime_config.spoolman_write_enabled(db_session) is True
-    assert runtime_config.spoolman_write_force(db_session) is True
-
-
 class TestGetOrCreate:
     def test_get_or_create_creates_singleton_row_once(
         self, db_session: Session
@@ -255,6 +214,25 @@ class TestUpdateConfig:
         # Falls back to the env/default Settings value, still coerced to a Path.
         assert isinstance(_overlay["data_dir"], Path)
 
+    def test_makerworld_legacy_token_helper_only_clears(
+        self, db_session: Session
+    ) -> None:
+        status_before = runtime_config.makerworld_status(db_session)
+        assert status_before == {"connected": False, "updated_at": None}
+
+        runtime_config.set_makerworld_token(db_session, "session-token-xyz")
+        config = runtime_config.get_or_create(db_session)
+        assert config.makerworld_token is None
+        assert "makerworld_cookie" not in _overlay
+        assert runtime_config.makerworld_status(db_session) == {
+            "connected": False,
+            "updated_at": None,
+        }
+
+        runtime_config.clear_makerworld_token(db_session)
+        assert "makerworld_cookie" not in _overlay
+        assert runtime_config.makerworld_status(db_session)["connected"] is False
+
 
 class TestSpoolmanConfig:
     def test_spoolman_config_set_and_get_respects_unset_sentinel(
@@ -323,6 +301,28 @@ class TestGetEffectiveConfig:
         assert effective["s3_access_key"].startswith("AKIA")
         assert effective["has_oidc_client_secret"] is True
         assert effective["oidc_enabled"] is False
+
+    def test_boolean_toggles_default_and_round_trip(self, db_session: Session) -> None:
+        assert runtime_config.auto_mark_known_good_enabled(db_session) is True
+        assert runtime_config.external_libraries_enabled(db_session) is False
+        assert runtime_config.notifications_enabled(db_session) is False
+        assert runtime_config.spoolman_enabled(db_session) is False
+        assert runtime_config.spoolman_write_enabled(db_session) is False
+        assert runtime_config.spoolman_write_force(db_session) is False
+
+        runtime_config.set_auto_mark_known_good(db_session, False)
+        runtime_config.set_external_libraries_enabled(db_session, True)
+        runtime_config.set_notifications_enabled(db_session, True)
+        runtime_config.set_spoolman_enabled(db_session, True)
+        runtime_config.set_spoolman_write_enabled(db_session, True)
+        runtime_config.set_spoolman_write_force(db_session, True)
+
+        assert runtime_config.auto_mark_known_good_enabled(db_session) is False
+        assert runtime_config.external_libraries_enabled(db_session) is True
+        assert runtime_config.notifications_enabled(db_session) is True
+        assert runtime_config.spoolman_enabled(db_session) is True
+        assert runtime_config.spoolman_write_enabled(db_session) is True
+        assert runtime_config.spoolman_write_force(db_session) is True
 
 
 class TestMaskSecret:

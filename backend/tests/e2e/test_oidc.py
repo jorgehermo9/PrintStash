@@ -53,86 +53,91 @@ async def _begin_login(api) -> tuple[str, str]:
     return state, nonce
 
 
-@pytest.mark.asyncio
-async def test_full_login_provisions_admin_via_pkce_and_sets_session(api, idp, e2e_db):
-    _enable_oidc(idp)
-    state, nonce = await _begin_login(api)
+class TestOidcLogin:
+    @pytest.mark.asyncio
+    async def test_full_login_provisions_admin_via_pkce_and_sets_session(
+        self, api, idp, e2e_db
+    ):
+        _enable_oidc(idp)
+        state, nonce = await _begin_login(api)
 
-    code = idp.issue_code(
-        {
-            "sub": "e2e-user-1",
-            "aud": "printstash-e2e",
-            "nonce": nonce,
-            "preferred_username": "grillmaster",
-            "email": "grill@example.test",
-            "groups": ["vault-admins"],
-        }
-    )
-    callback = await api.get(f"/api/v1/auth/oidc/callback?code={code}&state={state}")
-    assert callback.status_code == 302, callback.text
-    assert callback.headers["location"] == "/login?oidc=success"
-    assert "printstash_session=" in callback.headers.get("set-cookie", "")
+        code = idp.issue_code(
+            {
+                "sub": "e2e-user-1",
+                "aud": "printstash-e2e",
+                "nonce": nonce,
+                "preferred_username": "grillmaster",
+                "email": "grill@example.test",
+                "groups": ["vault-admins"],
+            }
+        )
+        callback = await api.get(
+            f"/api/v1/auth/oidc/callback?code={code}&state={state}"
+        )
+        assert callback.status_code == 302, callback.text
+        assert callback.headers["location"] == "/login?oidc=success"
+        assert "printstash_session=" in callback.headers.get("set-cookie", "")
 
-    e2e_db.expire_all()
-    user = e2e_db.exec(select(User).where(User.username == "grillmaster")).one()
-    assert user.is_superuser is True
-    assert user.oidc_issuer == idp.issuer
-    assert user.oidc_subject == "e2e-user-1"
-    assert user.email == "grill@example.test"
+        e2e_db.expire_all()
+        user = e2e_db.exec(select(User).where(User.username == "grillmaster")).one()
+        assert user.is_superuser is True
+        assert user.oidc_issuer == idp.issuer
+        assert user.oidc_subject == "e2e-user-1"
+        assert user.email == "grill@example.test"
 
+    @pytest.mark.asyncio
+    async def test_username_collision_gets_a_unique_suffix(self, api, idp, e2e_db):
 
-@pytest.mark.asyncio
-async def test_username_collision_gets_a_unique_suffix(api, idp, e2e_db):
+        build_user(e2e_db, username="grillmaster", password="Password123", active=True)
 
-    build_user(e2e_db, username="grillmaster", password="Password123", active=True)
+        _enable_oidc(idp)
+        state, nonce = await _begin_login(api)
+        code = idp.issue_code(
+            {
+                "sub": "e2e-user-3",
+                "aud": "printstash-e2e",
+                "nonce": nonce,
+                "preferred_username": "grillmaster",
+            }
+        )
+        callback = await api.get(
+            f"/api/v1/auth/oidc/callback?code={code}&state={state}"
+        )
+        assert callback.status_code == 302
+        assert callback.headers["location"] == "/login?oidc=success"
 
-    _enable_oidc(idp)
-    state, nonce = await _begin_login(api)
-    code = idp.issue_code(
-        {
-            "sub": "e2e-user-3",
-            "aud": "printstash-e2e",
-            "nonce": nonce,
-            "preferred_username": "grillmaster",
-        }
-    )
-    callback = await api.get(f"/api/v1/auth/oidc/callback?code={code}&state={state}")
-    assert callback.status_code == 302
-    assert callback.headers["location"] == "/login?oidc=success"
+        e2e_db.expire_all()
+        provisioned = e2e_db.exec(
+            select(User).where(User.oidc_subject == "e2e-user-3")
+        ).one()
+        assert provisioned.username != "grillmaster"
+        assert provisioned.username.startswith("grillmaster")
 
-    e2e_db.expire_all()
-    provisioned = e2e_db.exec(
-        select(User).where(User.oidc_subject == "e2e-user-3")
-    ).one()
-    assert provisioned.username != "grillmaster"
-    assert provisioned.username.startswith("grillmaster")
+    @pytest.mark.asyncio
+    async def test_state_mismatch_is_rejected(self, api, idp, e2e_db):
+        _enable_oidc(idp)
+        _state, nonce = await _begin_login(api)
 
+        code = idp.issue_code(
+            {
+                "sub": "e2e-user-4",
+                "aud": "printstash-e2e",
+                "nonce": nonce,
+                "preferred_username": "sneaky",
+            }
+        )
+        callback = await api.get(
+            f"/api/v1/auth/oidc/callback?code={code}&state=not-the-real-state"
+        )
+        assert callback.status_code == 302
+        assert callback.headers["location"] == "/login?oidc_error=invalid_state"
+        assert "printstash_session=" not in callback.headers.get("set-cookie", "")
 
-@pytest.mark.asyncio
-async def test_state_mismatch_is_rejected(api, idp, e2e_db):
-    _enable_oidc(idp)
-    _state, nonce = await _begin_login(api)
-
-    code = idp.issue_code(
-        {
-            "sub": "e2e-user-4",
-            "aud": "printstash-e2e",
-            "nonce": nonce,
-            "preferred_username": "sneaky",
-        }
-    )
-    callback = await api.get(
-        f"/api/v1/auth/oidc/callback?code={code}&state=not-the-real-state"
-    )
-    assert callback.status_code == 302
-    assert callback.headers["location"] == "/login?oidc_error=invalid_state"
-    assert "printstash_session=" not in callback.headers.get("set-cookie", "")
-
-    e2e_db.expire_all()
-    assert (
-        e2e_db.exec(select(User).where(User.oidc_subject == "e2e-user-4")).first()
-        is None
-    )
+        e2e_db.expire_all()
+        assert (
+            e2e_db.exec(select(User).where(User.oidc_subject == "e2e-user-4")).first()
+            is None
+        )
 
 
 class TestUser:

@@ -75,168 +75,173 @@ def _persist(db_session: Session, model: Model, staged: Path, **kwargs):
     return ingestion.persist_artifact(db_session, **defaults)
 
 
-def test_persist_never_overwrites_an_unclaimed_destination(
-    db_session: Session, storage, model: Model, tmp_path: Path
-) -> None:
-    occupied = Path(storage.blob_key(model.slug, 1, "bracket.stl"))
-    occupied.parent.mkdir(parents=True, exist_ok=True)
-    occupied.write_bytes(b"pre-existing user data")
+class TestPersistArtifact:
+    def test_persist_never_overwrites_an_unclaimed_destination(
+        self, db_session: Session, storage, model: Model, tmp_path: Path
+    ) -> None:
+        occupied = Path(storage.blob_key(model.slug, 1, "bracket.stl"))
+        occupied.parent.mkdir(parents=True, exist_ok=True)
+        occupied.write_bytes(b"pre-existing user data")
 
-    file_row = _persist(db_session, model, _staged(tmp_path))
+        file_row = _persist(db_session, model, _staged(tmp_path))
 
-    assert occupied.read_bytes() == b"pre-existing user data"
-    assert file_row.path != str(occupied)
-    assert Path(file_row.path).read_bytes() == b"solid bracket\nendsolid\n"
+        assert occupied.read_bytes() == b"pre-existing user data"
+        assert file_row.path != str(occupied)
+        assert Path(file_row.path).read_bytes() == b"solid bracket\nendsolid\n"
 
+    def test_concurrent_same_hash_upload_dedups_instead_of_crashing(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Model.hash is UNIQUE. Two uploads of the same bytes race between the
+        lookup and the insert; the loser must dedup onto the winner's model, not
+        500 with an IntegrityError."""
+        from app.db.session import get_session_factory
+        from app.services import storage as storage_mod
 
-def test_version_numbers_increment_across_revisions(
-    db_session: Session, storage, model: Model, tmp_path: Path
-) -> None:
-    first = _persist(db_session, model, _staged(tmp_path, "v1.stl"))
-    second = _persist(db_session, model, _staged(tmp_path, "v2.stl"))
+        dedup_hash = "c" * 64
+        real_ensure = storage_mod.ensure_unique_slug
 
-    assert (first.version, second.version) == (1, 2)
+        def _insert_the_winner(base_slug, exists):
+            # Runs after resolve_or_create_model's SELECT found nothing and before
+            # its INSERT lands — exactly the window the race lives in.
+            with get_session_factory().session() as other:
+                build_model(other, name="Winner", slug="winner", hash=dedup_hash)
+            return real_ensure(base_slug, exists)
 
+        monkeypatch.setattr(ingestion.storage, "ensure_unique_slug", _insert_the_winner)
 
-def test_concurrent_version_reservations_are_unique(tmp_path: Path) -> None:
-    engine = create_engine(
-        f"sqlite:///{tmp_path / 'versions.sqlite'}",
-        connect_args={"check_same_thread": False},
-    )
-    event.listen(engine, "connect", _set_sqlite_pragmas)
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as session:
-        concurrent_model = build_model(
-            session, name="Concurrent", slug="concurrent", hash="c" * 64
+        model, created = ingestion.resolve_or_create_model(
+            db_session, dedup_hash=dedup_hash, model_name="Loser"
         )
-        model_id = concurrent_model.id
-    assert model_id is not None
 
-    start = threading.Barrier(3)
-    versions: list[int] = []
-    errors: list[BaseException] = []
+        assert created is False
+        assert model.name == "Winner"
+        assert (
+            len(db_session.exec(select(Model).where(Model.hash == dedup_hash)).all())
+            == 1
+        )
 
-    def reserve() -> None:
-        try:
-            with Session(engine) as session:
-                start.wait(timeout=5)
-                version = ingestion._reserve_next_version(session, model_id)
-                session.commit()
-                versions.append(version)
-        except BaseException as exc:  # pragma: no cover - asserted below
-            errors.append(exc)
 
-    threads = [threading.Thread(target=reserve) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    start.wait(timeout=5)
-    for thread in threads:
-        thread.join(timeout=10)
+class TestReserveNextVersion:
+    def test_version_numbers_increment_across_revisions(
+        self, db_session: Session, storage, model: Model, tmp_path: Path
+    ) -> None:
+        first = _persist(db_session, model, _staged(tmp_path, "v1.stl"))
+        second = _persist(db_session, model, _staged(tmp_path, "v2.stl"))
 
-    try:
-        assert errors == []
-        assert sorted(versions) == [1, 2]
+        assert (first.version, second.version) == (1, 2)
+
+    def test_concurrent_version_reservations_are_unique(self, tmp_path: Path) -> None:
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'versions.sqlite'}",
+            connect_args={"check_same_thread": False},
+        )
+        event.listen(engine, "connect", _set_sqlite_pragmas)
+        SQLModel.metadata.create_all(engine)
         with Session(engine) as session:
-            assert session.get(Model, model_id).next_file_version == 3
-    finally:
-        engine.dispose()
+            concurrent_model = build_model(
+                session, name="Concurrent", slug="concurrent", hash="c" * 64
+            )
+            model_id = concurrent_model.id
+        assert model_id is not None
 
+        start = threading.Barrier(3)
+        versions: list[int] = []
+        errors: list[BaseException] = []
 
-def test_concurrent_artifacts_keep_distinct_versions_and_matching_hashes(
-    tmp_path: Path, storage
-) -> None:
-    engine = create_engine(
-        f"sqlite:///{tmp_path / 'artifacts.sqlite'}",
-        connect_args={"check_same_thread": False},
-    )
-    event.listen(engine, "connect", _set_sqlite_pragmas)
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as session:
-        concurrent_model = build_model(session, name="Race", slug="race", hash="a" * 64)
-        model_id = concurrent_model.id
-    assert model_id is not None
+        def reserve() -> None:
+            try:
+                with Session(engine) as session:
+                    start.wait(timeout=5)
+                    version = ingestion._reserve_next_version(session, model_id)
+                    session.commit()
+                    versions.append(version)
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
 
-    staged: list[tuple[Path, bytes]] = []
-    for index in range(2):
-        content = f"G28 ; artifact {index}\n".encode()
-        path = tmp_path / f"race-{index}.gcode"
-        path.write_bytes(content)
-        staged.append((path, content))
+        threads = [threading.Thread(target=reserve) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        start.wait(timeout=5)
+        for thread in threads:
+            thread.join(timeout=10)
 
-    start = threading.Barrier(3)
-    errors: list[BaseException] = []
-
-    def persist(path: Path, content: bytes) -> None:
         try:
+            assert errors == []
+            assert sorted(versions) == [1, 2]
             with Session(engine) as session:
-                model_row = session.get(Model, model_id)
-                assert model_row is not None
-                start.wait(timeout=5)
-                ingestion.persist_artifact(
-                    session,
-                    model=model_row,
-                    staged_path=path,
-                    original_filename=path.name,
-                    file_type=FileType.GCODE,
-                    blob_hash=hashlib.sha256(content).hexdigest(),
-                    meta={},
-                    thumb_bytes=None,
-                    overwrite_thumbnail=False,
+                assert session.get(Model, model_id).next_file_version == 3
+        finally:
+            engine.dispose()
+
+    def test_concurrent_artifacts_keep_distinct_versions_and_matching_hashes(
+        self, tmp_path: Path, storage
+    ) -> None:
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'artifacts.sqlite'}",
+            connect_args={"check_same_thread": False},
+        )
+        event.listen(engine, "connect", _set_sqlite_pragmas)
+        SQLModel.metadata.create_all(engine)
+        with Session(engine) as session:
+            concurrent_model = build_model(
+                session, name="Race", slug="race", hash="a" * 64
+            )
+            model_id = concurrent_model.id
+        assert model_id is not None
+
+        staged: list[tuple[Path, bytes]] = []
+        for index in range(2):
+            content = f"G28 ; artifact {index}\n".encode()
+            path = tmp_path / f"race-{index}.gcode"
+            path.write_bytes(content)
+            staged.append((path, content))
+
+        start = threading.Barrier(3)
+        errors: list[BaseException] = []
+
+        def persist(path: Path, content: bytes) -> None:
+            try:
+                with Session(engine) as session:
+                    model_row = session.get(Model, model_id)
+                    assert model_row is not None
+                    start.wait(timeout=5)
+                    ingestion.persist_artifact(
+                        session,
+                        model=model_row,
+                        staged_path=path,
+                        original_filename=path.name,
+                        file_type=FileType.GCODE,
+                        blob_hash=hashlib.sha256(content).hexdigest(),
+                        meta={},
+                        thumb_bytes=None,
+                        overwrite_thumbnail=False,
+                    )
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=persist, args=item) for item in staged]
+        for thread in threads:
+            thread.start()
+        start.wait(timeout=5)
+        for thread in threads:
+            thread.join(timeout=15)
+
+        try:
+            assert errors == []
+            with Session(engine) as session:
+                rows = session.exec(
+                    select(File).where(File.model_id == model_id).order_by(File.version)
+                ).all()
+            assert [row.version for row in rows] == [1, 2]
+            assert sum(row.is_recommended for row in rows) == 1
+            for row in rows:
+                assert (
+                    hashlib.sha256(Path(row.path).read_bytes()).hexdigest()
+                    == row.sha256
                 )
-        except BaseException as exc:  # pragma: no cover - asserted below
-            errors.append(exc)
-
-    threads = [threading.Thread(target=persist, args=item) for item in staged]
-    for thread in threads:
-        thread.start()
-    start.wait(timeout=5)
-    for thread in threads:
-        thread.join(timeout=15)
-
-    try:
-        assert errors == []
-        with Session(engine) as session:
-            rows = session.exec(
-                select(File).where(File.model_id == model_id).order_by(File.version)
-            ).all()
-        assert [row.version for row in rows] == [1, 2]
-        assert sum(row.is_recommended for row in rows) == 1
-        for row in rows:
-            assert hashlib.sha256(Path(row.path).read_bytes()).hexdigest() == row.sha256
-    finally:
-        engine.dispose()
-
-
-def test_concurrent_same_hash_upload_dedups_instead_of_crashing(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Model.hash is UNIQUE. Two uploads of the same bytes race between the
-    lookup and the insert; the loser must dedup onto the winner's model, not
-    500 with an IntegrityError."""
-    from app.db.session import get_session_factory
-    from app.services import storage as storage_mod
-
-    dedup_hash = "c" * 64
-    real_ensure = storage_mod.ensure_unique_slug
-
-    def _insert_the_winner(base_slug, exists):
-        # Runs after resolve_or_create_model's SELECT found nothing and before
-        # its INSERT lands — exactly the window the race lives in.
-        with get_session_factory().session() as other:
-            build_model(other, name="Winner", slug="winner", hash=dedup_hash)
-        return real_ensure(base_slug, exists)
-
-    monkeypatch.setattr(ingestion.storage, "ensure_unique_slug", _insert_the_winner)
-
-    model, created = ingestion.resolve_or_create_model(
-        db_session, dedup_hash=dedup_hash, model_name="Loser"
-    )
-
-    assert created is False
-    assert model.name == "Winner"
-    assert (
-        len(db_session.exec(select(Model).where(Model.hash == dedup_hash)).all()) == 1
-    )
+        finally:
+            engine.dispose()
 
 
 class TestMetadata:

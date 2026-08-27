@@ -74,309 +74,327 @@ async def _wait_job_state(
     raise AssertionError(f"job {job_id} never reached {states}")
 
 
-@pytest.mark.asyncio
-async def test_queue_jobs_can_be_edited_reordered_and_deleted_via_real_api(
-    api, superuser_headers, e2e_db
-):
-    printer = build_printer(
-        e2e_db,
-        name="Queue editor",
-        moonraker_url="http://queue-editor.invalid",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(e2e_db, "queue-edit")
+class TestFleetOverRealApi:
+    """The fleet's whole surface driven the way the frontend drives it.
 
-    first = (
-        await api.post(
-            "/api/v1/fleet/queue",
-            headers=superuser_headers,
-            json={
-                "file_id": artifact.id,
-                "strategy": "manual",
-                "printer_id": printer.id,
-            },
-        )
-    ).json()
-    second = (
-        await api.post(
-            "/api/v1/fleet/queue",
-            headers=superuser_headers,
-            json={
-                "file_id": artifact.id,
-                "strategy": "manual",
-                "printer_id": printer.id,
-            },
-        )
-    ).json()
+    Every other fleet test calls a service or a router in-process. These run the
+    real app over ASGI against real emulators, so what they add is the parts no
+    unit boundary covers: that the endpoints compose into a workflow an operator
+    can actually complete, and that a restart in the middle of one recovers."""
 
-    edited = await api.patch(
-        f"/api/v1/fleet/queue/{second['id']}",
-        headers=superuser_headers,
-        json={
-            "queue_position": 1,
-            "priority": "rush",
-            "expected_updated_at": second["updated_at"],
-        },
-    )
-    assert edited.status_code == 200, edited.text
-    assert edited.json()["priority"] == "rush"
-
-    deleted = await api.delete(
-        f"/api/v1/fleet/queue/{first['id']}", headers=superuser_headers
-    )
-    assert deleted.status_code == 200, deleted.text
-    rows = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
-    assert [row["id"] for row in rows] == [second["id"]]
-
-    await api.delete(f"/api/v1/fleet/queue/{second['id']}", headers=superuser_headers)
-    summary = (await api.get("/api/v1/fleet/summary", headers=superuser_headers)).json()
-    assert summary["queued_jobs"] == 0
-    assert summary["active_jobs"] == 0
-    assert (
-        await api.get("/api/v1/fleet/queue", headers=superuser_headers)
-    ).json() == []
-
-
-@pytest.mark.asyncio
-async def test_two_printers_dispatch_and_complete_via_real_api(
-    api, superuser_headers, e2e_db
-):
-    app_a, _sim_a = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
-    app_b, _sim_b = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
-    running_a = start_server(app_a)
-    running_b = start_server(app_b)
-    try:
-        printer_a = printer_config(
-            "Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY
-        )
-        printer_b = build_printer(
+    @pytest.mark.asyncio
+    async def test_queue_jobs_can_be_edited_reordered_and_deleted_via_real_api(
+        self, api, superuser_headers, e2e_db
+    ):
+        printer = build_printer(
             e2e_db,
-            name="Emu B",
-            moonraker_url=running_b.base_url,
+            name="Queue editor",
+            moonraker_url="http://queue-editor.invalid",
             status=PrinterStatus.READY,
         )
-        e2e_db.add(printer_a)
-        e2e_db.commit()
-        e2e_db.refresh(printer_a)
-        e2e_db.refresh(printer_b)
+        artifact = a_gcode_artifact(e2e_db, "queue-edit")
 
-        artifact_1 = a_gcode_artifact(e2e_db, "fleetcube1")
-        artifact_2 = a_gcode_artifact(e2e_db, "fleetcube2")
-
-        job1 = (
+        first = (
             await api.post(
                 "/api/v1/fleet/queue",
                 headers=superuser_headers,
                 json={
-                    "file_id": artifact_1.id,
+                    "file_id": artifact.id,
                     "strategy": "manual",
-                    "printer_id": printer_a.id,
+                    "printer_id": printer.id,
                 },
             )
         ).json()
-        job2 = (
+        second = (
             await api.post(
                 "/api/v1/fleet/queue",
                 headers=superuser_headers,
                 json={
-                    "file_id": artifact_2.id,
+                    "file_id": artifact.id,
                     "strategy": "manual",
-                    "printer_id": printer_b.id,
+                    "printer_id": printer.id,
                 },
             )
         ).json()
 
-        with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
-            dispatched_1 = await dispatch_next(_provider_builder)
-            dispatched_2 = await dispatch_next(_provider_builder)
-            assert {dispatched_1, dispatched_2} == {job1["id"], job2["id"]}
+        edited = await api.patch(
+            f"/api/v1/fleet/queue/{second['id']}",
+            headers=superuser_headers,
+            json={
+                "queue_position": 1,
+                "priority": "rush",
+                "expected_updated_at": second["updated_at"],
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["priority"] == "rush"
 
-        hub = PrinterHub(provider_builder=_provider_builder)
-        stop = asyncio.Event()
-        tasks = [
-            asyncio.create_task(hub._run_printer(printer_a.id, stop)),
-            asyncio.create_task(hub._run_printer(printer_b.id, stop)),
-        ]
-        try:
-            await asyncio.gather(
-                _wait_job_state(e2e_db, job1["id"], PrintJobState.COMPLETED),
-                _wait_job_state(e2e_db, job2["id"], PrintJobState.COMPLETED),
-            )
-        finally:
-            stop.set()
-            for t in tasks:
-                t.cancel()
-            for t in tasks:
-                try:
-                    await t
-                except asyncio.CancelledError:
-                    pass
+        deleted = await api.delete(
+            f"/api/v1/fleet/queue/{first['id']}", headers=superuser_headers
+        )
+        assert deleted.status_code == 200, deleted.text
+        rows = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
+        assert [row["id"] for row in rows] == [second["id"]]
 
-        # History + summary are read back through the real API, not the DB.
-        queue = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
-        completed_ids = {row["id"] for row in queue if row["state"] == "completed"}
-        assert {job1["id"], job2["id"]} <= completed_ids
-
+        await api.delete(
+            f"/api/v1/fleet/queue/{second['id']}", headers=superuser_headers
+        )
         summary = (
             await api.get("/api/v1/fleet/summary", headers=superuser_headers)
         ).json()
-        assert summary["active_jobs"] == 0
         assert summary["queued_jobs"] == 0
-        assert summary["total_printers"] == 2
-    finally:
-        running_a.stop()
-        running_b.stop()
+        assert summary["active_jobs"] == 0
+        assert (
+            await api.get("/api/v1/fleet/queue", headers=superuser_headers)
+        ).json() == []
 
+    @pytest.mark.asyncio
+    async def test_two_printers_dispatch_and_complete_via_real_api(
+        self, api, superuser_headers, e2e_db
+    ):
+        app_a, _sim_a = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
+        app_b, _sim_b = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
+        running_a = start_server(app_a)
+        running_b = start_server(app_b)
+        try:
+            printer_a = printer_config(
+                "Emu A", moonraker_url=running_a.base_url, status=PrinterStatus.READY
+            )
+            printer_b = build_printer(
+                e2e_db,
+                name="Emu B",
+                moonraker_url=running_b.base_url,
+                status=PrinterStatus.READY,
+            )
+            e2e_db.add(printer_a)
+            e2e_db.commit()
+            e2e_db.refresh(printer_a)
+            e2e_db.refresh(printer_b)
 
-@pytest.mark.asyncio
-async def test_drain_mode_blocks_routing_via_api(api, superuser_headers, e2e_db):
-    app_available, _sim = create_app(
-        total_mm=500.0, total_seconds=6.0, print_seconds=1.0
-    )
-    running = start_server(app_available)
-    try:
-        draining = printer_config(
-            "Draining",
-            moonraker_url="http://unreachable-draining.invalid",
-            status=PrinterStatus.READY,
+            artifact_1 = a_gcode_artifact(e2e_db, "fleetcube1")
+            artifact_2 = a_gcode_artifact(e2e_db, "fleetcube2")
+
+            job1 = (
+                await api.post(
+                    "/api/v1/fleet/queue",
+                    headers=superuser_headers,
+                    json={
+                        "file_id": artifact_1.id,
+                        "strategy": "manual",
+                        "printer_id": printer_a.id,
+                    },
+                )
+            ).json()
+            job2 = (
+                await api.post(
+                    "/api/v1/fleet/queue",
+                    headers=superuser_headers,
+                    json={
+                        "file_id": artifact_2.id,
+                        "strategy": "manual",
+                        "printer_id": printer_b.id,
+                    },
+                )
+            ).json()
+
+            with patch(
+                "app.services.printer_jobs.get_backend", return_value=_Backend()
+            ):
+                dispatched_1 = await dispatch_next(_provider_builder)
+                dispatched_2 = await dispatch_next(_provider_builder)
+                assert {dispatched_1, dispatched_2} == {job1["id"], job2["id"]}
+
+            hub = PrinterHub(provider_builder=_provider_builder)
+            stop = asyncio.Event()
+            tasks = [
+                asyncio.create_task(hub._run_printer(printer_a.id, stop)),
+                asyncio.create_task(hub._run_printer(printer_b.id, stop)),
+            ]
+            try:
+                await asyncio.gather(
+                    _wait_job_state(e2e_db, job1["id"], PrintJobState.COMPLETED),
+                    _wait_job_state(e2e_db, job2["id"], PrintJobState.COMPLETED),
+                )
+            finally:
+                stop.set()
+                for t in tasks:
+                    t.cancel()
+                for t in tasks:
+                    try:
+                        await t
+                    except asyncio.CancelledError:
+                        pass
+
+            # History + summary are read back through the real API, not the DB.
+            queue = (
+                await api.get("/api/v1/fleet/queue", headers=superuser_headers)
+            ).json()
+            completed_ids = {row["id"] for row in queue if row["state"] == "completed"}
+            assert {job1["id"], job2["id"]} <= completed_ids
+
+            summary = (
+                await api.get("/api/v1/fleet/summary", headers=superuser_headers)
+            ).json()
+            assert summary["active_jobs"] == 0
+            assert summary["queued_jobs"] == 0
+            assert summary["total_printers"] == 2
+        finally:
+            running_a.stop()
+            running_b.stop()
+
+    @pytest.mark.asyncio
+    async def test_drain_mode_blocks_routing_via_api(
+        self, api, superuser_headers, e2e_db
+    ):
+        app_available, _sim = create_app(
+            total_mm=500.0, total_seconds=6.0, print_seconds=1.0
         )
-        available = build_printer(
+        running = start_server(app_available)
+        try:
+            draining = printer_config(
+                "Draining",
+                moonraker_url="http://unreachable-draining.invalid",
+                status=PrinterStatus.READY,
+            )
+            available = build_printer(
+                e2e_db,
+                name="Available",
+                moonraker_url=running.base_url,
+                status=PrinterStatus.READY,
+            )
+            e2e_db.add(draining)
+            e2e_db.commit()
+            e2e_db.refresh(draining)
+            e2e_db.refresh(available)
+
+            # Enter drain through the real routing endpoint.
+            drain_resp = await api.patch(
+                f"/api/v1/fleet/printers/{draining.id}/routing",
+                headers=superuser_headers,
+                json={"drain_mode": True, "drain_reason": "Nozzle swap"},
+            )
+            assert drain_resp.status_code == 200, drain_resp.text
+            assert drain_resp.json()["drain_mode"] is True
+
+            artifact = a_gcode_artifact(e2e_db, "drainjob")
+            queued = (
+                await api.post(
+                    "/api/v1/fleet/queue",
+                    headers=superuser_headers,
+                    json={"file_id": artifact.id, "strategy": "least_busy"},
+                )
+            ).json()
+
+            with patch(
+                "app.services.printer_jobs.get_backend", return_value=_Backend()
+            ):
+                dispatched = await dispatch_next(_provider_builder)
+                assert dispatched == queued["id"]
+
+            row = (
+                await api.get("/api/v1/fleet/queue", headers=superuser_headers)
+            ).json()
+            matched = next(r for r in row if r["id"] == queued["id"])
+            assert matched["printer_id"] == available.id
+
+            summary = (
+                await api.get("/api/v1/fleet/summary", headers=superuser_headers)
+            ).json()
+            assert summary["draining_printers"] == 1
+        finally:
+            running.stop()
+
+    @pytest.mark.asyncio
+    async def test_maintenance_window_blocks_manual_routing_via_api(
+        self, api, superuser_headers, e2e_db
+    ):
+        printer = build_printer(
             e2e_db,
-            name="Available",
-            moonraker_url=running.base_url,
+            name="Under maintenance",
+            moonraker_url="http://unreachable-maint.invalid",
             status=PrinterStatus.READY,
         )
-        e2e_db.add(draining)
-        e2e_db.commit()
-        e2e_db.refresh(draining)
-        e2e_db.refresh(available)
 
-        # Enter drain through the real routing endpoint.
-        drain_resp = await api.patch(
-            f"/api/v1/fleet/printers/{draining.id}/routing",
+        now = utcnow()
+        window = await api.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
             headers=superuser_headers,
-            json={"drain_mode": True, "drain_reason": "Nozzle swap"},
+            json={
+                "starts_at": (now - timedelta(minutes=5)).isoformat(),
+                "ends_at": (now + timedelta(hours=1)).isoformat(),
+                "reason": "Bed releveling",
+            },
         )
-        assert drain_resp.status_code == 200, drain_resp.text
-        assert drain_resp.json()["drain_mode"] is True
+        assert window.status_code == 201, window.text
 
-        artifact = a_gcode_artifact(e2e_db, "drainjob")
+        artifact = a_gcode_artifact(e2e_db, "maintenancejob")
         queued = (
             await api.post(
                 "/api/v1/fleet/queue",
                 headers=superuser_headers,
-                json={"file_id": artifact.id, "strategy": "least_busy"},
+                json={
+                    "file_id": artifact.id,
+                    "strategy": "manual",
+                    "printer_id": printer.id,
+                },
             )
         ).json()
 
-        with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
-            dispatched = await dispatch_next(_provider_builder)
-            assert dispatched == queued["id"]
+        dispatched = await dispatch_next(_provider_builder)
+        assert dispatched is None
 
-        row = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
-        matched = next(r for r in row if r["id"] == queued["id"])
-        assert matched["printer_id"] == available.id
+        row = next(
+            r
+            for r in (
+                await api.get("/api/v1/fleet/queue", headers=superuser_headers)
+            ).json()
+            if r["id"] == queued["id"]
+        )
+        assert row["state"] == "queued"
+        assert row["blocked_reason"] == "printer_unavailable"
 
         summary = (
             await api.get("/api/v1/fleet/summary", headers=superuser_headers)
         ).json()
-        assert summary["draining_printers"] == 1
-    finally:
-        running.stop()
+        assert summary["maintenance_printers"] == 1
 
-
-@pytest.mark.asyncio
-async def test_maintenance_window_blocks_manual_routing_via_api(
-    api, superuser_headers, e2e_db
-):
-    printer = build_printer(
-        e2e_db,
-        name="Under maintenance",
-        moonraker_url="http://unreachable-maint.invalid",
-        status=PrinterStatus.READY,
-    )
-
-    now = utcnow()
-    window = await api.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=superuser_headers,
-        json={
-            "starts_at": (now - timedelta(minutes=5)).isoformat(),
-            "ends_at": (now + timedelta(hours=1)).isoformat(),
-            "reason": "Bed releveling",
-        },
-    )
-    assert window.status_code == 201, window.text
-
-    artifact = a_gcode_artifact(e2e_db, "maintenancejob")
-    queued = (
-        await api.post(
-            "/api/v1/fleet/queue",
-            headers=superuser_headers,
-            json={
-                "file_id": artifact.id,
-                "strategy": "manual",
-                "printer_id": printer.id,
-            },
+    @pytest.mark.asyncio
+    async def test_restart_reconciles_stranded_dispatch_and_blocks_retry(
+        self, api, superuser_headers, e2e_db
+    ):
+        printer = build_printer(
+            e2e_db,
+            name="Restart",
+            moonraker_url="http://restart.invalid",
+            status=PrinterStatus.READY,
         )
-    ).json()
+        artifact = a_gcode_artifact(e2e_db, "restartjob")
 
-    dispatched = await dispatch_next(_provider_builder)
-    assert dispatched is None
+        job = build_print_job(
+            e2e_db,
+            artifact,
+            printer_id=printer.id,
+            remote_filename="restart.gcode",
+            state=PrintJobState.UPLOADING,
+            dispatch_claimed_at=utcnow(),
+        )
 
-    row = next(
-        r
-        for r in (
-            await api.get("/api/v1/fleet/queue", headers=superuser_headers)
-        ).json()
-        if r["id"] == queued["id"]
-    )
-    assert row["state"] == "queued"
-    assert row["blocked_reason"] == "printer_unavailable"
+        # Simulate the app restarting mid-dispatch: the reconciler runs at boot.
+        assert reconcile_stranded_dispatches() == 1
 
-    summary = (await api.get("/api/v1/fleet/summary", headers=superuser_headers)).json()
-    assert summary["maintenance_printers"] == 1
+        row = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
+        matched = next(r for r in row if r["id"] == job.id)
+        assert matched["state"] == "failed"
+        assert matched["retryable"] is False
 
+        # An ambiguous outcome (provider may already be printing) must never be
+        # auto-retried through the API.
+        retry = await api.post(
+            f"/api/v1/fleet/queue/{job.id}/retry", headers=superuser_headers
+        )
+        assert retry.status_code == 400
+        assert retry.json()["detail"] == "queue_job_not_retryable"
 
-@pytest.mark.asyncio
-async def test_restart_reconciles_stranded_dispatch_and_blocks_retry(
-    api, superuser_headers, e2e_db
-):
-    printer = build_printer(
-        e2e_db,
-        name="Restart",
-        moonraker_url="http://restart.invalid",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(e2e_db, "restartjob")
-
-    job = build_print_job(
-        e2e_db,
-        artifact,
-        printer_id=printer.id,
-        remote_filename="restart.gcode",
-        state=PrintJobState.UPLOADING,
-        dispatch_claimed_at=utcnow(),
-    )
-
-    # Simulate the app restarting mid-dispatch: the reconciler runs at boot.
-    assert reconcile_stranded_dispatches() == 1
-
-    row = (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json()
-    matched = next(r for r in row if r["id"] == job.id)
-    assert matched["state"] == "failed"
-    assert matched["retryable"] is False
-
-    # An ambiguous outcome (provider may already be printing) must never be
-    # auto-retried through the API.
-    retry = await api.post(
-        f"/api/v1/fleet/queue/{job.id}/retry", headers=superuser_headers
-    )
-    assert retry.status_code == 400
-    assert retry.json()["detail"] == "queue_job_not_retryable"
-
-
-class TestPrinter:
     @pytest.mark.asyncio
     async def test_material_mismatch_override_then_multi_printer_batch_via_real_api(
         self, api, superuser_headers, e2e_db

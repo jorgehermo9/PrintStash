@@ -25,42 +25,41 @@ def _run(groups: list[ResolvedGroup]) -> object:
     return registry.get(job_id)
 
 
-def test_all_members_failing_marks_job_failed() -> None:
-    job = _run(
-        [
-            ResolvedGroup(
-                source_url="u1", title="A", error="makerworld_login_required"
-            ),
-            ResolvedGroup(
-                source_url="u2", title="B", error="makerworld_login_required"
-            ),
-        ]
-    )
-    assert job is not None
-    assert job.state == "failed"
-    # Members agree on one error -> surface it (UI shows the login message).
-    assert job.error == "makerworld_login_required"
-    assert job.result["imported"] == 0
+class TestRunGroupImport:
+    def test_all_members_failing_marks_job_failed(self) -> None:
+        job = _run(
+            [
+                ResolvedGroup(
+                    source_url="u1", title="A", error="makerworld_login_required"
+                ),
+                ResolvedGroup(
+                    source_url="u2", title="B", error="makerworld_login_required"
+                ),
+            ]
+        )
+        assert job is not None
+        assert job.state == "failed"
+        # Members agree on one error -> surface it (UI shows the login message).
+        assert job.error == "makerworld_login_required"
+        assert job.result["imported"] == 0
 
+    def test_mixed_member_errors_use_generic_code(self) -> None:
+        job = _run(
+            [
+                ResolvedGroup(
+                    source_url="u1", title="A", error="makerworld_login_required"
+                ),
+                ResolvedGroup(source_url="u2", title="B", error="no_importable_files"),
+            ]
+        )
+        assert job is not None
+        assert job.state == "failed"
+        assert job.error == "collection_import_failed"
 
-def test_mixed_member_errors_use_generic_code() -> None:
-    job = _run(
-        [
-            ResolvedGroup(
-                source_url="u1", title="A", error="makerworld_login_required"
-            ),
-            ResolvedGroup(source_url="u2", title="B", error="no_importable_files"),
-        ]
-    )
-    assert job is not None
-    assert job.state == "failed"
-    assert job.error == "collection_import_failed"
-
-
-def test_empty_group_without_error_still_fails() -> None:
-    job = _run([ResolvedGroup(source_url="u1", title="A")])
-    assert job is not None
-    assert job.state == "failed"
-    # No explicit member error falls back to the per-member default, which is the
-    # single distinct code here, so it surfaces rather than the generic one.
-    assert job.error == "no_importable_files"
+    def test_empty_group_without_error_still_fails(self) -> None:
+        job = _run([ResolvedGroup(source_url="u1", title="A")])
+        assert job is not None
+        assert job.state == "failed"
+        # No explicit member error falls back to the per-member default, which is the
+        # single distinct code here, so it surfaces rather than the generic one.
+        assert job.error == "no_importable_files"

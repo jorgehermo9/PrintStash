@@ -73,52 +73,54 @@ def _add_file(session: Session, model: Model, path: str, **kw) -> File:
     )
 
 
-def test_hard_delete_on_remote_backend_respects_blob_ownership(
-    monkeypatch: pytest.MonkeyPatch, db_session: Session
-) -> None:
-    backend = _RecordingRemoteBackend()
-    monkeypatch.setattr("app.services.storage_backend._backend", backend)
+class TestHardDeleteModel:
+    def test_hard_delete_on_remote_backend_respects_blob_ownership(
+        self, monkeypatch: pytest.MonkeyPatch, db_session: Session
+    ) -> None:
+        backend = _RecordingRemoteBackend()
+        monkeypatch.setattr("app.services.storage_backend._backend", backend)
 
-    model = _add_model(db_session, "mixed")
-    vault_key = "vault-data/files/mixed/v1/part.gcode"
-    nas_path = "/mnt/nas/3d/part.gcode"
-    vault_file = _add_file(db_session, model, vault_key, sha256="a" * 64)
-    ext_file = _add_file(
-        db_session, model, nas_path, version=2, sha256="b" * 64, external=True
-    )
+        model = _add_model(db_session, "mixed")
+        vault_key = "vault-data/files/mixed/v1/part.gcode"
+        nas_path = "/mnt/nas/3d/part.gcode"
+        vault_file = _add_file(db_session, model, vault_key, sha256="a" * 64)
+        ext_file = _add_file(
+            db_session, model, nas_path, version=2, sha256="b" * 64, external=True
+        )
 
-    with pytest.raises(UnsafeStorageDeleteError):
-        trash.hard_delete_model(db_session, model)
-    db_session.rollback()
+        with pytest.raises(UnsafeStorageDeleteError):
+            trash.hard_delete_model(db_session, model)
+        db_session.rollback()
 
-    # These hand-built legacy rows have no positive creation receipts, so even
-    # the vault-shaped key is preserved. The NAS-linked path is never eligible.
-    assert vault_key not in backend.deleted
-    assert nas_path not in backend.deleted
-    assert backend.thumbnail_key(vault_file.id) not in backend.deleted
-    assert backend.thumbnail_key(ext_file.id) not in backend.deleted
-    # Fail-closed also preserves the rows so an operator can recover/adopt them.
-    db_session.expire_all()
-    assert db_session.get(Model, model.id) is not None
-    assert db_session.get(File, vault_file.id) is not None
-    assert db_session.get(File, ext_file.id) is not None
+        # These hand-built legacy rows have no positive creation receipts, so even
+        # the vault-shaped key is preserved. The NAS-linked path is never eligible.
+        assert vault_key not in backend.deleted
+        assert nas_path not in backend.deleted
+        assert backend.thumbnail_key(vault_file.id) not in backend.deleted
+        assert backend.thumbnail_key(ext_file.id) not in backend.deleted
+        # Fail-closed also preserves the rows so an operator can recover/adopt them.
+        db_session.expire_all()
+        assert db_session.get(Model, model.id) is not None
+        assert db_session.get(File, vault_file.id) is not None
+        assert db_session.get(File, ext_file.id) is not None
 
 
-def test_gc_on_remote_backend_never_discovers_or_deletes_unclaimed_objects(
-    monkeypatch: pytest.MonkeyPatch, db_session: Session
-) -> None:
-    _overlay["storage_backend"] = "s3"
-    keep_key = "vault-data/files/keep/v1/a.gcode"
-    orphan_key = "vault-data/files/orphan/v1/b.gcode"
+class TestCleanupOrphanBlobs:
+    def test_gc_on_remote_backend_never_discovers_or_deletes_unclaimed_objects(
+        self, monkeypatch: pytest.MonkeyPatch, db_session: Session
+    ) -> None:
+        _overlay["storage_backend"] = "s3"
+        keep_key = "vault-data/files/keep/v1/a.gcode"
+        orphan_key = "vault-data/files/orphan/v1/b.gcode"
 
-    model = _add_model(db_session, "keep")
-    _add_file(db_session, model, keep_key, sha256="a" * 64)
+        model = _add_model(db_session, "keep")
+        _add_file(db_session, model, keep_key, sha256="a" * 64)
 
-    backend = _WalkRecordingBackend([keep_key, orphan_key])
-    monkeypatch.setattr("app.services.storage_backend._backend", backend)
+        backend = _WalkRecordingBackend([keep_key, orphan_key])
+        monkeypatch.setattr("app.services.storage_backend._backend", backend)
 
-    removed = trash._cleanup_orphan_blobs(db_session)
+        removed = trash._cleanup_orphan_blobs(db_session)
 
-    assert backend.walked == []
-    assert backend.deleted == []
-    assert removed == 0
+        assert backend.walked == []
+        assert backend.deleted == []
+        assert removed == 0

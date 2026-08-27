@@ -43,51 +43,52 @@ def _completed(client: TestClient, resp, headers: dict[str, str]) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def test_ingest_step_is_accepted_and_typed(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    """A .step upload is accepted, routed to the CAD pipeline, and stored as STEP.
+class TestIngestModel:
+    def test_ingest_step_is_accepted_and_typed(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """A .step upload is accepted, routed to the CAD pipeline, and stored as STEP.
 
-    We don't ship a real STEP fixture (hand-authoring valid B-rep is brittle), so
-    the bogus body fails tessellation — but ingestion degrades gracefully and
-    still persists the source file typed as STEP. End-to-end STEP tessellation
-    (mesh + thumbnail) is exercised once a safe fixture is contributed.
-    """
-    use_local_storage(tmp_path)
-    resp = client.post(
-        "/api/v1/ingest/model",
-        headers=auth_headers,
-        files={
-            "file": (
-                "part.step",
-                b"ISO-10303-21;\nnot-a-real-step\n",
-                "application/step",
-            )
-        },
-        data={"model_name": "STEP Part"},
-    )
-    assert resp.status_code == 202, resp.text
-    payload = _completed(client, resp, auth_headers)
-    assert payload["state"] == "completed", payload
-    file_row = db_session.get(File, payload["file_id"])
-    assert file_row is not None and file_row.file_type == FileType.STEP
+        We don't ship a real STEP fixture (hand-authoring valid B-rep is brittle), so
+        the bogus body fails tessellation — but ingestion degrades gracefully and
+        still persists the source file typed as STEP. End-to-end STEP tessellation
+        (mesh + thumbnail) is exercised once a safe fixture is contributed.
+        """
+        use_local_storage(tmp_path)
+        resp = client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={
+                "file": (
+                    "part.step",
+                    b"ISO-10303-21;\nnot-a-real-step\n",
+                    "application/step",
+                )
+            },
+            data={"model_name": "STEP Part"},
+        )
+        assert resp.status_code == 202, resp.text
+        payload = _completed(client, resp, auth_headers)
+        assert payload["state"] == "completed", payload
+        file_row = db_session.get(File, payload["file_id"])
+        assert file_row is not None and file_row.file_type == FileType.STEP
 
-
-def test_ingest_rejects_unsupported_type(
-    tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    use_local_storage(tmp_path)
-    resp = client.post(
-        "/api/v1/ingest/model",
-        headers=auth_headers,
-        files={"file": ("notes.txt", b"hello", "text/plain")},
-        data={"model_name": "Nope"},
-    )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "unsupported_file_type"
+    def test_ingest_rejects_unsupported_type(
+        self, tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        use_local_storage(tmp_path)
+        resp = client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={"file": ("notes.txt", b"hello", "text/plain")},
+            data={"model_name": "Nope"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "unsupported_file_type"
 
 
 # --------------------------------------------------------------------------- #
@@ -95,66 +96,69 @@ def test_ingest_rejects_unsupported_type(
 # --------------------------------------------------------------------------- #
 
 
-def test_import_zip_archive_creates_models(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("parts/part_a.stl", _mesh_bytes("stl", (10, 10, 10)))
-        zf.writestr("parts/part_b.stl", _mesh_bytes("stl", (20, 10, 10)))
-        zf.writestr("readme.txt", b"not a 3d file")
+class TestIngestArchive:
+    def test_import_zip_archive_creates_models(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("parts/part_a.stl", _mesh_bytes("stl", (10, 10, 10)))
+            zf.writestr("parts/part_b.stl", _mesh_bytes("stl", (20, 10, 10)))
+            zf.writestr("readme.txt", b"not a 3d file")
 
-    manifest = client.post(
-        "/api/v1/ingest/archive",
-        headers=auth_headers,
-        files={"file": ("bundle.zip", buf.getvalue(), "application/zip")},
-    )
-    assert manifest.status_code == 200, manifest.text
-    body = manifest.json()
-    archive_id = body["archive_id"]
-    importable = [e["name"] for e in body["entries"] if e["file_type"]]
-    assert sorted(importable) == ["parts/part_a.stl", "parts/part_b.stl"]
-
-    payload = _completed(
-        client,
-        client.post(
-            f"/api/v1/ingest/archive/{archive_id}/select",
+        manifest = client.post(
+            "/api/v1/ingest/archive",
             headers=auth_headers,
-            json={"names": importable},
-        ),
-        auth_headers,
-    )
-    assert payload["state"] == "completed", payload
-    assert payload["result"]["imported"] == 2
+            files={"file": ("bundle.zip", buf.getvalue(), "application/zip")},
+        )
+        assert manifest.status_code == 200, manifest.text
+        body = manifest.json()
+        archive_id = body["archive_id"]
+        importable = [e["name"] for e in body["entries"] if e["file_type"]]
+        assert sorted(importable) == ["parts/part_a.stl", "parts/part_b.stl"]
 
-    # Both files sit under the zip's "parts/" folder, so they are mirrored into
-    # a sub-collection ("bundle/parts") nested beneath the archive's auto
-    # collection rather than flattened onto it.
-    collection = db_session.exec(
-        select(Collection).where(Collection.path == "bundle/parts")
-    ).first()
-    assert collection is not None
-    models = db_session.exec(
-        select(Model).where(Model.collection_id == collection.id)
-    ).all()
-    assert len(models) == 2
+        payload = _completed(
+            client,
+            client.post(
+                f"/api/v1/ingest/archive/{archive_id}/select",
+                headers=auth_headers,
+                json={"names": importable},
+            ),
+            auth_headers,
+        )
+        assert payload["state"] == "completed", payload
+        assert payload["result"]["imported"] == 2
+
+        # Both files sit under the zip's "parts/" folder, so they are mirrored into
+        # a sub-collection ("bundle/parts") nested beneath the archive's auto
+        # collection rather than flattened onto it.
+        collection = db_session.exec(
+            select(Collection).where(Collection.path == "bundle/parts")
+        ).first()
+        assert collection is not None
+        models = db_session.exec(
+            select(Model).where(Model.collection_id == collection.id)
+        ).all()
+        assert len(models) == 2
 
 
-def test_import_archive_select_unknown_id_404(
-    tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    use_local_storage(tmp_path)
-    resp = client.post(
-        "/api/v1/ingest/archive/does-not-exist/select",
-        headers=auth_headers,
-        json={"names": ["x.stl"]},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "archive_not_found"
+class TestSelectArchiveEntries:
+    def test_import_archive_select_unknown_id_404(
+        self, tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        use_local_storage(tmp_path)
+        resp = client.post(
+            "/api/v1/ingest/archive/does-not-exist/select",
+            headers=auth_headers,
+            json={"names": ["x.stl"]},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "archive_not_found"
 
 
 # --------------------------------------------------------------------------- #

@@ -38,36 +38,39 @@ from app.services.storage_backend import LocalStorageBackend
 from app.services.storage_paths import StoragePathOverlapError, unlink_managed_file
 
 
-def test_managed_unlink_rejects_leaf_symlink_without_touching_target(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "staging"
-    root.mkdir()
-    target = root / "other-user-file.bin"
-    target.write_bytes(b"preserve")
-    link = root / "operation-temp.bin"
-    link.symlink_to(target)
+class TestManagedUnlink:
+    def test_managed_unlink_rejects_leaf_symlink_without_touching_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        root = tmp_path / "staging"
+        root.mkdir()
+        target = root / "other-user-file.bin"
+        target.write_bytes(b"preserve")
+        link = root / "operation-temp.bin"
+        link.symlink_to(target)
 
-    with pytest.raises(StoragePathOverlapError, match="symlink"):
-        unlink_managed_file(link, root)
+        with pytest.raises(StoragePathOverlapError, match="symlink"):
+            unlink_managed_file(link, root)
 
-    assert link.is_symlink()
-    assert target.read_bytes() == b"preserve"
+        assert link.is_symlink()
+        assert target.read_bytes() == b"preserve"
 
+    def test_managed_unlink_rejects_intermediate_symlink_escape(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "staging"
+        outside = tmp_path / "outside"
+        root.mkdir()
+        outside.mkdir()
+        target = outside / "keep.bin"
+        target.write_bytes(b"preserve")
+        (root / "redirect").symlink_to(outside, target_is_directory=True)
 
-def test_managed_unlink_rejects_intermediate_symlink_escape(tmp_path: Path) -> None:
-    root = tmp_path / "staging"
-    outside = tmp_path / "outside"
-    root.mkdir()
-    outside.mkdir()
-    target = outside / "keep.bin"
-    target.write_bytes(b"preserve")
-    (root / "redirect").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(StoragePathOverlapError, match="outside_root"):
+            unlink_managed_file(root / "redirect" / "keep.bin", root)
 
-    with pytest.raises(StoragePathOverlapError, match="outside_root"):
-        unlink_managed_file(root / "redirect" / "keep.bin", root)
-
-    assert target.read_bytes() == b"preserve"
+        assert target.read_bytes() == b"preserve"
 
 
 class TestEnsureUniqueSlug:

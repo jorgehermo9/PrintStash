@@ -91,101 +91,6 @@ async def _stop_hub_tasks(tasks: list[asyncio.Task[None]], stop: asyncio.Event) 
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def test_dispatch_to_two_emulated_printers_both_complete(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    # Deterministic (manual, explicit printer_id) routing rather than
-    # least_busy: choose_printer's tie-break recomputes at dispatch time and
-    # counts a still-QUEUED job's own prior assignment as load on that
-    # printer, so with exactly one job per printer the count ties and both
-    # would land on the same (lowest-id) printer — a real routing quirk, but
-    # not what this test is for. This test's job is to prove dispatch +
-    # PrinterHub complete correctly over two real emulators concurrently;
-    # `test_draining_printer_is_skipped_by_least_busy_routing` below covers
-    # least_busy itself.
-    app_a, _sim_a = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
-    app_b, _sim_b = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
-    running_a = start_server(app_a)
-    running_b = start_server(app_b)
-    try:
-        printer_a = build_printer(
-            db_session,
-            name="Emu A",
-            moonraker_url=running_a.base_url,
-            status=PrinterStatus.READY,
-        )
-        printer_b = build_printer(
-            db_session,
-            name="Emu B",
-            moonraker_url=running_b.base_url,
-            status=PrinterStatus.READY,
-        )
-
-        artifact_1 = a_gcode_artifact(db_session, "fleetcube1")
-        artifact_2 = a_gcode_artifact(db_session, "fleetcube2")
-        job1 = client.post(
-            "/api/v1/fleet/queue",
-            headers=auth_headers,
-            json={
-                "file_id": artifact_1.id,
-                "strategy": "manual",
-                "printer_id": printer_a.id,
-            },
-        ).json()
-        job2 = client.post(
-            "/api/v1/fleet/queue",
-            headers=auth_headers,
-            json={
-                "file_id": artifact_2.id,
-                "strategy": "manual",
-                "printer_id": printer_b.id,
-            },
-        ).json()
-
-        with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
-            from app.services.printer_jobs import dispatch_next
-
-            async def _dispatch_and_drive_both() -> tuple[int | None, int | None]:
-                # Keep the pooled HTTP client and both printer hubs on the event
-                # loop that created them. Splitting this flow across separate
-                # asyncio.run() calls can reuse a client bound to a closed loop.
-                first = await dispatch_next(_provider_builder)
-                second = await dispatch_next(_provider_builder)
-
-                with get_session_factory().session() as s:
-                    row1 = s.get(PrintJob, job1["id"])
-                    row2 = s.get(PrintJob, job2["id"])
-                    assert row1.printer_id == printer_a.id
-                    assert row2.printer_id == printer_b.id
-
-                hub = PrinterHub(provider_builder=_provider_builder)
-                stop = asyncio.Event()
-                tasks = [
-                    asyncio.create_task(hub._run_printer(printer_a.id, stop)),
-                    asyncio.create_task(hub._run_printer(printer_b.id, stop)),
-                ]
-                try:
-                    await asyncio.gather(
-                        _wait_job_state(job1["id"], PrintJobState.COMPLETED),
-                        _wait_job_state(job2["id"], PrintJobState.COMPLETED),
-                    )
-                finally:
-                    await _stop_hub_tasks(tasks, stop)
-
-                return first, second
-
-            dispatched_1, dispatched_2 = asyncio.run(_dispatch_and_drive_both())
-            assert {dispatched_1, dispatched_2} == {job1["id"], job2["id"]}
-
-        with get_session_factory().session() as s:
-            for job in (job1, job2):
-                row = s.exec(select(PrintJob).where(PrintJob.id == job["id"])).one()
-                assert row.state == PrintJobState.COMPLETED
-    finally:
-        running_a.stop()
-        running_b.stop()
-
-
 class TestPrinter:
     def test_draining_printer_is_skipped_by_least_busy_routing(
         self, client: TestClient, auth_headers: dict[str, str], db_session: Session
@@ -230,3 +135,99 @@ class TestPrinter:
                 assert row.printer_id == available.id
         finally:
             running_available.stop()
+
+    def test_dispatch_to_two_emulated_printers_both_complete(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        # Deterministic (manual, explicit printer_id) routing rather than
+        # least_busy: choose_printer's tie-break recomputes at dispatch time and
+        # counts a still-QUEUED job's own prior assignment as load on that
+        # printer, so with exactly one job per printer the count ties and both
+        # would land on the same (lowest-id) printer — a real routing quirk, but
+        # not what this test is for. This test's job is to prove dispatch +
+        # PrinterHub complete correctly over two real emulators concurrently;
+        # `test_draining_printer_is_skipped_by_least_busy_routing` below covers
+        # least_busy itself.
+        app_a, _sim_a = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
+        app_b, _sim_b = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
+        running_a = start_server(app_a)
+        running_b = start_server(app_b)
+        try:
+            printer_a = build_printer(
+                db_session,
+                name="Emu A",
+                moonraker_url=running_a.base_url,
+                status=PrinterStatus.READY,
+            )
+            printer_b = build_printer(
+                db_session,
+                name="Emu B",
+                moonraker_url=running_b.base_url,
+                status=PrinterStatus.READY,
+            )
+
+            artifact_1 = a_gcode_artifact(db_session, "fleetcube1")
+            artifact_2 = a_gcode_artifact(db_session, "fleetcube2")
+            job1 = client.post(
+                "/api/v1/fleet/queue",
+                headers=auth_headers,
+                json={
+                    "file_id": artifact_1.id,
+                    "strategy": "manual",
+                    "printer_id": printer_a.id,
+                },
+            ).json()
+            job2 = client.post(
+                "/api/v1/fleet/queue",
+                headers=auth_headers,
+                json={
+                    "file_id": artifact_2.id,
+                    "strategy": "manual",
+                    "printer_id": printer_b.id,
+                },
+            ).json()
+
+            with patch(
+                "app.services.printer_jobs.get_backend", return_value=_Backend()
+            ):
+                from app.services.printer_jobs import dispatch_next
+
+                async def _dispatch_and_drive_both() -> tuple[int | None, int | None]:
+                    # Keep the pooled HTTP client and both printer hubs on the event
+                    # loop that created them. Splitting this flow across separate
+                    # asyncio.run() calls can reuse a client bound to a closed loop.
+                    first = await dispatch_next(_provider_builder)
+                    second = await dispatch_next(_provider_builder)
+
+                    with get_session_factory().session() as s:
+                        row1 = s.get(PrintJob, job1["id"])
+                        row2 = s.get(PrintJob, job2["id"])
+                        assert row1.printer_id == printer_a.id
+                        assert row2.printer_id == printer_b.id
+
+                    hub = PrinterHub(provider_builder=_provider_builder)
+                    stop = asyncio.Event()
+                    tasks = [
+                        asyncio.create_task(hub._run_printer(printer_a.id, stop)),
+                        asyncio.create_task(hub._run_printer(printer_b.id, stop)),
+                    ]
+                    try:
+                        await asyncio.gather(
+                            _wait_job_state(job1["id"], PrintJobState.COMPLETED),
+                            _wait_job_state(job2["id"], PrintJobState.COMPLETED),
+                        )
+                    finally:
+                        await _stop_hub_tasks(tasks, stop)
+
+                    return first, second
+
+                dispatched_1, dispatched_2 = asyncio.run(_dispatch_and_drive_both())
+                assert {dispatched_1, dispatched_2} == {job1["id"], job2["id"]}
+
+            with get_session_factory().session() as s:
+                for job in (job1, job2):
+                    row = s.exec(select(PrintJob).where(PrintJob.id == job["id"])).one()
+                    assert row.state == PrintJobState.COMPLETED
+        finally:
+            running_a.stop()
+            running_b.stop()

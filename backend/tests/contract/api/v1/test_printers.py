@@ -165,86 +165,90 @@ def _stored_gcode(
     return file_row
 
 
-def test_diagnostics_hits_real_moonraker_http_server(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    with moonraker_server() as server:
-        printer = build_printer(
-            db_session, name="Real Moonraker", moonraker_url=server.base_url
-        )
+class TestDiagnostics:
+    def test_diagnostics_hits_real_moonraker_http_server(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        with moonraker_server() as server:
+            printer = build_printer(
+                db_session, name="Real Moonraker", moonraker_url=server.base_url
+            )
 
-        resp = client.get(
-            f"/api/v1/printers/{printer.id}/diagnostics", headers=auth_headers
-        )
+            resp = client.get(
+                f"/api/v1/printers/{printer.id}/diagnostics", headers=auth_headers
+            )
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["ok"] is True
-        assert body["support_level"] == "stable"
-        assert [check["name"] for check in body["checks"]] == [
-            "configuration",
-            "provider_info",
-            "live_status",
-        ]
-        assert server.state.info_requests == 1
-        assert server.state.status_requests == 1
-
-
-def test_sync_printer_files_uses_real_provider_list_response(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    with moonraker_server() as server:
-        server.state.remote_files = [
-            {"path": "folder/from-printer.gcode", "size": 321},
-            {"path": "other/external.gcode", "size": 654},
-        ]
-        printer = build_printer(
-            db_session, name="Real Moonraker", moonraker_url=server.base_url
-        )
-
-        resp = client.post(
-            f"/api/v1/printers/{printer.id}/files/sync",
-            headers=auth_headers,
-        )
-
-        assert resp.status_code == 200, resp.text
-        assert [row["remote_filename"] for row in resp.json()] == [
-            "folder/from-printer.gcode",
-            "other/external.gcode",
-        ]
-        rows = db_session.exec(
-            select(PrinterFile).where(PrinterFile.printer_id == printer.id)
-        ).all()
-        assert {row.remote_filename for row in rows} == {
-            "folder/from-printer.gcode",
-            "other/external.gcode",
-        }
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["ok"] is True
+            assert body["support_level"] == "stable"
+            assert [check["name"] for check in body["checks"]] == [
+                "configuration",
+                "provider_info",
+                "live_status",
+            ]
+            assert server.state.info_requests == 1
+            assert server.state.status_requests == 1
 
 
-def test_sync_printer_files_reports_real_provider_http_failure(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    with moonraker_server() as server:
-        server.state.list_files_status = 503
-        printer = build_printer(
-            db_session, name="Failing Moonraker", moonraker_url=server.base_url
-        )
+class TestSyncPrinterFiles:
+    def test_sync_printer_files_uses_real_provider_list_response(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        with moonraker_server() as server:
+            server.state.remote_files = [
+                {"path": "folder/from-printer.gcode", "size": 321},
+                {"path": "other/external.gcode", "size": 654},
+            ]
+            printer = build_printer(
+                db_session, name="Real Moonraker", moonraker_url=server.base_url
+            )
 
-        resp = client.post(
-            f"/api/v1/printers/{printer.id}/files/sync",
-            headers=auth_headers,
-        )
+            resp = client.post(
+                f"/api/v1/printers/{printer.id}/files/sync",
+                headers=auth_headers,
+            )
 
-        assert resp.status_code == 502
-        assert resp.json() == {"detail": "provider_transport_error"}
-        db_session.refresh(printer)
-        assert "moonraker 503" in (printer.last_error or "")
+            assert resp.status_code == 200, resp.text
+            assert [row["remote_filename"] for row in resp.json()] == [
+                "folder/from-printer.gcode",
+                "other/external.gcode",
+            ]
+            rows = db_session.exec(
+                select(PrinterFile).where(PrinterFile.printer_id == printer.id)
+            ).all()
+            assert {row.remote_filename for row in rows} == {
+                "folder/from-printer.gcode",
+                "other/external.gcode",
+            }
+
+    def test_sync_printer_files_reports_real_provider_http_failure(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        with moonraker_server() as server:
+            server.state.list_files_status = 503
+            printer = build_printer(
+                db_session, name="Failing Moonraker", moonraker_url=server.base_url
+            )
+
+            resp = client.post(
+                f"/api/v1/printers/{printer.id}/files/sync",
+                headers=auth_headers,
+            )
+
+            assert resp.status_code == 502
+            assert resp.json() == {"detail": "provider_transport_error"}
+            db_session.refresh(printer)
+            assert "moonraker 503" in (printer.last_error or "")
 
 
 class TestSendToPrinter:

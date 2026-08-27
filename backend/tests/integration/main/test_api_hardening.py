@@ -8,57 +8,64 @@ from fastapi.testclient import TestClient
 from app.core.config import _overlay
 
 
-def test_openapi_describes_the_actual_http_bearer_contract(
-    client: TestClient,
-) -> None:
-    schema = client.get("/openapi.json").json()
+class TestOpenApiContract:
+    def test_openapi_describes_the_actual_http_bearer_contract(
+        self,
+        client: TestClient,
+    ) -> None:
+        schema = client.get("/openapi.json").json()
 
-    assert schema["components"]["securitySchemes"]["BearerAuth"] == {
-        "type": "http",
-        "scheme": "bearer",
-    }
-    assert "OAuth2PasswordBearer" not in schema["components"]["securitySchemes"]
+        assert schema["components"]["securitySchemes"]["BearerAuth"] == {
+            "type": "http",
+            "scheme": "bearer",
+        }
+        assert "OAuth2PasswordBearer" not in schema["components"]["securitySchemes"]
 
 
-def test_api_rejects_oversized_request_body_before_route(client: TestClient) -> None:
-    _overlay["max_upload_mb"] = 1
-    try:
-        response = client.post(
-            "/api/v1/auth/login",
-            content=b"x" * (1024 * 1024 + 1),
-            headers={"Content-Type": "application/octet-stream"},
+class TestBodyLimit:
+    def test_api_rejects_oversized_request_body_before_route(
+        self, client: TestClient
+    ) -> None:
+        _overlay["max_upload_mb"] = 1
+        try:
+            response = client.post(
+                "/api/v1/auth/login",
+                content=b"x" * (1024 * 1024 + 1),
+                headers={"Content-Type": "application/octet-stream"},
+            )
+        finally:
+            _overlay.pop("max_upload_mb", None)
+
+        assert response.status_code == 413
+        assert response.json() == {"detail": "request_too_large"}
+
+
+class TestCors:
+    def test_default_cors_allows_local_dev_origin(self, client: TestClient) -> None:
+        response = client.options(
+            "/api/v1/health",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "GET",
+            },
         )
-    finally:
-        _overlay.pop("max_upload_mb", None)
 
-    assert response.status_code == 413
-    assert response.json() == {"detail": "request_too_large"}
+        assert response.status_code == 200
+        assert (
+            response.headers["access-control-allow-origin"] == "http://localhost:3000"
+        )
 
+    def test_default_cors_rejects_unconfigured_origin(self, client: TestClient) -> None:
+        response = client.options(
+            "/api/v1/health",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
 
-def test_default_cors_allows_local_dev_origin(client: TestClient) -> None:
-    response = client.options(
-        "/api/v1/health",
-        headers={
-            "Origin": "http://localhost:3000",
-            "Access-Control-Request-Method": "GET",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
-
-
-def test_default_cors_rejects_unconfigured_origin(client: TestClient) -> None:
-    response = client.options(
-        "/api/v1/health",
-        headers={
-            "Origin": "https://evil.example",
-            "Access-Control-Request-Method": "GET",
-        },
-    )
-
-    assert response.status_code == 400
-    assert "access-control-allow-origin" not in response.headers
+        assert response.status_code == 400
+        assert "access-control-allow-origin" not in response.headers
 
 
 # The three health-endpoint tests that used to live here (public liveness disclosure,
@@ -71,24 +78,23 @@ def test_default_cors_rejects_unconfigured_origin(client: TestClient) -> None:
 # tests/integration/api/v1/test_setup.py, the mirror of the router it defends.
 
 
-def test_write_payloads_reject_unknown_fields(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    response = client.post(
-        "/api/v1/printers",
-        headers=auth_headers,
-        json={
-            "name": "Ender 3",
-            "moonraker_url": "http://10.0.0.1:7125",
-            "unexpected": "ignored-before-hardening",
-        },
-    )
+class TestSchemaStrictness:
+    def test_write_payloads_reject_unknown_fields(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        response = client.post(
+            "/api/v1/printers",
+            headers=auth_headers,
+            json={
+                "name": "Ender 3",
+                "moonraker_url": "http://10.0.0.1:7125",
+                "unexpected": "ignored-before-hardening",
+            },
+        )
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == "request_validation_failed"
+        assert response.status_code == 422
+        assert response.json()["detail"] == "request_validation_failed"
 
-
-class TestJson:
     def test_unhandled_errors_return_stable_json(self, app: FastAPI) -> None:
         if not any(
             getattr(route, "path", None) == "/__test__/boom" for route in app.routes

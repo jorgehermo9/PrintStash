@@ -60,92 +60,95 @@ async def _wait_state(
     raise AssertionError(f"never reached state {state!r}")
 
 
-def test_send_print_completes() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=1.0)
-    provider, built = _provider(sim)
+class TestStart:
+    def test_send_print_completes(self) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=1.0)
+        provider, built = _provider(sim)
 
-    async def _run() -> None:
-        await provider.start(REMOTE)
-        assert built[0].published[0]["print"]["command"] == "gcode_file"
+        async def _run() -> None:
+            await provider.start(REMOTE)
+            assert built[0].published[0]["print"]["command"] == "gcode_file"
+            assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
+            assert built[0].published_topics == ["device/01S00A000000000/request"]
+            await _wait_state(provider, "complete")
+
+        asyncio.run(_run())
+        assert built[0].username == "bblp"
+        assert built[0].tls_configured is True
+
+
+class TestSubscribeStatus:
+    def test_status_subscription_uses_one_mqtt_session_and_one_bootstrap_pushall(
+        self,
+    ) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
+        provider, built = _provider(sim)
+
+        async def _run() -> None:
+            stop = asyncio.Event()
+            received: list[dict] = []
+
+            async def on_status(status: dict) -> None:
+                received.append(status)
+                stop.set()
+
+            await provider.subscribe_status(on_status, stop_event=stop)
+            assert received[0]["print_stats"]["state"] == "standby"
+
+        asyncio.run(_run())
+        assert len(built) == 1
         assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
         assert built[0].published_topics == ["device/01S00A000000000/request"]
-        await _wait_state(provider, "complete")
-
-    asyncio.run(_run())
-    assert built[0].username == "bblp"
-    assert built[0].tls_configured is True
-
-
-def test_status_subscription_uses_one_mqtt_session_and_one_bootstrap_pushall() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
-    provider, built = _provider(sim)
-
-    async def _run() -> None:
-        stop = asyncio.Event()
-        received: list[dict] = []
-
-        async def on_status(status: dict) -> None:
-            received.append(status)
-            stop.set()
-
-        await provider.subscribe_status(on_status, stop_event=stop)
-        assert received[0]["print_stats"]["state"] == "standby"
-
-    asyncio.run(_run())
-    assert len(built) == 1
-    assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
-    assert built[0].published_topics == ["device/01S00A000000000/request"]
-    assert built[0].published == [
-        {
-            "pushing": {
-                "command": "pushall",
-                "push_target": 1,
-                "version": 1,
-                "sequence_id": built[0].published[0]["pushing"]["sequence_id"],
-            }
-        }
-    ]
-
-
-def test_project_file_report_preserves_external_capture_hint() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
-    provider, built = _provider(
-        sim,
-        pushall_report={
-            "print": {
-                "command": "project_file",
-                "gcode_state": "RUNNING",
-                "subtask_name": "Benchy",
-                "task_id": "task-42",
-                "url": "ftps://01S00A000000000/cache/benchy.3mf",
-            }
-        },
-    )
-
-    async def _run() -> None:
-        stop = asyncio.Event()
-        received: list[dict[str, Any]] = []
-
-        async def on_status(status: dict[str, Any]) -> None:
-            received.append(status)
-            stop.set()
-
-        await provider.subscribe_status(on_status, stop_event=stop)
-        assert received == [
+        assert built[0].published == [
             {
-                "print_stats": {
-                    "state": "printing",
-                    "filename": "Benchy",
-                    "external_display_name": "Benchy",
-                    "external_task_id": "task-42",
-                    "external_artifact_path": "ftps://01S00A000000000/cache/benchy.3mf",
+                "pushing": {
+                    "command": "pushall",
+                    "push_target": 1,
+                    "version": 1,
+                    "sequence_id": built[0].published[0]["pushing"]["sequence_id"],
                 }
             }
         ]
 
-    asyncio.run(_run())
-    assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
-    assert built[0].published_topics == ["device/01S00A000000000/request"]
+    def test_project_file_report_preserves_external_capture_hint(self) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
+        provider, built = _provider(
+            sim,
+            pushall_report={
+                "print": {
+                    "command": "project_file",
+                    "gcode_state": "RUNNING",
+                    "subtask_name": "Benchy",
+                    "task_id": "task-42",
+                    "url": "ftps://01S00A000000000/cache/benchy.3mf",
+                }
+            },
+        )
+
+        async def _run() -> None:
+            stop = asyncio.Event()
+            received: list[dict[str, Any]] = []
+
+            async def on_status(status: dict[str, Any]) -> None:
+                received.append(status)
+                stop.set()
+
+            await provider.subscribe_status(on_status, stop_event=stop)
+            assert received == [
+                {
+                    "print_stats": {
+                        "state": "printing",
+                        "filename": "Benchy",
+                        "external_display_name": "Benchy",
+                        "external_task_id": "task-42",
+                        "external_artifact_path": "ftps://01S00A000000000/cache/benchy.3mf",
+                    }
+                }
+            ]
+
+        asyncio.run(_run())
+        assert built[0].subscriptions == [("device/01S00A000000000/report", 1)]
+        assert built[0].published_topics == ["device/01S00A000000000/request"]
 
 
 class TestResume:

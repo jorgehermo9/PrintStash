@@ -37,39 +37,40 @@ def _ingest_gcode(client: TestClient, auth_headers: dict[str, str]) -> int:
     return payload["file_id"]
 
 
-def test_token_for_wrong_file_is_rejected(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-    file_id = _ingest_gcode(client, auth_headers)
+class TestVerifyDownloadToken:
+    def test_token_for_wrong_file_is_rejected(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+        file_id = _ingest_gcode(client, auth_headers)
 
-    # A token minted for a different file id must not unlock this one.
-    other_token = auth.create_file_download_token(file_id + 999)
-    resp = client.get(f"/api/v1/files/{file_id}/slicer/{other_token}/sample.gcode")
-    assert resp.status_code == 401, resp.text
+        # A token minted for a different file id must not unlock this one.
+        other_token = auth.create_file_download_token(file_id + 999)
+        resp = client.get(f"/api/v1/files/{file_id}/slicer/{other_token}/sample.gcode")
+        assert resp.status_code == 401, resp.text
 
+    def test_garbage_token_is_rejected(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+        file_id = _ingest_gcode(client, auth_headers)
 
-def test_garbage_token_is_rejected(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-    file_id = _ingest_gcode(client, auth_headers)
+        resp = client.get(f"/api/v1/files/{file_id}/slicer/not-a-jwt/sample.gcode")
+        assert resp.status_code == 401, resp.text
 
-    resp = client.get(f"/api/v1/files/{file_id}/slicer/not-a-jwt/sample.gcode")
-    assert resp.status_code == 401, resp.text
-
-
-def test_verify_download_token_unit() -> None:
-    token = auth.create_file_download_token(42)
-    assert auth.verify_file_download_token(token, 42) is True
-    assert auth.verify_file_download_token(token, 43) is False
-    # A normal access token isn't a download token (wrong scope).
-    access = auth.create_access_token(1, "alice", "write")
-    assert auth.verify_file_download_token(access, 42) is False
+    def test_verify_download_token_unit(self) -> None:
+        token = auth.create_file_download_token(42)
+        assert auth.verify_file_download_token(token, 42) is True
+        assert auth.verify_file_download_token(token, 43) is False
+        # A normal access token isn't a download token (wrong scope).
+        access = auth.create_access_token(1, "alice", "write")
+        assert auth.verify_file_download_token(access, 42) is False
 
 
 class TestAuth:

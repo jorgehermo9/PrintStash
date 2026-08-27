@@ -195,89 +195,6 @@ def _embedded_3mf() -> tuple[bytes, tuple[int, int, int]]:
     return archive.getvalue(), color
 
 
-@pytest.mark.asyncio
-async def test_over_cap_mesh_upload_has_a_visible_thumbnail(
-    api, tmp_path, e2e_db, monkeypatch
-):
-    """The headline #67 flow persists a useful fallback through the real API."""
-    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
-    stl = _microfaceted_stl()
-    headers = await _setup_and_login(api, tmp_path)
-    owner = e2e_db.exec(select(User).where(User.username == "owner")).one()
-    expired_job = BackgroundJob(
-        id="issue-67-expired-inbox-job",
-        owner_user_id=owner.id,
-        state="completed",
-        status_json='{"state":"completed"}',
-        finished_at=utcnow() - timedelta(hours=2),
-    )
-    e2e_db.add(expired_job)
-    e2e_db.flush()
-    e2e_db.add(
-        InboxItem(
-            owner_user_id=owner.id,
-            state=InboxItemState.COMPLETED,
-            background_job_id=expired_job.id,
-        )
-    )
-    e2e_db.commit()
-    monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
-
-    uploaded = await api.post(
-        "/api/v1/ingest/model",
-        files={"file": ("issue-67-dense.stl", stl, "application/sla")},
-        data={"model_name": "Issue 67 Dense"},
-        headers=headers,
-    )
-    assert uploaded.status_code == 202, uploaded.text
-    job = await _await_job(api, headers, uploaded.json()["job_id"])
-
-    assert job["state"] == "completed", job
-    assert job["thumbnail_status"] == "fallback_generated", job
-    file_id = job["file_id"]
-    thumbnail = await api.get(f"/api/v1/files/{file_id}/thumbnail", headers=headers)
-    assert thumbnail.status_code == 200, thumbnail.text
-    assert thumbnail.headers["content-type"] == "image/webp"
-
-    with Image.open(io.BytesIO(thumbnail.content)) as image:
-        pixels = np.asarray(image.convert("RGBA"))
-    visible = pixels[:, :, 3] > 20
-    assert visible.mean() > 0.08
-    assert _largest_component_fraction(visible) > 0.75
-    assert float(pixels[:, :, :3][visible].std()) > 8.0
-
-
-@pytest.mark.asyncio
-async def test_3mf_upload_persists_embedded_preview(api, tmp_path, e2e_db, monkeypatch):
-    """The public ingest flow serves a valid embedded 3MF preview unchanged."""
-    # Force the safe over-cap branch: geometry is intentionally skipped, while
-    # the valid embedded image must still bypass any mesh rasterization.
-    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1)
-    archive, color = _embedded_3mf()
-    headers = await _setup_and_login(api, tmp_path)
-
-    uploaded = await api.post(
-        "/api/v1/ingest/model",
-        files={"file": ("embedded-preview.3mf", archive, "model/3mf")},
-        data={"model_name": "Embedded Preview"},
-        headers=headers,
-    )
-    assert uploaded.status_code == 202, uploaded.text
-    job = await _await_job(api, headers, uploaded.json()["job_id"])
-
-    assert job["state"] == "completed", job
-    assert job["thumbnail_status"] == "generated", job
-    thumbnail = await api.get(
-        f"/api/v1/files/{job['file_id']}/thumbnail", headers=headers
-    )
-    assert thumbnail.status_code == 200, thumbnail.text
-    assert thumbnail.headers["content-type"] == "image/webp"
-
-    with Image.open(io.BytesIO(thumbnail.content)) as image:
-        pixels = np.asarray(image.convert("RGB"))
-    assert np.all(pixels == color)
-
-
 class TestMetadata:
     @pytest.mark.asyncio
     async def test_gcode_upload_parses_metadata_and_dedups(self, api, tmp_path, e2e_db):
@@ -316,3 +233,86 @@ class TestMetadata:
         listing2 = (await api.get("/api/v1/models", headers=headers)).json()
         benchies = [m for m in listing2 if m["name"] in ("Benchy", "Benchy Copy")]
         assert len(benchies) == 1, f"dedup failed, got {benchies}"
+
+    @pytest.mark.asyncio
+    async def test_over_cap_mesh_upload_has_a_visible_thumbnail(
+        self, api, tmp_path, e2e_db, monkeypatch
+    ):
+        """The headline #67 flow persists a useful fallback through the real API."""
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+        stl = _microfaceted_stl()
+        headers = await _setup_and_login(api, tmp_path)
+        owner = e2e_db.exec(select(User).where(User.username == "owner")).one()
+        expired_job = BackgroundJob(
+            id="issue-67-expired-inbox-job",
+            owner_user_id=owner.id,
+            state="completed",
+            status_json='{"state":"completed"}',
+            finished_at=utcnow() - timedelta(hours=2),
+        )
+        e2e_db.add(expired_job)
+        e2e_db.flush()
+        e2e_db.add(
+            InboxItem(
+                owner_user_id=owner.id,
+                state=InboxItemState.COMPLETED,
+                background_job_id=expired_job.id,
+            )
+        )
+        e2e_db.commit()
+        monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
+
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("issue-67-dense.stl", stl, "application/sla")},
+            data={"model_name": "Issue 67 Dense"},
+            headers=headers,
+        )
+        assert uploaded.status_code == 202, uploaded.text
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+
+        assert job["state"] == "completed", job
+        assert job["thumbnail_status"] == "fallback_generated", job
+        file_id = job["file_id"]
+        thumbnail = await api.get(f"/api/v1/files/{file_id}/thumbnail", headers=headers)
+        assert thumbnail.status_code == 200, thumbnail.text
+        assert thumbnail.headers["content-type"] == "image/webp"
+
+        with Image.open(io.BytesIO(thumbnail.content)) as image:
+            pixels = np.asarray(image.convert("RGBA"))
+        visible = pixels[:, :, 3] > 20
+        assert visible.mean() > 0.08
+        assert _largest_component_fraction(visible) > 0.75
+        assert float(pixels[:, :, :3][visible].std()) > 8.0
+
+    @pytest.mark.asyncio
+    async def test_3mf_upload_persists_embedded_preview(
+        self, api, tmp_path, e2e_db, monkeypatch
+    ):
+        """The public ingest flow serves a valid embedded 3MF preview unchanged."""
+        # Force the safe over-cap branch: geometry is intentionally skipped, while
+        # the valid embedded image must still bypass any mesh rasterization.
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1)
+        archive, color = _embedded_3mf()
+        headers = await _setup_and_login(api, tmp_path)
+
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("embedded-preview.3mf", archive, "model/3mf")},
+            data={"model_name": "Embedded Preview"},
+            headers=headers,
+        )
+        assert uploaded.status_code == 202, uploaded.text
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+
+        assert job["state"] == "completed", job
+        assert job["thumbnail_status"] == "generated", job
+        thumbnail = await api.get(
+            f"/api/v1/files/{job['file_id']}/thumbnail", headers=headers
+        )
+        assert thumbnail.status_code == 200, thumbnail.text
+        assert thumbnail.headers["content-type"] == "image/webp"
+
+        with Image.open(io.BytesIO(thumbnail.content)) as image:
+            pixels = np.asarray(image.convert("RGB"))
+        assert np.all(pixels == color)

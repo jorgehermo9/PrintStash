@@ -59,47 +59,54 @@ def _run_asgi(
     return sent
 
 
-def test_invalid_content_length_is_left_to_the_application() -> None:
-    async def app(_scope, _receive, send) -> None:
-        await send({"type": "http.response.start", "status": 204, "headers": []})
-        await send({"type": "http.response.body", "body": b""})
+class TestBodyLimitMiddleware:
+    def test_invalid_content_length_is_left_to_the_application(self) -> None:
+        async def app(_scope, _receive, send) -> None:
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
 
-    sent = _run_asgi(app, headers=[(b"content-length", b"not-a-number")])
+        sent = _run_asgi(app, headers=[(b"content-length", b"not-a-number")])
 
-    assert sent[0]["status"] == 204
+        assert sent[0]["status"] == 204
 
-
-def test_streamed_body_over_limit_is_rejected_before_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(type(settings), "max_upload_bytes", property(lambda _self: 3))
-
-    async def app(_scope, receive, _send) -> None:
-        await receive()
-
-    sent = _run_asgi(app, headers=[], body=b"four")
-
-    assert sent[0]["status"] == 413
-    assert sent[1]["body"] == b'{"detail": "request_too_large"}'
-
-
-def test_streamed_body_at_limit_reaches_application(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(type(settings), "max_upload_bytes", property(lambda _self: 3))
-
-    async def app(_scope, receive, send) -> None:
-        message = await receive()
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [(b"content-length", str(len(message["body"])).encode())],
-            }
+    def test_streamed_body_over_limit_is_rejected_before_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            type(settings), "max_upload_bytes", property(lambda _self: 3)
         )
-        await send({"type": "http.response.body", "body": message["body"]})
 
-    sent = _run_asgi(app, headers=[], body=b"123")
+        async def app(_scope, receive, _send) -> None:
+            await receive()
 
-    assert sent[0]["status"] == 200
-    assert sent[1]["body"] == b"123"
+        sent = _run_asgi(app, headers=[], body=b"four")
+
+        assert sent[0]["status"] == 413
+        assert sent[1]["body"] == b'{"detail": "request_too_large"}'
+
+    def test_streamed_body_at_limit_reaches_application(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            type(settings), "max_upload_bytes", property(lambda _self: 3)
+        )
+
+        async def app(_scope, receive, send) -> None:
+            message = await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"content-length", str(len(message["body"])).encode())
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": message["body"]})
+
+        sent = _run_asgi(app, headers=[], body=b"123")
+
+        assert sent[0]["status"] == 200
+        assert sent[1]["body"] == b"123"

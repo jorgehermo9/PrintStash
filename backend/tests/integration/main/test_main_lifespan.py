@@ -64,173 +64,174 @@ def _local_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _overlay.pop(field, None)
 
 
-def test_storage_composition_runs_publication_recovery_after_binding(
-    _local_storage: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.services import inbox
+class TestStorageComposition:
+    def test_storage_composition_runs_publication_recovery_after_binding(
+        self, _local_storage: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.services import inbox
 
-    events: list[str] = []
+        events: list[str] = []
 
-    class _Backend:
-        def ensure_setup(self) -> None:
-            events.append("ensure")
+        class _Backend:
+            def ensure_setup(self) -> None:
+                events.append("ensure")
 
-    backend = _Backend()
-    monkeypatch.setattr(app_main, "LocalStorageBackend", lambda: backend)
-    monkeypatch.setattr(
-        app_main,
-        "bind_backend",
-        lambda value: events.append("bind") or value,
-    )
-    monkeypatch.setattr(
-        inbox,
-        "reconcile_storage_publications",
-        lambda: events.append("recover") or 1,
-    )
+        backend = _Backend()
+        monkeypatch.setattr(app_main, "LocalStorageBackend", lambda: backend)
+        monkeypatch.setattr(
+            app_main,
+            "bind_backend",
+            lambda value: events.append("bind") or value,
+        )
+        monkeypatch.setattr(
+            inbox,
+            "reconcile_storage_publications",
+            lambda: events.append("recover") or 1,
+        )
 
-    assert app_main._compose_storage_backend() is backend
-    assert events == ["ensure", "bind", "recover"]
+        assert app_main._compose_storage_backend() is backend
+        assert events == ["ensure", "bind", "recover"]
 
+    def test_storage_composition_recovers_cover_published_before_restart_binding(
+        self, _local_storage: None, db_session
+    ) -> None:
+        from app.services import source_covers, storage_backend
+        from app.services.storage_backend import LocalStorageBackend, get_backend
 
-def test_storage_composition_recovers_cover_published_before_restart_binding(
-    _local_storage: None, db_session
-) -> None:
-    from app.services import source_covers, storage_backend
-    from app.services.storage_backend import LocalStorageBackend, get_backend
+        model = build_model(
+            db_session,
+            name="Startup recovery model",
+            slug="startup-recovery-model",
+            hash="a" * 64,
+        )
+        source = ModelProvenanceSource(
+            model_id=model.id,
+            provider="test",
+            canonical_url="https://example.test/startup-recovery",
+            identity_key="startup-recovery",
+        )
+        db_session.add(source)
+        db_session.commit()
 
-    model = build_model(
-        db_session,
-        name="Startup recovery model",
-        slug="startup-recovery-model",
-        hash="a" * 64,
-    )
-    source = ModelProvenanceSource(
-        model_id=model.id,
-        provider="test",
-        canonical_url="https://example.test/startup-recovery",
-        identity_key="startup-recovery",
-    )
-    db_session.add(source)
-    db_session.commit()
+        # The fixture has a local backend bound for service setup. Simulate a
+        # process crash after publication and before the caller's receipt commit.
+        storage_backend.bind_backend(LocalStorageBackend())
+        image = BytesIO()
+        Image.new("RGB", (1, 1), "navy").save(image, format="PNG")
+        result = source_covers.put(
+            db_session,
+            get_backend(),
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=image.getvalue(),
+            content_type="image/png",
+        )
+        db_session.rollback()
+        assert db_session.exec(select(StagingLease)).all()
 
-    # The fixture has a local backend bound for service setup. Simulate a
-    # process crash after publication and before the caller's receipt commit.
-    storage_backend.bind_backend(LocalStorageBackend())
-    image = BytesIO()
-    Image.new("RGB", (1, 1), "navy").save(image, format="PNG")
-    result = source_covers.put(
-        db_session,
-        get_backend(),
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=image.getvalue(),
-        content_type="image/png",
-    )
-    db_session.rollback()
-    assert db_session.exec(select(StagingLease)).all()
+        storage_backend._backend = None
+        app_main._compose_storage_backend()
+        assert db_session.exec(select(StagingLease)).all() == []
+        assert (
+            db_session.exec(select(OwnedStorageObject)).one().key
+            == result.cover.storage_key
+        )
 
-    storage_backend._backend = None
-    app_main._compose_storage_backend()
-    assert db_session.exec(select(StagingLease)).all() == []
-    assert (
-        db_session.exec(select(OwnedStorageObject)).one().key
-        == result.cover.storage_key
-    )
+    def test_startup_reconciles_completed_capture_slot_after_storage_binding(
+        self, _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A completed browser capture must recover its publication at startup.
 
+        This is deliberately a bounded startup seam test instead of a TestClient
+        lifespan portal: the ordering under test is synchronous and should not
+        depend on background-task shutdown completing.
+        """
+        from app.db.session import get_session_factory
+        from app.services import inbox, staging_leases, storage_backend
+        from app.services.storage_backend import LocalStorageBackend
 
-def test_startup_reconciles_completed_capture_slot_after_storage_binding(
-    _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A completed browser capture must recover its publication at startup.
+        owner = build_user(db_session, "startup-capture-owner")
+        assert owner.id is not None
+        item = InboxItem(
+            owner_user_id=owner.id,
+            source_kind=InboxSourceKind.BROWSER,
+            state=InboxItemState.COMPLETED,
+        )
+        db_session.add(item)
+        db_session.flush()
+        assert item.id is not None
 
-    This is deliberately a bounded startup seam test instead of a TestClient
-    lifespan portal: the ordering under test is synchronous and should not
-    depend on background-task shutdown completing.
-    """
-    from app.db.session import get_session_factory
-    from app.services import inbox, staging_leases, storage_backend
-    from app.services.storage_backend import LocalStorageBackend
+        payload = b"completed capture slot publication"
+        slot_id = "startup-completed-slot"
+        unbound_backend = LocalStorageBackend()
+        storage_key = unbound_backend.capture_upload_slot_key(slot_id)
+        slot = CaptureUploadSlot(
+            id=slot_id,
+            inbox_item_id=item.id,
+            role="file",
+            filename="capture.stl",
+            media_type="model/stl",
+            size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            state=CaptureUploadSlotState.PENDING,
+            storage_key=storage_key,
+        )
+        db_session.add(slot)
+        db_session.flush()
+        staging_leases.create_capture_slot_lease(
+            db_session,
+            slot_id=slot.id,
+            owner_user_id=owner.id,
+            destination_key=storage_key,
+            size_bytes=slot.size_bytes,
+            sha256=slot.sha256,
+        )
+        db_session.commit()
+        Path(storage_key).parent.mkdir(parents=True, exist_ok=True)
+        Path(storage_key).write_bytes(payload)
 
-    owner = build_user(db_session, "startup-capture-owner")
-    assert owner.id is not None
-    item = InboxItem(
-        owner_user_id=owner.id,
-        source_kind=InboxSourceKind.BROWSER,
-        state=InboxItemState.COMPLETED,
-    )
-    db_session.add(item)
-    db_session.flush()
-    assert item.id is not None
+        events: list[str] = []
 
-    payload = b"completed capture slot publication"
-    slot_id = "startup-completed-slot"
-    unbound_backend = LocalStorageBackend()
-    storage_key = unbound_backend.capture_upload_slot_key(slot_id)
-    slot = CaptureUploadSlot(
-        id=slot_id,
-        inbox_item_id=item.id,
-        role="file",
-        filename="capture.stl",
-        media_type="model/stl",
-        size_bytes=len(payload),
-        sha256=hashlib.sha256(payload).hexdigest(),
-        state=CaptureUploadSlotState.PENDING,
-        storage_key=storage_key,
-    )
-    db_session.add(slot)
-    db_session.flush()
-    staging_leases.create_capture_slot_lease(
-        db_session,
-        slot_id=slot.id,
-        owner_user_id=owner.id,
-        destination_key=storage_key,
-        size_bytes=slot.size_bytes,
-        sha256=slot.sha256,
-    )
-    db_session.commit()
-    Path(storage_key).parent.mkdir(parents=True, exist_ok=True)
-    Path(storage_key).write_bytes(payload)
+        class _TrackingBackend(LocalStorageBackend):
+            def ensure_setup(self) -> None:
+                events.append("ensure")
+                super().ensure_setup()
 
-    events: list[str] = []
+            def adopt_existing(
+                self, key: str, *, expected_size: int, expected_sha256: str
+            ):
+                events.append("recover")
+                return super().adopt_existing(
+                    key, expected_size=expected_size, expected_sha256=expected_sha256
+                )
 
-    class _TrackingBackend(LocalStorageBackend):
-        def ensure_setup(self) -> None:
-            events.append("ensure")
-            super().ensure_setup()
+        backend = _TrackingBackend()
+        monkeypatch.setattr(app_main, "LocalStorageBackend", lambda: backend)
+        real_bind = storage_backend.bind_backend
 
-        def adopt_existing(self, key: str, *, expected_size: int, expected_sha256: str):
-            events.append("recover")
-            return super().adopt_existing(
-                key, expected_size=expected_size, expected_sha256=expected_sha256
-            )
+        def record_bind(value):
+            events.append("bind")
+            return real_bind(value)
 
-    backend = _TrackingBackend()
-    monkeypatch.setattr(app_main, "LocalStorageBackend", lambda: backend)
-    real_bind = storage_backend.bind_backend
+        monkeypatch.setattr(app_main, "bind_backend", record_bind)
 
-    def record_bind(value):
-        events.append("bind")
-        return real_bind(value)
+        def record_interrupted_reconcile() -> int:
+            events.append("inbox")
+            assert storage_backend.get_backend() is backend
+            with get_session_factory().scoped_session() as session:
+                recovered = session.get(CaptureUploadSlot, slot_id)
+                assert recovered is not None
+                assert recovered.state == CaptureUploadSlotState.UPLOADED
+                assert recovered.receipt_json
+            return 0
 
-    monkeypatch.setattr(app_main, "bind_backend", record_bind)
+        monkeypatch.setattr(
+            inbox, "reconcile_interrupted_items", record_interrupted_reconcile
+        )
+        storage_backend._backend = None
 
-    def record_interrupted_reconcile() -> int:
-        events.append("inbox")
-        assert storage_backend.get_backend() is backend
-        with get_session_factory().scoped_session() as session:
-            recovered = session.get(CaptureUploadSlot, slot_id)
-            assert recovered is not None
-            assert recovered.state == CaptureUploadSlotState.UPLOADED
-            assert recovered.receipt_json
-        return 0
-
-    monkeypatch.setattr(
-        inbox, "reconcile_interrupted_items", record_interrupted_reconcile
-    )
-    storage_backend._backend = None
-
-    assert app_main._prepare_storage_for_startup() is backend
-    assert events == ["ensure", "bind", "recover", "inbox"]
+        assert app_main._prepare_storage_for_startup() is backend
+        assert events == ["ensure", "bind", "recover", "inbox"]
 
 
 async def _done() -> None:

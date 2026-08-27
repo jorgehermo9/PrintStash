@@ -324,8 +324,13 @@ Every test file, in every runtime, has the same anatomy, top to bottom:
    [references/fixtures.md](references/fixtures.md).
 4. **One group per production unit, in the production module's order** —
    `class Test<Function|Endpoint|Method>` in pytest, `describe("<unit>")` in
-   vitest. Never an ad-hoc group (`TestMisc`, `describe("extra cases")`); a
-   new aspect of a unit is a sibling test in that unit's group.
+   vitest. Never an ad-hoc group (`TestMisc`, `describe("extra cases")`, or a
+   bare type name like `TestFile` when the unit is a function); a new aspect of
+   a unit is a sibling test in that unit's group. **No test sits at module
+   level** — `tests/repo/test_test_hygiene.py` enforces it, because a test that
+   belongs to no group accumulates in write order and drifts away from the code
+   it defends. The group name is what turns "what covers `scan_library`?" from a
+   grep into a lookup.
 5. **Inside a group, tests in matrix order: Happy → Edge → Error.** Reading
    the file top to bottom reads the matrix.
 

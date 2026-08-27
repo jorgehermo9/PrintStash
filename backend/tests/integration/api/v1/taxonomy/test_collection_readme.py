@@ -23,80 +23,86 @@ def _grant(session: Session, user: User, cid: int, role: CollectionRole) -> None
     grant_collection_role(session, user, cid, role)
 
 
-def test_readme_roundtrip_and_image_lifecycle(
-    db_session: Session, client: TestClient, tmp_path: Path
-) -> None:
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    col = taxonomy.resolve_or_create_collection(db_session, "Brackets")
-    editor = build_user(db_session, "editor")
-    _grant(db_session, editor, col.id, CollectionRole.EDIT)
-    h = bearer(editor)
+class TestCollectionReadme:
+    def test_readme_roundtrip_and_image_lifecycle(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        _overlay["thumb_dir"] = tmp_path / "thumbs"
+        col = taxonomy.resolve_or_create_collection(db_session, "Brackets")
+        editor = build_user(db_session, "editor")
+        _grant(db_session, editor, col.id, CollectionRole.EDIT)
+        h = bearer(editor)
 
-    # Set + read back the markdown.
-    r = client.put(
-        f"/api/v1/collections/{col.id}/readme", json={"readme": "# Notes"}, headers=h
-    )
-    assert r.status_code == 200
-    assert (
-        client.get(f"/api/v1/collections/{col.id}/readme", headers=h).json()["readme"]
-        == "# Notes"
-    )
-
-    # Upload an image; the returned URL serves the bytes back.
-    up = client.post(
-        f"/api/v1/collections/{col.id}/images",
-        files={"file": ("pic.png", _PNG, "image/png")},
-        headers=h,
-    )
-    assert up.status_code == 201
-    url = up.json()["url"]
-    served = client.get(url, headers=h)
-    assert served.status_code == 200
-    assert served.content == _PNG
-
-    # Non-image extension is rejected.
-    bad = client.post(
-        f"/api/v1/collections/{col.id}/images",
-        files={"file": ("x.svg", b"<svg/>", "image/svg+xml")},
-        headers=h,
-    )
-    assert bad.status_code == 400
-
-
-def test_readme_rbac(db_session: Session, client: TestClient, tmp_path: Path) -> None:
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    col = taxonomy.resolve_or_create_collection(db_session, "Private")
-    viewer = build_user(db_session, "viewer")
-    _grant(db_session, viewer, col.id, CollectionRole.VIEW)
-    outsider = build_user(db_session, "outsider")
-
-    # VIEW can read but not write.
-    assert (
-        client.get(
-            f"/api/v1/collections/{col.id}/readme", headers=bearer(viewer)
-        ).status_code
-        == 200
-    )
-    assert (
-        client.put(
+        # Set + read back the markdown.
+        r = client.put(
             f"/api/v1/collections/{col.id}/readme",
-            json={"readme": "x"},
-            headers=bearer(viewer),
-        ).status_code
-        == 403
-    )
-    # No grant at all → no read.
-    assert (
-        client.get(
-            f"/api/v1/collections/{col.id}/readme", headers=bearer(outsider)
-        ).status_code
-        == 403
-    )
-    # Path-traversal-shaped image name is rejected before any disk access.
-    assert (
-        client.get(
-            f"/api/v1/collections/{col.id}/images/..%2f..%2fetc%2fpasswd",
-            headers=bearer(viewer),
-        ).status_code
-        == 404
-    )
+            json={"readme": "# Notes"},
+            headers=h,
+        )
+        assert r.status_code == 200
+        assert (
+            client.get(f"/api/v1/collections/{col.id}/readme", headers=h).json()[
+                "readme"
+            ]
+            == "# Notes"
+        )
+
+        # Upload an image; the returned URL serves the bytes back.
+        up = client.post(
+            f"/api/v1/collections/{col.id}/images",
+            files={"file": ("pic.png", _PNG, "image/png")},
+            headers=h,
+        )
+        assert up.status_code == 201
+        url = up.json()["url"]
+        served = client.get(url, headers=h)
+        assert served.status_code == 200
+        assert served.content == _PNG
+
+        # Non-image extension is rejected.
+        bad = client.post(
+            f"/api/v1/collections/{col.id}/images",
+            files={"file": ("x.svg", b"<svg/>", "image/svg+xml")},
+            headers=h,
+        )
+        assert bad.status_code == 400
+
+    def test_readme_rbac(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        _overlay["thumb_dir"] = tmp_path / "thumbs"
+        col = taxonomy.resolve_or_create_collection(db_session, "Private")
+        viewer = build_user(db_session, "viewer")
+        _grant(db_session, viewer, col.id, CollectionRole.VIEW)
+        outsider = build_user(db_session, "outsider")
+
+        # VIEW can read but not write.
+        assert (
+            client.get(
+                f"/api/v1/collections/{col.id}/readme", headers=bearer(viewer)
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                f"/api/v1/collections/{col.id}/readme",
+                json={"readme": "x"},
+                headers=bearer(viewer),
+            ).status_code
+            == 403
+        )
+        # No grant at all → no read.
+        assert (
+            client.get(
+                f"/api/v1/collections/{col.id}/readme", headers=bearer(outsider)
+            ).status_code
+            == 403
+        )
+        # Path-traversal-shaped image name is rejected before any disk access.
+        assert (
+            client.get(
+                f"/api/v1/collections/{col.id}/images/..%2f..%2fetc%2fpasswd",
+                headers=bearer(viewer),
+            ).status_code
+            == 404
+        )

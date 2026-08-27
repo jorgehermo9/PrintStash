@@ -59,77 +59,77 @@ def _run_import(
         )
 
 
-def test_import_dedups_case_insensitively(db_session: Session):
-    f = _seed_model_and_file(db_session, filename="Benchy.gcode")
-    p = _seed_printer(db_session)
-    build_print_job(
-        db_session,
-        f,
-        printer=p,
-        remote_filename="Benchy.gcode",
-        state=PrintJobState.COMPLETED,
-    )
+class TestImportPrinterJobs:
+    def test_import_dedups_case_insensitively(self, db_session: Session):
+        f = _seed_model_and_file(db_session, filename="Benchy.gcode")
+        p = _seed_printer(db_session)
+        build_print_job(
+            db_session,
+            f,
+            printer=p,
+            remote_filename="Benchy.gcode",
+            state=PrintJobState.COMPLETED,
+        )
 
-    results = _run_import(
-        db_session,
-        model_id=f.model_id,
-        printer_id=p.id,
-        history=[{"filename": "benchy.gcode", "status": "completed"}],
-    )
+        results = _run_import(
+            db_session,
+            model_id=f.model_id,
+            printer_id=p.id,
+            history=[{"filename": "benchy.gcode", "status": "completed"}],
+        )
 
-    assert results[0].imported is False
-    jobs = db_session.exec(
-        select(PrintJob).where(PrintJob.model_id == f.model_id)
-    ).all()
-    assert len(jobs) == 1
+        assert results[0].imported is False
+        jobs = db_session.exec(
+            select(PrintJob).where(PrintJob.model_id == f.model_id)
+        ).all()
+        assert len(jobs) == 1
 
+    def test_import_is_idempotent(self, db_session: Session):
+        f = _seed_model_and_file(db_session)
+        p = _seed_printer(db_session)
+        history = [{"filename": "Benchy.gcode", "status": "completed"}]
 
-def test_import_is_idempotent(db_session: Session):
-    f = _seed_model_and_file(db_session)
-    p = _seed_printer(db_session)
-    history = [{"filename": "Benchy.gcode", "status": "completed"}]
+        _run_import(db_session, model_id=f.model_id, printer_id=p.id, history=history)
+        _run_import(db_session, model_id=f.model_id, printer_id=p.id, history=history)
 
-    _run_import(db_session, model_id=f.model_id, printer_id=p.id, history=history)
-    _run_import(db_session, model_id=f.model_id, printer_id=p.id, history=history)
+        jobs = db_session.exec(
+            select(PrintJob).where(PrintJob.model_id == f.model_id)
+        ).all()
+        assert len(jobs) == 1
 
-    jobs = db_session.exec(
-        select(PrintJob).where(PrintJob.model_id == f.model_id)
-    ).all()
-    assert len(jobs) == 1
+    def test_import_maps_moonraker_status_to_job_state(self, db_session: Session):
+        f = _seed_model_and_file(db_session)
+        p = _seed_printer(db_session)
+        history = [
+            {"filename": "Benchy.gcode", "status": "completed"},
+        ]
+        _run_import(db_session, model_id=f.model_id, printer_id=p.id, history=history)
+        job = db_session.exec(
+            select(PrintJob).where(PrintJob.model_id == f.model_id)
+        ).one()
+        assert job.state == PrintJobState.COMPLETED
 
+        f2 = _seed_model_and_file(db_session, filename="Other.gcode")
+        history2 = [{"filename": "Other.gcode", "status": "cancelled"}]
+        _run_import(db_session, model_id=f2.model_id, printer_id=p.id, history=history2)
+        job2 = db_session.exec(
+            select(PrintJob).where(PrintJob.model_id == f2.model_id)
+        ).one()
+        assert job2.state == PrintJobState.CANCELLED
 
-def test_import_maps_moonraker_status_to_job_state(db_session: Session):
-    f = _seed_model_and_file(db_session)
-    p = _seed_printer(db_session)
-    history = [
-        {"filename": "Benchy.gcode", "status": "completed"},
-    ]
-    _run_import(db_session, model_id=f.model_id, printer_id=p.id, history=history)
-    job = db_session.exec(select(PrintJob).where(PrintJob.model_id == f.model_id)).one()
-    assert job.state == PrintJobState.COMPLETED
+    def test_import_skips_files_not_in_this_model(self, db_session: Session):
+        f = _seed_model_and_file(db_session, filename="Benchy.gcode")
+        p = _seed_printer(db_session)
 
-    f2 = _seed_model_and_file(db_session, filename="Other.gcode")
-    history2 = [{"filename": "Other.gcode", "status": "cancelled"}]
-    _run_import(db_session, model_id=f2.model_id, printer_id=p.id, history=history2)
-    job2 = db_session.exec(
-        select(PrintJob).where(PrintJob.model_id == f2.model_id)
-    ).one()
-    assert job2.state == PrintJobState.CANCELLED
+        results = _run_import(
+            db_session,
+            model_id=f.model_id,
+            printer_id=p.id,
+            history=[{"filename": "unrelated.gcode", "status": "completed"}],
+        )
 
-
-def test_import_skips_files_not_in_this_model(db_session: Session):
-    f = _seed_model_and_file(db_session, filename="Benchy.gcode")
-    p = _seed_printer(db_session)
-
-    results = _run_import(
-        db_session,
-        model_id=f.model_id,
-        printer_id=p.id,
-        history=[{"filename": "unrelated.gcode", "status": "completed"}],
-    )
-
-    assert results == []
-    jobs = db_session.exec(
-        select(PrintJob).where(PrintJob.model_id == f.model_id)
-    ).all()
-    assert jobs == []
+        assert results == []
+        jobs = db_session.exec(
+            select(PrintJob).where(PrintJob.model_id == f.model_id)
+        ).all()
+        assert jobs == []

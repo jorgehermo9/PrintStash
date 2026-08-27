@@ -65,21 +65,6 @@ def s3_backend() -> Iterator[S3StorageBackend]:
             _overlay.pop(field, None)
 
 
-def test_round_trips_bytes(s3_backend: S3StorageBackend):
-    key = "models/round-trip.txt"
-    assert not s3_backend.exists(key)
-
-    s3_backend.write_bytes(b"hello s3", key)
-
-    assert s3_backend.exists(key)
-    assert s3_backend.stat_size(key) == len(b"hello s3")
-    assert s3_backend.read_bytes(key) == b"hello s3"
-    info = s3_backend.object_info(key)
-    assert info is not None
-    assert info.size == len(b"hello s3")
-    assert info.etag
-
-
 class TestCaptureUploadSlotKey:
     def test_capture_upload_slot_key_uses_s3_prefix(self, s3_backend: S3StorageBackend):
         assert s3_backend.capture_upload_slot_key("slot-1").endswith(
@@ -130,6 +115,20 @@ class TestWriteStream:
             assert s3_backend.read_bytes(key) == payload
         finally:
             _overlay.pop("s3_multipart_threshold_mb", None)
+
+    def test_round_trips_bytes(self, s3_backend: S3StorageBackend):
+        key = "models/round-trip.txt"
+        assert not s3_backend.exists(key)
+
+        s3_backend.write_bytes(b"hello s3", key)
+
+        assert s3_backend.exists(key)
+        assert s3_backend.stat_size(key) == len(b"hello s3")
+        assert s3_backend.read_bytes(key) == b"hello s3"
+        info = s3_backend.object_info(key)
+        assert info is not None
+        assert info.size == len(b"hello s3")
+        assert info.etag
 
 
 class TestMove:

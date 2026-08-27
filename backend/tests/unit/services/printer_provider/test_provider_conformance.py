@@ -83,12 +83,6 @@ def _build(provider: PrinterProvider):
     return get_provider_client(_printer(provider), registry=REGISTRY)
 
 
-def test_every_provider_is_covered():
-    """A new PrinterProvider enum member must be registered and credentialed."""
-    assert set(PROVIDERS) == set(ALL_PROVIDERS)
-    assert set(FULL_CREDENTIALS) == set(ALL_PROVIDERS)
-
-
 @pytest.mark.parametrize("provider", ALL_PROVIDERS)
 class TestProviderConformance:
     def test_implements_the_provider_protocol(self, provider):
@@ -159,3 +153,17 @@ class TestProviderConformance:
         client = _build(provider)
         for method in [*METHOD_ARGS, "info", "subscribe_status"]:
             assert inspect.iscoroutinefunction(getattr(client, method)), method
+
+
+class TestProviderRegistry:
+    """The registry and the enum agree about which providers exist.
+
+    Every conformance test above is parametrized over the enum, so a provider
+    added to `PrinterProvider` and not to `PROVIDERS` is not a failing test — it
+    is a provider the whole conformance pack silently never runs against.
+    """
+
+    def test_every_provider_is_covered(self):
+        """A new PrinterProvider enum member must be registered and credentialed."""
+        assert set(PROVIDERS) == set(ALL_PROVIDERS)
+        assert set(FULL_CREDENTIALS) == set(ALL_PROVIDERS)
