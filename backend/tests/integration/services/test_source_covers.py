@@ -77,6 +77,22 @@ def _receipt(key: str = "opaque/covers/1.webp", token: str = "new") -> CreationR
     )
 
 
+def _put_cover(session, backend, source, colour: str):
+    """Publish a cover of *colour* for *source* — the arrange step of a replacement.
+
+    Three of these in a row is what "successive replacements" means, so it lives
+    here rather than being written out per test.
+    """
+    return source_covers.put(
+        session,
+        backend,
+        provenance_source_id=source.id,
+        actor_id=None,
+        data=_png(colour),
+        content_type="image/png",
+    )
+
+
 class TestPut:
     def test_create_rolls_back_published_bytes_when_recording_the_receipt_fails(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
@@ -106,7 +122,7 @@ class TestPut:
         assert db_session.exec(select(StagingLease)).all() == []
         assert db_session.exec(select(OwnedStorageObject)).all() == []
 
-    def test_replacement_failure_keeps_old_metadata_and_proof(
+    def test_leaves_the_old_cover_untouched_when_the_replace_fails(
         self, db_session: Session
     ) -> None:
         source = _source(db_session)
@@ -138,48 +154,33 @@ class TestPut:
         proof = db_session.exec(select(OwnedStorageObject)).one()
         assert proof.token == "old"
 
-    def test_successive_replacements_publish_latest_bytes_and_release_each_lease(
-        self,
-        db_session: Session,
+    def test_publishes_the_newest_bytes_after_repeated_replacements(
+        self, db_session: Session
     ) -> None:
         source = _source(db_session)
         backend = get_backend()
-
-        first = source_covers.put(
-            db_session,
-            backend,
-            provenance_source_id=source.id,
-            actor_id=None,
-            data=_png("navy"),
-            content_type="image/png",
-        )
+        first = _put_cover(db_session, backend, source, "navy")
+        db_session.commit()
+        _put_cover(db_session, backend, source, "maroon")
         db_session.commit()
 
-        second = source_covers.put(
-            db_session,
-            backend,
-            provenance_source_id=source.id,
-            actor_id=None,
-            data=_png("maroon"),
-            content_type="image/png",
-        )
-        assert second.cover.id == first.cover.id
-        assert db_session.exec(select(StagingLease)).all() == []
-        db_session.commit()
-
-        latest = source_covers.put(
-            db_session,
-            backend,
-            provenance_source_id=source.id,
-            actor_id=None,
-            data=_png("gold"),
-            content_type="image/png",
-        )
+        latest = _put_cover(db_session, backend, source, "gold")
         db_session.commit()
 
         assert latest.cover.id == first.cover.id
         expected = process_source_cover_upload(_png("gold"), "image/png").data
         assert backend.read_bytes(latest.cover.storage_key) == expected
+
+    def test_leaves_no_staging_lease_behind_after_a_replacement(
+        self, db_session: Session
+    ) -> None:
+        source = _source(db_session)
+        backend = get_backend()
+        _put_cover(db_session, backend, source, "navy")
+        db_session.commit()
+
+        _put_cover(db_session, backend, source, "maroon")
+
         assert db_session.exec(select(StagingLease)).all() == []
 
     def test_new_replacement_supersedes_a_crashed_prior_generation(
@@ -248,10 +249,7 @@ class TestPut:
         assert db_session.exec(select(StagingLease)).all() == []
         assert db_session.exec(select(OwnedStorageObject)).all() == []
 
-    def test_cover_lease_requires_cover_as_its_only_owner_and_cascades(
-        self,
-        db_session: Session,
-    ) -> None:
+    def test_deleting_a_cover_cascades_to_its_lease(self, db_session: Session) -> None:
         source = _source(db_session)
         cover = ModelSourceCover(
             provenance_source_id=source.id,
@@ -272,29 +270,38 @@ class TestPut:
         lease_id = lease.id
         db_session.commit()
         db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
+
         db_session.delete(cover)
         db_session.commit()
+
         assert db_session.get(StagingLease, lease_id) is None
 
-        replacement = ModelSourceCover(
+    def test_refuses_a_cover_lease_that_also_names_a_background_job(
+        self, db_session: Session
+    ) -> None:
+        source = _source(db_session)
+        cover = ModelSourceCover(
             provenance_source_id=source.id,
             storage_key="opaque/covers/conflict.webp",
             size_bytes=1,
         )
         job = BackgroundJob(id="cover-owner-conflict")
-        db_session.add_all([replacement, job])
+        db_session.add_all([cover, job])
         db_session.commit()
-        assert replacement.id is not None
-        invalid = StagingLease(
-            id="cover-owner-conflict",
-            path="cover:invalid",
-            background_job_id=job.id,
-            model_source_cover_id=replacement.id,
-            size_bytes=1,
-            sha256="a" * 64,
-            expires_at=cover.created_at,
+        assert cover.id is not None
+
+        db_session.add(
+            StagingLease(
+                id="cover-owner-conflict",
+                path="cover:invalid",
+                background_job_id=job.id,
+                model_source_cover_id=cover.id,
+                size_bytes=1,
+                sha256="a" * 64,
+                expires_at=cover.created_at,
+            )
         )
-        db_session.add(invalid)
+
         with pytest.raises(IntegrityError):
             db_session.commit()
         db_session.rollback()
@@ -323,7 +330,7 @@ class TestPut:
         assert db_session.exec(select(ModelSourceCover)).all() == []
         assert db_session.exec(select(StagingLease)).all() == []
 
-    def test_replacement_commit_failure_restores_bytes_and_a_current_proof(
+    def test_restores_the_previous_cover_when_the_commit_fails(
         self,
         db_session: Session,
     ) -> None:
@@ -429,7 +436,7 @@ class TestPut:
         monkeypatch.setattr(db_session, "commit", caller_commit)
         db_session.rollback()
 
-    def test_finish_import_uses_only_intent_and_final_sqlite_commits(
+    def test_publishes_a_cover_in_exactly_two_sqlite_commits(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Cover publication must not open a second writer behind Inbox flushes.
@@ -546,7 +553,7 @@ class TestPut:
             )
         engine.dispose()
 
-    def test_soft_delete_and_restore_keep_cover_and_proof(
+    def test_a_trash_round_trip_leaves_the_cover_published(
         self, db_session: Session
     ) -> None:
         source = _source(db_session)
@@ -698,7 +705,7 @@ class TestPruneExpired:
     be sure about — is left entirely alone, because a wrong guess here deletes a
     cover a user can see."""
 
-    def test_expired_cover_intent_without_bytes_removes_cover_and_lease(
+    def test_prunes_a_cover_intent_whose_bytes_were_never_published(
         self,
         db_session: Session,
     ) -> None:

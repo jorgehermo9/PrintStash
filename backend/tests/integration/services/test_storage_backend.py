@@ -77,6 +77,93 @@ def _s3_backend_raising(error_code: str) -> S3StorageBackend:
     return backend
 
 
+_ADOPT_KEY = "vault-data/capture-slots/pending"
+_ADOPT_PAYLOAD = b"published-before-receipt"
+
+
+class _ConditionalPutClient:
+    """The subset of the S3 API that `create_bytes` and `rollback_create` use.
+
+    Conditional on both sides: `put_object` asserts `IfNoneMatch: *` and answers a
+    second write with the 412 S3 really returns, and `delete_object` asserts the
+    `IfMatch` etag. Getting either wrong in production is a silent overwrite, so the
+    fake refuses to be lenient about it.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
+
+    def put_object(self, **kwargs):
+        import botocore.exceptions
+
+        key = kwargs["Key"]
+        assert kwargs["IfNoneMatch"] == "*"
+        if key in self.objects:
+            raise botocore.exceptions.ClientError(
+                {
+                    "Error": {"Code": "PreconditionFailed"},
+                    "ResponseMetadata": {"HTTPStatusCode": 412},
+                },
+                "PutObject",
+            )
+        body = kwargs["Body"]
+        data = body.read() if hasattr(body, "read") else bytes(body)
+        etag = '"etag-1"'
+        self.objects[key] = (data, kwargs["Metadata"], etag)
+        return {"ETag": etag}
+
+    def head_object(self, **kwargs):
+        data, metadata, etag = self.objects[kwargs["Key"]]
+        return {"ContentLength": len(data), "Metadata": metadata, "ETag": etag}
+
+    def delete_object(self, **kwargs):
+        assert kwargs["IfMatch"] == self.objects[kwargs["Key"]][2]
+        del self.objects[kwargs["Key"]]
+
+
+class _AdoptClient:
+    """`head_object`/`get_object` over a versioned bucket, for `adopt_existing`."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
+
+    def head_object(self, **kwargs):
+        data, metadata, etag = self.objects[kwargs["Key"]]
+        return {
+            "ContentLength": len(data),
+            "Metadata": metadata,
+            "ETag": etag,
+            "VersionId": "version-1",
+        }
+
+    def get_object(self, **kwargs):
+        data, _metadata, _etag = self.objects[kwargs["Key"]]
+        return {"Body": BytesIO(data)}
+
+
+def _bare_s3_backend(client) -> S3StorageBackend:
+    """An `S3StorageBackend` wired to *client* without touching a real endpoint."""
+    backend = object.__new__(S3StorageBackend)
+    backend._client = client  # type: ignore[attr-defined]
+    backend._bucket = "vault"  # type: ignore[attr-defined]
+    return backend
+
+
+def _conditional_put_backend() -> S3StorageBackend:
+    return _bare_s3_backend(_ConditionalPutClient())
+
+
+def _adoptable_backend(key: str, payload: bytes) -> S3StorageBackend:
+    """A backend whose bucket already holds *payload* at *key*, tagged as ours."""
+    client = _AdoptClient()
+    client.objects[key] = (
+        payload,
+        {"printstash-create-token": "operation-token"},
+        '"etag-1"',
+    )
+    return _bare_s3_backend(client)
+
+
 class TestS3GetObject:
     def test_s3_get_object_preserves_non_missing_client_error(self) -> None:
         import botocore.exceptions
@@ -97,60 +184,30 @@ class TestS3GetObject:
 
 
 class TestS3CreateStream:
-    def test_s3_create_is_conditional_and_rollback_requires_operation_token(
-        self,
-    ) -> None:
-        import botocore.exceptions
-
-        class _Client:
-            def __init__(self) -> None:
-                self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
-
-            def put_object(self, **kwargs):
-                key = kwargs["Key"]
-                assert kwargs["IfNoneMatch"] == "*"
-                if key in self.objects:
-                    raise botocore.exceptions.ClientError(
-                        {
-                            "Error": {"Code": "PreconditionFailed"},
-                            "ResponseMetadata": {"HTTPStatusCode": 412},
-                        },
-                        "PutObject",
-                    )
-                body = kwargs["Body"]
-                data = body.read() if hasattr(body, "read") else bytes(body)
-                etag = '"etag-1"'
-                self.objects[key] = (data, kwargs["Metadata"], etag)
-                return {"ETag": etag}
-
-            def head_object(self, **kwargs):
-                data, metadata, etag = self.objects[kwargs["Key"]]
-                return {"ContentLength": len(data), "Metadata": metadata, "ETag": etag}
-
-            def delete_object(self, **kwargs):
-                assert kwargs["IfMatch"] == self.objects[kwargs["Key"]][2]
-                del self.objects[kwargs["Key"]]
-
-        backend = object.__new__(S3StorageBackend)
-        backend._client = _Client()  # type: ignore[attr-defined]
-        backend._bucket = "vault"  # type: ignore[attr-defined]
+    def test_s3_create_refuses_to_overwrite_an_existing_key(self) -> None:
+        backend = _conditional_put_backend()
 
         receipt = backend.create_bytes(b"owned", "vault-data/files/part.stl")
+
         with pytest.raises(StorageCollisionError):
             backend.create_bytes(b"replacement", receipt.key)
 
+    def test_s3_rollback_refuses_a_receipt_from_another_operation(self) -> None:
+        backend = _conditional_put_backend()
+        receipt = backend.create_bytes(b"owned", "vault-data/files/part.stl")
         data, _metadata, etag = backend._client.objects[receipt.key]  # type: ignore[attr-defined]
         backend._client.objects[receipt.key] = (  # type: ignore[attr-defined]
             data,
             {"printstash-create-token": "another-operation"},
             etag,
         )
+
         assert backend.rollback_create(receipt) is False
         assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
 
 
 class TestS3RollbackCreate:
-    def test_s3_rollback_deletes_exact_version_and_preserves_same_etag_replacement(
+    def test_s3_rollback_deletes_only_the_version_it_created(
         self,
     ) -> None:
         class _Client:
@@ -235,66 +292,50 @@ class TestExists:
 
 
 class TestAdoptExisting:
-    def test_s3_adopt_existing_reconciles_exact_object_and_preserves_collision(
+    def test_s3_adopt_existing_returns_a_receipt_for_the_object_already_there(
         self,
     ) -> None:
-        class _Client:
-            def __init__(self) -> None:
-                self.objects: dict[str, tuple[bytes, dict[str, str], str]] = {}
-
-            def head_object(self, **kwargs):
-                data, metadata, etag = self.objects[kwargs["Key"]]
-                return {
-                    "ContentLength": len(data),
-                    "Metadata": metadata,
-                    "ETag": etag,
-                    "VersionId": "version-1",
-                }
-
-            def get_object(self, **kwargs):
-                data, _metadata, _etag = self.objects[kwargs["Key"]]
-                return {"Body": BytesIO(data)}
-
-        backend = object.__new__(S3StorageBackend)
-        backend._client = _Client()  # type: ignore[attr-defined]
-        backend._bucket = "vault"  # type: ignore[attr-defined]
-        key = "vault-data/capture-slots/pending"
-        payload = b"published-before-receipt"
-        backend._client.objects[key] = (  # type: ignore[attr-defined]
-            payload,
-            {"printstash-create-token": "operation-token"},
-            '"etag-1"',
-        )
+        backend = _adoptable_backend(_ADOPT_KEY, _ADOPT_PAYLOAD)
 
         receipt = backend.adopt_existing(
-            key,
-            expected_size=len(payload),
-            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            _ADOPT_KEY,
+            expected_size=len(_ADOPT_PAYLOAD),
+            expected_sha256=hashlib.sha256(_ADOPT_PAYLOAD).hexdigest(),
         )
+
         assert receipt.token == "operation-token"
         assert receipt.version_id == "version-1"
         assert backend.creation_matches(receipt)
 
-        backend._client.objects[key] = (  # type: ignore[attr-defined]
-            b"different-owner-bytes",
-            {"printstash-create-token": "operation-token"},
-            '"etag-2"',
-        )
+    def test_s3_adopt_existing_refuses_when_the_bytes_are_not_the_expected_ones(
+        self,
+    ) -> None:
+        backend = _adoptable_backend(_ADOPT_KEY, b"different-owner-bytes")
+
         with pytest.raises(StorageCollisionError):
             backend.adopt_existing(
-                key,
-                expected_size=len(payload),
-                expected_sha256=hashlib.sha256(payload).hexdigest(),
+                _ADOPT_KEY,
+                expected_size=len(_ADOPT_PAYLOAD),
+                expected_sha256=hashlib.sha256(_ADOPT_PAYLOAD).hexdigest(),
             )
-        assert backend._client.objects[key][0] == b"different-owner-bytes"  # type: ignore[attr-defined]
 
-        # Copying PrintStash metadata onto different bytes is still not proof that
-        # the current object is the exact create operation in the receipt.
+        assert backend._client.objects[_ADOPT_KEY][0] == b"different-owner-bytes"  # type: ignore[attr-defined]
+
+    def test_s3_rollback_refuses_when_only_the_create_token_matches(self) -> None:
+        # Copying PrintStash metadata onto different bytes is not proof that the
+        # current object is the exact create operation the receipt describes.
+        backend = _adoptable_backend(_ADOPT_KEY, _ADOPT_PAYLOAD)
+        receipt = backend.adopt_existing(
+            _ADOPT_KEY,
+            expected_size=len(_ADOPT_PAYLOAD),
+            expected_sha256=hashlib.sha256(_ADOPT_PAYLOAD).hexdigest(),
+        )
         backend._client.objects[receipt.key] = (  # type: ignore[attr-defined]
             b"changed",
             {"printstash-create-token": receipt.token},
             '"etag-2"',
         )
+
         assert backend.rollback_create(receipt) is False
         assert receipt.key in backend._client.objects  # type: ignore[attr-defined]
 
@@ -315,7 +356,7 @@ class TestStatSize:
 
 
 class TestObjectInfo:
-    def test_s3_object_info_exposes_remote_etag_and_size(self) -> None:
+    def test_s3_object_info_reports_what_the_remote_head_returned(self) -> None:
         class _Client:
             def head_object(self, **_kwargs):
                 return {"ContentLength": 42, "ETag": '"remote-etag"'}
@@ -343,7 +384,7 @@ class TestLocalPath:
         # Real path must survive the context exit.
         assert blob.exists()
 
-    def test_remote_backend_local_path_downloads_and_cleans_up(
+    def test_remote_backend_local_path_removes_its_temp_copy_on_exit(
         self, tmp_path: Path
     ) -> None:
         backend = _FakeRemoteBackend(tmp_path / "store")
@@ -386,7 +427,7 @@ class TestMoveIn:
         assert staged.read_bytes() == b"new data"
         assert dest.read_bytes() == b"existing data"
 
-    def test_remote_backend_move_in_uploads_and_removes_staged(
+    def test_remote_backend_move_in_consumes_the_staged_file(
         self, tmp_path: Path
     ) -> None:
         backend = _FakeRemoteBackend(tmp_path / "store")
@@ -570,7 +611,7 @@ class TestInitBackend:
 
 
 class TestTrashed:
-    def test_live_and_trashed_scopes(self, db_session: Session) -> None:
+    def test_scopes_track_a_models_trashed_state(self, db_session: Session) -> None:
         m = build_model(db_session, name="ScopeTest", slug="scope-test", hash="f" * 64)
 
         assert m in db_session.exec(select(Model).where(live(Model))).all()

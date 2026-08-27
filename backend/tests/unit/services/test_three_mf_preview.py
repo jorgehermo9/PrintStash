@@ -125,7 +125,9 @@ class TestSelectMember:
 
         assert failure.value.code == "embedded_gcode_not_found"
 
-    def test_traversal_and_case_variants_are_ignored(self, tmp_path: Path) -> None:
+    def test_ignores_entry_names_that_only_differ_by_traversal_or_case(
+        self, tmp_path: Path
+    ) -> None:
         path = _archive(
             tmp_path / "project.3mf",
             {
@@ -143,7 +145,7 @@ class TestSelectMember:
 class TestExtractEmbeddedGcode:
     """Pulling the G-code out of a local archive, within every cap."""
 
-    def test_uncompressed_cap_is_enforced_before_and_during_read(
+    def test_rejects_an_entry_larger_than_the_uncompressed_cap(
         self, tmp_path: Path
     ) -> None:
         path = _archive(tmp_path / "project.3mf", {"Metadata/plate_1.gcode": b"12345"})
@@ -211,16 +213,21 @@ class TestExtractEmbeddedGcode:
         with pytest.raises(ValueError, match="embedded_gcode_limits_invalid"):
             extract_embedded_gcode(path, **limits)
 
-    def test_archive_cap_and_missing_archive_keep_stable_errors(
+    def test_rejects_an_archive_larger_than_the_archive_cap(
         self, tmp_path: Path
     ) -> None:
         path = _archive(
             tmp_path / "too-large.3mf", {"Metadata/plate_1.gcode": b"G28\n"}
         )
-        with pytest.raises(EmbeddedGcodeError) as oversized:
-            extract_embedded_gcode(path, max_archive_bytes=1)
-        assert oversized.value.code == "embedded_gcode_archive_too_large"
 
+        with pytest.raises(EmbeddedGcodeError) as failure:
+            extract_embedded_gcode(path, max_archive_bytes=1)
+
+        assert failure.value.code == "embedded_gcode_archive_too_large"
+
+    def test_raises_file_not_found_for_an_archive_that_is_not_there(
+        self, tmp_path: Path
+    ) -> None:
         with pytest.raises(FileNotFoundError):
             extract_embedded_gcode(tmp_path / "missing.3mf")
 
@@ -408,7 +415,7 @@ class TestReadEmbeddedGcode:
         assert calls == ["opaque-3mf-key", "opaque-3mf-key"]
         assert list(tmp_path.glob("*.gcode")) == []
 
-    def test_remote_archive_success_closes_stream_and_removes_temp_file(
+    def test_cleans_up_after_streaming_a_remote_archive(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         archive_bytes = _archive_bytes({"Metadata/plate_1.gcode": b"G28\n"})
@@ -513,7 +520,7 @@ class TestReadEmbeddedGcode:
         with pytest.raises(FileNotFoundError):
             read_embedded_gcode(MissingBackend(), "missing.3mf")  # type: ignore[arg-type]
 
-    def test_remote_backend_errors_are_normalized_and_cleaned_up(self) -> None:
+    def test_normalizes_an_error_raised_by_a_remote_backend(self) -> None:
         class BrokenBackend:
             def stat_size(self, _key: str) -> int:
                 raise OSError("remote unavailable")
@@ -640,7 +647,7 @@ class TestZipfile:
 
 
 class TestError:
-    def test_remote_archive_error_closes_stream_and_removes_temp_file(
+    def test_cleans_up_after_a_remote_stream_fails_mid_download(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         archive_bytes = _archive_bytes({"Metadata/plate_1.gcode": b"G28\n"})

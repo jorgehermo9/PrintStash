@@ -205,7 +205,7 @@ class TestGcSoftDeleted:
 
         assert _cleanup_orphan_blobs(db_session) == 0
 
-    def test_gc_hard_deletes_expired_artifact_and_its_derivatives(
+    def test_hard_deletes_an_expired_artifact_with_every_derivative(
         self, db_session: Session, storage
     ) -> None:
         artifact = build_stored_file(
@@ -233,7 +233,7 @@ class TestGcSoftDeleted:
         db_session.expire_all()
         assert db_session.get(File, artifact_id) is None
 
-    def test_negative_retention_disables_gc_and_preserves_owned_bytes(
+    def test_negative_retention_disables_collection_entirely(
         self, db_session: Session, storage
     ) -> None:
         artifact = build_stored_file(
@@ -293,7 +293,7 @@ class TestGcSoftDeleted:
         assert db_session.get(File, first_id) is None
         assert db_session.get(File, legacy.id) is not None
 
-    def test_gc_adopts_and_purges_pre_ledger_artifact_with_matching_content(
+    def test_purges_a_pre_ledger_artifact_whose_content_still_matches(
         self, db_session: Session, storage
     ) -> None:
         model = build_model(
@@ -468,7 +468,7 @@ class TestGcSoftDeleted:
 
         assert Path(key).exists()
 
-    def test_gc_hard_deletes_expired_document_and_its_blob(
+    def test_hard_deletes_an_expired_document_with_its_blob(
         self, db_session: Session, storage
     ) -> None:
         doc = _binary_document(db_session, storage)
@@ -562,7 +562,7 @@ class TestHardDelete:
         assert db_session.get(File, artifact.id) is not None
         assert (detached_root / "unmounted" / "v1" / "unmounted.stl").exists()
 
-    def test_hard_delete_aborts_on_read_only_storage_and_preserves_row(
+    def test_leaves_the_row_in_place_when_storage_is_read_only(
         self,
         db_session: Session,
         storage,
@@ -686,7 +686,7 @@ class TestHardDelete:
         assert db_session.get(File, first.id) is None
         assert db_session.get(File, second.id) is None
 
-    def test_hard_delete_rollback_preserves_blob_and_discards_intent(
+    def test_a_rolled_back_hard_delete_touches_neither_blob_nor_intent(
         self, db_session: Session, storage, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.services.trash import hard_delete_model

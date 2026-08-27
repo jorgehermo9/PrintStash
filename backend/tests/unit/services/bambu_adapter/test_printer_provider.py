@@ -66,7 +66,7 @@ class TestCapabilities:
         assert caps.support_level == "beta"
         assert "list_files" in caps.unsupported_actions
 
-    def test_prusalink_capabilities_are_beta_and_honest(self):
+    def test_prusalink_declares_its_beta_capability_set(self):
         caps = PrusaLinkProvider.capabilities
         assert caps.can_upload is True
         assert caps.can_start is True
@@ -75,7 +75,7 @@ class TestCapabilities:
         assert caps.can_measure_consumption is False
         assert caps.support_level == "beta"
 
-    def test_centauri_capabilities_are_safe_and_honest(self):
+    def test_centauri_declares_its_beta_capability_set(self):
         caps = ElegooCentauriProvider.capabilities
         assert caps.can_live_status is True
         assert caps.can_start is True
@@ -85,7 +85,7 @@ class TestCapabilities:
         assert caps.can_send_gcode is False
         assert caps.support_level == "beta"
 
-    def test_octoprint_capabilities_are_beta_and_honest(self):
+    def test_octoprint_declares_its_beta_capability_set(self):
         caps = OctoPrintProvider.capabilities
         assert caps.can_upload is True
         assert caps.can_start is True
@@ -313,7 +313,7 @@ def _fake_mqtt_client() -> MagicMock:
 
 
 class TestBambuLanProvider:
-    def test_mqtt_client_uses_bambu_ca_and_manual_serial_validation(self):
+    def test_mqtt_client_pins_the_bambu_ca_without_hostname_checks(self):
         client = MagicMock()
         provider = BambuLanProvider(
             "192.168.1.50", "SN123", "acc", mqtt_client_factory=lambda: client
@@ -436,7 +436,7 @@ class TestBambuLanProvider:
         with pytest.raises(ProviderError, match="invalid_bambu_remote_filename"):
             provider._upload_via_ftps(source, "nested/cube.gcode")
 
-    def test_ftps_upload_uses_cache_and_atomic_rename(self, tmp_path: Path):
+    def test_ftps_upload_publishes_through_a_temporary_name(self, tmp_path: Path):
         provider = BambuLanProvider("192.168.1.50", "SN123", "acc")
         source = tmp_path / "cube.gcode"
         source.write_bytes(b"G28\n")
@@ -590,7 +590,7 @@ class TestBambuLanProvider:
                 )
         assert "not_published" in exc.value.detail
 
-    def test_mqtt_request_accepts_paho_v2_reason_code_and_response_without_puback(self):
+    def test_mqtt_request_accepts_a_paho_v2_response_before_puback(self):
         provider = BambuLanProvider("192.168.1.50", "SN123", "acc")
         client = _fake_mqtt_client()
         publish_info = MagicMock()
@@ -797,7 +797,7 @@ class TestBambuLanProvider:
         assert exc.value.code == "provider_authentication_failed"
         assert "certificate identity mismatch" in exc.value.detail
 
-    def test_subscribe_status_ignores_malformed_and_non_print_messages(self):
+    def test_subscribe_status_surfaces_only_well_formed_print_messages(self):
         provider = BambuLanProvider("192.168.1.50", "SN123", "acc")
         client = _fake_mqtt_client()
         received: list = []

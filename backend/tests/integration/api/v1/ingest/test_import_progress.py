@@ -227,7 +227,7 @@ class TestListForUser:
 
         assert [job.job_id for job in listed] == ["mine-valid"]
 
-    def test_reconnect_listing_keeps_active_and_bounds_terminal_history(
+    def test_lists_active_jobs_with_a_bounded_terminal_tail(
         self,
         db_session: Session,
     ) -> None:
@@ -376,7 +376,7 @@ class TestCollectionTarget:
 
 class TestDownloadAndCollect:
     @pytest.mark.asyncio
-    async def test_download_and_collect_skips_non_importable_direct_file(
+    async def test_skips_a_direct_file_that_is_not_importable(
         self,
         monkeypatch,
     ) -> None:
@@ -394,7 +394,7 @@ class TestDownloadAndCollect:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_download_and_collect_extracts_zip_entries(self, monkeypatch) -> None:
+    async def test_extracts_the_entries_of_a_zip(self, monkeypatch) -> None:
         zip_bytes = io.BytesIO()
         with zipfile.ZipFile(zip_bytes, "w") as bundle:
             bundle.writestr("cube.stl", _cube_stl_bytes())
@@ -413,7 +413,7 @@ class TestDownloadAndCollect:
         assert [name for _path, name in result] == ["cube.stl"]
 
     @pytest.mark.asyncio
-    async def test_download_and_collect_returns_direct_mesh_file(
+    async def test_returns_a_direct_mesh_file_unchanged(
         self, monkeypatch
     ) -> None:
         async def fake_download(url: str):
@@ -1119,7 +1119,7 @@ class TestIngestUrl:
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "private_host_blocked"
 
-    def test_ingest_url_creates_job_and_completes(
+    def test_runs_a_url_ingest_through_to_a_completed_job(
         self, tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
     ) -> None:
         use_local_storage(tmp_path)
@@ -1291,14 +1291,14 @@ class TestInspectArchiveBackground:
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "archive_invalid"
 
-    def test_strips_a_control_character_and_the_directory_from_an_item_name(
+    def test_reduces_an_item_name_to_its_safe_basename(
         self,
     ) -> None:
         # A newline in a filename is what turns one log line into two, and the
         # directory is the server's layout rather than anything the user needs.
         assert safe_item("/mnt/nas/private/Cube\n.stl") == "Cube.stl"
 
-    def test_strips_the_path_and_credential_from_an_error_message(self) -> None:
+    def test_leaks_neither_path_nor_credential_from_an_error_message(self) -> None:
         error = safe_error("failed /mnt/nas/private/Cube.stl?api_key=hunter2")
 
         assert error is not None

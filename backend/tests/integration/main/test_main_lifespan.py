@@ -255,7 +255,7 @@ def _fake_request(
 
 class TestCancelTasks:
     @pytest.mark.asyncio
-    async def test_cancel_tasks_awaits_cleanup_and_consumes_cancellation(self) -> None:
+    async def test_cancel_tasks_waits_for_each_task_to_finish_cleaning_up(self) -> None:
         cleaned_up = asyncio.Event()
 
         async def worker() -> None:
@@ -333,7 +333,7 @@ class TestSafeDbUrl:
 
 
 class TestLifespan:
-    def test_lifespan_starts_background_tasks_and_shuts_down_cleanly(
+    def test_lifespan_wires_every_background_task_then_cancels_them_on_shutdown(
         self, _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.main import app
@@ -388,44 +388,15 @@ class TestLifespan:
         assert app.state.external_scan_task.cancelled()
         assert app.state.notification_task.cancelled()
 
-    def test_lifespan_logs_reconciliation_warnings_and_survives_watcher_failure(
+    def test_lifespan_warns_once_for_every_nonzero_reconcile_count(
         self,
         _local_storage: None,
         db_session,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Every reconcile_* call returning a nonzero count logs a warning, and a
-        watcher startup failure must not abort the rest of lifespan startup."""
-        from app.services import (
-            external_library,
-            inbox,
-            jobs,
-            library_watcher,
-            vault_audit,
-        )
-
-        monkeypatch.setattr(
-            external_library, "reset_orphaned_scans", lambda _session: 2
-        )
-        monkeypatch.setattr(jobs, "reconcile_interrupted_jobs", lambda: 3)
-        monkeypatch.setattr(vault_audit, "reconcile_interrupted_runs", lambda: 4)
-        monkeypatch.setattr(inbox, "reconcile_interrupted_items", lambda: 5)
-        monkeypatch.setattr(app_main, "reconcile_stranded_dispatches", lambda: 6)
-
-        async def _boom_start_all(self):
-            raise RuntimeError("watcher init failed")
-
-        monkeypatch.setattr(
-            library_watcher.LibraryWatcher, "start_all", _boom_start_all
-        )
-
-        # This test isn't exercising the fleet scheduler; keep it from racing the
-        # warning assertions while retaining the production composition signature.
-        async def _noop_scheduler(_task_queue, _provider_builder) -> None:
-            return None
-
-        monkeypatch.setattr(app_main, "run_fleet_scheduler", _noop_scheduler)
+        _stub_reconcilers(monkeypatch)
+        _silence_fleet_scheduler(monkeypatch)
 
         from app.main import app
 
@@ -433,20 +404,76 @@ class TestLifespan:
             with TestClient(app):
                 pass
 
-        messages = [r.getMessage() for r in caplog.records]
+        messages = [record.getMessage() for record in caplog.records]
         assert any("reset 2 external library scan" in m for m in messages)
         assert any("reconciled 3 interrupted background job" in m for m in messages)
         assert any("reconciled 4 interrupted vault audit" in m for m in messages)
         assert any("reconciled 5 interrupted pending import" in m for m in messages)
         assert any("reconciled 6 stranded fleet dispatch" in m for m in messages)
-        # The watcher exception is swallowed (best-effort) rather than propagating
-        # and aborting startup — app.state.library_watcher still gets set.
-        assert any("library watcher failed to start" in m for m in messages)
+
+    def test_lifespan_finishes_starting_up_after_the_watcher_fails(
+        self,
+        _local_storage: None,
+        db_session,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from app.services import library_watcher
+
+        async def _boom_start_all(self):
+            raise RuntimeError("watcher init failed")
+
+        monkeypatch.setattr(
+            library_watcher.LibraryWatcher, "start_all", _boom_start_all
+        )
+        _silence_fleet_scheduler(monkeypatch)
+
+        from app.main import app
+
+        with caplog.at_level(logging.WARNING, logger=app_main.logger.name):
+            with TestClient(app) as client:
+                # Startup completed: the watcher exception was swallowed as
+                # best-effort rather than propagating out of lifespan.
+                assert client.get("/api/v1/health").status_code == 200
+                assert hasattr(app.state, "library_watcher")
+
+        assert any(
+            "library watcher failed to start" in record.getMessage()
+            for record in caplog.records
+        )
+
+
+def _stub_reconcilers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every reconcile_* call report a distinct nonzero count.
+
+    Distinct so the assertions can tell which warning came from which reconciler —
+    identical counts would pass even if one call's message named the wrong thing.
+    """
+    from app.services import external_library, inbox, jobs, vault_audit
+
+    monkeypatch.setattr(external_library, "reset_orphaned_scans", lambda _session: 2)
+    monkeypatch.setattr(jobs, "reconcile_interrupted_jobs", lambda: 3)
+    monkeypatch.setattr(vault_audit, "reconcile_interrupted_runs", lambda: 4)
+    monkeypatch.setattr(inbox, "reconcile_interrupted_items", lambda: 5)
+    monkeypatch.setattr(app_main, "reconcile_stranded_dispatches", lambda: 6)
+
+
+def _silence_fleet_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the scheduler from racing a test's log assertions.
+
+    It keeps the production composition signature, so lifespan still wires it the
+    way it really does; it just returns instead of looping.
+    """
+
+    async def _noop_scheduler(_task_queue, _provider_builder) -> None:
+        return None
+
+    monkeypatch.setattr(app_main, "run_fleet_scheduler", _noop_scheduler)
 
 
 class TestGcLoop:
     @pytest.mark.asyncio
-    async def test_gc_loop_logs_and_continues_past_each_task_failure(
+    async def test_gc_loop_runs_every_step_even_when_each_one_fails(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """_gc_loop runs GC, delivery pruning, and inbox pruning independently —
@@ -607,7 +634,7 @@ class TestRunDueExternalScans:
 
         assert called["scan"] is False
 
-    def test_run_due_external_scans_logs_and_continues_on_scan_failure(
+    def test_runs_every_due_scan_even_after_one_of_them_fails(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         from app.services import external_library, runtime_config
@@ -639,10 +666,14 @@ class TestRunDueExternalScans:
 
 
 class TestParseCorsOrigins:
-    def test_parse_cors_origins_accepts_list_and_filters_blanks(self) -> None:
-        assert app_main._parse_cors_origins(
+    def test_drops_blank_entries_from_a_list_of_origins(self) -> None:
+        origins = app_main._parse_cors_origins(
             ["http://a.example", "  ", "http://b.example"]
-        ) == ["http://a.example", "http://b.example"]
+        )
+
+        assert origins == ["http://a.example", "http://b.example"]
+
+    def test_returns_no_origins_for_a_value_that_is_not_a_list(self) -> None:
         assert app_main._parse_cors_origins(42) == []
 
 
