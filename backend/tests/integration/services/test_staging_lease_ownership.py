@@ -158,7 +158,7 @@ class TestMatchingCaptureStagingPath:
     def test_refuses_a_path_that_is_not_the_slots_own(
         self, spool, tmp_path: Path
     ) -> None:
-        path = spool()
+        spool()
         elsewhere = tmp_path / "elsewhere.bin"
         elsewhere.write_bytes(b"partial")
 
