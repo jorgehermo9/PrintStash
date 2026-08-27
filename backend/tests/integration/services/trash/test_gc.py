@@ -25,22 +25,15 @@ from app.db.models import (
     Model,
     ShareLink,
     StorageDeleteIntent,
+    VaultAuditFinding,
+    VaultAuditFindingState,
+    VaultAuditMode,
+    VaultAuditRun,
+    VaultAuditRunState,
+    VaultAuditSeverity,
 )
-from app.services.storage_backend import get_backend
 from app.services.storage_ownership import record_creation
 from app.services.trash import _cleanup_orphan_blobs, gc_soft_deleted
-
-
-@pytest.fixture
-def storage(tmp_path: Path):
-    _overlay["storage_backend"] = "local"
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    (tmp_path / "files").mkdir()
-    (tmp_path / "thumbs").mkdir()
-    yield get_backend()
-    for key in ("storage_backend", "data_dir", "thumb_dir"):
-        _overlay.pop(key, None)
 
 
 def _write(key: str, data: bytes = b"x") -> str:
@@ -89,6 +82,26 @@ def _binary_document(session: Session, storage, name: str = "manual.pdf") -> Doc
     session.commit()
     _owned_write(session, storage, storage.document_file_key(doc.id, name))
     return doc
+
+
+def _open_namespace_escape(session: Session) -> None:
+    run = VaultAuditRun(
+        mode=VaultAuditMode.QUICK, state=VaultAuditRunState.COMPLETED, requested_by=1
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    session.add(
+        VaultAuditFinding(
+            run_id=run.id,
+            code="managed_storage_namespace_escape",
+            severity=VaultAuditSeverity.CRITICAL,
+            resource_type="storage",
+            resource_identifier="vault",
+            state=VaultAuditFindingState.OPEN,
+        )
+    )
+    session.commit()
 
 
 def test_gc_preserves_document_blobs(db_session: Session, storage) -> None:
@@ -600,3 +613,85 @@ def test_gc_hard_deletes_expired_collection_referenced_image(
     gc_soft_deleted(retention_days=0)
 
     assert not Path(key).exists()
+
+
+class TestGcSoftDeleted:
+    """The interlock: an open namespace-escape finding stops the GC deleting.
+
+    `managed_storage_namespace_escape` means the vault may be pointed at a
+    directory PrintStash does not own — somebody's mounted model library. While
+    that is on the books no ownership receipt proves anything, so the hourly GC
+    must refuse every expired row rather than empty the trash into a stranger's
+    files. Each resource kind is its own loop with its own `except`, so each one
+    is asserted separately: a single miss would let the GC keep deleting one kind
+    of resource through an open escape finding.
+    """
+
+    def test_refuses_to_purge_an_expired_model(
+        self, db_session: Session, storage
+    ) -> None:
+        artifact = _model_with_file(db_session, storage, "escape-model")
+        model = db_session.get(Model, artifact.model_id)
+        assert model is not None
+        model.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(model)
+        db_session.commit()
+        _open_namespace_escape(db_session)
+
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["resources_blocked"] == 1
+        db_session.expire_all()
+        assert db_session.get(Model, model.id) is not None
+        assert Path(artifact.path).exists()
+
+    def test_refuses_to_purge_an_expired_document(
+        self, db_session: Session, storage
+    ) -> None:
+        document = _binary_document(db_session, storage)
+        key = storage.document_file_key(document.id, document.filename)
+        document.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(document)
+        db_session.commit()
+        _open_namespace_escape(db_session)
+
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["resources_blocked"] == 1
+        db_session.expire_all()
+        assert db_session.get(Document, document.id) is not None
+        assert Path(key).exists()
+
+    def test_refuses_to_purge_an_expired_standalone_artifact(
+        self, db_session: Session, storage
+    ) -> None:
+        artifact = _model_with_file(db_session, storage, "escape-artifact")
+        artifact.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(artifact)
+        db_session.commit()
+        _open_namespace_escape(db_session)
+
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["resources_blocked"] == 1
+        db_session.expire_all()
+        assert db_session.get(File, artifact.id) is not None
+        assert Path(artifact.path).exists()
+
+    def test_refuses_to_purge_an_expired_collection(self, db_session: Session) -> None:
+        collection = Collection(
+            name="Escape docs",
+            slug="escape-docs",
+            path="escape-docs",
+            deleted_at=utcnow() - timedelta(days=1),
+        )
+        db_session.add(collection)
+        db_session.commit()
+        db_session.refresh(collection)
+        _open_namespace_escape(db_session)
+
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["resources_blocked"] == 1
+        db_session.expire_all()
+        assert db_session.get(Collection, collection.id) is not None
