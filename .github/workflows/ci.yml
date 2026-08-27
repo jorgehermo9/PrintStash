@@ -162,6 +162,70 @@ jobs:
       - name: Run backend compatibility suite
         run: ./scripts/test.sh full -q
 
+  flaky-detection:
+    name: Flaky detection (nightly)
+    # An order-dependent test fails perhaps one run in eight, which on a PR reads
+    # as "CI is flaky" and gets a re-run rather than a fix. Five shuffled,
+    # parallel runs on a schedule turn that into a specific named failure with a
+    # seed that reproduces it.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev --extra full --frozen
+
+      - name: Run the suite five times with different orderings
+        run: |
+          set -uo pipefail
+          status=0
+          for seed in 1 7 42 99 1234; do
+            echo "::group::seed ${seed}"
+            uv run pytest tests -q -p randomly --randomly-seed="${seed}" -n 4 \
+              --deselect tests/postgres \
+              > "run-${seed}.log" 2>&1 || status=1
+            tail -1 "run-${seed}.log"
+            echo "::endgroup::"
+          done
+          # Every run must fail the *same* set. A test that appears in one run's
+          # failures and not another's is order-dependent, which is the thing
+          # this job exists to name.
+          for seed in 1 7 42 99 1234; do
+            grep -E '^FAILED ' "run-${seed}.log" | sed 's/ - .*//' | sort > "fails-${seed}.txt"
+          done
+          if ! diff -q fails-1.txt fails-7.txt > /dev/null \
+            || ! diff -q fails-1.txt fails-42.txt > /dev/null \
+            || ! diff -q fails-1.txt fails-99.txt > /dev/null \
+            || ! diff -q fails-1.txt fails-1234.txt > /dev/null; then
+            echo "::error::the failing set differs between orderings — an order-dependent test"
+            sort -u fails-*.txt | comm -13 <(sort fails-1.txt) - || true
+            exit 1
+          fi
+          exit "${status}"
+
+      - name: Upload the run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-detection-logs
+          path: backend/run-*.log
+          retention-days: 7
+
   sqlite-async:
     name: SQLite async extra
     runs-on: ubuntu-latest
