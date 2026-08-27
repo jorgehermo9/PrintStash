@@ -686,12 +686,19 @@ test("URL capture is reviewable, reports a partial result, and restores a source
   await expect(page.getByText("Fixture maker")).toBeVisible();
   await expect(page.getByText("CC BY 4.0")).toBeVisible();
   await expect(page.getByText("Print with supports.")).toBeVisible();
-  await page.getByRole("button", { name: "Edit" }).first().click();
+  // Scope to the Creator row rather than taking the first Edit button: every
+  // field renders an identically-named "Edit", so `.first()` silently targets
+  // whichever field the API happens to return first — currently Description.
+  // The field row is the heading's grandparent: h3 -> label+badge wrapper -> row.
+  const creatorRow = page
+    .getByRole("heading", { level: 3, name: "Creator", exact: true })
+    .locator("../..");
+  await creatorRow.getByRole("button", { name: "Edit" }).click();
   await page.getByLabel("Creator override").fill("Corrected maker");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Corrected maker")).toBeVisible();
   await expect(page.getByText("Edited")).toBeVisible();
-  await page.getByRole("button", { name: "Edit" }).first().click();
+  await creatorRow.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("button", { name: "Restore captured value" }).click();
   const dialog = page.getByRole("dialog", { name: "Restore captured value?" });
   await expect(dialog).toBeVisible();
@@ -738,7 +745,9 @@ test("pending import can be deleted with its staged capture", async ({ page }) =
   await dialog.getByRole("button", { name: "Delete import" }).click();
 
   await expect(page).toHaveURL(/\/inbox$/);
-  await expect(page.getByText("Capture a source URL", { exact: true })).toBeVisible();
+  // The queue tab's own empty state, not the page-level one: the Inbox is
+  // tabbed, so "there are no pending imports" is a statement about the queue.
+  await expect(page.getByText("No imports in the queue", { exact: true })).toBeVisible();
 });
 
 test.describe("shared volumes enabled", () => {
