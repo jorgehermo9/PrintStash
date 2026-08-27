@@ -10,6 +10,7 @@ from alembic import context
 from app.core.config import settings
 from app.db import models  # noqa: F401
 from app.db.migration_guards import (
+    acknowledged_drops,
     dropped_and_added_columns,
     refuse_possible_renames,
 )
@@ -55,9 +56,17 @@ def _process_revision_directives(context_, revision, directives) -> None:
         ).split(",")
         if entry.strip()
     }
-    refuse_possible_renames(
-        dropped_and_added_columns(script.upgrade_ops), allowed=acknowledged
-    )
+    changes = dropped_and_added_columns(script.upgrade_ops)
+    refuse_possible_renames(changes, allowed=acknowledged)
+
+    # Carry the acknowledgement into the file. `-x allow_column_drop=…` is otherwise
+    # invisible to everyone downstream of the person who typed it.
+    vetted = acknowledged_drops(changes, allowed=acknowledged)
+    if vetted:
+        script.message = (
+            f"{script.message} "
+            f"[confirmed data-dropping, not a rename: {', '.join(vetted)}]"
+        )
 
 
 def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool:

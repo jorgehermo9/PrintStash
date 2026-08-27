@@ -29,6 +29,7 @@ from alembic.migration import MigrationContext
 from sqlalchemy import MetaData, create_engine
 
 from app.db.migration_guards import (
+    acknowledged_drops,
     dropped_and_added_columns,
     refuse_possible_renames,
 )
@@ -186,3 +187,40 @@ class TestDroppedAndAddedColumns:
         )
 
         assert changes == {}
+
+
+class TestAcknowledgedDrops:
+    """What `-x allow_column_drop=…` leaves behind in the migration.
+
+    The escape hatch has to exist — sometimes a table really does lose one column and
+    gain an unrelated one — but an acknowledgement that lives only in the shell history
+    of whoever typed it is no better than no acknowledgement. A reviewer meeting
+    `add_column` next to `remove_column` cannot tell a vetted drop from the rename the
+    guard exists to catch, which is the same failure one step later.
+
+    `env.py` appends these to the migration's message, so they reach the docstring, the
+    filename and `alembic history`.
+    """
+
+    def test_reports_a_drop_the_author_confirmed(self) -> None:
+        vetted = acknowledged_drops(
+            {"things": (["old_name"], ["new_name"])}, allowed={"things.old_name"}
+        )
+
+        assert vetted == ["things.old_name"]
+
+    def test_reports_nothing_when_the_drop_has_no_matching_add(self) -> None:
+        # No add means the guard never fired, so there was nothing to acknowledge and
+        # nothing worth recording.
+        vetted = acknowledged_drops(
+            {"things": (["old_name"], [])}, allowed={"things.old_name"}
+        )
+
+        assert vetted == []
+
+    def test_reports_nothing_for_an_unacknowledged_drop(self) -> None:
+        vetted = acknowledged_drops(
+            {"things": (["old_name"], ["new_name"])}, allowed=set()
+        )
+
+        assert vetted == []

@@ -29,6 +29,23 @@ def dropped_and_added_columns(upgrade_ops: Any) -> ColumnChanges:
     return per_table
 
 
+def acknowledged_drops(changes: ColumnChanges, *, allowed: set[str]) -> list[str]:
+    """The `table.column` drops in *changes* that the author explicitly acknowledged.
+
+    Returned so the acknowledgement can be written into the migration's docstring.
+    Without that it lives only in the shell history of whoever ran the command, and a
+    reviewer meeting `add_column` next to `remove_column` has no way to tell a vetted
+    drop from the rename this guard exists to catch — which is the same failure one step
+    later.
+    """
+    return sorted(
+        f"{table}.{column}"
+        for table, (dropped, added) in changes.items()
+        for column in dropped
+        if added and f"{table}.{column}" in allowed
+    )
+
+
 def refuse_possible_renames(changes: ColumnChanges, *, allowed: set[str]) -> None:
     """Raise when a migration drops and adds columns in the same table.
 

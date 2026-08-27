@@ -99,8 +99,57 @@ looks like to a schema differ, and shipping it as a drop destroys the column's d
 ```
 
 That is the Django prompt in non-interactive form: the intent has to be stated, once,
-by the person who has it. A genuine drop is acknowledged explicitly and recorded in the
-shell history that produced the migration.
+by the person who has it.
+
+#### When the guard fires, you are at a fork
+
+Nothing was written, so there is no file to fix yet. Which branch you are on decides the
+next command.
+
+**It is a rename.** Do not use the escape hatch — a rename is not a drop, and forcing one
+out of autogenerate would only give you two operations to delete. Write the one operation
+instead:
+
+```bash
+uv run alembic revision -m "rename tags.name to label"     # note: no --autogenerate
+```
+
+```python
+def upgrade() -> None:
+    op.alter_column("tags", "name", new_column_name="label")
+
+def downgrade() -> None:
+    op.alter_column("tags", "label", new_column_name="name")
+```
+
+Outside a batch block, so SQLite runs `ALTER TABLE … RENAME COLUMN` in place rather than
+rebuilding — see the table above. Then re-run `--autogenerate` and confirm it emits
+nothing: that is the proof the models and the chain agree again.
+
+**It really is a drop, plus an unrelated add.** Acknowledge it by name:
+
+```bash
+uv run alembic revision --autogenerate -m "drop tags.name, add tags.slug" \
+  -x allow_column_drop=tags.name
+```
+
+The acknowledgement is not just a flag to get past the check. `env.py` writes it into the
+migration's message, so it lands in the docstring, the filename and `alembic history`:
+
+```
+"""drop tags.name, add tags.slug [confirmed data-dropping, not a rename: tags.name]
+```
+
+That is the point of the escape hatch being noisy. An acknowledgement that lived only in
+the shell history of whoever typed it would leave a reviewer looking at `add_column` next
+to `remove_column` with no way to tell a vetted drop from the rename this guard exists to
+catch — the same failure, one step later.
+
+Several columns are comma-separated: `-x allow_column_drop=tags.name,models.old_slug`.
+
+**You are not sure.** Then the answer is not a migration yet. `git stash` the model
+change, look at what reads the column, and come back. A drop is irreversible on a
+self-hoster's data and the downgrade cannot bring it back.
 
 #### How to actually write the rename
 
