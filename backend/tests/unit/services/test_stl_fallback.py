@@ -54,6 +54,47 @@ from ._meshes import (
 )
 
 
+def _sampled_stl(
+    *,
+    coordinates: list[float] | None = None,
+    bounds_min: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    bounds_max: tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> "stl_fallback._SampledSTL":
+    """A complete one-facet sample, so a test can vary the one field it is about."""
+    from array import array
+
+    return stl_fallback._SampledSTL(
+        coordinates=array("f", coordinates if coordinates is not None else [0.0] * 9),
+        triangle_count=1,
+        sampled_triangles=1,
+        bounds_min=bounds_min,
+        bounds_max=bounds_max,
+        scanned_bytes=1,
+        parsed_triangles=1,
+        complete=True,
+    )
+
+
+def _write_hostile_ascii(path: Path) -> Path:
+    """An ASCII STL whose one good facet is preceded by everything that can go wrong.
+
+    An unparseable vertex, a NaN vertex, and a line past `_MAX_ASCII_LINE_BYTES` —
+    the iterator has to skip all three and still yield the facet that follows.
+    """
+    valid = b"vertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n"
+    path.write_bytes(
+        b"solid iterator\n"
+        + b"vertex not-a-number 0 0\n"
+        + b"vertex nan 0 0\n"
+        + b"comment "
+        + b"x" * (stl_fallback._MAX_ASCII_LINE_BYTES + 10)
+        + b"\n"
+        + valid
+        + b"endsolid iterator\n"
+    )
+    return path
+
+
 class TestRenderStlThumbnail:
     def test_stl_fallback_uniformly_caps_sample_to_100k(
         self, tmp_path: Path, monkeypatch
@@ -176,7 +217,7 @@ class TestRenderStlThumbnail:
         assert result.sampled_triangles == 100_000
         assert result.raster_candidates == stl_fallback._MAX_COVERAGE_CANDIDATES
 
-    def test_stl_fallback_rasterises_real_area_and_preserves_hole(
+    def test_keeps_the_hole_open_when_rasterising_an_annulus(
         self, tmp_path: Path
     ) -> None:
 
@@ -242,11 +283,9 @@ class TestRenderStlThumbnail:
         assert result.triangle_count == 2
         assert result.sampled_triangles == 1
 
-    def test_stl_fallback_binary_helpers_bound_reads_and_reject_truncation(
-        self,
-        tmp_path: Path,
+    def test_binary_helpers_read_no_more_records_than_asked_for(
+        self, tmp_path: Path
     ) -> None:
-
         path = tmp_path / "helpers.stl"
         _write_renderable_binary_stl(path, 2)
 
@@ -256,13 +295,21 @@ class TestRenderStlThumbnail:
         assert len(records) == 1
         assert len(records[0]) == 9
 
+    def test_binary_helpers_reject_a_file_shorter_than_the_header(
+        self, tmp_path: Path
+    ) -> None:
         short_header = tmp_path / "short-header.stl"
         short_header.write_bytes(b"short")
+
         assert stl_fallback._binary_stl_info(short_header) is None
         assert list(stl_fallback._iter_binary_triangles(short_header)) == []
 
+    def test_binary_helpers_reject_a_truncated_facet_record(
+        self, tmp_path: Path
+    ) -> None:
         truncated = tmp_path / "truncated.stl"
         truncated.write_bytes(b"x" * 80 + struct.pack("<I", 1) + b"x")
+
         assert list(stl_fallback._iter_binary_triangles(truncated)) == []
         assert stl_fallback._read_binary_samples(truncated, 1) is None
 
@@ -289,45 +336,64 @@ class TestRenderStlThumbnail:
         monkeypatch.setattr(Path, "stat", fail_stat)
         assert stl_fallback._read_samples(path, 1) is None
 
-    def test_stl_fallback_binary_sampler_handles_short_records_and_io_failures(
-        self, tmp_path: Path, monkeypatch
+    def test_binary_sampler_is_nothing_when_a_record_is_short(
+        self, tmp_path: Path
     ) -> None:
-
-        path = tmp_path / "sampler-short-record.stl"
-        _write_renderable_binary_stl(path, 1)
-        info = (1, path.stat().st_size)
         short = tmp_path / "sampler-truncated-record.stl"
         short.write_bytes(b"x" * 84 + b"x")
+
         assert stl_fallback._read_binary_samples(short, 1, info=(1, 85)) is None
+
+    def test_binary_sampler_is_nothing_when_the_file_cannot_be_opened(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        path = tmp_path / "sampler-unreadable.stl"
+        _write_renderable_binary_stl(path, 1)
+        info = (1, path.stat().st_size)
 
         def fail_open(_path: Path, *args, **kwargs):
             raise OSError("unreadable")
 
         monkeypatch.setattr(Path, "open", fail_open)
+
         assert stl_fallback._read_binary_samples(path, 1, info=info) is None
 
-    def test_stl_fallback_ascii_iterator_recovers_after_bad_and_oversized_lines(
-        self,
-        tmp_path: Path,
+    def test_ascii_iterator_yields_the_facet_that_follows_unparseable_lines(
+        self, tmp_path: Path
     ) -> None:
-
         path = tmp_path / "ascii-iterator.stl"
-        valid = b"vertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n"
-        path.write_bytes(
-            b"solid iterator\n"
-            + b"vertex not-a-number 0 0\n"
-            + b"vertex nan 0 0\n"
-            + b"comment "
-            + b"x" * (stl_fallback._MAX_ASCII_LINE_BYTES + 10)
-            + b"\n"
-            + valid
-            + b"endsolid iterator\n"
+
+        records = list(stl_fallback._iter_ascii_triangles(_write_hostile_ascii(path)))
+
+        assert records == [(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0)]
+
+    def test_ascii_iterator_yields_nothing_for_a_zero_triangle_budget(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "ascii-iterator-no-triangles.stl"
+
+        assert (
+            list(
+                stl_fallback._iter_ascii_triangles(
+                    _write_hostile_ascii(path), max_triangles=0
+                )
+            )
+            == []
         )
 
-        records = list(stl_fallback._iter_ascii_triangles(path))
-        assert records == [(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0)]
-        assert list(stl_fallback._iter_ascii_triangles(path, max_triangles=0)) == []
-        assert list(stl_fallback._iter_ascii_triangles(path, max_lines=0)) == []
+    def test_ascii_iterator_yields_nothing_for_a_zero_line_budget(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "ascii-iterator-no-lines.stl"
+
+        assert (
+            list(
+                stl_fallback._iter_ascii_triangles(
+                    _write_hostile_ascii(path), max_lines=0
+                )
+            )
+            == []
+        )
 
     def test_stl_fallback_ascii_helpers_fail_closed_on_io_errors(
         self, tmp_path: Path, monkeypatch
@@ -343,29 +409,32 @@ class TestRenderStlThumbnail:
         assert list(stl_fallback._iter_ascii_triangles(path)) == []
         assert stl_fallback._read_ascii_samples(path, 1) is None
 
-    def test_stl_fallback_ascii_samples_mark_invalid_source_and_truncation(
-        self,
-        tmp_path: Path,
+    def test_ascii_samples_from_a_partly_invalid_source_are_marked_incomplete(
+        self, tmp_path: Path
     ) -> None:
-
         path = tmp_path / "ascii-invalid-source.stl"
         path.write_text(
             "solid invalid\nvertex broken 0 0\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n",
             encoding="ascii",
         )
+
         sampled = stl_fallback._read_ascii_samples(path, 4)
+
         assert sampled is not None
         assert sampled.parsed_triangles == 1
         assert sampled.complete is False
 
-        empty = tmp_path / "ascii-empty.stl"
-        empty.write_text("solid empty\nvertex nan 0 0\n", encoding="ascii")
-        assert stl_fallback._read_ascii_samples(empty, 1) is None
-
-    def test_stl_fallback_dispatches_binary_and_ascii_iterators(
+    def test_ascii_samples_are_nothing_when_no_facet_parses(
         self, tmp_path: Path
     ) -> None:
+        path = tmp_path / "ascii-empty.stl"
+        path.write_text("solid empty\nvertex nan 0 0\n", encoding="ascii")
 
+        assert stl_fallback._read_ascii_samples(path, 1) is None
+
+    def test_dispatches_to_the_iterator_for_the_files_format(
+        self, tmp_path: Path
+    ) -> None:
         binary = tmp_path / "dispatch.stl"
         _write_renderable_binary_stl(binary, 1)
         ascii_path = tmp_path / "dispatch-ascii.stl"
@@ -373,68 +442,96 @@ class TestRenderStlThumbnail:
             "solid dispatch\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendsolid dispatch\n",
             encoding="ascii",
         )
+
         assert len(list(stl_fallback._iter_stl_triangles(binary))) == 1
         assert len(list(stl_fallback._iter_stl_triangles(ascii_path))) == 1
-        assert stl_fallback._read_binary_samples(binary, 0) is None
 
-    def test_stl_fallback_render_rejects_bad_dimensions_and_numeric_states(
+    def test_binary_sampler_returns_nothing_for_a_zero_sample_budget(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "zero-budget.stl"
+        _write_renderable_binary_stl(path, 1)
+
+        assert stl_fallback._read_binary_samples(path, 0) is None
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"width": 0},
+            {"height": stl_fallback._MAX_RENDER_DIMENSION + 1},
+        ],
+        ids=["zero-width", "height-over-cap"],
+    )
+    def test_refuses_a_frame_size_outside_the_supported_range(
+        self, tmp_path: Path, kwargs: dict[str, int]
+    ) -> None:
+        path = tmp_path / "render-dimensions.stl"
+        _write_renderable_binary_stl(path, 1)
+
+        assert stl_fallback.render_stl_thumbnail(path, **kwargs) is None
+
+    def test_refuses_a_sample_whose_coordinates_are_not_finite(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        from array import array
+        path = tmp_path / "render-nan-coordinates.stl"
+        _write_renderable_binary_stl(path, 1)
+        sampled = _sampled_stl(coordinates=[float("nan")] * 9)
 
+        monkeypatch.setattr(stl_fallback, "_read_samples", lambda *_args: sampled)
+
+        assert stl_fallback.render_stl_thumbnail(path) is None
+
+    def test_refuses_a_sample_whose_bounds_are_a_single_extreme_point(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        path = tmp_path / "render-degenerate-bounds.stl"
+        _write_renderable_binary_stl(path, 1)
+        sampled = _sampled_stl(
+            bounds_min=(1e308, 1e308, 1e308), bounds_max=(1e308, 1e308, 1e308)
+        )
+
+        monkeypatch.setattr(stl_fallback, "_read_samples", lambda *_args: sampled)
+
+        assert stl_fallback.render_stl_thumbnail(path) is None
+
+    def test_refuses_a_sample_whose_bounds_overflow_float32(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         from app.services import mesh_render
 
-        path = tmp_path / "render-defensive.stl"
+        path = tmp_path / "render-overflowing-bounds.stl"
         _write_renderable_binary_stl(path, 1)
-        assert stl_fallback.render_stl_thumbnail(path, width=0) is None
-        assert (
-            stl_fallback.render_stl_thumbnail(
-                path, height=stl_fallback._MAX_RENDER_DIMENSION + 1
-            )
-            is None
+        sampled = _sampled_stl(
+            bounds_min=(-1e308, -1e308, -1e308), bounds_max=(1e308, 1e308, 1e308)
         )
 
-        sampled = stl_fallback._SampledSTL(
-            coordinates=array("f", [float("nan")] * 9),
-            triangle_count=1,
-            sampled_triangles=1,
-            bounds_min=(0.0, 0.0, 0.0),
-            bounds_max=(1.0, 1.0, 1.0),
-            scanned_bytes=1,
-            parsed_triangles=1,
-            complete=True,
-        )
         monkeypatch.setattr(stl_fallback, "_read_samples", lambda *_args: sampled)
-        assert stl_fallback.render_stl_thumbnail(path) is None
-
-        sampled.coordinates = array("f", [0.0] * 9)
-        sampled.bounds_min = (1e308, 1e308, 1e308)
-        sampled.bounds_max = (1e308, 1e308, 1e308)
-        assert stl_fallback.render_stl_thumbnail(path) is None
-
-        sampled.bounds_min = (0.0, 0.0, 0.0)
-        sampled.bounds_max = (1.0, 1.0, 1.0)
-        monkeypatch.setattr(
-            mesh_render,
-            "_select_view_rotation",
-            lambda *_args: (_ for _ in ()).throw(ValueError("rotation")),
-        )
-        assert stl_fallback.render_stl_thumbnail(path) is None
-
-        sampled.bounds_min = (-1e308, -1e308, -1e308)
-        sampled.bounds_max = (1e308, 1e308, 1e308)
         monkeypatch.setattr(
             mesh_render, "_select_view_rotation", lambda *_args: np.eye(3)
         )
+
         assert stl_fallback.render_stl_thumbnail(path) is None
 
-        sampled.bounds_min = (0.0, 0.0, 0.0)
-        sampled.bounds_max = (1.0, 1.0, 1.0)
-        monkeypatch.setattr(
-            mesh_render,
-            "_select_view_rotation",
+    @pytest.mark.parametrize(
+        "rotation",
+        [
+            lambda *_args: (_ for _ in ()).throw(ValueError("rotation")),
             lambda *_args: np.full((3, 3), np.nan),
-        )
+        ],
+        ids=["raises", "returns-nan"],
+    )
+    def test_refuses_to_render_when_view_selection_fails(
+        self, tmp_path: Path, monkeypatch, rotation
+    ) -> None:
+        from app.services import mesh_render
+
+        path = tmp_path / "render-rotation.stl"
+        _write_renderable_binary_stl(path, 1)
+        sampled = _sampled_stl()
+
+        monkeypatch.setattr(stl_fallback, "_read_samples", lambda *_args: sampled)
+        monkeypatch.setattr(mesh_render, "_select_view_rotation", rotation)
+
         assert stl_fallback.render_stl_thumbnail(path) is None
 
     def test_stl_fallback_returns_none_when_optional_render_dependencies_are_missing(
@@ -470,7 +567,7 @@ class TestRenderStlThumbnail:
         pixels = np.asarray(Image.open(io.BytesIO(result.png)).convert("RGBA"))
         assert pixels[pixels.shape[0] // 2, pixels.shape[1] // 2, 3] < 32
 
-    def test_dense_microfaceted_annulus_keeps_hole_and_connected_coverage(
+    def test_renders_a_dense_microfaceted_annulus_as_one_connected_ring(
         self, tmp_path: Path, monkeypatch
     ) -> None:
 
@@ -492,7 +589,7 @@ class TestRenderStlThumbnail:
         assert visible.mean() >= 0.08
         assert _largest_component_fraction(visible) >= 0.70
 
-    def test_ascii_fallback_discards_hostile_line_and_recovers(
+    def test_renders_the_facets_that_follow_an_oversized_ascii_line(
         self,
         tmp_path: Path,
     ) -> None:
@@ -524,7 +621,7 @@ class TestRenderStlThumbnail:
         assert result.scanned_bytes <= stl_fallback._MAX_ASCII_BYTES
         assert result.complete is False
 
-    def test_ascii_fallback_caps_total_facets_and_bytes(
+    def test_stops_sampling_ascii_facets_at_the_cap(
         self, tmp_path: Path, monkeypatch
     ) -> None:
 

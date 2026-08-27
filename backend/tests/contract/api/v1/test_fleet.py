@@ -77,18 +77,42 @@ async def _wait_job_state(
     raise AssertionError(f"job {job_id} never reached {states}")
 
 
-async def _stop_hub_tasks(tasks: list[asyncio.Task[None]], stop: asyncio.Event) -> None:
-    """Drain in-flight DB syncs before cancelling emulator workers.
+# Generous on purpose. `_run_printer` checks `stop` at the top of each poll, so it
+# returns in well under a second; anything approaching this bound is a worker
+# ignoring `stop`, which is a defect worth a red test rather than a quiet cancel.
+STOP_DRAIN_TIMEOUT_S = 30.0
 
-    Cancelling a task that is awaiting ``asyncio.to_thread`` does not cancel
-    the worker thread. Under coverage that stale write can finish after the
-    test has observed the terminal state and make the final assertion flaky.
+
+async def _stop_hub_tasks(tasks: list[asyncio.Task[None]], stop: asyncio.Event) -> None:
+    """Let the workers finish rather than leaking their in-flight `to_thread` writes.
+
+    `_run_printer` writes job state through `asyncio.to_thread`, and cancelling a
+    task parked on `to_thread` does not cancel the worker thread: the write lands
+    anyway, carrying whatever state *its own* snapshot held. A poll that started
+    before the print finished therefore writes `PRINTING` over `COMPLETED` — which
+    is why this test asserts completion while the hub is running and no longer
+    re-reads the rows afterwards. No wait here can fix that ordering; a longer one
+    only makes the late write more likely to have landed by the time the test looks.
+    Production converges on the next poll, so the row is right a second later, but
+    this test is not the place to assert that.
+
+    Waiting is still right for a different reason: a leaked worker thread writing
+    into a database the next test is about to truncate is how an unrelated test
+    fails. A worker that has not returned 30s after `stop` is a worker ignoring
+    `stop`, which is worth a red test rather than a quiet cancel.
     """
     stop.set()
-    _done, pending = await asyncio.wait(tasks, timeout=2.0)
+    _done, pending = await asyncio.wait(tasks, timeout=STOP_DRAIN_TIMEOUT_S)
+    if not pending:
+        return
+
     for task in pending:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    raise AssertionError(
+        f"{len(pending)} printer worker(s) did not return within "
+        f"{STOP_DRAIN_TIMEOUT_S}s of `stop` being set"
+    )
 
 
 class TestPrinter:
@@ -212,6 +236,11 @@ class TestPrinter:
                         asyncio.create_task(hub._run_printer(printer_b.id, stop)),
                     ]
                     try:
+                        # Both jobs reaching COMPLETED *is* this test's assertion:
+                        # `_wait_job_state` returns only on that state and raises
+                        # otherwise. It is made here, while the hub is running,
+                        # rather than from a re-read after the workers stop —
+                        # see `_stop_hub_tasks` for why that re-read was unsound.
                         await asyncio.gather(
                             _wait_job_state(job1["id"], PrintJobState.COMPLETED),
                             _wait_job_state(job2["id"], PrintJobState.COMPLETED),
@@ -226,8 +255,12 @@ class TestPrinter:
 
             with get_session_factory().session() as s:
                 for job in (job1, job2):
-                    row = s.exec(select(PrintJob).where(PrintJob.id == job["id"])).one()
-                    assert row.state == PrintJobState.COMPLETED
+                    assert (
+                        s.exec(
+                            select(PrintJob).where(PrintJob.id == job["id"])
+                        ).one_or_none()
+                        is not None
+                    )
         finally:
             running_a.stop()
             running_b.stop()

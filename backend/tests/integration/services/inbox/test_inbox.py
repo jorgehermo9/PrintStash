@@ -72,7 +72,7 @@ def _make_item(session: Session, owner: User, **overrides) -> InboxItem:
 
 
 class TestBeginImport:
-    def test_begin_browser_import_transfer_failure_rolls_back_job_and_lease(
+    def test_rolls_back_when_the_staging_transfer_fails(
         self, db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         owner = _make_user(db_session, "lease-transfer-rollback")
@@ -125,6 +125,16 @@ class TestBeginImport:
 # --------------------------------------------------------------------------- #
 
 
+_TWO_FILE_MANIFEST = json.dumps(
+    {
+        "schema_version": 2,
+        "kind": "model_files",
+        "files": [{"id": "ok"}, {"id": "other"}],
+        "selected_ids": ["ok", "other"],
+    }
+)
+
+
 class TestValidateImportSelection:
     @pytest.mark.parametrize("requested", [["missing"], ["ok", "missing"], [""]])
     def test_v2_import_selection_rejects_invalid_ids_without_fallback(
@@ -151,26 +161,30 @@ class TestValidateImportSelection:
         assert exc_info.value.status_code == 422
         assert exc_info.value.detail == "file_selection_invalid"
 
-    def test_v2_import_selection_accepts_valid_subset_and_defaults_when_empty(
-        self,
-        db_session: Session,
+    def test_accepts_a_subset_of_the_manifests_file_ids(
+        self, db_session: Session
     ) -> None:
-        owner = _make_user(db_session, "selection-validation-valid")
+        owner = _make_user(db_session, "selection-validation-subset")
         row = _make_item(
             db_session,
             owner,
             state=InboxItemState.REVIEW,
-            manifest_json=json.dumps(
-                {
-                    "schema_version": 2,
-                    "kind": "model_files",
-                    "files": [{"id": "ok"}, {"id": "other"}],
-                    "selected_ids": ["ok", "other"],
-                }
-            ),
+            manifest_json=_TWO_FILE_MANIFEST,
         )
 
         assert inbox.validate_import_selection(row, ["other"]) == ["other"]
+
+    def test_defaults_an_empty_selection_to_every_selected_id(
+        self, db_session: Session
+    ) -> None:
+        owner = _make_user(db_session, "selection-validation-default")
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.REVIEW,
+            manifest_json=_TWO_FILE_MANIFEST,
+        )
+
         assert inbox.validate_import_selection(row, []) == ["ok", "other"]
 
 
@@ -660,7 +674,7 @@ class TestSanitizeSourceUrl:
         with pytest.raises(ValueError, match="url_invalid"):
             inbox.sanitize_source_url("https:///model.stl")
 
-    def test_sanitize_source_url_keeps_port_and_strips_secrets(self) -> None:
+    def test_sanitizes_a_source_url_down_to_its_safe_parts(self) -> None:
         result = inbox.sanitize_source_url(
             "HTTPS://Example.com:8443/model?token=secret&view=files"
         )
@@ -684,25 +698,35 @@ class TestSanitizeSourceUrl:
 
 
 class TestListVisible:
-    def test_list_visible_scopes_to_owner_and_can_exclude_completed(
-        self,
-        db_session: Session,
-    ) -> None:
+    def test_lists_the_items_the_owner_owns(self, db_session: Session) -> None:
         owner = _make_user(db_session, "inbox-owner", admin=False)
         other = _make_user(db_session, "inbox-other", admin=False)
-        admin = _make_user(db_session, "inbox-admin", admin=True)
         mine = _make_item(db_session, owner)
         _make_item(db_session, other)
         done = _make_item(db_session, owner, state=InboxItemState.COMPLETED)
 
-        owner_rows = inbox.list_visible(db_session, owner)
-        assert {row.id for row in owner_rows} == {mine.id, done.id}
+        rows = inbox.list_visible(db_session, owner)
 
-        owner_active = inbox.list_visible(db_session, owner, include_completed=False)
-        assert {row.id for row in owner_active} == {mine.id}
+        assert {row.id for row in rows} == {mine.id, done.id}
 
-        admin_rows = inbox.list_visible(db_session, admin)
-        assert {row.id for row in admin_rows} >= {mine.id, done.id}
+    def test_omits_completed_items_when_asked_to(self, db_session: Session) -> None:
+        owner = _make_user(db_session, "inbox-owner", admin=False)
+        mine = _make_item(db_session, owner)
+        _make_item(db_session, owner, state=InboxItemState.COMPLETED)
+
+        rows = inbox.list_visible(db_session, owner, include_completed=False)
+
+        assert {row.id for row in rows} == {mine.id}
+
+    def test_shows_an_admin_every_owners_items(self, db_session: Session) -> None:
+        owner = _make_user(db_session, "inbox-owner", admin=False)
+        admin = _make_user(db_session, "inbox-admin", admin=True)
+        mine = _make_item(db_session, owner)
+        done = _make_item(db_session, owner, state=InboxItemState.COMPLETED)
+
+        rows = inbox.list_visible(db_session, admin)
+
+        assert {row.id for row in rows} >= {mine.id, done.id}
 
 
 class TestPruneHistory:
@@ -1107,7 +1131,7 @@ class TestRunImport:
             assert fresh.state == InboxItemState.CAPTURED
 
     @pytest.mark.asyncio
-    async def test_run_import_direct_completes_and_marks_model(
+    async def test_records_the_resulting_model_when_a_direct_import_completes(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         owner = _make_user(db_session, "run-import-direct")
@@ -1140,7 +1164,7 @@ class TestRunImport:
             assert fresh.completed_at is not None
 
     @pytest.mark.asyncio
-    async def test_run_import_archive_selection_and_missing_staging(
+    async def test_fails_retryably_when_an_archive_item_has_no_staging_key(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         owner = _make_user(db_session, "run-import-archive-missing")
@@ -1203,7 +1227,7 @@ class TestRunImport:
         assert not staged_archive.exists()
 
     @pytest.mark.asyncio
-    async def test_run_import_browser_file_uses_copy_and_releases_staging_on_success(
+    async def test_releases_staging_after_importing_a_browser_file_copy(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         owner = _make_user(db_session, "run-import-browser-file")
@@ -1454,7 +1478,9 @@ class TestRetry:
         assert retried.completion is None
         assert inbox._json_dict(retried.manifest_json)["selected_ids"] == ["bad"]
 
-    def test_retry_requires_failed_and_retryable(self, db_session: Session) -> None:
+    def test_refuses_to_retry_an_item_that_did_not_fail(
+        self, db_session: Session
+    ) -> None:
         owner = _make_user(db_session, "retry-owner")
         row = _make_item(db_session, owner, state=InboxItemState.REVIEW)
         with pytest.raises(HTTPException) as exc:
