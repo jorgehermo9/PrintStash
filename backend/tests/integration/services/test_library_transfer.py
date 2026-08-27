@@ -878,3 +878,930 @@ def test_library_import_rejects_wrong_format(
 
     with pytest.raises(ValueError, match="portable_manifest_invalid"):
         library_transfer.import_archive(db_session, wrong_format, user)
+
+
+class TestValidateProvenanceCoverMembers:
+    """Preflighting the cover images in a portable archive before any writes.
+
+    A portable archive is a zip from a stranger's machine, and its provenance sidecar
+    *names* members of that zip. Every one of those names is untrusted: it can point
+    outside the archive, at a directory, at a member that does not exist, at one that
+    exists twice, or at bytes that do not match the hash the sidecar claims. The whole
+    check runs **before** a single row or file is written, because a partially imported
+    library with half its covers wrong is worse than a refused import.
+    """
+
+    @staticmethod
+    def _archive(tmp_path: Path, members: dict[str, bytes]) -> zipfile.ZipFile:
+        path = tmp_path / "portable.zip"
+        with zipfile.ZipFile(path, "w") as bundle:
+            for name, data in members.items():
+                bundle.writestr(name, data)
+        return zipfile.ZipFile(path)
+
+    @staticmethod
+    def _sidecar(cover: object) -> dict:
+        return {"models": [{"sources": [{"cover": cover}]}]}
+
+    @staticmethod
+    def _cover(data: bytes, entry: str = "covers/1.webp") -> dict:
+        import hashlib as _hashlib
+
+        return {
+            "entry": entry,
+            "content_type": "image/webp",
+            "size_bytes": len(data),
+            "sha256": _hashlib.sha256(data).hexdigest(),
+        }
+
+    def test_accepts_a_cover_whose_bytes_match_its_hash(self, tmp_path: Path) -> None:
+        data = b"webp-bytes"
+        archive = self._archive(tmp_path, {"covers/1.webp": data})
+
+        library_transfer._validate_provenance_cover_members(
+            archive, self._sidecar(self._cover(data))
+        )
+
+    def test_accepts_an_archive_with_no_sidecar(self, tmp_path: Path) -> None:
+        archive = self._archive(tmp_path, {"manifest.json": b"{}"})
+
+        library_transfer._validate_provenance_cover_members(archive, None)
+
+    def test_accepts_a_source_that_declares_no_cover(self, tmp_path: Path) -> None:
+        archive = self._archive(tmp_path, {"manifest.json": b"{}"})
+
+        library_transfer._validate_provenance_cover_members(
+            archive, {"models": [{"sources": [{}]}]}
+        )
+
+    @pytest.mark.parametrize(
+        "sidecar",
+        [
+            pytest.param({"models": ["not-a-dict"]}, id="model-not-a-dict"),
+            pytest.param(
+                {"models": [{"sources": "not-a-list"}]}, id="sources-not-a-list"
+            ),
+        ],
+    )
+    def test_refuses_a_sidecar_that_is_not_the_right_shape(
+        self, tmp_path: Path, sidecar: dict
+    ) -> None:
+        archive = self._archive(tmp_path, {"manifest.json": b"{}"})
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(archive, sidecar)
+
+    @pytest.mark.parametrize(
+        ("mutation", "identifier"),
+        [
+            pytest.param({"entry": "../escape.webp"}, "path-traversal", id="traversal"),
+            pytest.param({"entry": "/absolute.webp"}, "absolute", id="absolute-path"),
+            pytest.param({"entry": "elsewhere/1.webp"}, "outside", id="outside-covers"),
+            pytest.param(
+                {"content_type": "image/png"}, "type", id="wrong-content-type"
+            ),
+            pytest.param({"size_bytes": -1}, "negative", id="negative-size"),
+            pytest.param({"size_bytes": True}, "bool", id="bool-size"),
+            pytest.param({"size_bytes": "10"}, "string", id="string-size"),
+            pytest.param({"sha256": "not-a-hash"}, "hash", id="malformed-hash"),
+        ],
+    )
+    def test_refuses_a_cover_field_it_does_not_trust(
+        self, tmp_path: Path, mutation: dict, identifier: str
+    ) -> None:
+        data = b"webp-bytes"
+        archive = self._archive(tmp_path, {"covers/1.webp": data})
+        cover = {**self._cover(data), **mutation}
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive, self._sidecar(cover)
+            )
+
+    def test_refuses_a_cover_that_is_not_an_object(self, tmp_path: Path) -> None:
+        archive = self._archive(tmp_path, {"covers/1.webp": b"webp-bytes"})
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive, self._sidecar("not-a-dict")
+            )
+
+    def test_refuses_a_cover_carrying_a_field_it_does_not_know(
+        self, tmp_path: Path
+    ) -> None:
+        data = b"webp-bytes"
+        archive = self._archive(tmp_path, {"covers/1.webp": data})
+        cover = {**self._cover(data), "surprise": 1}
+
+        # An exact key set, not a superset: an unknown field is a manifest from a
+        # newer or forged writer and is not safe to guess at.
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive, self._sidecar(cover)
+            )
+
+    def test_refuses_a_cover_larger_than_the_cap(self, tmp_path: Path) -> None:
+        data = b"webp-bytes"
+        archive = self._archive(tmp_path, {"covers/1.webp": data})
+        cover = {
+            **self._cover(data),
+            "size_bytes": library_transfer._MAX_COVER_BYTES + 1,
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive, self._sidecar(cover)
+            )
+
+    def test_refuses_a_member_the_archive_does_not_contain(
+        self, tmp_path: Path
+    ) -> None:
+        data = b"webp-bytes"
+        archive = self._archive(tmp_path, {"manifest.json": b"{}"})
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive, self._sidecar(self._cover(data))
+            )
+
+    def test_refuses_the_same_member_claimed_twice(self, tmp_path: Path) -> None:
+        data = b"webp-bytes"
+        archive = self._archive(tmp_path, {"covers/1.webp": data})
+        cover = self._cover(data)
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive,
+                {"models": [{"sources": [{"cover": cover}, {"cover": dict(cover)}]}]},
+            )
+
+    def test_refuses_a_member_that_appears_twice_in_the_archive(
+        self, tmp_path: Path
+    ) -> None:
+        data = b"webp-bytes"
+        path = tmp_path / "duplicated.zip"
+        with zipfile.ZipFile(path, "w") as bundle:
+            bundle.writestr("covers/1.webp", data)
+            bundle.writestr("covers/1.webp", data)
+
+        # A zip may hold two members with one name; a reader picking either is a
+        # place to smuggle different bytes past the hash check.
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                zipfile.ZipFile(path), self._sidecar(self._cover(data))
+            )
+
+    def test_refuses_a_member_whose_declared_size_is_wrong(
+        self, tmp_path: Path
+    ) -> None:
+        data = b"webp-bytes"
+        archive = self._archive(tmp_path, {"covers/1.webp": data})
+        cover = {**self._cover(data), "size_bytes": len(data) + 5}
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive, self._sidecar(cover)
+            )
+
+    def test_refuses_a_member_whose_bytes_do_not_match_the_hash(
+        self, tmp_path: Path
+    ) -> None:
+        archive = self._archive(tmp_path, {"covers/1.webp": b"different"})
+        cover = self._cover(b"webp-bytes")
+        cover["size_bytes"] = len(b"different")
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                archive, self._sidecar(cover)
+            )
+
+    def test_refuses_a_directory_entry(self, tmp_path: Path) -> None:
+        path = tmp_path / "dir.zip"
+        with zipfile.ZipFile(path, "w") as bundle:
+            bundle.writestr("covers/1.webp/", b"")
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            library_transfer._validate_provenance_cover_members(
+                zipfile.ZipFile(path),
+                self._sidecar(
+                    {
+                        "entry": "covers/1.webp/",
+                        "content_type": "image/webp",
+                        "size_bytes": 0,
+                        "sha256": "0" * 64,
+                    }
+                ),
+            )
+
+
+class TestPortableProvenanceContextsV1:
+    """Reading a *legacy* provenance sidecar out of a portable archive.
+
+    PrintStash writes the v2 format, but an archive exported by an older install still
+    has to import, so this branch keeps reading v1. Everything in it comes from another
+    machine, so the transformation is strict in a way a same-version reader would not
+    need to be: an unknown key is a refusal rather than something to ignore, a link must
+    name an artifact the manifest actually contains, and its `blob_sha256` must match
+    that artifact's — otherwise the archive could attach one model's provenance to
+    another's bytes.
+
+    It is also deliberately **preflight-only**: it returns contexts and writes nothing,
+    so a refusal partway through leaves no half-restored provenance behind.
+    """
+
+    ARTIFACT = {
+        "source_id": 11,
+        "sha256": "a" * 64,
+        "file_type": "stl",
+        "size_bytes": 1,
+    }
+
+    @classmethod
+    def _manifest(cls) -> dict:
+        return {"models": [{"source_id": 7, "artifacts": [dict(cls.ARTIFACT)]}]}
+
+    @classmethod
+    def _link(cls, **overrides) -> dict:
+        return {
+            "artifact_source_id": 11,
+            "source_file_id": "42:cube",
+            "source_filename": "cube.stl",
+            "container_entry_path": None,
+            "source_revision": None,
+            "blob_sha256": cls.ARTIFACT["sha256"],
+            **overrides,
+        }
+
+    @classmethod
+    def _source(cls, **overrides) -> dict:
+        return {
+            "source_id": 3,
+            "provider": "printables",
+            "canonical_url": "https://www.printables.com/model/42",
+            "source_item_id": "42",
+            "source_revision": None,
+            "fields": [
+                {
+                    "field_name": "title",
+                    "captured_value": "Captured",
+                    "captured_origin": "confirmed",
+                    "user_value": None,
+                    "user_override_set": False,
+                }
+            ],
+            "latest_capture": {"adapter_version": "printables-v1", "snapshot": {}},
+            "artifact_links": [cls._link()],
+            **overrides,
+        }
+
+    @classmethod
+    def _sidecar(cls, **source_overrides) -> dict:
+        return {
+            "models": [
+                {"model_source_id": 7, "sources": [cls._source(**source_overrides)]}
+            ]
+        }
+
+    def _contexts(self, sidecar: dict):
+        return library_transfer._portable_provenance_contexts(sidecar, self._manifest())
+
+    def test_returns_nothing_for_an_archive_with_no_sidecar(self) -> None:
+        assert library_transfer._portable_provenance_contexts(None, {}) == {}
+
+    def test_builds_a_context_for_each_artifact_link(self) -> None:
+        contexts = self._contexts(self._sidecar())
+
+        assert list(contexts) == [(7, 11)]
+
+    def test_carries_the_captured_source_across(self) -> None:
+        (context, _overrides) = self._contexts(self._sidecar())[(7, 11)][0]
+
+        assert context.manifest.source.provider == "printables"
+        assert context.source_filename == "cube.stl"
+
+    def test_turns_a_marked_field_into_a_user_override(self) -> None:
+        source = self._source(
+            fields=[
+                {
+                    "field_name": "title",
+                    "captured_value": "Captured",
+                    "captured_origin": "confirmed",
+                    "user_value": "Local",
+                    "user_override_set": True,
+                }
+            ]
+        )
+        sidecar = {"models": [{"model_source_id": 7, "sources": [source]}]}
+
+        (_context, overrides) = self._contexts(sidecar)[(7, 11)][0]
+
+        assert overrides == {"title": "Local"}
+
+    def test_reads_a_legacy_separate_overrides_list(self) -> None:
+        source = self._source(
+            overrides=[{"field_name": "description", "user_value": "Mine"}]
+        )
+        sidecar = {"models": [{"model_source_id": 7, "sources": [source]}]}
+
+        (_context, overrides) = self._contexts(sidecar)[(7, 11)][0]
+
+        assert overrides["description"] == "Mine"
+
+    def test_invents_an_id_for_a_link_that_has_none(self) -> None:
+        source = self._source(artifact_links=[self._link(source_file_id=None)])
+        sidecar = {"models": [{"model_source_id": 7, "sources": [source]}]}
+
+        (context, _overrides) = self._contexts(sidecar)[(7, 11)][0]
+
+        # An older export may not have carried one; a stable synthetic id keeps
+        # the link addressable rather than dropping it.
+        assert context.source_selection_id == "portable-artifact-11"
+
+    def test_delegates_a_v2_sidecar_to_the_v2_reader(self) -> None:
+        sidecar = {"format": library_transfer.PROVENANCE_FORMAT, "models": []}
+
+        # One entry point, two formats: the caller never chooses a reader.
+        assert (
+            library_transfer._portable_provenance_contexts(sidecar, self._manifest())
+            == {}
+        )
+
+    @pytest.mark.parametrize(
+        "model_row",
+        [
+            pytest.param({"sources": []}, id="missing-model-source-id"),
+            pytest.param(
+                {"model_source_id": 7, "sources": [], "extra": 1}, id="unknown-key"
+            ),
+            pytest.param(
+                {"model_source_id": 7, "sources": "not-a-list"}, id="sources-not-a-list"
+            ),
+            pytest.param(
+                {"model_source_id": "7", "sources": []}, id="model-source-id-not-an-int"
+            ),
+            pytest.param(
+                {"model_source_id": True, "sources": []}, id="model-source-id-a-bool"
+            ),
+        ],
+    )
+    def test_refuses_a_model_row_it_does_not_recognise(self, model_row: dict) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts({"models": [model_row]})
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            pytest.param({"latest_capture": "not-a-dict"}, id="capture-not-a-dict"),
+            pytest.param(
+                {"latest_capture": {"adapter_version": "v1"}}, id="capture-missing-key"
+            ),
+            pytest.param(
+                {"latest_capture": {"adapter_version": "v1", "snapshot": "no"}},
+                id="snapshot-not-a-dict",
+            ),
+            pytest.param({"fields": "not-a-list"}, id="fields-not-a-list"),
+            pytest.param({"artifact_links": "not-a-list"}, id="links-not-a-list"),
+            pytest.param({"overrides": "not-a-list"}, id="overrides-not-a-list"),
+        ],
+    )
+    def test_refuses_a_source_it_does_not_recognise(self, mutation: dict) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(**mutation))
+
+    def test_refuses_a_source_that_is_not_an_object(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(
+                {"models": [{"model_source_id": 7, "sources": ["not-a-dict"]}]}
+            )
+
+    def test_refuses_a_source_carrying_a_key_it_does_not_know(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(surprise=1))
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            pytest.param({"field_name": "title"}, id="missing-keys"),
+            pytest.param(
+                {
+                    "field_name": 1,
+                    "captured_value": None,
+                    "captured_origin": None,
+                    "user_value": None,
+                    "user_override_set": False,
+                },
+                id="name-not-a-string",
+            ),
+            pytest.param(
+                {
+                    "field_name": "title",
+                    "captured_value": None,
+                    "captured_origin": None,
+                    "user_value": None,
+                    "user_override_set": "yes",
+                },
+                id="override-flag-not-a-bool",
+            ),
+        ],
+    )
+    def test_refuses_a_field_it_does_not_recognise(self, field: dict) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(fields=[field]))
+
+    def test_refuses_the_same_field_declared_twice(self) -> None:
+        field = {
+            "field_name": "title",
+            "captured_value": "One",
+            "captured_origin": "confirmed",
+            "user_value": None,
+            "user_override_set": False,
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(fields=[field, dict(field)]))
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            pytest.param({"field_name": "title"}, id="missing-value"),
+            pytest.param(
+                {"field_name": "not_a_real_field", "user_value": "x"},
+                id="unknown-field",
+            ),
+            pytest.param({"field_name": 1, "user_value": "x"}, id="name-not-a-string"),
+        ],
+    )
+    def test_refuses_a_legacy_override_it_does_not_recognise(
+        self, override: dict
+    ) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(overrides=[override]))
+
+    def test_refuses_a_legacy_override_that_repeats_a_marked_field(self) -> None:
+        source = self._source(
+            fields=[
+                {
+                    "field_name": "title",
+                    "captured_value": "Captured",
+                    "captured_origin": "confirmed",
+                    "user_value": "Local",
+                    "user_override_set": True,
+                }
+            ],
+            overrides=[{"field_name": "title", "user_value": "Other"}],
+        )
+
+        # Two answers for one field, and no rule about which wins.
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts({"models": [{"model_source_id": 7, "sources": [source]}]})
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            pytest.param({"artifact_source_id": 99}, id="unknown-artifact"),
+            pytest.param({"artifact_source_id": True}, id="artifact-id-a-bool"),
+            pytest.param({"source_filename": 1}, id="filename-not-a-string"),
+            pytest.param({"source_file_id": 1}, id="file-id-not-a-string"),
+            pytest.param({"container_entry_path": 1}, id="entry-path-not-a-string"),
+            pytest.param({"container_entry_path": "../escape"}, id="entry-path-escape"),
+            pytest.param({"source_revision": 1}, id="revision-not-a-string"),
+            pytest.param({"blob_sha256": 1}, id="hash-not-a-string"),
+            pytest.param({"blob_sha256": "b" * 64}, id="hash-of-another-artifact"),
+            pytest.param({"source_filename": "../escape.stl"}, id="filename-escape"),
+        ],
+    )
+    def test_refuses_an_artifact_link_it_does_not_trust(self, mutation: dict) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(artifact_links=[self._link(**mutation)]))
+
+    def test_refuses_a_link_that_is_not_an_object(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(artifact_links=["not-a-dict"]))
+
+    def test_refuses_a_link_carrying_a_key_it_does_not_know(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(artifact_links=[self._link(surprise=1)]))
+
+    def test_refuses_the_same_link_declared_twice(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(artifact_links=[self._link(), self._link()]))
+
+
+class TestPortableProvenanceContextsV2:
+    """Reading the current provenance sidecar out of a portable archive.
+
+    A v2 sidecar carries the **full capture snapshot** and a hash of it, and every
+    relationship in it is checked against the library manifest before anything is
+    written. That cross-check is the point: the sidecar and the manifest come from the
+    same archive but are separate documents, so a forged or corrupted sidecar could
+    otherwise attach one model's provenance to another model's bytes.
+
+    The snapshot hash is checked against a canonical re-encoding rather than trusted,
+    and the snapshot's own header must agree with the source row that carries it — a
+    snapshot claiming a different provider than the source it sits under is the exact
+    shape of that attack.
+
+    Every artifact in a source's snapshot must match exactly one link and one manifest
+    artifact, in both directions. Importing one member of a multi-file capture must not
+    silently collapse the history to a one-file source.
+    """
+
+    ARTIFACT = {
+        "source_id": 11,
+        "sha256": "a" * 64,
+        "file_type": "stl",
+        "size_bytes": 1,
+    }
+    SNAPSHOT_FIELDS = {"title": {"origin": "confirmed", "value": "Captured"}}
+
+    @classmethod
+    def _manifest(cls) -> dict:
+        return {"models": [{"source_id": 7, "artifacts": [dict(cls.ARTIFACT)]}]}
+
+    @staticmethod
+    def _hash(snapshot: dict) -> str:
+        import hashlib as _hashlib
+
+        encoded = json.dumps(
+            snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return _hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def _snapshot(cls, **overrides) -> dict:
+        return {
+            "provider": "printables",
+            "canonical_url": "https://www.printables.com/model/42",
+            "source_item_id": "42",
+            "source_revision": None,
+            "tags": [],
+            "fields": dict(cls.SNAPSHOT_FIELDS),
+            "files": [
+                {
+                    "source_selection_id": "42:cube",
+                    "source_file_id": "42:cube",
+                    "source_filename": "cube.stl",
+                }
+            ],
+            **overrides,
+        }
+
+    @classmethod
+    def _link(cls, **overrides) -> dict:
+        return {
+            "artifact_source_id": 11,
+            "source_file_id": "42:cube",
+            "source_filename": "cube.stl",
+            "container_entry_path": None,
+            "source_revision": None,
+            "blob_sha256": cls.ARTIFACT["sha256"],
+            **overrides,
+        }
+
+    @classmethod
+    def _source(cls, *, snapshot: dict | None = None, **overrides) -> dict:
+        snapshot = snapshot if snapshot is not None else cls._snapshot()
+        return {
+            "source_id": 3,
+            "provider": snapshot["provider"],
+            "canonical_url": snapshot["canonical_url"],
+            "source_item_id": snapshot["source_item_id"],
+            "source_revision": snapshot["source_revision"],
+            "fields": [
+                {
+                    "field_name": "title",
+                    "captured_value": "Captured",
+                    "captured_origin": "confirmed",
+                    "user_value": None,
+                    "user_override_set": False,
+                }
+            ],
+            "latest_capture": {
+                "adapter_version": "printables-v1",
+                "snapshot": snapshot,
+                "snapshot_sha256": cls._hash(snapshot),
+            },
+            "artifact_links": [cls._link()],
+            **overrides,
+        }
+
+    @classmethod
+    def _sidecar(cls, **source_overrides) -> dict:
+        return {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [
+                {"model_source_id": 7, "sources": [cls._source(**source_overrides)]}
+            ],
+        }
+
+    def _contexts(self, sidecar: dict):
+        return library_transfer._portable_v2_provenance_contexts(
+            sidecar, self._manifest()
+        )
+
+    def test_builds_a_context_for_each_artifact_link(self) -> None:
+        assert list(self._contexts(self._sidecar())) == [(7, 11)]
+
+    def test_carries_the_whole_capture_snapshot(self) -> None:
+        (context, _overrides) = self._contexts(self._sidecar())[(7, 11)][0]
+
+        assert context.manifest.source.provider == "printables"
+        assert context.source_selection_id == "42:cube"
+
+    def test_turns_a_marked_field_into_a_user_override(self) -> None:
+        source = self._source(
+            fields=[
+                {
+                    "field_name": "title",
+                    "captured_value": "Captured",
+                    "captured_origin": "confirmed",
+                    "user_value": "Local",
+                    "user_override_set": True,
+                }
+            ]
+        )
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        (_context, overrides) = self._contexts(sidecar)[(7, 11)][0]
+
+        assert overrides == {"title": "Local"}
+
+    def test_accepts_a_source_that_also_carries_a_cover(self) -> None:
+        sidecar = self._sidecar(
+            cover={
+                "entry": "covers/1.webp",
+                "content_type": "image/webp",
+                "size_bytes": 1,
+                "sha256": "0" * 64,
+            }
+        )
+
+        assert list(self._contexts(sidecar)) == [(7, 11)]
+
+    def test_refuses_a_source_carrying_a_key_it_does_not_know(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(surprise=1))
+
+    @pytest.mark.parametrize(
+        "source_id", [pytest.param("3", id="string"), pytest.param(True, id="bool")]
+    )
+    def test_refuses_a_source_id_that_is_not_an_integer(
+        self, source_id: object
+    ) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(source_id=source_id))
+
+    def test_refuses_the_same_source_declared_twice(self) -> None:
+        source = self._source()
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [
+                {
+                    "model_source_id": 7,
+                    "sources": [source, json.loads(json.dumps(source))],
+                }
+            ],
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    def test_refuses_a_snapshot_hash_that_does_not_match_the_snapshot(self) -> None:
+        source = self._source()
+        source["latest_capture"]["snapshot_sha256"] = "b" * 64
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        # The hash is re-computed from a canonical encoding, never trusted.
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            pytest.param({"provider": "thingiverse"}, id="provider"),
+            pytest.param({"canonical_url": "https://elsewhere.test/1"}, id="url"),
+            pytest.param({"source_item_id": "99"}, id="item-id"),
+            pytest.param({"source_revision": "r9"}, id="revision"),
+        ],
+    )
+    def test_refuses_a_snapshot_that_disagrees_with_its_source_row(
+        self, mutation: dict
+    ) -> None:
+        snapshot = self._snapshot(**mutation)
+        source = self._source()
+        source["latest_capture"]["snapshot"] = snapshot
+        source["latest_capture"]["snapshot_sha256"] = self._hash(snapshot)
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        # A snapshot claiming a different origin than the row it sits under is
+        # exactly how one model's provenance would be attached to another's bytes.
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            pytest.param({"tags": "not-a-list"}, id="tags-not-a-list"),
+            pytest.param({"fields": "not-a-dict"}, id="fields-not-a-dict"),
+            pytest.param({"files": "not-a-list"}, id="files-not-a-list"),
+            pytest.param({"files": []}, id="no-files"),
+        ],
+    )
+    def test_refuses_a_snapshot_it_does_not_recognise(self, mutation: dict) -> None:
+        snapshot = self._snapshot(**mutation)
+        source = self._source()
+        source["latest_capture"]["snapshot"] = snapshot
+        source["latest_capture"]["snapshot_sha256"] = self._hash(snapshot)
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    def test_refuses_a_snapshot_carrying_a_key_it_does_not_know(self) -> None:
+        snapshot = self._snapshot(surprise=1)
+        source = self._source()
+        source["latest_capture"]["snapshot"] = snapshot
+        source["latest_capture"]["snapshot_sha256"] = self._hash(snapshot)
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    def test_refuses_a_capture_missing_its_snapshot_hash(self) -> None:
+        source = self._source()
+        del source["latest_capture"]["snapshot_sha256"]
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    def test_refuses_a_field_set_that_disagrees_with_the_snapshot(self) -> None:
+        source = self._source(
+            fields=[
+                {
+                    "field_name": "description",
+                    "captured_value": "Elsewhere",
+                    "captured_origin": "confirmed",
+                    "user_value": None,
+                    "user_override_set": False,
+                }
+            ]
+        )
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        # The rows and the snapshot are two copies of one truth; they must agree.
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    def test_refuses_a_field_whose_value_disagrees_with_the_snapshot(self) -> None:
+        source = self._source(
+            fields=[
+                {
+                    "field_name": "title",
+                    "captured_value": "Different",
+                    "captured_origin": "confirmed",
+                    "user_value": None,
+                    "user_override_set": False,
+                }
+            ]
+        )
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    def test_refuses_a_source_with_no_artifact_links(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(artifact_links=[]))
+
+    def test_refuses_a_link_carrying_a_key_it_does_not_know(self) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(artifact_links=[self._link(surprise=1)]))
+
+    @pytest.mark.parametrize(
+        "snapshot_file",
+        [
+            pytest.param({"source_file_id": "42:cube"}, id="missing-keys"),
+            pytest.param(
+                {
+                    "source_selection_id": "42:cube",
+                    "source_file_id": 1,
+                    "source_filename": "cube.stl",
+                },
+                id="file-id-not-a-string",
+            ),
+            pytest.param(
+                {
+                    "source_selection_id": "42:cube",
+                    "source_file_id": "42:cube",
+                    "source_filename": "../escape.stl",
+                },
+                id="filename-escape",
+            ),
+        ],
+    )
+    def test_refuses_a_snapshot_file_it_does_not_trust(
+        self, snapshot_file: dict
+    ) -> None:
+        snapshot = self._snapshot(files=[snapshot_file])
+        source = self._source()
+        source["latest_capture"]["snapshot"] = snapshot
+        source["latest_capture"]["snapshot_sha256"] = self._hash(snapshot)
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    def test_refuses_a_snapshot_file_that_no_link_names(self) -> None:
+        snapshot = self._snapshot(
+            files=[
+                {
+                    "source_selection_id": "42:other",
+                    "source_file_id": "42:other",
+                    "source_filename": "other.stl",
+                }
+            ]
+        )
+        source = self._source()
+        source["latest_capture"]["snapshot"] = snapshot
+        source["latest_capture"]["snapshot_sha256"] = self._hash(snapshot)
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            pytest.param({"artifact_source_id": 99}, id="unknown-artifact"),
+            pytest.param({"artifact_source_id": True}, id="artifact-id-a-bool"),
+            pytest.param({"blob_sha256": "b" * 64}, id="hash-of-another-artifact"),
+            pytest.param({"container_entry_path": "../escape"}, id="entry-path-escape"),
+            pytest.param({"source_revision": "r9"}, id="revision-disagrees"),
+        ],
+    )
+    def test_refuses_an_artifact_link_it_does_not_trust(self, mutation: dict) -> None:
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(self._sidecar(artifact_links=[self._link(**mutation)]))
+
+    def test_refuses_two_links_pointing_at_the_same_artifact(self) -> None:
+        snapshot = self._snapshot(
+            files=[
+                {
+                    "source_selection_id": "42:cube",
+                    "source_file_id": "42:cube",
+                    "source_filename": "cube.stl",
+                },
+                {
+                    "source_selection_id": "42:cube2",
+                    "source_file_id": "42:cube2",
+                    "source_filename": "cube2.stl",
+                },
+            ]
+        )
+        source = self._source()
+        source["latest_capture"]["snapshot"] = snapshot
+        source["latest_capture"]["snapshot_sha256"] = self._hash(snapshot)
+        source["artifact_links"] = [
+            self._link(),
+            self._link(source_file_id="42:cube2", source_filename="cube2.stl"),
+        ]
+        sidecar = {
+            "format": library_transfer.PROVENANCE_FORMAT,
+            "models": [{"model_source_id": 7, "sources": [source]}],
+        }
+
+        # Two snapshot files claiming one artifact would give that artifact two
+        # different provenance histories.
+        with pytest.raises(ValueError, match="portable_provenance_invalid"):
+            self._contexts(sidecar)
