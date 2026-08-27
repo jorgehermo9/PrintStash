@@ -1,3 +1,32 @@
+"""Reading a user-uploaded ZIP without letting it decide where bytes land.
+
+A model archive comes from Printables, MakerWorld, or a browser upload — never
+from PrintStash — and every field inside it is chosen by whoever built it: entry
+names, declared sizes, entry count, nesting depth. Extracting one naively is the
+classic zip-slip: an entry named `../../../etc/cron.d/x` writes wherever the
+process can reach.
+
+So this module treats an archive as a manifest to be validated, and only then as
+bytes to be copied. The refusals are the substance of the file:
+
+**Names are refused, not sanitised.** Traversal, an absolute path, a Windows
+drive prefix, a backslash separator — each is rejected rather than rewritten,
+because a rewrite means guessing what the archive meant and every guess is a
+place to be wrong. Unicode-normalised duplicates are refused too: `café.stl` in
+NFC and NFD are one file on macOS and two on Linux, and accepting both would let
+one entry overwrite the other during extraction.
+
+**Every limit is enforced from the central directory first.** Entry count, per-
+entry size, total uncompressed size, path length, and nesting depth are all
+checked before anything is read, so a zip bomb is refused at inspection time
+rather than discovered when the disk fills. The *declared* size is checked and
+then the *actual* bytes are counted while streaming, because a ZIP header can lie.
+
+**Only importable entries are staged.** A selection naming a `.txt` gets it
+skipped rather than extracted, so a user cannot smuggle an arbitrary file into
+the library by asking for it by name.
+"""
+
 from __future__ import annotations
 
 import zipfile
@@ -38,97 +67,164 @@ def _archive(path: Path, entries: dict[str, bytes]) -> Path:
     return path
 
 
-def test_inspection_returns_only_supported_files_and_images(tmp_path: Path) -> None:
-    path = _archive(
-        tmp_path / "bundle.zip",
-        {"parts/a.stl": b"a", "preview.png": b"p", "notes.txt": b"n"},
-    )
-
-    entries = inspect_archive(
-        path, limits=_limits(), file_types=FILE_TYPES, image_suffixes=IMAGES
-    )
-
-    assert [(entry.name, entry.file_type, entry.is_image) for entry in entries] == [
-        ("parts/a.stl", "stl", False),
-        ("preview.png", None, True),
-    ]
-    assert all(entry.entry_id.count(":") == 2 for entry in entries)
-
-
-@pytest.mark.parametrize(
-    ("name", "code"),
-    [
-        ("../escape.stl", "archive_unsafe_entry"),
-        ("/absolute.stl", "archive_unsafe_entry"),
-        ("C:\\escape.stl", "archive_unsafe_entry"),
-    ],
-)
-def test_inspection_rejects_unsafe_paths(tmp_path: Path, name: str, code: str) -> None:
-    path = _archive(tmp_path / "unsafe.zip", {name: b"x"})
-
-    with pytest.raises(ArchivePolicyError, match=code):
-        inspect_archive(
-            path, limits=_limits(), file_types=FILE_TYPES, image_suffixes=IMAGES
-        )
-
-
-def test_inspection_rejects_unicode_normalized_duplicates(tmp_path: Path) -> None:
-    path = tmp_path / "duplicates.zip"
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("Caf\N{LATIN SMALL LETTER E WITH ACUTE}.stl", b"one")
-        archive.writestr("Cafe\N{COMBINING ACUTE ACCENT}.STL", b"two")
-
-    with pytest.raises(ArchivePolicyError, match="archive_duplicate_entry"):
-        inspect_archive(
-            path, limits=_limits(), file_types=FILE_TYPES, image_suffixes=IMAGES
-        )
-
-
-def test_inspection_enforces_entry_and_total_limits(tmp_path: Path) -> None:
-    path = _archive(tmp_path / "large.zip", {"a.stl": b"12", "b.stl": b"34"})
-
-    with pytest.raises(ArchivePolicyError, match="archive_too_many_entries"):
-        inspect_archive(
-            path,
-            limits=_limits(max_entries=1),
-            file_types=FILE_TYPES,
-            image_suffixes=IMAGES,
-        )
-    with pytest.raises(ArchivePolicyError, match="archive_too_large"):
-        inspect_archive(
-            path,
-            limits=_limits(max_total_bytes=3),
-            file_types=FILE_TYPES,
-            image_suffixes=IMAGES,
-        )
-
-
-def test_extract_selected_stages_only_supported_entries(tmp_path: Path) -> None:
-    path = _archive(tmp_path / "bundle.zip", {"a.stl": b"solid", "notes.txt": b"n"})
-    staging = tmp_path / "staging"
-
-    extracted = extract_selected(
+def _inspect(path: Path, **overrides: int) -> list:
+    return inspect_archive(
         path,
-        ["a.stl", "notes.txt"],
-        staging_dir=staging,
-        max_entry_bytes=1024,
-        importable_suffixes=set(FILE_TYPES),
-        name_factory=lambda suffix: f"fixed{suffix}",
+        limits=_limits(**overrides),
+        file_types=FILE_TYPES,
+        image_suffixes=IMAGES,
     )
 
-    assert extracted == [(staging / "fixed.stl", "a.stl")]
-    assert extracted[0][0].read_bytes() == b"solid"
-    assert safe_subdir("nested\\part.stl") == "nested"
+
+class TestInspectArchive:
+    def test_lists_a_supported_model_file_with_its_type(self, tmp_path: Path) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"parts/a.stl": b"a"})
+
+        entries = _inspect(path)
+
+        assert [(entry.name, entry.file_type, entry.is_image) for entry in entries] == [
+            ("parts/a.stl", "stl", False)
+        ]
+
+    def test_lists_an_image_without_a_file_type(self, tmp_path: Path) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"preview.png": b"p"})
+
+        entries = _inspect(path)
+
+        # Images become thumbnails rather than library files, so they are listed
+        # but carry no importable type.
+        assert [(entry.name, entry.is_image) for entry in entries] == [
+            ("preview.png", True)
+        ]
+
+    def test_omits_an_entry_that_is_neither(self, tmp_path: Path) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"a.stl": b"a", "notes.txt": b"n"})
+
+        # A README is not something PrintStash can do anything with, and offering
+        # it in the picker would invite a user to import it.
+        assert [entry.name for entry in _inspect(path)] == ["a.stl"]
+
+    def test_gives_each_entry_a_stable_identifier(self, tmp_path: Path) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"parts/a.stl": b"a"})
+
+        entries = _inspect(path)
+
+        # The id is what a selection refers to across the two requests that
+        # inspect and then import, so it has to be derivable from the archive
+        # rather than from list position.
+        assert all(entry.entry_id.count(":") == 2 for entry in entries)
+
+    def test_returns_nothing_for_an_archive_with_no_usable_entries(
+        self, tmp_path: Path
+    ) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"notes.txt": b"n"})
+
+        assert _inspect(path) == []
+
+    @pytest.mark.parametrize(
+        "name", ["../escape.stl", "/absolute.stl", "C:\\escape.stl"]
+    )
+    def test_refuses_an_entry_that_could_escape_the_extraction_root(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        path = _archive(tmp_path / "unsafe.zip", {name: b"x"})
+
+        # Refused rather than rewritten: a rewrite means guessing what the
+        # archive meant, and every guess is a place to be wrong.
+        with pytest.raises(ArchivePolicyError, match="archive_unsafe_entry"):
+            _inspect(path)
+
+    def test_refuses_two_entries_that_normalize_to_one_name(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "duplicates.zip"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("Caf\N{LATIN SMALL LETTER E WITH ACUTE}.stl", b"one")
+            archive.writestr("Cafe\N{COMBINING ACUTE ACCENT}.STL", b"two")
+
+        # NFC and NFD spellings are one file on macOS and two on Linux, and the
+        # case differs as well. Accepting both would let one entry overwrite the
+        # other during extraction, silently.
+        with pytest.raises(ArchivePolicyError, match="archive_duplicate_entry"):
+            _inspect(path)
+
+    def test_refuses_more_entries_than_the_limit(self, tmp_path: Path) -> None:
+        path = _archive(tmp_path / "large.zip", {"a.stl": b"12", "b.stl": b"34"})
+
+        with pytest.raises(ArchivePolicyError, match="archive_too_many_entries"):
+            _inspect(path, max_entries=1)
+
+    def test_refuses_more_total_bytes_than_the_limit(self, tmp_path: Path) -> None:
+        path = _archive(tmp_path / "large.zip", {"a.stl": b"12", "b.stl": b"34"})
+
+        # Checked from the central directory before anything is read, so a zip
+        # bomb costs nothing to refuse.
+        with pytest.raises(ArchivePolicyError, match="archive_too_large"):
+            _inspect(path, max_total_bytes=3)
+
+    def test_refuses_a_file_that_is_not_a_zip(self, tmp_path: Path) -> None:
+        path = tmp_path / "invalid.zip"
+        path.write_bytes(b"not a zip")
+
+        # A truncated download or a mislabelled file must produce a named
+        # provider error, not a `BadZipFile` traceback in the import job.
+        with pytest.raises(ArchivePolicyError, match="archive_invalid"):
+            _inspect(path)
 
 
-def test_invalid_zip_has_a_stable_error_code(tmp_path: Path) -> None:
-    path = tmp_path / "invalid.zip"
-    path.write_bytes(b"not a zip")
+class TestExtractSelected:
+    def test_stages_the_bytes_of_a_selected_entry(self, tmp_path: Path) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"a.stl": b"solid"})
+        staging = tmp_path / "staging"
 
-    with pytest.raises(ArchivePolicyError, match="archive_invalid"):
-        inspect_archive(
-            path, limits=_limits(), file_types=FILE_TYPES, image_suffixes=IMAGES
+        extracted = extract_selected(
+            path,
+            ["a.stl"],
+            staging_dir=staging,
+            max_entry_bytes=1024,
+            importable_suffixes=set(FILE_TYPES),
+            name_factory=lambda suffix: f"fixed{suffix}",
         )
+
+        assert extracted == [(staging / "fixed.stl", "a.stl")]
+        assert extracted[0][0].read_bytes() == b"solid"
+
+    def test_skips_a_selected_entry_that_is_not_importable(
+        self, tmp_path: Path
+    ) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"a.stl": b"solid", "notes.txt": b"n"})
+
+        extracted = extract_selected(
+            path,
+            ["a.stl", "notes.txt"],
+            staging_dir=tmp_path / "staging",
+            max_entry_bytes=1024,
+            importable_suffixes=set(FILE_TYPES),
+            name_factory=lambda suffix: f"fixed{suffix}",
+        )
+
+        # The selection comes from the client. Extracting whatever it names
+        # would let a user smuggle an arbitrary file into the library by asking
+        # for it explicitly.
+        assert [source for _staged, source in extracted] == ["a.stl"]
+
+    def test_names_the_staged_file_from_the_factory_it_was_given(
+        self, tmp_path: Path
+    ) -> None:
+        path = _archive(tmp_path / "bundle.zip", {"parts/a.stl": b"solid"})
+
+        extracted = extract_selected(
+            path,
+            ["parts/a.stl"],
+            staging_dir=tmp_path / "staging",
+            max_entry_bytes=1024,
+            importable_suffixes=set(FILE_TYPES),
+            name_factory=lambda suffix: f"generated{suffix}",
+        )
+
+        # The archive's own name never reaches the filesystem: the caller
+        # supplies an opaque staged name and keeps the original as metadata.
+        assert extracted[0][0].name == "generated.stl"
 
 
 class TestSafeEntryName:
