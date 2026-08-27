@@ -640,6 +640,18 @@ class TestListFiles:
         assert await client.list_files() == []
 
     @pytest.mark.asyncio
+    async def test_reads_a_listing_returned_as_a_bare_array(self) -> None:
+        client = make_client(
+            lambda _request: httpx.Response(200, json=[{"name": "a.gcode"}])
+        )
+
+        # A plugin or a proxy in front of the printer can answer with an array.
+        # `body.get` is evaluated before any inline fallback, so the list case
+        # has to be tested first or this raises AttributeError out of the poll
+        # loop.
+        assert [item["path"] for item in await client.list_files()] == ["a.gcode"]
+
+    @pytest.mark.asyncio
     async def test_returns_nothing_when_the_listing_is_the_wrong_shape(self) -> None:
         client = make_client(
             responding(**{"/api/v1/files/local/": {"children": "unavailable"}})
