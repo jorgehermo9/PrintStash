@@ -700,6 +700,100 @@ class TestReconcilePending:
         assert db_session.get(StagingLease, lease.id) is None
 
 
+def _expired_cover_lease(session: Session):
+    """A cover intent whose lease has already expired, ready for the reaper.
+
+    The arrange step of every `expire_pending` case: a cover row, a lease pointing at
+    its destination key, and an `expires_at` already in the past.
+    """
+    source = _source(session)
+    session.commit()
+    cover = ModelSourceCover(
+        provenance_source_id=source.id,
+        storage_key="opaque/covers/pending.webp",
+        size_bytes=4,
+    )
+    session.add(cover)
+    session.flush()
+    lease = staging_leases.create_cover_lease(
+        session,
+        model_source_cover_id=cover.id or 0,
+        owner_user_id=None,
+        destination_key=cover.storage_key,
+        size_bytes=4,
+        sha256="a" * 64,
+    )
+    lease.expires_at = lease.created_at
+    session.commit()
+    return cover, lease
+
+
+class TestExpirePending:
+    """Deciding an expired cover intent, when the backend is the only witness.
+
+    Three outcomes, and getting them the wrong way round either deletes a cover a
+    user can see or leaves an intent that never clears. The rule is that only an
+    *explicit* answer from storage is allowed to be destructive: an object that is
+    provably there is adopted, an object that is provably absent is discarded, and
+    anything the backend will not answer for is left alone for the next sweep.
+    """
+
+    def test_adopts_a_cover_whose_bytes_were_published(
+        self, db_session: Session
+    ) -> None:
+        cover, lease = _expired_cover_lease(db_session)
+        backend = _backend()
+        # The size has to match the lease: `_recover_pending_cover` compares them and
+        # treats any disagreement as "this is not the object we staged", which is the
+        # whole point of adopting by receipt rather than by key.
+        backend.adopt_existing.return_value = CreationReceipt(
+            key=cover.storage_key,
+            size=lease.size_bytes,
+            token="published",
+            backend="fake",
+            namespace="test",
+        )
+
+        assert source_covers.expire_pending(db_session, backend, lease=lease) is True
+
+        db_session.flush()
+        assert db_session.get(ModelSourceCover, cover.id) is not None
+        assert db_session.get(StagingLease, lease.id) is None
+        proof = db_session.exec(select(OwnedStorageObject)).one()
+        assert proof.key == cover.storage_key
+        assert proof.token == "published"
+
+    def test_leaves_everything_alone_when_the_backend_will_not_answer(
+        self, db_session: Session
+    ) -> None:
+        # An unreachable object store is a retryable state, not evidence of absence.
+        # Treating it as absence is how a sweep deletes a cover that *was* published.
+        #
+        # The fault goes through `creation_matches` rather than `adopt_existing`:
+        # `_recover_pending_cover` catches the storage errors `adopt_existing` raises
+        # and reports "absent", so only an exception escaping the recovery reaches the
+        # retryable branch under test.
+        cover, lease = _expired_cover_lease(db_session)
+        lease.receipt_json = json.dumps(
+            {
+                "key": cover.storage_key,
+                "size": lease.size_bytes,
+                "token": "staged",
+                "backend": "fake",
+                "namespace": "test",
+            }
+        )
+        db_session.add(lease)
+        db_session.commit()
+        backend = _backend()
+        backend.creation_matches.side_effect = RuntimeError("object store unreachable")
+
+        assert source_covers.expire_pending(db_session, backend, lease=lease) is False
+
+        assert db_session.get(ModelSourceCover, cover.id) is not None
+        assert db_session.get(StagingLease, lease.id) is not None
+
+
 class TestPruneExpired:
     """The staging sweep meeting a cover intent it did not create.
 

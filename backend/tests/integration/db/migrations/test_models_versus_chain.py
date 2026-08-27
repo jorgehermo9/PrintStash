@@ -1,30 +1,36 @@
-"""What a fresh install gets and what an upgraded install gets, compared row by row.
+"""What a fresh install gets and what an upgraded one gets, compared row by row.
 
-`run_migrations` has two paths that both end at "head", and they do not produce the
-same schema:
+`run_migrations` has two paths to head and they do not produce the same schema:
 
 * **fresh** — no tables at all, so `create_all` builds from the models and stamps
-  head. This is what a new installation gets, on SQLite or PostgreSQL.
-* **upgraded** — an existing `alembic_version`, so the chain runs. This is what
-  every self-hoster who upgraded from an earlier release has.
+  head. This is what a new installation gets.
+* **upgraded** — an existing `alembic_version`, so the chain runs from wherever the
+  installation is. This is what a self-hoster who upgraded has.
 
-They agree on everything except foreign keys, and the difference is not a rounding
-error: the models declare **eighteen** that no migration ever created — 108 against
-90. A fresh install enforces them; an upgraded install does not. With
-`foreign_keys=ON` that is different delete behaviour on two supported installations
-of the same version, and one of the eighteen is reachable from the HTTP API today
-(see `files.external_library_id` below).
+The difference is eighteen foreign keys — 108 against 90 — and the cause is not an
+oversight. SQLite has no `ALTER TABLE ADD CONSTRAINT`, so the migrations that added
+the audit columns guarded their `op.create_foreign_key` calls with
+`if not is_sqlite` (see `69b6a6d8a1d1_phase_4c_4d_lifecycle_audit.py`). The column
+lands, the constraint does not. `batch_alter_table` — which Alembic implements on
+SQLite by rebuilding the table — is the way to do it, and this repo already uses it
+elsewhere; it was not used here.
 
-This test does not assert they agree, because today they do not. It pins the exact
-gap, in both directions. A new divergence fails it, and *closing* the gap fails it
-too — with the message saying to delete the entry. The gap is a production decision
-(add a migration, or drop the constraints from the models), and until it is taken
-the honest thing is a guarded, documented list rather than a comment nobody reads.
+Two shapes therefore exist in the wild, both SQLite:
 
-The origin is visible in `tests/repo/test_schema_ddl.py`: the model graph has a
-foreign-key cycle, and a `create_all` against an ALTER-capable dialect suppresses
-the cycle-breaking constraints on the shared metadata. Autogenerating against a
-metadata already in that state is how the chain came to be missing exactly these.
+* Installed before v0.7.2, when a fresh database still replayed the chain: the pure
+  chain shape, missing all eighteen.
+* Installed v0.7.2 or later, when `create_all` became the fresh path: every
+  constraint the models declared *at install time*, minus any a later migration
+  added without one.
+
+PostgreSQL is not affected. The chain's baseline cannot bootstrap a Postgres
+database at all — which is exactly why the fresh path became `create_all` — so every
+Postgres installation is a `create_all` installation and has all 108.
+
+This test does not assert the two agree, because they do not. It pins the gap in
+both directions: a new divergence fails it, and *closing* the gap fails it too, with
+the message saying to delete the entry. Converging them needs a batch migration and
+is a release decision about every self-hoster's upgrade path.
 """
 
 from __future__ import annotations

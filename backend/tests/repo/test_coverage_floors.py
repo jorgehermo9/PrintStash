@@ -55,12 +55,7 @@ MODULE_FLOOR = 90.0
 #
 # Deleting an entry is the goal. See the module docstring for the ratchet.
 PINNED_BELOW_FLOOR = {
-    # 68.0 rather than 68.5: enforcing foreign keys turned on `ON DELETE CASCADE`,
-    # which had never fired while enforcement was off. The database now removes a
-    # cover row that this module used to remove itself, so that path stops
-    # executing. Worth a look — some of it may now be unreachable rather than
-    # merely uncovered.
-    "app/services/source_covers.py": 68.0,
+    "app/services/source_covers.py": 76.5,
     "app/services/staging_leases.py": 76.0,
     "app/services/inbox.py": 81.0,
     "app/services/provenance.py": 81.5,
@@ -76,6 +71,11 @@ PINNED_BELOW_FLOOR = {
     "app/services/mesh_processing.py": 89.0,
     "app/services/importer.py": 89.5,
 }
+
+# How far a pinned module may rise above its pin before the pin has to move. Wide
+# enough that covering one behaviour does not force an edit here, narrow enough that
+# a module cannot quietly gain ten points and keep the old floor.
+PIN_SLACK = 3.0
 
 # Two-sided, the same shape as the other ratchets in this directory: the list may
 # not grow, and when it shrinks this has to come down with it.
@@ -194,6 +194,32 @@ class TestModuleFloor:
                 f"{path} {now:.2f}% < {pin}%"
                 for path, (now, pin) in sorted(fallen.items())
             )
+        )
+
+    def test_no_pinned_module_has_drifted_far_above_its_pin(self) -> None:
+        """A pin that is stale by a wide margin has stopped constraining anything.
+
+        The aggregate floor is two-sided; these were not, and that showed:
+        `source_covers.py` went from 68% to 77% in one change and its 68% pin
+        happily accepted every point in between. `MODULE_FLOOR` only notices at 90%,
+        which is a long way to drift unwatched.
+        """
+        measured = _measured()
+
+        drifted = {
+            path: measured[path]
+            for path, pin in PINNED_BELOW_FLOOR.items()
+            if path in measured and measured[path] >= pin + PIN_SLACK
+        }
+        assert not drifted, (
+            "these pins are more than "
+            f"{PIN_SLACK}pp below what the module now measures: "
+            + ", ".join(
+                f"{path} ({percent:.2f}% vs pin {PINNED_BELOW_FLOOR[path]}%)"
+                for path, percent in sorted(drifted.items())
+            )
+            + ". Raise each pin to just under its figure, so the ground gained "
+            "cannot be given back."
         )
 
 
