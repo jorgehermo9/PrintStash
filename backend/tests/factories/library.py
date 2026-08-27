@@ -1,0 +1,174 @@
+"""Builders for the library itself: models, artifacts, metadata, collections, tags.
+
+These are the rows almost every test needs, and the ones where the raw table is
+most misleading. Three traps the builders take away:
+
+* **A trashed row is `deleted_at`, not a flag.** Every read path filters through
+  `scopes.live()`, so `trashed=True` here is the difference between testing the
+  live path and testing nothing. Spelling it as a keyword means a test never has
+  to import `utcnow` to hide a row.
+* **`next_file_version` is the model's own counter.** An artifact's `version`
+  comes from the model it hangs under, and two artifacts sharing a version is a
+  state the app cannot produce. `build_file` advances the counter the way
+  ingestion does.
+* **`is_recommended` is an invariant, not a column.** At most one live G-code
+  revision per model is the recommended one. `build_file(recommended=True)`
+  clears the previous holder, so a test setting up "three revisions, the newest
+  recommended" gets the state the app would actually be in.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from sqlmodel import Session, select
+
+from app.core.time import utcnow
+from app.db.models import (
+    Collection,
+    File,
+    FileRevisionStatus,
+    FileType,
+    Metadata,
+    Model,
+    ModelTagLink,
+    Tag,
+)
+from tests.factories._support import nth, reject_aliases, save, unique_hash
+
+
+def build_model(
+    session: Session,
+    name: str = "Bracket",
+    *,
+    collection: Collection | None = None,
+    trashed: bool | datetime = False,
+    **overrides: Any,
+) -> Model:
+    """A library model.
+
+    `trashed=True` puts it in the trash now; pass a datetime to control when, for
+    a retention-window test. `collection` is the row, not its id, so a test never
+    has to reach for `.id` on something it just built.
+    """
+    reject_aliases(overrides, {"deleted_at": "trashed"} if trashed else {})
+    index = nth("model")
+    if collection is not None:
+        overrides.setdefault("collection_id", collection.id)
+    if trashed:
+        overrides.setdefault(
+            "deleted_at", trashed if isinstance(trashed, datetime) else utcnow()
+        )
+    overrides.setdefault("slug", f"model-{index}")
+    overrides.setdefault("hash", f"{index:064d}")
+    return save(session, Model(name=name, **overrides))
+
+
+def build_file(
+    session: Session,
+    model: Model,
+    *,
+    file_type: FileType = FileType.GCODE,
+    filename: str | None = None,
+    recommended: bool = False,
+    status: FileRevisionStatus | None = None,
+    trashed: bool | datetime = False,
+    external: bool = False,
+    **overrides: Any,
+) -> File:
+    """One artifact under *model*, at the model's next version.
+
+    `recommended=True` also demotes whatever revision held the recommendation, so
+    the "exactly one recommended live G-code" invariant holds without the test
+    having to know about it.
+    """
+    reject_aliases(
+        overrides,
+        {
+            "is_recommended": "recommended",
+            "is_external": "external",
+            "revision_status": "status",
+            "original_filename": "filename",
+        },
+    )
+    index = nth("file")
+    version = overrides.pop("version", None)
+    if version is None:
+        version = model.next_file_version
+        model.next_file_version += 1
+        session.add(model)
+    name = filename or f"artifact-{index}.{file_type.value.lower()}"
+    if trashed:
+        overrides.setdefault(
+            "deleted_at", trashed if isinstance(trashed, datetime) else utcnow()
+        )
+    if recommended:
+        _demote_current_recommendation(session, model)
+    overrides.setdefault("path", f"{model.slug}/v{version}/{name}")
+    overrides.setdefault("size_bytes", 1)
+    overrides.setdefault("sha256", unique_hash("file_sha"))
+    return save(
+        session,
+        File(
+            model_id=model.id,
+            original_filename=name,
+            file_type=file_type,
+            version=version,
+            revision_status=status,
+            is_recommended=recommended,
+            is_external=external,
+            **overrides,
+        ),
+    )
+
+
+def _demote_current_recommendation(session: Session, model: Model) -> None:
+    for row in session.exec(
+        select(File).where(File.model_id == model.id, File.is_recommended == True)  # noqa: E712
+    ).all():
+        row.is_recommended = False
+        session.add(row)
+
+
+def build_metadata(session: Session, file: File, **overrides: Any) -> Metadata:
+    """Slicer/mesh metadata for one artifact.
+
+    Every field is optional in production: a mesh has no slicer settings, and a
+    G-code file from an unrecognised slicer parses to all-`None`. So this builder
+    defaults to empty and the test names only what it asserts on.
+    """
+    return save(session, Metadata(file_id=file.id, **overrides))
+
+
+def build_collection(
+    session: Session,
+    name: str = "Parts",
+    *,
+    parent: Collection | None = None,
+    **overrides: Any,
+) -> Collection:
+    """A collection.
+
+    `path` is the materialized ancestry the API returns and RBAC reads, so
+    passing `parent` keeps it consistent instead of leaving a child whose path
+    claims it is at the root.
+    """
+    slug = overrides.pop("slug", None) or f"{name.lower().replace(' ', '-')}"
+    if parent is not None:
+        overrides.setdefault("parent_id", parent.id)
+        overrides.setdefault("path", f"{parent.path}/{slug}")
+    else:
+        overrides.setdefault("path", slug)
+    return save(session, Collection(name=name, slug=slug, **overrides))
+
+
+def build_tag(session: Session, name: str = "functional", **overrides: Any) -> Tag:
+    overrides.setdefault("slug", name.lower().replace(" ", "-"))
+    return save(session, Tag(name=name, **overrides))
+
+
+def tag_model(session: Session, model: Model, tag: Tag) -> None:
+    """Attach an existing tag to a model, the way the taxonomy service would."""
+    session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
+    session.commit()

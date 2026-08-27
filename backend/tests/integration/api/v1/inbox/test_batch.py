@@ -24,7 +24,7 @@ class TestBatchItems:
         headers_for,
         make_item,
     ) -> None:
-        owner = make_user("batch-collection", is_superuser=True)
+        owner = make_user("batch-collection", superuser=True)
         row = make_item(owner)
         collection = Collection(
             name="Batch target", slug="batch-target", path="batch-target"

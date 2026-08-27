@@ -5,7 +5,7 @@ Local-first: SQLite + local FS default; Postgres/S3 optional. No hard deps on
 Redis/queues/cloud.
 
 Workflow reference (release procedure, roadmap position, plan pointers):
-`.claude/skills/printstash/SKILL.md` — read it before release or roadmap
+`.agents/skills/printstash/SKILL.md` — read it before release or roadmap
 work; that detail lives there, not here, so this file stays small.
 
 ## Bounded coordination
@@ -74,7 +74,7 @@ headline capability on top.** CI runs everything per-PR plus a
 nightly/`workflow_dispatch` full-matrix re-run.
 Any test-related work — writing, changing, deleting, or auditing tests, or
 deciding what a change needs — starts by loading
-`.claude/skills/create-tests/SKILL.md` (the `create-tests` skill). Its
+`.agents/skills/create-tests/SKILL.md` (the `create-tests` skill). Its
 coverage matrix (one row per behaviour, every row `✅`/`❌`/`⏭️`) is mandatory
 in the response and the PR; a change without a matrix is not done.
 
@@ -88,6 +88,6 @@ in the response and the PR; a change without a matrix is not done.
 6. Frontend UI follows `DESIGN.md`. The zero-counts are load-bearing: no `transition-all`, no `ease-in`, no raw durations/cubic-beziers, no arbitrary `[var(--…)]` colors. Nothing animates over 300ms; route navigation never animates.
 
 ## Release & roadmap
-Follow `.claude/skills/printstash/SKILL.md` — read it before cutting a
+Follow `.agents/skills/printstash/SKILL.md` — read it before cutting a
 release, bumping versions, or picking the next roadmap item. Don't
 reconstruct the procedure from memory or git history.

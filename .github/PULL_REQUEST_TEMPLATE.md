@@ -19,7 +19,7 @@ code happens to do reproduces its bugs as "expected".
 Every row ends at ✅ `<tier dir>/<file>::<test>`, ❌ missing, or ⏭️ N/A — reason.
 Zero unexplained ❌ is the definition of done.
 
-Format: .claude/skills/create-tests/SKILL.md -->
+Format: .agents/skills/create-tests/SKILL.md -->
 
 | # | Behaviour | Category | Precondition / input | Observable outcome | Tier | Status |
 |---|-----------|----------|----------------------|--------------------|------|--------|

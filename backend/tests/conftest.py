@@ -330,6 +330,20 @@ def _isolate_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def _reset_factory_counters() -> None:
+    """Rewind the `tests.factories` sequence counters between tests.
+
+    The builders derive unique slugs, hashes and names from these, and the
+    database is wiped per test, so rewinding them makes a generated value depend
+    only on the test that asked for it. Without this, `model-1` alone becomes
+    `model-97` in a full run, and a failure message stops being reproducible.
+    """
+    from tests.factories import reset_counters
+
+    reset_counters()
+
+
 @pytest.fixture
 def db_session() -> Iterator[Session]:
     """Yield a fresh session with rollback after each test.

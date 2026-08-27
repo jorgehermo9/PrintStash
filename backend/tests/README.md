@@ -49,7 +49,7 @@ Resource markers gate subsets *within* a tier and auto-skip when the resource is
 
 ## Before you add one
 
-Read `.claude/skills/create-tests/SKILL.md`. The coverage matrix it prescribes is the
+Read `.agents/skills/create-tests/SKILL.md`. The coverage matrix it prescribes is the
 definition of done, and it is derived from requirements — the issue, `CONTEXT.md`,
 `docs/provider-support.md`, the router contract — never from reading the implementation,
 because matrixing what the code happens to do reproduces its bugs as "expected".
