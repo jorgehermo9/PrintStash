@@ -31,14 +31,32 @@ def _enable_external_libraries(db_session: Session) -> None:
     runtime_config.set_external_libraries_enabled(db_session, True)
 
 
+async def _wait_for(condition, *, timeout: float = 5.0) -> None:
+    """Wait until `condition()` holds, or give up after `timeout` seconds.
+
+    Sleeping a fixed span instead would be a flake rather than a failure: under a
+    parallel run the loop can be starved well past a supervisor tick, and the
+    resulting red test says nothing about the behaviour under test.
+    """
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+
+
 # ---------------------------------------------------------------------------
 # _compute_desired
 # ---------------------------------------------------------------------------
 
 
-def test_compute_desired_empty_when_feature_disabled(db_session: Session, tmp_path: Path) -> None:
+def test_compute_desired_empty_when_feature_disabled(
+    db_session: Session, tmp_path: Path
+) -> None:
     db_session.add(
-        ExternalLibrary(name="Lib", root_path=str(tmp_path), watch_mode=ExternalLibraryWatchMode.EVENTS)
+        ExternalLibrary(
+            name="Lib",
+            root_path=str(tmp_path),
+            watch_mode=ExternalLibraryWatchMode.EVENTS,
+        )
     )
     db_session.commit()
 
@@ -67,10 +85,14 @@ def test_compute_desired_includes_forced_events_library_and_persists_fs_kind(
     assert lib.fs_kind is not None  # detect_fs_kind's result got persisted
 
 
-def test_compute_desired_excludes_watch_mode_off(db_session: Session, tmp_path: Path) -> None:
+def test_compute_desired_excludes_watch_mode_off(
+    db_session: Session, tmp_path: Path
+) -> None:
     _enable_external_libraries(db_session)
     db_session.add(
-        ExternalLibrary(name="Lib", root_path=str(tmp_path), watch_mode=ExternalLibraryWatchMode.OFF)
+        ExternalLibrary(
+            name="Lib", root_path=str(tmp_path), watch_mode=ExternalLibraryWatchMode.OFF
+        )
     )
     db_session.commit()
 
@@ -105,7 +127,11 @@ def test_compute_desired_excludes_auto_mode_on_network_fs(
 ) -> None:
     _enable_external_libraries(db_session)
     db_session.add(
-        ExternalLibrary(name="Lib", root_path=str(tmp_path), watch_mode=ExternalLibraryWatchMode.AUTO)
+        ExternalLibrary(
+            name="Lib",
+            root_path=str(tmp_path),
+            watch_mode=ExternalLibraryWatchMode.AUTO,
+        )
     )
     db_session.commit()
 
@@ -122,9 +148,13 @@ def test_compute_desired_excludes_auto_mode_on_network_fs(
 # ---------------------------------------------------------------------------
 
 
-def test_debounced_scan_coalesces_a_burst_of_events(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_debounced_scan_coalesces_a_burst_of_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[int] = []
-    monkeypatch.setattr(lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id))
+    monkeypatch.setattr(
+        lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id)
+    )
 
     watcher = lw.LibraryWatcher()
 
@@ -151,13 +181,17 @@ def test_debounced_scan_requeues_when_a_change_lands_mid_scan(
     monkeypatch.setattr(lw.external_library, "scan_library", _slow_scan)
 
     watcher = lw.LibraryWatcher()
-    watcher.tasks[9] = None  # present so the requeue branch's "in self.tasks" check passes
+    watcher.tasks[9] = (
+        None  # present so the requeue branch's "in self.tasks" check passes
+    )
 
     async def _run() -> None:
         # First scan in flight (marked "scanning") ...
         watcher._scanning.add(9)  # noqa: SLF001
         watcher._schedule_scan(9)  # noqa: SLF001
-        await asyncio.sleep(0.1)  # debounce elapses; _debounced_scan sees "already scanning"
+        await asyncio.sleep(
+            0.1
+        )  # debounce elapses; _debounced_scan sees "already scanning"
         assert 9 in watcher._rescan_requested  # noqa: SLF001
         assert calls == []  # scan was deferred, not run, while "scanning"
 
@@ -198,7 +232,9 @@ def test_real_file_create_triggers_a_scheduled_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[int] = []
-    monkeypatch.setattr(lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id))
+    monkeypatch.setattr(
+        lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id)
+    )
 
     watcher = lw.LibraryWatcher()
 
@@ -306,15 +342,19 @@ def test_supervisor_periodically_calls_refresh(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(watcher, "refresh", fake_refresh)
 
     async def _run() -> None:
-        await watcher.start_all()  # calls refresh() once directly, then starts supervisor
-        await asyncio.sleep(0.2)  # several 0.05s supervisor ticks
+        await (
+            watcher.start_all()
+        )  # calls refresh() once directly, then starts supervisor
+        await _wait_for(lambda: len(calls) >= 2)
         await watcher.stop_all()
 
     asyncio.run(_run())
     assert len(calls) >= 2  # the initial refresh() plus at least one supervisor tick
 
 
-def test_supervisor_survives_a_refresh_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_supervisor_survives_a_refresh_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     watcher = lw.LibraryWatcher()
     calls = []
 
@@ -327,7 +367,8 @@ def test_supervisor_survives_a_refresh_exception(monkeypatch: pytest.MonkeyPatch
 
     async def _run() -> None:
         watcher._supervisor = asyncio.create_task(watcher._supervise())  # noqa: SLF001
-        await asyncio.sleep(0.2)
+        await _wait_for(lambda: len(calls) >= 2)
+
         assert len(calls) >= 2  # survived the RuntimeError and ticked again
         watcher._supervisor.cancel()  # noqa: SLF001
         try:

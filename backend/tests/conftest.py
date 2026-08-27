@@ -252,6 +252,42 @@ def _reset_test_storage() -> None:
                 child.unlink(missing_ok=True)
 
 
+def _reset_every_rate_limiter() -> None:
+    """Clear every route's rate-limit window.
+
+    A limiter built by ``rate_limit()`` is a module-level singleton holding one
+    process-wide window, so a test that exhausts one leaves the next test to get
+    a 429 out of nowhere — and only when the two land on the same xdist worker in
+    the same order, which is the worst kind of flake to chase. The limiters are
+    discovered by walking the app's own route tree rather than listed here,
+    because a hand-maintained list silently misses the next route that adds one
+    (which is exactly how the browser-pairing claim limiter came to leak).
+    """
+    from app.main import app as _app
+
+    for limiter in _rate_limiters_in(_app):
+        limiter.reset()
+
+
+def _rate_limiters_in(target: object) -> Iterator[object]:
+    """Every rate limiter reachable from an app or router, mounts included."""
+    for route in getattr(target, "routes", ()):
+        dependant = getattr(route, "dependant", None)
+        if dependant is not None:
+            for dep in [dependant, *dependant.dependencies]:
+                limiter = getattr(dep.call, "limiter", None)
+                if limiter is not None:
+                    yield limiter
+        # A router included with `include_router` shows up as an opaque
+        # `_IncludedRouter` holding the real router; a mount holds a sub-app.
+        for nested in (
+            getattr(route, "original_router", None),
+            getattr(route, "app", None),
+        ):
+            if nested is not None and nested is not target:
+                yield from _rate_limiters_in(nested)
+
+
 @pytest.fixture(autouse=True)
 def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Override the session factory ContextVar to use the in-memory test engine.
@@ -280,12 +316,7 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _http_client_mod._http_client = None
 
-    # Rate limiters are module-level singletons (one process-wide window per
-    # dependency) so state leaks across tests without an explicit reset.
-    from app.api.v1.auth import _login_rate_limit, _refresh_rate_limit
-
-    _login_rate_limit.limiter.reset()  # type: ignore[attr-defined]
-    _refresh_rate_limit.limiter.reset()  # type: ignore[attr-defined]
+    _reset_every_rate_limiter()
 
 
 @pytest.fixture(autouse=True)
