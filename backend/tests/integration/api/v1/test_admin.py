@@ -223,6 +223,24 @@ class TestResetPassword:
         )
         assert resp.status_code == 200
 
+    def test_reset_password_lets_the_user_sign_in_with_the_new_one(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _user(db_session, "admin-reset-login")
+        target = _user(db_session, "reset-then-login", superuser=False)
+        client.post(
+            f"/api/v1/admin/users/{target.id}/password",
+            json={"password": "NewPassword123"},
+            headers=_headers(admin),
+        )
+
+        relogin = client.post(
+            "/api/v1/auth/login",
+            json={"username": "reset-then-login", "password": "NewPassword123"},
+        )
+
+        assert relogin.status_code == 200, relogin.text
+
     def test_reset_password_invalidates_existing_access_and_refresh_tokens(
         self, client: TestClient, db_session: Session
     ) -> None:
@@ -304,6 +322,20 @@ class TestDeactivateUser:
         assert resp.status_code == 204
         db_session.refresh(target)
         assert target.is_active is False
+
+    def test_deactivate_denies_a_later_login(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _user(db_session, "admin-deactivate-login")
+        target = _user(db_session, "deactivated-user", superuser=False)
+        client.delete(f"/api/v1/admin/users/{target.id}", headers=_headers(admin))
+
+        denied = client.post(
+            "/api/v1/auth/login",
+            json={"username": "deactivated-user", "password": "Password123"},
+        )
+
+        assert denied.status_code == 401, denied.text
 
     def test_deactivate_invalidates_existing_access_and_refresh_tokens(
         self, client: TestClient, db_session: Session
