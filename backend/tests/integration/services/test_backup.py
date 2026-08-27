@@ -463,7 +463,7 @@ class TestListBackups:
         listed = {m.id for m in backup.list_backups()}
         assert listed == {good.id}  # the corrupt archive is skipped, not raised
 
-    def test_list_backups_merges_s3_only_entry_and_local_wins_on_id_collision(
+    def test_list_backups_prefers_the_local_row_on_an_id_collision(
         self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
     ):
         seed_model_with_blob(backup_env, name="Widget", content=b"x")
@@ -498,7 +498,7 @@ class TestListBackups:
         assert merged[local_meta.id].location == "local"
         assert merged[local_meta.id].file_count == local_meta.file_count
 
-    def test_list_backups_merges_s3_only_entry_and_local_wins_on_dup_id(
+    def test_list_backups_includes_a_backup_that_exists_only_in_the_cloud(
         self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
     ):
         """Exercises the merge/dedup loop in list_backups() without a real S3
@@ -553,14 +553,18 @@ class TestListBackups:
         assert found.location == "s3"
         assert found.file_count == meta.file_count
 
-    def test_backup_appears_in_list_and_get(self, backup_env: BackupEnv):
+    def test_a_new_backup_appears_in_the_listing(self, backup_env: BackupEnv):
         seed_model_with_blob(backup_env, name="Widget", content=b"x")
         meta = backup.create_backup()
 
-        listed = backup.list_backups()
-        assert any(m.id == meta.id for m in listed)
+        assert any(m.id == meta.id for m in backup.list_backups())
+
+    def test_a_new_backup_is_retrievable_by_id(self, backup_env: BackupEnv):
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
 
         fetched = backup.get_backup(meta.id)
+
         assert fetched is not None
         assert fetched.id == meta.id
         assert fetched.file_count == 1
@@ -652,9 +656,7 @@ class TestGetBackupArchivePath:
 
 
 class TestVerifyBackup:
-    def test_verify_backup_checks_manifest_members_and_sizes(
-        self, backup_env: BackupEnv
-    ):
+    def test_verify_backup_accepts_an_intact_archive(self, backup_env: BackupEnv):
         seed_model_with_blob(backup_env, name="Verified", content=b"solid verified\n")
         meta = backup.create_backup()
 
@@ -1008,7 +1010,7 @@ class TestRestoreDatabase:
             actions = {row.action for row in session.exec(select(AuditLog)).all()}
         assert "restore.failed" in actions
 
-    def test_restore_collision_preserves_files_and_database(
+    def test_a_restore_refused_for_a_collision_changes_nothing(
         self, backup_env: BackupEnv
     ):
         _, first_key = seed_model_with_blob(
@@ -1382,7 +1384,7 @@ class TestDocument:
 
 
 class TestStart:
-    def test_restore_rejected_while_job_running_writes_start_and_failed_rows(
+    def test_a_restore_refused_for_a_running_job_is_audited(
         self,
         backup_env: BackupEnv,
     ):

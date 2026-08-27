@@ -59,7 +59,7 @@ class TestIsConfigured:
         # configured_at alone isn't enough — is_configured also requires a user.
         assert runtime_config.is_configured(db_session) is False
 
-    def test_is_configured_true_once_configured_and_a_user_exists(
+    def test_reports_configured_when_setup_finished_with_a_user_present(
         self,
         db_session: Session,
     ) -> None:
@@ -150,7 +150,7 @@ class TestEnsureJwtSecret:
 
         assert _overlay["jwt_secret"] == "already-persisted-secret"
 
-    def test_ensure_jwt_secret_generates_and_persists_when_missing(
+    def test_ensure_jwt_secret_persists_the_secret_it_generates(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings._frozen, "jwt_secret", DEFAULT_JWT_SECRET)  # noqa: SLF001
@@ -235,7 +235,7 @@ class TestUpdateConfig:
 
 
 class TestSpoolmanConfig:
-    def test_spoolman_config_set_and_get_respects_unset_sentinel(
+    def test_a_partial_spoolman_update_keeps_the_stored_api_key(
         self,
         db_session: Session,
     ) -> None:
@@ -264,11 +264,12 @@ class TestSpoolmanConfig:
 
 
 class TestCurrency:
-    def test_currency_defaults_to_usd_and_round_trips(
-        self, db_session: Session
-    ) -> None:
+    def test_currency_defaults_to_usd(self, db_session: Session) -> None:
         assert runtime_config.currency(db_session) == "USD"
+
+    def test_currency_round_trips_uppercased(self, db_session: Session) -> None:
         runtime_config.set_currency(db_session, "eur")
+
         assert runtime_config.currency(db_session) == "EUR"
 
 
@@ -302,27 +303,40 @@ class TestGetEffectiveConfig:
         assert effective["has_oidc_client_secret"] is True
         assert effective["oidc_enabled"] is False
 
-    def test_boolean_toggles_default_and_round_trip(self, db_session: Session) -> None:
-        assert runtime_config.auto_mark_known_good_enabled(db_session) is True
-        assert runtime_config.external_libraries_enabled(db_session) is False
-        assert runtime_config.notifications_enabled(db_session) is False
-        assert runtime_config.spoolman_enabled(db_session) is False
-        assert runtime_config.spoolman_write_enabled(db_session) is False
-        assert runtime_config.spoolman_write_force(db_session) is False
 
-        runtime_config.set_auto_mark_known_good(db_session, False)
-        runtime_config.set_external_libraries_enabled(db_session, True)
-        runtime_config.set_notifications_enabled(db_session, True)
-        runtime_config.set_spoolman_enabled(db_session, True)
-        runtime_config.set_spoolman_write_enabled(db_session, True)
-        runtime_config.set_spoolman_write_force(db_session, True)
+# Every boolean toggle the settings screen exposes, with the default a fresh install
+# ships. The defaults are the load-bearing half: `auto_mark_known_good` is the only
+# one that starts on, and a change there silently alters what a new install does on
+# its first ingest.
+_BOOLEAN_TOGGLES = [
+    ("auto_mark_known_good_enabled", "set_auto_mark_known_good", True),
+    ("external_libraries_enabled", "set_external_libraries_enabled", False),
+    ("notifications_enabled", "set_notifications_enabled", False),
+    ("spoolman_enabled", "set_spoolman_enabled", False),
+    ("spoolman_write_enabled", "set_spoolman_write_enabled", False),
+    ("spoolman_write_force", "set_spoolman_write_force", False),
+]
+_TOGGLE_IDS = [getter for getter, _setter, _default in _BOOLEAN_TOGGLES]
 
-        assert runtime_config.auto_mark_known_good_enabled(db_session) is False
-        assert runtime_config.external_libraries_enabled(db_session) is True
-        assert runtime_config.notifications_enabled(db_session) is True
-        assert runtime_config.spoolman_enabled(db_session) is True
-        assert runtime_config.spoolman_write_enabled(db_session) is True
-        assert runtime_config.spoolman_write_force(db_session) is True
+
+class TestBooleanToggles:
+    @pytest.mark.parametrize(
+        ("getter", "setter", "default"), _BOOLEAN_TOGGLES, ids=_TOGGLE_IDS
+    )
+    def test_a_boolean_toggle_starts_at_its_shipped_default(
+        self, db_session: Session, getter: str, setter: str, default: bool
+    ) -> None:
+        assert getattr(runtime_config, getter)(db_session) is default
+
+    @pytest.mark.parametrize(
+        ("getter", "setter", "default"), _BOOLEAN_TOGGLES, ids=_TOGGLE_IDS
+    )
+    def test_a_boolean_toggle_round_trips(
+        self, db_session: Session, getter: str, setter: str, default: bool
+    ) -> None:
+        getattr(runtime_config, setter)(db_session, not default)
+
+        assert getattr(runtime_config, getter)(db_session) is (not default)
 
 
 class TestMaskSecret:
@@ -330,7 +344,7 @@ class TestMaskSecret:
         assert runtime_config._mask_secret("") == ""  # noqa: SLF001
         assert runtime_config._mask_secret("short") == "*****"  # noqa: SLF001
 
-    def test_mask_secret_long_values_keep_head_and_tail(self) -> None:
+    def test_mask_secret_keeps_only_the_ends_of_a_long_value(self) -> None:
         masked = runtime_config._mask_secret("AKIAABCDEFGHIJKLMNOP")  # noqa: SLF001
         assert masked.startswith("AKIA")
         assert masked.endswith("MNOP")

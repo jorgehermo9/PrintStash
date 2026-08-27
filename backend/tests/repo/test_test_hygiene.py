@@ -317,4 +317,4 @@ class TestSuiteHygiene:
 # duplicated setup and assertions in the wrong test. So the count is capped and
 # may only fall, and the honest fix per test is one of two things: split it, or
 # rename it to say the single behaviour it actually asserts.
-MAX_CONJUNCTION_NAMES = 249
+MAX_CONJUNCTION_NAMES = 225

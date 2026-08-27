@@ -293,7 +293,7 @@ class TestExecuteRun:
         assert run.state == VaultAuditRunState.FAILED
         assert run.error_code == "audit_failed"
 
-    def test_execute_run_flags_embedded_and_unowned_blobs(
+    def test_execute_run_flags_every_ownership_problem_in_the_snapshot(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         user = _make_user(db_session, "exec-owner4")
@@ -373,7 +373,7 @@ class TestExecuteRun:
         db_session.refresh(run)
         assert run.state == VaultAuditRunState.COMPLETED
 
-    def test_execute_run_cancelled_between_external_and_database_checks(
+    def test_execute_run_honours_a_cancel_between_check_phases(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         user = _make_user(db_session, "exec-owner6")
@@ -562,7 +562,7 @@ class TestDetails:
 
 
 class TestListRuns:
-    def test_list_runs_orders_newest_first_and_respects_limit(
+    def test_list_runs_returns_the_newest_within_the_limit(
         self, db_session: Session
     ) -> None:
         user = _make_user(db_session, "runs-owner")
@@ -638,7 +638,7 @@ class TestReconcileInterruptedRuns:
 
 
 class TestCheckPrimary:
-    def test_check_primary_flags_size_and_hash_mismatch(
+    def test_check_primary_flags_a_blob_that_does_not_match_its_record(
         self, db_session: Session
     ) -> None:
         user = _make_user(db_session, "primary-owner")
@@ -1036,7 +1036,7 @@ class TestCheckExternal:
 
 
 class TestCheckBackgroundJobs:
-    def test_check_background_jobs_flags_stuck_job_and_pending_import(
+    def test_check_background_jobs_flags_everything_left_stuck(
         self,
         db_session: Session,
     ) -> None:
@@ -1452,7 +1452,7 @@ class TestRepairFinding:
 
 
 class TestAllOwnedBlobKeys:
-    def test_all_owned_blob_keys_includes_primary_and_external_files(
+    def test_all_owned_blob_keys_covers_external_files_too(
         self,
         db_session: Session,
     ) -> None:

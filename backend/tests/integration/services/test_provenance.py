@@ -115,22 +115,26 @@ def _capture_without_title() -> CaptureManifestV2:
 
 
 class TestCanonicalizeUrl:
-    def test_snapshot_hash_is_canonical_and_identity_uses_stable_source_id(
-        self,
-    ) -> None:
-        first = _capture()
-        second = _capture()
+    def test_canonicalizes_a_source_url(self) -> None:
+        capture = _capture()
 
-        assert (
-            provenance.canonicalize_url(first.source.canonical_url)
-            == "https://printables.com/model/42"
+        canonical = provenance.canonicalize_url(capture.source.canonical_url)
+
+        assert canonical == "https://printables.com/model/42"
+
+    def test_hashes_two_identical_captures_the_same(self) -> None:
+        assert provenance.snapshot_sha256(_capture()) == provenance.snapshot_sha256(
+            _capture()
         )
-        assert provenance.snapshot_sha256(first) == provenance.snapshot_sha256(second)
-        assert provenance.identity_key(first) == provenance.identity_key(second)
+
+    def test_derives_one_identity_key_for_identical_captures(self) -> None:
+        assert provenance.identity_key(_capture()) == provenance.identity_key(
+            _capture()
+        )
 
 
 class TestUpsertCapture:
-    def test_capture_is_idempotent_and_override_empty_wins(
+    def test_replaces_the_capture_row_only_when_the_manifest_changes(
         self, db_session: Session
     ) -> None:
         model = _model(db_session)
@@ -174,7 +178,7 @@ class TestUpsertCapture:
             == 2
         )
 
-    def test_stable_source_id_promotes_and_merges_legacy_url_source(
+    def test_promotes_a_legacy_url_source_onto_its_stable_id(
         self,
         db_session: Session,
     ) -> None:
@@ -316,7 +320,7 @@ class TestUpsertCapture:
         assert storage_deletion.process_storage_delete_intents().completed == 1
         assert not backend.exists(obsolete_key)
 
-    def test_live_reuse_trash_restore_and_hard_delete_follow_provenance_lifecycle(
+    def test_provenance_follows_its_models_whole_lifecycle(
         self,
         db_session: Session,
     ) -> None:
@@ -461,7 +465,7 @@ class TestUpsertCapture:
 
 
 class TestAttachExistingArtifact:
-    def test_portable_attach_keeps_existing_capture_and_local_override(
+    def test_portable_attach_leaves_an_existing_capture_alone(
         self,
         db_session: Session,
     ) -> None:
@@ -577,30 +581,29 @@ class TestIdentityKey:
         assert result.link is result.model_id is result.file_id is None
 
 
+def _import_key(capture, *, filename: str = "part.stl", blob: str = "b" * 64) -> str:
+    """`import_key` for one capture, varying only the field a test is about."""
+    return provenance.import_key(
+        capture,
+        source_file_id="file-a",
+        source_filename=filename,
+        blob_sha256=blob,
+    )
+
+
 class TestImportKey:
-    def test_import_key_is_stable_and_distinguishes_blob_bytes(self) -> None:
+    def test_import_key_ignores_a_renamed_source_file(self) -> None:
         capture = _capture()
-        assert provenance.import_key(
-            capture,
-            source_file_id="file-a",
-            source_filename="part.stl",
-            blob_sha256="b" * 64,
-        ) == provenance.import_key(
-            capture,
-            source_file_id="file-a",
-            source_filename="renamed.stl",
-            blob_sha256="b" * 64,
+
+        assert _import_key(capture, filename="part.stl") == _import_key(
+            capture, filename="renamed.stl"
         )
-        assert provenance.import_key(
-            capture,
-            source_file_id="file-a",
-            source_filename="part.stl",
-            blob_sha256="b" * 64,
-        ) != provenance.import_key(
-            capture,
-            source_file_id="file-a",
-            source_filename="part.stl",
-            blob_sha256="c" * 64,
+
+    def test_import_key_changes_with_the_blob_bytes(self) -> None:
+        capture = _capture()
+
+        assert _import_key(capture, blob="b" * 64) != _import_key(
+            capture, blob="c" * 64
         )
 
 
