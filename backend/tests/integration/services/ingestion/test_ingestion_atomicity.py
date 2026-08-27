@@ -174,7 +174,7 @@ class TestReserveNextVersion:
         finally:
             engine.dispose()
 
-    def test_concurrent_artifacts_keep_distinct_versions_and_matching_hashes(
+    def test_concurrent_artifacts_get_distinct_versions_under_contention(
         self, tmp_path: Path, storage
     ) -> None:
         engine = create_engine(
@@ -245,7 +245,7 @@ class TestReserveNextVersion:
 
 
 class TestMetadata:
-    def test_persists_file_and_metadata_together(
+    def test_persists_a_file_row_with_its_metadata_in_one_commit(
         self, db_session: Session, storage, model: Model, tmp_path: Path
     ) -> None:
         file_row = _persist(db_session, model, _staged(tmp_path))
@@ -447,7 +447,7 @@ class TestThumbnail:
             is not None
         )
 
-    def test_thumbnail_collision_preserves_existing_bytes_and_commits_artifact(
+    def test_a_thumbnail_collision_never_overwrites_the_occupying_bytes(
         self,
         db_session: Session,
         storage,
@@ -476,7 +476,7 @@ class TestThumbnail:
         assert Path(file_row.path).exists()
         assert file_row.thumbnail_path is None
 
-    def test_thumbnail_is_written_and_selected(
+    def test_a_new_thumbnail_becomes_the_models_selected_one(
         self, db_session: Session, storage, model: Model, tmp_path: Path
     ) -> None:
         png = (

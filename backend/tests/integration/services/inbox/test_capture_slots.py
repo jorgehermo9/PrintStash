@@ -267,7 +267,7 @@ class TestUploadCaptureSlot:
             )
         assert db_session.exec(select(InboxItem)).all() == []
 
-    def test_capture_slot_replay_survives_fresh_session_and_reassigns_two_leases(
+    def test_a_replayed_capture_slot_reassigns_both_of_its_leases(
         self,
         db_session: Session,
     ) -> None:
@@ -550,7 +550,7 @@ class TestCleanupCaptureSlots:
         assert len(db_session.exec(select(StagingLease)).all()) == 2
         assert db_session.exec(select(StorageDeleteIntent)).all() == []
 
-    def test_delete_intent_processor_retries_backend_failure_and_blocks_mismatch(
+    def test_the_delete_intent_processor_retries_rather_than_losing_bytes(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.db.models import StorageDeleteIntent
@@ -692,7 +692,7 @@ class TestCleanupCaptureSlots:
         assert seam_calls == [write]
         rollback.undo()
 
-    def test_capture_slot_cleanup_rollback_preserves_receipt_lease_and_bytes(
+    def test_a_rolled_back_slot_cleanup_leaves_everything_in_place(
         self,
         db_session: Session,
     ) -> None:

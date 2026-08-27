@@ -94,7 +94,7 @@ def _cursor_page_ids(
 
 
 class TestListItems:
-    def test_list_items_pagination_is_complete_and_unique_with_tied_timestamps(
+    def test_pagination_visits_every_model_once_when_timestamps_tie(
         self, db_session: Session, superuser: User
     ) -> None:
         tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -113,7 +113,7 @@ class TestListItems:
         assert created <= set(seen)
         assert sum(1 for i in seen if i in created) == 25
 
-    def test_list_items_order_is_stable_and_id_tiebroken(
+    def test_ordering_is_deterministic_when_timestamps_tie(
         self, db_session: Session, superuser: User
     ) -> None:
         tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -209,7 +209,7 @@ class TestListItems:
         assert item.print_summary.total_cost == 1.5
         assert item.print_summary.last_printed_at == finished
 
-    def test_cursor_page_name_sort_is_global_complete_and_unique(
+    def test_name_sorted_cursor_pages_cover_every_model_once(
         self, db_session: Session, superuser: User
     ) -> None:
         created: dict[int, str] = {}
@@ -341,7 +341,7 @@ class TestListItems:
 
 
 class TestListTrashed:
-    def test_list_trashed_pagination_is_complete_and_unique(
+    def test_trashed_pagination_visits_every_model_exactly_once(
         self, db_session: Session, superuser: User
     ) -> None:
         tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)

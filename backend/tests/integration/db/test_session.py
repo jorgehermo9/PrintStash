@@ -241,7 +241,7 @@ class TestCreateAsyncEngineForDb:
 
 
 class TestOverrideSessionFactory:
-    def test_get_and_override_session_factory_round_trip(self, tmp_path) -> None:
+    def test_override_session_factory_is_what_get_returns(self, tmp_path) -> None:
         original = get_session_factory()
         engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
         custom = SQLiteSessionFactory(engine)
@@ -341,7 +341,7 @@ class TestEnsureSentinelRows:
 
 
 class TestGetSession:
-    def test_get_session_dependency_yields_and_closes(self, tmp_path) -> None:
+    def test_get_session_closes_the_session_after_yielding(self, tmp_path) -> None:
         engine = create_engine(f"sqlite:///{tmp_path / 'f.sqlite'}")
         SQLModel.metadata.create_all(engine)
         original = get_session_factory()
@@ -360,7 +360,7 @@ class TestGetSession:
 
 class TestGetAsyncSession:
     @pytest.mark.asyncio
-    async def test_get_async_session_dependency_yields_and_closes(
+    async def test_get_async_session_closes_the_session_after_yielding(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
         if not _HAS_AIOSQLITE:

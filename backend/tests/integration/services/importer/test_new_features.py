@@ -85,7 +85,7 @@ class TestCompletionCapture:
         )
         return p.id, f.id, job.id
 
-    def test_completion_captures_filament_and_duration(self, hub, db_session):
+    def test_completion_records_the_measured_print_outcome(self, hub, db_session):
         pid, file_id, job_id = self._setup(db_session)
 
         asyncio.run(
@@ -156,7 +156,7 @@ class TestShareIsolation:
         assert res.status_code == 200, res.text
         return res.json()
 
-    def test_public_view_and_token_only_grants_one_model(
+    def test_a_share_token_grants_only_its_own_model(
         self, client, db_session, auth_headers
     ):
         shared = build_model(db_session, "shared", slug="shared")
@@ -176,7 +176,7 @@ class TestShareIsolation:
         res = client.get(f"/api/v1/share/{token}/files/{other_file.id}/stl")
         assert res.status_code == 404
 
-    def test_garbage_and_revoked_tokens_404(self, client, db_session, auth_headers):
+    def test_an_unusable_share_token_is_a_404(self, client, db_session, auth_headers):
         m = build_model(db_session, "rev", slug="rev")
         created = self._create_share(client, auth_headers, m.id)
         token = created["token"]

@@ -130,7 +130,7 @@ class TestBuildFile:
         # with "three revisions, the newest recommended" leaves two.
         assert first.is_recommended is False
 
-    def test_recommended_and_known_good_is_what_dispatch_looks_for(
+    def test_the_dispatchable_builder_matches_what_dispatch_queries_for(
         self, db_session: Session
     ) -> None:
         model = factories.build_model(db_session)
@@ -392,7 +392,7 @@ class TestBuildAuditFinding:
 
 
 class TestScenarios:
-    def test_a_dispatchable_gcode_artifact_is_recommended_and_known_good(
+    def test_a_dispatchable_gcode_artifact_is_ready_to_dispatch(
         self, db_session: Session
     ) -> None:
         gcode = factories.a_gcode_artifact(db_session, dispatchable=True)
@@ -439,7 +439,7 @@ class TestScenarios:
         assert [job.queue_position for job in jobs] == [0, 1, 2]
         assert all(job.state is PrintJobState.QUEUED for job in jobs)
 
-    def test_a_member_gets_one_reachable_and_one_unreachable_model(
+    def test_the_member_builder_yields_one_model_it_cannot_reach(
         self, db_session: Session
     ) -> None:
         member, allowed, denied = factories.a_member_who_can_see_one_collection(
@@ -483,7 +483,7 @@ class TestStorageOwnership:
         assert db_session.get(File, artifact_id) is None
         assert not Path(key).exists()
 
-    def test_an_unowned_file_is_refused_and_its_bytes_survive(
+    def test_an_unowned_file_is_refused_with_its_bytes_intact(
         self, db_session: Session, local_storage
     ) -> None:
         from app.services.storage_backend import get_backend

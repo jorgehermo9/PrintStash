@@ -28,7 +28,7 @@ class TestFacadeSurface:
     that quietly stops pointing at core is the failure this guards: the name
     still resolves, the code still runs, and it runs a stale copy of the rule."""
 
-    def test_facade_preserves_pure_rule_api_and_adds_connected_providers(self) -> None:
+    def test_the_facade_re_exports_the_pure_rule_api_intact(self) -> None:
         assert r.ModelFile is core_resolvers.ModelFile
         assert r.CollectionMember is core_resolvers.CollectionMember
         printables_url = "https://www.printables.com/model/42-widget"
@@ -106,7 +106,7 @@ class TestResolvePageUrl:
         assert str(exc.value) == "makerworld_extension_required"
 
     @pytest.mark.asyncio
-    async def test_provider_resolution_logs_redact_url_queries_and_exception_text(
+    async def test_provider_resolution_logs_redact_every_secret_they_touch(
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -484,7 +484,7 @@ class TestResolvePrintablesCollection:
         )
 
     @pytest.mark.asyncio
-    async def test_resolve_printables_collection_skips_duplicate_and_missing_ids(
+    async def test_printables_collection_members_are_deduplicated(
         self,
     ) -> None:
         name_payload = {"data": {"collection": {"name": "cool"}}}

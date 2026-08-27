@@ -39,7 +39,7 @@ REMOTE = "demo.gcode"
 
 
 class TestMoonrakerEmulator:
-    def test_mock_enforces_moonraker_http_and_websocket_api_key(self) -> None:
+    def test_the_emulator_requires_the_api_key_on_every_transport(self) -> None:
         app, _state = create_app(api_key="secret")
         running = start_server(app)
         try:
@@ -143,7 +143,7 @@ async def _wait_job_state(
 
 
 class TestStart:
-    def test_send_print_completes_and_decrements_spoolman(
+    def test_a_completed_print_draws_down_the_linked_spool(
         self, db_session: Session
     ) -> None:
         app, state = create_app(total_mm=1000.0, total_seconds=10.0, print_seconds=1.5)
@@ -210,7 +210,7 @@ class TestPause:
 
 
 class TestCancel:
-    def test_cancel_marks_job_cancelled_and_skips_spoolman(
+    def test_a_cancelled_print_leaves_the_spool_untouched(
         self, db_session: Session
     ) -> None:
         """A cancelled print finishes as CANCELLED and writes no usage to Spoolman."""

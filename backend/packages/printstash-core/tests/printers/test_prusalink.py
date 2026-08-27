@@ -351,7 +351,7 @@ class TestServerInfo:
 
 class TestQueryStatus:
     @pytest.mark.asyncio
-    async def test_normalizes_state_progress_temperatures_and_job_id(self) -> None:
+    async def test_normalizes_a_printing_status_into_the_shared_envelope(self) -> None:
         client = make_client(
             responding(
                 **{"/api/v1/status": PRINTING_STATUS, "/api/v1/job": PRINTING_JOB}
@@ -570,7 +570,7 @@ class TestListFiles:
         ]
 
     @pytest.mark.asyncio
-    async def test_reports_size_and_modification_time(self) -> None:
+    async def test_reports_file_size_alongside_modification_time(self) -> None:
         client = make_client(
             responding(
                 **{
@@ -702,7 +702,7 @@ class TestUpload:
         assert sent == [("PUT", "/api/v1/files/local/folder/cube.gcode", b"G28\n")]
 
     @pytest.mark.asyncio
-    async def test_declares_gcode_and_asks_not_to_print_on_arrival(
+    async def test_uploads_gcode_without_asking_the_printer_to_start(
         self, tmp_path: Path
     ) -> None:
         source = tmp_path / "cube.gcode"
@@ -956,7 +956,7 @@ class TestPrusaLinkFactory:
         assert isinstance(client, PrusaLinkClient)
         assert client.config is config
 
-    def test_passes_the_injected_transport_and_timeout_through(self) -> None:
+    def test_passes_injected_transport_settings_through_to_the_client(self) -> None:
         transport = httpx.MockTransport(lambda _request: httpx.Response(204))
 
         client = PrusaLinkFactory(timeout=3.0, transport=transport).build(

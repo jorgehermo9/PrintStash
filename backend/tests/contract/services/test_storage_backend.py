@@ -145,7 +145,7 @@ class TestWriteStream:
 
 
 class TestMove:
-    def test_unchecked_move_is_disabled_and_preserves_source(
+    def test_an_unchecked_move_is_refused_with_the_source_intact(
         self, s3_backend: S3StorageBackend
     ):
         s3_backend.write_bytes(b"move me", "models/move-src.txt")
@@ -241,16 +241,32 @@ class TestDelete:
             s3_backend.delete("models/never-existed.txt")
 
 
+def _seed_two_objects(backend: S3StorageBackend) -> None:
+    """Two objects of known, different sizes under one prefix.
+
+    Different sizes so a `total_size_bytes` that summed the wrong thing — a count,
+    or one object twice — could not accidentally match.
+    """
+    backend.write_bytes(b"a", "models/list-1.txt")
+    backend.write_bytes(b"bb", "models/list-2.txt")
+
+
 class TestListKeys:
-    def test_list_keys_and_walk_keys_and_usage(self, s3_backend: S3StorageBackend):
-        s3_backend.write_bytes(b"a", "models/list-1.txt")
-        s3_backend.write_bytes(b"bb", "models/list-2.txt")
+    def test_list_keys_agrees_with_walk_keys(self, s3_backend: S3StorageBackend):
+        _seed_two_objects(s3_backend)
 
         listed = s3_backend.list_keys(prefix="models/")
         walked = list(s3_backend.walk_keys(prefix="models/"))
+
         assert set(listed) == set(walked) == {"models/list-1.txt", "models/list-2.txt"}
 
+    def test_usage_reports_the_object_count_with_its_total_size(
+        self, s3_backend: S3StorageBackend
+    ):
+        _seed_two_objects(s3_backend)
+
         usage = s3_backend.usage(prefix="models/")
+
         assert usage["backend"] == "s3"
         assert usage["object_count"] == 2
         assert usage["total_size_bytes"] == 3
@@ -301,7 +317,7 @@ class TestHealthProbe:
 
 
 class TestMoveIn:
-    def test_move_in_uploads_and_removes_staged_file(
+    def test_move_in_consumes_the_staged_file(
         self, s3_backend: S3StorageBackend, tmp_path: Path
     ):
         staged = tmp_path / "staged.bin"

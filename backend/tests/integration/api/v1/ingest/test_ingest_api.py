@@ -262,7 +262,7 @@ class TestListJobs:
 
 
 class TestIngestOrca:
-    def test_ingest_orca_gcode_creates_db_blob_and_thumbnail(
+    def test_ingesting_orca_gcode_produces_a_servable_artifact(
         self,
         tmp_path: Path,
         client: TestClient,
@@ -534,7 +534,7 @@ class TestIngestModel:
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "external_libraries_disabled"
 
-    def test_ingest_stl_creates_db_blob_and_thumbnail(
+    def test_ingesting_an_stl_produces_a_servable_artifact(
         self,
         tmp_path: Path,
         client: TestClient,
@@ -909,7 +909,7 @@ class TestIngestModel:
         assert detail.status_code == 200, detail.text
         assert len(detail.json()["files"]) == 2
 
-    def test_trash_can_restore_and_purge_model(
+    def test_a_model_survives_the_whole_trash_lifecycle(
         self,
         tmp_path: Path,
         client: TestClient,

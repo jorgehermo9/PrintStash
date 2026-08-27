@@ -83,13 +83,17 @@ class TestEnsureUniqueSlug:
 
 
 class TestSlugify:
-    def test_slugify_normalises_unicode_punctuation_and_empty_names(self) -> None:
+    def test_slugify_normalises_unicode_and_punctuation(self) -> None:
         assert slugify("  Café Racer — Bracket v2!! ") == "cafe-racer-bracket-v2"
+
+    def test_slugify_falls_back_for_a_name_with_nothing_sluggable(self) -> None:
+        # The fallback matters more than it looks: an empty slug would make the
+        # model unaddressable by URL.
         assert slugify("___") == "model"
 
 
 class TestStreamToPath:
-    def test_stream_to_path_creates_parent_dirs_and_returns_byte_count(
+    def test_stream_to_path_writes_through_missing_parent_directories(
         self,
         tmp_path: Path,
     ) -> None:
@@ -114,7 +118,7 @@ class TestStreamToPath:
         assert written == len(payload)
         assert digest.hexdigest() == hashlib.sha256(payload).hexdigest()
 
-    def test_stream_to_path_stops_and_removes_partial_file_at_limit(
+    def test_stream_to_path_leaves_no_partial_file_when_it_aborts(
         self, tmp_path: Path
     ) -> None:
         class CountingStream(BytesIO):

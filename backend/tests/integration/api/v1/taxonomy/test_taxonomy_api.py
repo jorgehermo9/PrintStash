@@ -282,7 +282,7 @@ class TestMoveCollection:
 
 
 class TestCollectionReadme:
-    def test_set_and_get_readme(
+    def test_a_collection_readme_round_trips(
         self, client: TestClient, db_session: Session, auth_headers: dict[str, str]
     ) -> None:
         col = taxonomy.resolve_or_create_collection(db_session, "Docs")
@@ -358,7 +358,7 @@ class TestCollectionImages:
         assert resp.status_code == 413
         assert resp.json()["detail"] == "upload_too_large"
 
-    def test_upload_and_serve_roundtrip(
+    def test_a_collection_image_round_trips(
         self,
         client: TestClient,
         db_session: Session,
@@ -461,7 +461,7 @@ class TestDeleteCollection:
         assert resp.status_code == 409
         assert resp.json()["detail"] == "collection_has_models"
 
-    def test_delete_recursive_trashes_descendants_and_models(
+    def test_a_recursive_delete_trashes_every_descendant(
         self, client: TestClient, db_session: Session, auth_headers: dict[str, str]
     ) -> None:
         parent = taxonomy.resolve_or_create_collection(db_session, "Tree")

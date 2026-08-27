@@ -397,7 +397,7 @@ class TestAnalyzeMesh:
 
 
 class TestExtractGeometry:
-    def test_extract_geometry_real_load_and_reclaim(
+    def test_extract_geometry_loads_the_mesh_exactly_once(
         self, tmp_path: Path, monkeypatch
     ) -> None:
         p = tmp_path / "cube.stl"
@@ -479,7 +479,7 @@ class TestExtractGeometry:
 
 
 class TestRenderThumbnail:
-    def test_render_thumbnail_respects_cap_and_falls_back_to_embedded(
+    def test_render_thumbnail_falls_back_to_the_embedded_image_over_the_cap(
         self, tmp_path: Path, monkeypatch
     ) -> None:
         monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
@@ -518,7 +518,7 @@ class TestRenderThumbnail:
         )
         assert mesh_processing.render_thumbnail(p) == png
 
-    def test_render_thumbnail_returns_none_when_render_fails_and_no_embedded(
+    def test_render_thumbnail_is_none_when_nothing_can_be_rendered(
         self, tmp_path: Path, monkeypatch
     ) -> None:
         p = tmp_path / "cube.stl"
