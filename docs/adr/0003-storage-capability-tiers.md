@@ -778,12 +778,25 @@ Each provider section states its tier and consequences in the operator's terms,
 generated from the same per-axis table as the boot log and the UI. One source, so
 the docs cannot promise what the probe denies.
 
-### 12. External libraries stay local-filesystem. This is a decision, not a deferral
+### 12. External libraries keep the local-filesystem *transport*; the catalogue reaches them later
 
-`ExternalLibrary` keeps reading a local path with POSIX calls. It does not gain
-storage providers, and the reason is not sequencing — **the argument that
-justifies decisions 1–11 does not transfer, and one that runs the other way
-does.**
+Two questions hide inside "should external libraries get provider support", and
+they have different answers.
+
+**Should they read bytes through a remote transport instead of a mount?** Not on
+the strength of anything in this ADR — the argument that justifies decisions 1–11
+does not transfer, and one that runs the other way does (below).
+
+**Should they be *configured* through the same provider catalogue?** Yes,
+eventually, and for a reason none of the below touches: **coherence.** Once the
+vault can be configured as "Nextcloud, this URL, this app password", an external
+library still demanding `/mnt/nextcloud/PrintStash` leaves one product with two
+ways to name a remote storage location. That is a real cost, it is a
+configuration cost rather than a correctness one, and it is tracked separately in
+the external-library issue rather than settled here.
+
+What follows is the case against the *transport* migration, which stands on its
+own and is what this decision fixes.
 
 #### The safety argument does not transfer
 
@@ -827,12 +840,21 @@ Detect, persist, expose, degrade. The vault does none of the four. **The
 borrowing direction is external-library → vault**, which is precisely what
 decision 1's probe does by promoting `detect_fs_kind` to a shared module.
 
-#### The trigger that would reopen this
+#### What the follow-up is actually for
 
-One specific case, not a vague "if demand appears": an operator who **cannot**
-mount — a managed container platform that forbids FUSE or privileged containers,
-where the files live in a hosted Nextcloud. That is a real constraint and a
-narrow audience. If it arrives, the work is already scoped:
+Given the above, a provider-backed external library is justified by setup
+ergonomics and product coherence, **not** by safety or throughput — and it must
+be scoped and reviewed on those terms. It also has to confront the one place
+where mounting is genuinely superior: real-time watching works over a mount and
+can never work over a transport, so such a library is scheduled-scan-only by
+construction and needs a resting state distinct from "network mount, might work
+someday".
+
+A second, sharper trigger exists for the transport itself: an operator who
+**cannot** mount — a managed container platform forbidding FUSE or privileged
+containers, with files in a hosted Nextcloud. Narrow but real.
+
+Either way the work is pre-scoped:
 
 1. `File.path` becomes a storage key plus a provider reference, changing what
    `path` and `is_external` mean — a migration, not a seam reuse.
@@ -842,9 +864,11 @@ narrow audience. If it arrives, the work is already scoped:
 3. Watch mode becomes permanently unavailable for such a library, so
    `AUTO`/`EVENTS` need a third resting state distinct from "network mount".
 
-Until then the catalogue is defined as storage-role-agnostic so nothing in
-decisions 1–11 assumes the vault is its only consumer, and no decision here needs
-reopening to add a second one.
+The catalogue is therefore defined as **storage-role-agnostic**: nothing in
+decisions 1–11 assumes the vault is its only consumer, and adding a second one
+requires no decision here to be reopened. A first cut should be **read-only,
+write-back excluded**, which removes the write-side tier gate entirely and covers
+the realistic case — a folder the user curates with their own tools.
 
 ## Consequences
 
