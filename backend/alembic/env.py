@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from logging.config import fileConfig
 
 from sqlalchemy import Connection, engine_from_config, pool
@@ -8,8 +9,13 @@ from sqlmodel import SQLModel
 from alembic import context
 from app.core.config import settings
 from app.db import models  # noqa: F401
+from app.db.migration_guards import (
+    dropped_and_added_columns,
+    refuse_possible_renames,
+)
 from app.db.url import normalize_database_url
 
+logger = logging.getLogger("alembic.env")
 config = context.config
 default_url = "sqlite:///./dev.sqlite"
 if config.get_main_option("sqlalchemy.url") == default_url:
@@ -25,6 +31,33 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = SQLModel.metadata
+
+
+def _process_revision_directives(context_, revision, directives) -> None:
+    """Guard what autogenerate is about to write.
+
+    Two things, both of which would otherwise land on a reviewer's judgement:
+
+    * An **empty** migration is not written at all. `--autogenerate` with nothing to do
+      produces a file whose `upgrade()` is `pass`, and a chain accumulating those makes
+      every later `alembic history` harder to read for no benefit.
+    * A **possible rename** stops the run. See `_refuse_possible_renames`.
+    """
+    script = directives[0]
+    if script.upgrade_ops.is_empty():
+        directives[:] = []
+        logger.info("migrate: models and database already agree — no migration written")
+        return
+    acknowledged = {
+        entry.strip()
+        for entry in (
+            context.get_x_argument(as_dictionary=True).get("allow_column_drop") or ""
+        ).split(",")
+        if entry.strip()
+    }
+    refuse_possible_renames(
+        dropped_and_added_columns(script.upgrade_ops), allowed=acknowledged
+    )
 
 
 def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool:
@@ -59,6 +92,7 @@ def _configure_context(
         "compare_type": True,
         "compare_server_default": True,
         "render_item": _render_item,
+        "process_revision_directives": _process_revision_directives,
         "render_as_batch": (
             connection.dialect.name == "sqlite"
             if connection

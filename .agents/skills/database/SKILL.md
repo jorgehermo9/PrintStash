@@ -75,13 +75,40 @@ and the blind spots have a shape worth memorising.
 ('remove_column', 'things', Column('old_name', VARCHAR(64)))
 ```
 
-Ship that and every value in the column is gone. There is no way for a differ to know
-the two are the same column, so **an `add_column` and a `remove_column` on the same
-table in the same migration is the one pattern to stop and stare at.** If it is a
-rename, replace both with `batch_op.alter_column("old_name", new_column_name="new_name")`
-— which is editing the generated file, not authoring DDL.
+Ship that and every value in the column is gone.
 
-The same applies to a table rename, and to splitting one column into two.
+**No setting fixes this, and it is not an Alembic defect.** Autogenerate compares two
+*states*: the database's schema and the models' metadata. Renaming `old_name` to
+`new_name`, and dropping `old_name` while adding an unrelated `new_name`, leave the
+database in the same place — so the differ produces byte-identical output for both.
+`tests/integration/db/migrations/test_autogenerate_guards.py` asserts that equality,
+because it is the reason the rest of this section exists. The distinguishing fact is
+what you meant, and that was never written anywhere a differ can read it. Django
+resolves the same ambiguity by *asking*, interactively; Alembic is non-interactive by
+design.
+
+**So `env.py` refuses to write the file instead.** `process_revision_directives` stops
+the run when a migration would drop and add columns in the same table:
+
+```
+this migration would drop tags.name and add tags.label — which is what a *rename*
+looks like to a schema differ, and shipping it as a drop destroys the column's data.
+  If it is a rename: replace both operations with
+  `batch_op.alter_column("name", new_column_name="label")`.
+  If it really is a drop: re-run with `-x allow_column_drop=tags.name`.
+```
+
+That is the Django prompt in non-interactive form: the intent has to be stated, once,
+by the person who has it. A genuine drop is acknowledged explicitly and recorded in the
+shell history that produced the migration.
+
+The same reasoning applies to a table rename and to splitting one column into two —
+neither is visible to a state comparison either, and neither is guarded, so they are
+still yours to notice.
+
+The same hook also **declines to write an empty migration**. `--autogenerate` with
+nothing to do otherwise produces a file whose `upgrade()` is `pass`, and a chain
+collecting those makes every later `alembic history` harder to read for no benefit.
 
 ### What each operation means, and the trap in it
 
