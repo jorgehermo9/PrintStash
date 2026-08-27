@@ -65,3 +65,16 @@ class TestSettings:
     ) -> None:
         with pytest.raises(ValidationError):
             FrozenSettings(_env_file=None, **{field: value})
+
+    def test_never_renders_the_provider_client_credentials(self) -> None:
+        configured = FrozenSettings(
+            _env_file=None, mmf_client_id="client-id", mmf_client_secret="client-secret"
+        )
+
+        rendered = repr(configured)
+
+        # A settings object is repr'd into logs, error pages and crash reports.
+        # Both halves of an OAuth client credential are secret: the id alone
+        # identifies the deployment's app registration.
+        assert "client-id" not in rendered
+        assert "client-secret" not in rendered

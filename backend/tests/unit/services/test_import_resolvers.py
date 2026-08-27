@@ -20,53 +20,56 @@ from app.services.capture_provider_transport import ProviderTransportError
 from app.services.importer import ImportError_
 
 
-def test_facade_preserves_pure_rule_api_and_adds_connected_providers() -> None:
-    assert r.ModelFile is core_resolvers.ModelFile
-    assert r.CollectionMember is core_resolvers.CollectionMember
-    printables_url = "https://www.printables.com/model/42-widget"
-    assert r.classify_page(printables_url) == core_resolvers.classify_page(
-        printables_url
-    )
-    assert (
-        r.classify_page("https://www.myminifactory.com/object/123") == "myminifactory"
-    )
-    assert r.classify_page("https://cults3d.com/en/3d-model/art/widget") == "cults"
-    assert r.classify_collection is core_resolvers.classify_collection
-    assert r._printables_id is core_resolvers.printables_id
-    assert r._makerworld_id is core_resolvers.makerworld_id
-    assert r._thingiverse_id is core_resolvers.thingiverse_id
-    assert r._collection_id is core_resolvers.collection_id
-    assert r._looks_like_download is core_resolvers.looks_like_download
-    assert r._first_download_url is core_resolvers.first_download_url
-    assert r._looks_like_challenge is core_resolvers.looks_like_challenge
-    assert r._extract_next_data is core_resolvers.extract_next_data
-    assert r._pick_printables_pack is core_resolvers.pick_printables_pack
-    assert r._printables_link_from_output is core_resolvers.printables_link_from_output
-    assert (
-        r._printables_links_from_output is core_resolvers.printables_links_from_output
-    )
-    assert r._printables_files_from_print is core_resolvers.printables_files_from_print
-    assert (
-        r._makerworld_collection_members is core_resolvers.makerworld_collection_members
-    )
-    assert r.parse_printables_capture is core_resolvers.parse_printables_capture
+class TestFacadeSurface:
+    """The app module still re-exports the pure rules `printstash-core` owns.
+
+    Every rule helper moved to core, and the app module keeps aliases so the
+    hundreds of existing call sites and tests did not have to change. An alias
+    that quietly stops pointing at core is the failure this guards: the name
+    still resolves, the code still runs, and it runs a stale copy of the rule."""
+
+    def test_facade_preserves_pure_rule_api_and_adds_connected_providers(self) -> None:
+        assert r.ModelFile is core_resolvers.ModelFile
+        assert r.CollectionMember is core_resolvers.CollectionMember
+        printables_url = "https://www.printables.com/model/42-widget"
+        assert r.classify_page(printables_url) == core_resolvers.classify_page(
+            printables_url
+        )
+        assert (
+            r.classify_page("https://www.myminifactory.com/object/123")
+            == "myminifactory"
+        )
+        assert r.classify_page("https://cults3d.com/en/3d-model/art/widget") == "cults"
+        assert r.classify_collection is core_resolvers.classify_collection
+        assert r._printables_id is core_resolvers.printables_id
+        assert r._makerworld_id is core_resolvers.makerworld_id
+        assert r._thingiverse_id is core_resolvers.thingiverse_id
+        assert r._collection_id is core_resolvers.collection_id
+        assert r._looks_like_download is core_resolvers.looks_like_download
+        assert r._first_download_url is core_resolvers.first_download_url
+        assert r._looks_like_challenge is core_resolvers.looks_like_challenge
+        assert r._extract_next_data is core_resolvers.extract_next_data
+        assert r._pick_printables_pack is core_resolvers.pick_printables_pack
+        assert (
+            r._printables_link_from_output is core_resolvers.printables_link_from_output
+        )
+        assert (
+            r._printables_links_from_output
+            is core_resolvers.printables_links_from_output
+        )
+        assert (
+            r._printables_files_from_print is core_resolvers.printables_files_from_print
+        )
+        assert (
+            r._makerworld_collection_members
+            is core_resolvers.makerworld_collection_members
+        )
+        assert r.parse_printables_capture is core_resolvers.parse_printables_capture
 
 
 # --------------------------------------------------------------------------- #
 # Host classification + id extraction (pure functions)
 # --------------------------------------------------------------------------- #
-
-
-def test_id_extractors() -> None:
-    assert (
-        r._printables_id("https://www.printables.com/model/3161-3d-benchy/files")
-        == "3161"
-    )
-    assert r._makerworld_id("https://makerworld.com/en/models/1123776-x") == "1123776"
-    assert r._thingiverse_id("https://www.thingiverse.com/thing:763622") == "763622"
-    assert (
-        r._thingiverse_id("https://www.thingiverse.com/things/763622/files") == "763622"
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -77,59 +80,108 @@ def test_id_extractors() -> None:
 # --------------------------------------------------------------------------- #
 # resolve_page_url dispatch
 # --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_resolve_unknown_host_returns_none() -> None:
-    # No network: unknown hosts short-circuit before any resolver runs.
-    assert await r.resolve_page_url("https://example.com/foo.zip") is None
+class TestResolvePageUrl:
+    @pytest.mark.asyncio
+    async def test_resolve_unknown_host_returns_none(self) -> None:
+        # No network: unknown hosts short-circuit before any resolver runs.
+        assert await r.resolve_page_url("https://example.com/foo.zip") is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_thingiverse_requires_browser_assisted_manual_capture(
+        self,
+    ) -> None:
+        url = "https://www.thingiverse.com/thing:763622/files"
+        with pytest.raises(ImportError_) as exc:
+            await r.resolve_page_url(url)
+
+        assert str(exc.value) == "thingiverse_extension_required"
+
+    @pytest.mark.asyncio
+    async def test_resolve_makerworld_requires_browser_extension(self) -> None:
+        with pytest.raises(ImportError_) as exc:
+            await r.resolve_page_url(
+                "https://makerworld.com/en/models/1123776-x",
+                makerworld_cookie="legacy-cookie-must-not-be-used",
+            )
+        assert str(exc.value) == "makerworld_extension_required"
+
+    @pytest.mark.asyncio
+    async def test_provider_resolution_logs_redact_url_queries_and_exception_text(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with patch.object(
+            r,
+            "_resolve_printables",
+            AsyncMock(side_effect=RuntimeError("signed token=upstream-secret")),
+        ):
+            with caplog.at_level(
+                logging.WARNING, logger="app.services.import_resolvers"
+            ):
+                with pytest.raises(ImportError_, match="printables_resolve_failed"):
+                    await r.resolve_page_url(
+                        "https://www.printables.com/model/3161-benchy?token=query-secret"
+                    )
+
+        assert "query-secret" not in caplog.text
+        assert "upstream-secret" not in caplog.text
+        assert "RuntimeError" in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_resolve_thingiverse_requires_browser_assisted_manual_capture() -> None:
-    url = "https://www.thingiverse.com/thing:763622/files"
-    with pytest.raises(ImportError_) as exc:
-        await r.resolve_page_url(url)
-
-    assert str(exc.value) == "thingiverse_extension_required"
-
-
-@pytest.mark.asyncio
-async def test_provider_resolution_logs_redact_url_queries_and_exception_text(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    with patch.object(
-        r,
-        "_resolve_printables",
-        AsyncMock(side_effect=RuntimeError("signed token=upstream-secret")),
-    ):
-        with caplog.at_level(logging.WARNING, logger="app.services.import_resolvers"):
-            with pytest.raises(ImportError_, match="printables_resolve_failed"):
-                await r.resolve_page_url(
-                    "https://www.printables.com/model/3161-benchy?token=query-secret"
-                )
-
-    assert "query-secret" not in caplog.text
-    assert "upstream-secret" not in caplog.text
-    assert "RuntimeError" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_resolve_makerworld_requires_browser_extension() -> None:
-    with pytest.raises(ImportError_) as exc:
-        await r.resolve_page_url(
-            "https://makerworld.com/en/models/1123776-x",
-            makerworld_cookie="legacy-cookie-must-not-be-used",
+class TestResolveCollectionUrl:
+    @pytest.mark.asyncio
+    async def test_resolve_collection_unknown_url_returns_none(self) -> None:
+        assert (
+            await r.resolve_collection_url("https://example.com/collections/9") is None
         )
-    assert str(exc.value) == "makerworld_extension_required"
 
+    @pytest.mark.asyncio
+    async def test_resolve_makerworld_collection_requires_browser_extension(
+        self,
+    ) -> None:
+        with pytest.raises(ImportError_) as exc:
+            await r.resolve_collection_url(
+                "https://makerworld.com/en/collections/5-x",
+                makerworld_cookie="legacy-cookie-must-not-be-used",
+            )
+        assert str(exc.value) == "makerworld_extension_required"
 
-@pytest.mark.asyncio
-async def test_resolve_makerworld_collection_requires_browser_extension() -> None:
-    with pytest.raises(ImportError_) as exc:
-        await r.resolve_collection_url(
-            "https://makerworld.com/en/collections/5-x",
-            makerworld_cookie="legacy-cookie-must-not-be-used",
-        )
-    assert str(exc.value) == "makerworld_extension_required"
+    @pytest.mark.asyncio
+    async def test_resolve_collection_reraises_import_error_unwrapped(self) -> None:
+        with patch.object(
+            r,
+            "_resolve_printables_collection",
+            AsyncMock(side_effect=ImportError_("printables_blocked")),
+        ):
+            with pytest.raises(ImportError_) as exc:
+                await r.resolve_collection_url("https://printables.com/collections/9")
+        assert str(exc.value) == "printables_blocked"
+
+    @pytest.mark.asyncio
+    async def test_resolve_collection_wraps_unexpected_errors(self) -> None:
+        with patch.object(
+            r,
+            "_resolve_printables_collection",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            with pytest.raises(ImportError_) as exc:
+                await r.resolve_collection_url("https://printables.com/collections/9")
+        assert str(exc.value) == "printables_collection_resolve_failed"
+
+    @pytest.mark.asyncio
+    async def test_resolve_collection_empty_raises_host_error(self) -> None:
+        name_payload = {"data": {"collection": {"name": "empty"}}}
+        members_payload = {
+            "data": {"moreCollectionModels": {"cursor": "", "items": []}}
+        }
+        with patch.object(
+            r,
+            "_printables_graphql",
+            AsyncMock(side_effect=[name_payload, members_payload]),
+        ):
+            with pytest.raises(ImportError_) as exc:
+                await r.resolve_collection_url("https://printables.com/collections/9")
+        assert str(exc.value) == "printables_collection_resolve_failed"
 
 
 # --------------------------------------------------------------------------- #
@@ -170,83 +222,6 @@ _SPRINGY_CAT_META = {
 # --------------------------------------------------------------------------- #
 # Collection resolution
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.asyncio
-async def test_resolve_collection_unknown_url_returns_none() -> None:
-    assert await r.resolve_collection_url("https://example.com/collections/9") is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_collection_reraises_import_error_unwrapped() -> None:
-    with patch.object(
-        r,
-        "_resolve_printables_collection",
-        AsyncMock(side_effect=ImportError_("printables_blocked")),
-    ):
-        with pytest.raises(ImportError_) as exc:
-            await r.resolve_collection_url("https://printables.com/collections/9")
-    assert str(exc.value) == "printables_blocked"
-
-
-@pytest.mark.asyncio
-async def test_resolve_collection_wraps_unexpected_errors() -> None:
-    with patch.object(
-        r, "_resolve_printables_collection", AsyncMock(side_effect=RuntimeError("boom"))
-    ):
-        with pytest.raises(ImportError_) as exc:
-            await r.resolve_collection_url("https://printables.com/collections/9")
-    assert str(exc.value) == "printables_collection_resolve_failed"
-
-
-class TestClassifyPage:
-    @pytest.mark.parametrize(
-        "url, expected",
-        [
-            ("https://www.printables.com/model/3161-3d-benchy", "printables"),
-            ("https://www.printables.com/model/3161-3d-benchy/files", "printables"),
-            ("https://printables.com/model/3161", "printables"),
-            (
-                "https://makerworld.com/en/models/1123776-original-3d-benchy",
-                "makerworld",
-            ),
-            ("https://makerworld.com/es/models/1123776?from=search#x", "makerworld"),
-            ("https://www.thingiverse.com/thing:763622", "thingiverse"),
-            ("https://www.thingiverse.com/thing:763622/files", "thingiverse"),
-            # Direct blob URLs are not pages — different host / no model id.
-            ("https://files.printables.com/abc/3dbenchy.stl", None),
-            ("https://example.com/model.zip", None),
-            # Known host but no extractable id -> treated as direct, not a page.
-            ("https://www.printables.com/social/123-user", None),
-        ],
-    )
-    def test_classify_page(self, url: str, expected) -> None:
-        assert r.classify_page(url) == expected
-
-    @pytest.mark.parametrize(
-        "url",
-        [
-            # Regression: endswith("makerworld.com") used to classify look-alike
-            # hosts as MakerWorld pages.
-            "https://evilmakerworld.com/en/models/123",
-            "https://makerworld.com.attacker.test/models/123",
-            "https://notmakerworld.com/models/123",
-        ],
-    )
-    def test_classify_page_rejects_lookalike_makerworld_hosts(self, url: str) -> None:
-        assert r.classify_page(url) is None
-
-    def test_classify_page_accepts_makerworld_subdomain(self) -> None:
-        assert (
-            r.classify_page("https://www.makerworld.com/en/models/123") == "makerworld"
-        )
-
-    def test_classify_page_is_case_insensitive_on_host(self) -> None:
-        assert r.classify_page("https://WWW.PRINTABLES.COM/model/3161") == "printables"
-
-    def test_classify_page_handles_garbage_input(self) -> None:
-        assert r.classify_page("not a url") is None
-        assert r.classify_page("") is None
 
 
 class TestPrintablesGraphql:
@@ -762,202 +737,3 @@ class TestResolveSelectedAssets:
             ("first", "https://files.test/first.stl"),
             ("second", "https://files.test/second.stl"),
         ]
-
-
-class TestMakerworldCollectionMembers:
-    def test_makerworld_collection_members_handles_malformed_next_data(self) -> None:
-        assert r._makerworld_collection_members({}) == []
-        assert r._makerworld_collection_members({"props": None}) == []
-
-    def test_makerworld_collection_members_skips_non_dict_and_duplicate_entries(
-        self,
-    ) -> None:
-        next_data = {
-            "props": {
-                "pageProps": {
-                    "designs": [
-                        "not-a-dict",
-                        {"id": 1, "title": "A"},
-                        {"id": 1, "title": "A dup"},
-                    ]
-                }
-            }
-        }
-        members = r._makerworld_collection_members(next_data)
-        assert [m.source_id for m in members] == ["1"]
-
-
-class TestFirstDownloadUrl:
-    def test_first_download_url_prefers_keyed_link(self) -> None:
-        data = {"a": {"nested": {"downloadUrl": "https://cdn.test/x.zip"}}, "b": [1, 2]}
-        assert r._first_download_url(data) == "https://cdn.test/x.zip"
-
-    def test_first_download_url_falls_back_to_model_like_string(self) -> None:
-        data = {"meta": "hello", "links": ["https://cdn.test/model.3mf", "not-a-url"]}
-        assert r._first_download_url(data) == "https://cdn.test/model.3mf"
-
-    def test_first_download_url_none_when_nothing_matches(self) -> None:
-        assert (
-            r._first_download_url(
-                {"meta": "hello", "n": 3, "page": "https://x.test/about"}
-            )
-            is None
-        )
-
-    def test_first_download_url_keyed_link_beats_deep_fallback(self) -> None:
-        # A keyed url anywhere wins over a model-looking bare string.
-        data = {
-            "files": ["https://cdn.test/a.stl"],
-            "meta": {"url": "https://cdn.test/real.zip"},
-        }
-        assert r._first_download_url(data) == "https://cdn.test/real.zip"
-
-    def test_first_download_url_ignores_non_http_keyed_values(self) -> None:
-        # A relative or non-http "url" must not be returned as a download link.
-        data = {"url": "/local/path.zip", "links": ["https://cdn.test/model.stl"]}
-        assert r._first_download_url(data) == "https://cdn.test/model.stl"
-
-
-class TestPickPrintablesPack:
-    def test_pick_printables_pack_prefers_model_files(self) -> None:
-        packs = [{"id": 5, "fileType": "OTHER"}, {"id": 9, "fileType": "MODEL_FILES"}]
-        assert r._pick_printables_pack(packs) == "9"
-        # Falls back to the first pack with an id when there's no MODEL_FILES pack.
-        assert r._pick_printables_pack([{"id": 7, "fileType": "GCODE"}]) == "7"
-        assert r._pick_printables_pack([]) is None
-
-    def test_pick_printables_pack_non_list_returns_none(self) -> None:
-        assert r._pick_printables_pack(None) is None
-        assert r._pick_printables_pack("nope") is None
-
-
-class TestLooksLikeDownload:
-    @pytest.mark.parametrize(
-        "url, expected",
-        [
-            ("https://cdn.test/model.stl", True),
-            ("https://cdn.test/model.3MF", True),  # case-insensitive ext
-            ("https://cdn.test/get?file=model.stl", False),  # ext only in query
-            ("https://cdn.test/api/download/123", True),  # /download path
-            ("https://cdn.test/image.png", False),
-            ("https://cdn.test/about", False),
-        ],
-    )
-    def test_looks_like_download(self, url: str, expected: bool) -> None:
-        assert r._looks_like_download(url) is expected
-
-
-class TestExtractNextData:
-    def test_extract_next_data_round_trips(self) -> None:
-        html = '<html><script id="__NEXT_DATA__" type="application/json">{"props":{"x":1}}</script></html>'
-        assert r._extract_next_data(html) == {"props": {"x": 1}}
-        assert r._extract_next_data("<html>no next data</html>") is None
-
-    def test_extract_next_data_invalid_json_returns_none(self) -> None:
-        html = '<script id="__NEXT_DATA__" type="application/json">{not json}</script>'
-        assert r._extract_next_data(html) is None
-
-
-class TestPrintablesLinkFromOutput:
-    def test_printables_link_from_output_falls_back_to_files_list(self) -> None:
-        payload = {
-            "data": {
-                "getDownloadLink": {
-                    "output": {
-                        "files": [{"link": "https://files.printables.test/a.stl"}]
-                    }
-                }
-            }
-        }
-        assert (
-            r._printables_link_from_output(payload)
-            == "https://files.printables.test/a.stl"
-        )
-
-
-class TestPrintablesLinksFromOutput:
-    def test_printables_links_from_output_falls_back_to_single_link(self) -> None:
-        payload = {
-            "data": {
-                "getDownloadLink": {
-                    "output": {"link": "https://files.printables.test/x.zip"}
-                }
-            }
-        }
-        assert r._printables_links_from_output(payload) == [
-            "https://files.printables.test/x.zip"
-        ]
-        assert r._printables_links_from_output({}) == []
-
-
-class TestRaises:
-    @pytest.mark.asyncio
-    async def test_resolve_collection_empty_raises_host_error(self) -> None:
-        name_payload = {"data": {"collection": {"name": "empty"}}}
-        members_payload = {
-            "data": {"moreCollectionModels": {"cursor": "", "items": []}}
-        }
-        with patch.object(
-            r,
-            "_printables_graphql",
-            AsyncMock(side_effect=[name_payload, members_payload]),
-        ):
-            with pytest.raises(ImportError_) as exc:
-                await r.resolve_collection_url("https://printables.com/collections/9")
-        assert str(exc.value) == "printables_collection_resolve_failed"
-
-
-class TestLooksLikeChallenge:
-    def test_looks_like_challenge_detects_interstitial(self) -> None:
-        html = "<html><head><title>Just a moment...</title></head><body><div class='cf-chl'></div></body>"
-        assert r._looks_like_challenge(html) is True
-
-    def test_looks_like_challenge_false_when_next_data_present(self) -> None:
-        # A page that ships __NEXT_DATA__ is real content, even if it name-drops a marker.
-        assert (
-            r._looks_like_challenge(
-                '<script id="__NEXT_DATA__">{}</script> just a moment'
-            )
-            is False
-        )
-
-    def test_looks_like_challenge_false_for_plain_page(self) -> None:
-        assert r._looks_like_challenge("<html><body>hello world</body></html>") is False
-
-
-class TestClassifyCollection:
-    @pytest.mark.parametrize(
-        "url, expected",
-        [
-            (
-                "https://www.printables.com/@JonasHansen_1131321/collections/3525050",
-                "printables",
-            ),
-            ("https://printables.com/collections/3525050", "printables"),
-            (
-                "https://makerworld.com/es/collections/5600774-h2d-sample-projects",
-                "makerworld",
-            ),
-            ("https://makerworld.com/en/collections/5600774", "makerworld"),
-            # A model page is not a collection.
-            ("https://www.printables.com/model/1660232-springy-cat", None),
-            ("https://example.com/collections/5", None),
-            # Look-alike host must not classify as MakerWorld.
-            ("https://evilmakerworld.com/collections/5600774", None),
-        ],
-    )
-    def test_classify_collection(self, url: str, expected) -> None:
-        assert r.classify_collection(url) == expected
-
-
-class TestCollectionId:
-    def test_collection_id_extractor(self) -> None:
-        assert (
-            r._collection_id("https://printables.com/@u/collections/3525050")
-            == "3525050"
-        )
-        assert (
-            r._collection_id("https://makerworld.com/es/collections/5600774-slug")
-            == "5600774"
-        )
-        assert r._collection_id("https://printables.com/model/1660232") is None

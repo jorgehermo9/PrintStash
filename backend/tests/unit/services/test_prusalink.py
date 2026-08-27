@@ -1,393 +1,84 @@
-"""Reading a PrusaLink printer across two firmware generations and two auth modes.
+"""The legacy constructor still in front of the extracted PrusaLink client.
 
-PrusaLink is the provider with the most shapes to accommodate, and every one of
-them is a real printer somebody owns:
+The client moved into `printstash-core` and is tested there against a mock
+transport (`printers/test_prusalink.py`) and in this repo's contract tier against
+the real emulator. What remains here is the constructor callers had before the
+extraction — and for PrusaLink that translation carries more than a URL.
 
-**Two status shapes.** The older flat form and the official v1 form, which nests
-the job and reports temperatures separately. Both normalise to the same snapshot,
-because the UI cannot ask the user which firmware they have.
-
-**Two auth modes.** An API key, and HTTP digest — which requires answering a
-challenge rather than sending a header. A printer configured for digest with only
-an API key set is a printer that fails at the first request, which is why the
-mode is part of the configuration contract rather than something inferred.
-
-The progress rows are there because a low percentage must not be misread as
-complete. That mistake ends the job record while the print is still running, and
-the queue then dispatches onto a busy machine.
-
-Failures carry stable codes for the same reason as every other provider: a caller
-branches on them, and an auth failure in particular must trigger exactly one
-credential prompt rather than a retry loop.
+PrusaLink speaks two authentication schemes: an API key header, and HTTP digest
+with a username and password. The legacy signature takes `auth_mode` plus four
+optional credential fields and has to funnel them into the core config that
+decides which scheme the transport uses. Getting that wrong does not fail loudly;
+it produces a client that authenticates the wrong way and reports every printer
+as unreachable, which reads as a network problem rather than a wiring bug.
 """
 
-import asyncio
-from pathlib import Path
+from __future__ import annotations
 
 import httpx
 import pytest
+from printstash_core.printers.prusalink import PrusaLinkClient as CorePrusaLinkClient
+from printstash_core.printers.prusalink import PrusaLinkError as CorePrusaLinkError
 
 from app.services.prusalink import PrusaLinkClient, PrusaLinkError
 
+API_KEY = "key-123"
+USERNAME = "maker"
+PASSWORD = "hunter2"
 
-def _client(handler, *, auth_mode="api_key") -> PrusaLinkClient:
+
+def _client(
+    auth_mode: str, seen: list[httpx.Request], **credentials: str
+) -> PrusaLinkClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"printer": {"state": "IDLE"}})
+
     return PrusaLinkClient(
-        "http://prusa.local",
+        "http://printer.local",
         auth_mode=auth_mode,
-        username="maker",
-        password="secret",
-        api_key="key-123",
         transport=httpx.MockTransport(handler),
+        **credentials,
     )
 
 
-@pytest.mark.asyncio
-async def test_api_key_status_is_normalized() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["X-Api-Key"] == "key-123"
-        if request.url.path == "/api/v1/status":
-            return httpx.Response(
-                200,
-                json={
-                    "printer": {
-                        "state": "PRINTING",
-                        "telemetry": {
-                            "temp-bed": {"actual": 59.5, "target": 60},
-                            "temp-nozzle": {"actual": 214, "target": 215},
-                        },
-                    }
-                },
-            )
-        return httpx.Response(
-            200,
-            json={
-                "id": 42,
-                "state": "PRINTING",
-                "file": {"name": "cube.gcode"},
-                "progress": 25,
-                "time_printing": 120,
-                "time_remaining": 360,
-            },
+class TestPrusaLinkClient:
+    def test_builds_a_core_client_from_the_legacy_arguments(self) -> None:
+        client = PrusaLinkClient(
+            "http://printer.local", auth_mode="api_key", api_key=API_KEY
         )
 
-    result = await _client(handler).query_status()
-    status = result["result"]["status"]
-    assert status["print_stats"] == {
-        "state": "printing",
-        "filename": "cube.gcode",
-        "message": "",
-        "print_duration": 120,
-    }
-    assert status["virtual_sdcard"]["progress"] == 0.25
-    assert status["heater_bed"]["temperature"] == 59.5
-    assert status["extruder"]["target"] == 215
-    assert status["prusalink"]["job_id"] == 42
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("raw_progress", "expected"), [(1, 0.01), (0.5, 0.005)])
-async def test_low_progress_is_not_misread_as_complete(
-    raw_progress: float, expected: float
-) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v1/status":
-            return httpx.Response(200, json={"printer": {"state": "PRINTING"}})
-        return httpx.Response(
-            200,
-            json={"id": 1, "state": "PRINTING", "progress": raw_progress},
-        )
-
-    result = await _client(handler).query_status()
-    assert result["result"]["status"]["virtual_sdcard"]["progress"] == expected
-
-
-def test_official_v1_status_shape_normalizes_embedded_job_and_temperatures() -> None:
-    normalized = PrusaLinkClient._normalize_status(
-        {
-            "printer": {
-                "state": "PRINTING",
-                "temp_bed": 59.5,
-                "target_bed": 60.0,
-                "temp_nozzle": 214.9,
-                "target_nozzle": 215.0,
-            },
-            "job": {"id": 42, "progress": 25.0, "time_printing": 120},
-        },
-        {},
-    )
-
-    assert normalized["print_stats"]["state"] == "printing"
-    assert normalized["virtual_sdcard"]["progress"] == 0.25
-    assert normalized["heater_bed"] == {"temperature": 59.5, "target": 60.0}
-    assert normalized["extruder"] == {"temperature": 214.9, "target": 215.0}
-    assert normalized["prusalink"]["job_id"] == 42
-
-
-@pytest.mark.asyncio
-async def test_digest_auth_challenge_is_answered() -> None:
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if "authorization" not in request.headers:
-            return httpx.Response(
-                401,
-                headers={
-                    "WWW-Authenticate": 'Digest realm="prusalink", nonce="abc", qop="auth", algorithm=MD5'
-                },
-            )
-        return httpx.Response(200, json={"printer": {"state": "IDLE"}})
-
-    result = await _client(handler, auth_mode="digest").info()
-    assert result["result"]["provider"] == "prusalink"
-    assert len(requests) == 2
-    assert requests[1].headers["Authorization"].startswith("Digest ")
-
-
-@pytest.mark.asyncio
-async def test_file_operations_and_controls(tmp_path: Path) -> None:
-    seen: list[tuple[str, str]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((request.method, request.url.path))
-        if request.url.path == "/api/v1/files/local/" and request.method == "GET":
-            return httpx.Response(
-                200,
-                json={
-                    "name": "local",
-                    "type": "FOLDER",
-                    "children": [
-                        {"name": "cube.gcode", "type": "PRINT_FILE", "size": 5}
-                    ],
-                },
-            )
-        if request.url.path == "/api/v1/job" and request.method == "GET":
-            return httpx.Response(200, json={"id": 7, "state": "PAUSED"})
-        return httpx.Response(204)
-
-    source = tmp_path / "cube.gcode"
-    source.write_text("G28\n")
-    client = _client(handler)
-    assert (await client.list_files())[0]["filename"] == "cube.gcode"
-    await client.upload(source, "folder/cube.gcode")
-    await client.start("folder/cube.gcode")
-    await client.delete_file("folder/cube.gcode")
-    await client.pause()
-    await client.resume()
-    await client.cancel()
-    assert ("PUT", "/api/v1/files/local/folder/cube.gcode") in seen
-    assert ("GET", "/api/v1/files/local/") in seen
-    assert ("POST", "/api/v1/files/local/folder/cube.gcode") in seen
-    assert ("PUT", "/api/v1/job/7/pause") in seen
-    assert ("PUT", "/api/v1/job/7/resume") in seen
-    assert ("DELETE", "/api/v1/job/7") in seen
-
-
-@pytest.mark.asyncio
-async def test_auth_failure_has_stable_code() -> None:
-    client = _client(lambda request: httpx.Response(403))
-    with pytest.raises(PrusaLinkError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_authentication_failed"
-
-
-@pytest.mark.asyncio
-async def test_idle_printer_tolerates_missing_job() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v1/job":
-            return httpx.Response(404)
-        return httpx.Response(200, json={"printer": {"state": "IDLE"}})
-
-    result = await _client(handler).query_status()
-    assert result["result"]["status"]["print_stats"]["state"] == "standby"
-
-
-@pytest.mark.asyncio
-async def test_remote_path_traversal_rejected(tmp_path: Path) -> None:
-    source = tmp_path / "cube.gcode"
-    source.write_text("G28\n")
-    client = _client(lambda request: httpx.Response(204))
-    with pytest.raises(PrusaLinkError) as exc:
-        await client.upload(source, "../cube.gcode")
-    assert exc.value.code == "provider_error"
-
-
-@pytest.mark.asyncio
-async def test_timeout_maps_to_provider_timeout() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("timed out", request=request)
-
-    client = _client(handler)
-    with pytest.raises(PrusaLinkError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_timeout"
-
-
-@pytest.mark.asyncio
-async def test_transport_error_wraps_httpx_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("refused", request=request)
-
-    client = _client(handler)
-    with pytest.raises(PrusaLinkError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_transport_error"
-
-
-@pytest.mark.asyncio
-async def test_generic_http_error_maps_to_transport_error() -> None:
-    client = _client(lambda request: httpx.Response(500))
-    with pytest.raises(PrusaLinkError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_transport_error"
-    assert "prusalink_http_500" in str(exc.value)
-
-
-class TestNormalizeStatus:
-    def test_normalize_status_unwraps_nested_job_key(self) -> None:
-        normalized = PrusaLinkClient._normalize_status(
-            {"printer": {"state": "PRINTING"}},
-            {"job": {"id": 5, "state": "PRINTING", "progress": 10}},
-        )
-        assert normalized["prusalink"]["job_id"] == 5
-        assert normalized["virtual_sdcard"]["progress"] == 0.1
-
-    def test_normalize_status_reads_legacy_completion_field(self) -> None:
-        normalized = PrusaLinkClient._normalize_status(
-            {"printer": {"state": "PRINTING"}},
-            {"id": 1, "state": "PRINTING", "progress": {"completion": 40}},
-        )
-        assert normalized["virtual_sdcard"]["progress"] == 0.4
-
-    def test_normalize_status_tolerates_unparseable_progress(self) -> None:
-        normalized = PrusaLinkClient._normalize_status(
-            {"printer": {"state": "PRINTING"}},
-            {"id": 1, "state": "PRINTING", "progress": "not-a-number"},
-        )
-        assert normalized["virtual_sdcard"]["progress"] == 0.0
-
-
-class TestResponse:
-    @pytest.mark.asyncio
-    async def test_invalid_json_response_raises(self) -> None:
-        client = _client(
-            lambda request: httpx.Response(
-                200, content=b"not json", headers={"content-length": "8"}
-            )
-        )
-        with pytest.raises(PrusaLinkError) as exc:
-            await client.info()
-        assert exc.value.code == "provider_invalid_response"
-
-
-class TestRaises:
-    @pytest.mark.asyncio
-    async def test_404_without_allow_not_found_raises(self) -> None:
-        client = _client(lambda request: httpx.Response(404))
-        with pytest.raises(PrusaLinkError) as exc:
-            await client.delete_file("missing.gcode")
-        assert exc.value.code == "provider_endpoint_not_supported"
+        assert isinstance(client, CorePrusaLinkClient)
 
     @pytest.mark.asyncio
-    async def test_pause_without_active_job_raises(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/v1/job":
-                return httpx.Response(200, json={"id": None})
-            return httpx.Response(200, json={})
+    async def test_sends_the_api_key_header_in_api_key_mode(self) -> None:
+        seen: list[httpx.Request] = []
+        client = _client("api_key", seen, api_key=API_KEY)
 
-        client = _client(handler)
-        with pytest.raises(PrusaLinkError) as exc:
-            await client.pause()
-        assert exc.value.code == "provider_no_active_job"
+        await client.query_status()
 
-
-class TestListFiles:
-    @pytest.mark.asyncio
-    async def test_list_files_returns_empty_when_body_not_list(self) -> None:
-        client = _client(
-            lambda request: httpx.Response(200, json={"children": {"nope": True}})
-        )
-        assert await client.list_files() == []
+        assert seen[0].headers["X-Api-Key"] == API_KEY
 
     @pytest.mark.asyncio
-    async def test_list_files_skips_non_dict_entries_and_recurses_folders(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={
-                    "children": [
-                        "not-a-dict",
-                        {
-                            "name": "sub",
-                            "type": "FOLDER",
-                            "children": [
-                                {
-                                    "name": "nested.gcode",
-                                    "type": "PRINT_FILE",
-                                    "size": 9,
-                                }
-                            ],
-                        },
-                    ]
-                },
-            )
+    async def test_omits_the_api_key_header_in_digest_mode(self) -> None:
+        seen: list[httpx.Request] = []
+        client = _client("digest", seen, username=USERNAME, password=PASSWORD)
 
-        files = await _client(handler).list_files()
-        assert [f["filename"] for f in files] == ["nested.gcode"]
+        await client.query_status()
 
+        # Digest credentials travel in the challenge response, not a header. A
+        # facade that passed them through as an API key would authenticate the
+        # wrong way and report the printer as unreachable.
+        assert "X-Api-Key" not in seen[0].headers
 
-class TestSubscribeStatus:
-    @pytest.mark.asyncio
-    async def test_subscribe_status_pushes_once_then_returns_without_stop_event(
-        self,
-    ) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/v1/status":
-                return httpx.Response(200, json={"printer": {"state": "IDLE"}})
-            return httpx.Response(200, json={})
-
-        client = _client(handler)
-        received: list = []
-
-        async def on_status(status):
-            received.append(status)
-
-        await asyncio.wait_for(client.subscribe_status(on_status), timeout=3.0)
-        assert len(received) == 1
-
-    @pytest.mark.asyncio
-    async def test_subscribe_status_returns_when_stop_event_set(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/v1/status":
-                return httpx.Response(200, json={"printer": {"state": "IDLE"}})
-            return httpx.Response(200, json={})
-
-        client = _client(handler)
-        stop = asyncio.Event()
-        stop.set()
-
-        async def on_status(status):
-            pass
-
-        await asyncio.wait_for(
-            client.subscribe_status(on_status, stop_event=stop), timeout=3.0
+    def test_strips_a_trailing_slash_from_the_configured_url(self) -> None:
+        client = PrusaLinkClient(
+            "http://printer.local/", auth_mode="api_key", api_key=API_KEY
         )
 
-    @pytest.mark.asyncio
-    async def test_subscribe_status_times_out_and_returns_when_stop_event_not_set_in_time(
-        self,
-    ) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/v1/status":
-                return httpx.Response(200, json={"printer": {"state": "IDLE"}})
-            return httpx.Response(200, json={})
+        assert client.base_url == "http://printer.local"
 
-        client = _client(handler)
-        stop = asyncio.Event()
-
-        async def on_status(status):
-            pass
-
-        await asyncio.wait_for(
-            client.subscribe_status(on_status, stop_event=stop), timeout=3.0
-        )
+    def test_re_exports_the_error_class_core_actually_raises(self) -> None:
+        # Call sites `except PrusaLinkError`. An alias that drifted from core's
+        # class would turn every provider failure into an unhandled 500.
+        assert PrusaLinkError is CorePrusaLinkError

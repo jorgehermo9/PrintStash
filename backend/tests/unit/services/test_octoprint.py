@@ -1,424 +1,67 @@
-"""Reading an OctoPrint printer's state, where "done" is not one field.
+"""The legacy constructor still in front of the extracted OctoPrint client.
 
-OctoPrint reports progress and a set of activity flags separately, and the
-combination is what means something. A completion of 100% with no active flag is
-finished; 100% with `printing` still set is a print about to finish. Reading the
-percentage alone marks a job complete while the nozzle is still moving, which
-ends the job record early and lets the queue dispatch the next print onto a busy
-machine.
+The client itself moved into `printstash-core` and is tested there, exhaustively,
+against a mock transport (`printers/test_octoprint.py`) and against the real
+emulator in this repo's contract tier. Duplicating those behaviours here would
+mean two suites that drift, so what is left is the only thing this module still
+owns: the constructor shape callers had before the extraction.
 
-So the normalisation rows cover each state the flags can express, and the
-progress rows cover the boundary in both directions.
-
-The error mapping is the other half. Every failure the client can surface gets a
-*stable code*, because callers branch on it: an auth failure triggers exactly one
-credential prompt, a 409 means "no active job" rather than a fault, and anything
-unrecognised must not be reported as success. OctoPrint is a beta provider, so
-what it cannot do is as much a part of the contract as what it can.
+That shape matters because it is not the core's. Core takes an `OctoPrintConfig`;
+callers here pass `base_url` positionally with a keyword `api_key`. If the
+translation between them is wrong, every printer in an existing installation
+fails to build — and it fails at construction, far from anything that looks like
+a provider bug. The re-exported `OctoPrintError` is part of the same contract:
+call sites catch the app symbol, so it has to be the class core actually raises.
 """
 
-import asyncio
-from pathlib import Path
+from __future__ import annotations
 
 import httpx
 import pytest
+from printstash_core.printers.octoprint import OctoPrintClient as CoreOctoPrintClient
+from printstash_core.printers.octoprint import OctoPrintError as CoreOctoPrintError
 
 from app.services.octoprint import OctoPrintClient, OctoPrintError
 
-
-def _client(handler) -> OctoPrintClient:
-    return OctoPrintClient(
-        "http://octopi.local",
-        api_key="key-123",
-        transport=httpx.MockTransport(handler),
-    )
+API_KEY = "key-123"
 
 
-@pytest.mark.asyncio
-async def test_printing_status_is_normalized() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["X-Api-Key"] == "key-123"
-        if request.url.path == "/api/printer":
-            return httpx.Response(
-                200,
-                json={
-                    "state": {"text": "Printing", "flags": {"printing": True}},
-                    "temperature": {
-                        "bed": {"actual": 59.5, "target": 60},
-                        "tool0": {"actual": 214, "target": 215},
-                    },
-                },
-            )
-        return httpx.Response(
-            200,
-            json={
-                "job": {"file": {"name": "cube.gcode"}},
-                "progress": {"completion": 25.0, "printTime": 120},
-                "state": "Printing",
-            },
-        )
+class TestOctoPrintClient:
+    def test_builds_a_core_client_from_the_legacy_arguments(self) -> None:
+        client = OctoPrintClient("http://printer.local", api_key=API_KEY)
 
-    result = await _client(handler).query_status()
-    status = result["result"]["status"]
-    assert status["print_stats"]["state"] == "printing"
-    assert status["print_stats"]["filename"] == "cube.gcode"
-    assert status["print_stats"]["print_duration"] == 120
-    assert status["virtual_sdcard"]["progress"] == 0.25
-    assert status["heater_bed"]["temperature"] == 59.5
-    assert status["extruder"]["target"] == 215
-
-
-@pytest.mark.asyncio
-async def test_completion_at_100_with_no_active_flags_is_complete() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/printer":
-            return httpx.Response(
-                200, json={"state": {"text": "Operational", "flags": {}}}
-            )
-        return httpx.Response(
-            200,
-            json={
-                "job": {"file": {"name": "cube.gcode"}},
-                "progress": {"completion": 100.0},
-            },
-        )
-
-    result = await _client(handler).query_status()
-    assert result["result"]["status"]["print_stats"]["state"] == "complete"
-
-
-@pytest.mark.asyncio
-async def test_idle_printer_has_no_file_and_is_standby() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/printer":
-            return httpx.Response(
-                200, json={"state": {"text": "Operational", "flags": {}}}
-            )
-        return httpx.Response(200, json={"job": {"file": {}}, "progress": {}})
-
-    result = await _client(handler).query_status()
-    assert result["result"]["status"]["print_stats"]["state"] == "standby"
-
-
-@pytest.mark.asyncio
-async def test_file_operations_and_controls(tmp_path: Path) -> None:
-    seen: list[tuple[str, str]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((request.method, request.url.path))
-        if request.url.path == "/api/files" and request.method == "GET":
-            return httpx.Response(
-                200,
-                json={
-                    "files": [
-                        {
-                            "name": "cube.gcode",
-                            "path": "cube.gcode",
-                            "size": 5,
-                            "type": "machinecode",
-                        }
-                    ]
-                },
-            )
-        return httpx.Response(200, json={})
-
-    source = tmp_path / "cube.gcode"
-    source.write_text("G28\n")
-    client = _client(handler)
-    assert (await client.list_files())[0]["filename"] == "cube.gcode"
-    await client.upload(source, "cube.gcode")
-    await client.start("cube.gcode")
-    await client.delete_file("cube.gcode")
-    await client.pause()
-    await client.resume()
-    await client.cancel()
-    assert ("POST", "/api/files/local") in seen
-    assert ("POST", "/api/files/local/cube.gcode") in seen
-    assert ("DELETE", "/api/files/local/cube.gcode") in seen
-    assert ("POST", "/api/job") in seen
-
-
-@pytest.mark.asyncio
-async def test_auth_failure_has_stable_code() -> None:
-    client = _client(lambda request: httpx.Response(403))
-    with pytest.raises(OctoPrintError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_authentication_failed"
-
-
-@pytest.mark.asyncio
-async def test_conflict_maps_to_no_active_job() -> None:
-    client = _client(lambda request: httpx.Response(409))
-    with pytest.raises(OctoPrintError) as exc:
-        await client.pause()
-    assert exc.value.code == "provider_no_active_job"
-
-
-@pytest.mark.asyncio
-async def test_remote_path_traversal_rejected(tmp_path: Path) -> None:
-    source = tmp_path / "cube.gcode"
-    source.write_text("G28\n")
-    client = _client(lambda request: httpx.Response(204))
-    with pytest.raises(OctoPrintError) as exc:
-        await client.upload(source, "../cube.gcode")
-    assert exc.value.code == "provider_error"
-
-
-@pytest.mark.asyncio
-async def test_timeout_maps_to_provider_timeout() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("timed out", request=request)
-
-    client = _client(handler)
-    with pytest.raises(OctoPrintError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_timeout"
-
-
-@pytest.mark.asyncio
-async def test_transport_error_wraps_httpx_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("refused", request=request)
-
-    client = _client(handler)
-    with pytest.raises(OctoPrintError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_transport_error"
-
-
-@pytest.mark.asyncio
-async def test_404_with_allow_not_found_returns_empty_dict() -> None:
-    client = _client(lambda request: httpx.Response(404))
-    status = await client.query_status()
-    # Both /api/printer and /api/job 404 (allow_not_found=True) -> {} -> standby.
-    assert status["result"]["status"]["print_stats"]["state"] == "standby"
-
-
-@pytest.mark.asyncio
-async def test_generic_http_error_maps_to_transport_error() -> None:
-    client = _client(lambda request: httpx.Response(500))
-    with pytest.raises(OctoPrintError) as exc:
-        await client.info()
-    assert exc.value.code == "provider_transport_error"
-    assert "octoprint_http_500" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_paused_cancelling_and_error_states() -> None:
-    def make_client(flags: dict) -> OctoPrintClient:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/printer":
-                return httpx.Response(200, json={"state": {"flags": flags}})
-            return httpx.Response(200, json={"job": {}, "progress": {}})
-
-        return _client(handler)
-
-    paused = await make_client({"paused": True}).query_status()
-    assert paused["result"]["status"]["print_stats"]["state"] == "paused"
-
-    cancelling = await make_client({"cancelling": True}).query_status()
-    assert cancelling["result"]["status"]["print_stats"]["state"] == "cancelled"
-
-    errored = await make_client({"error": True}).query_status()
-    assert errored["result"]["status"]["print_stats"]["state"] == "error"
-
-
-@pytest.mark.asyncio
-async def test_flatten_files_skips_non_dict_and_unknown_type_entries() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "files": [
-                    "not-a-dict",
-                    {"name": "readme.txt", "path": "readme.txt", "type": "machine"},
-                    {"name": "cube.gcode", "path": "cube.gcode", "type": "machinecode"},
-                ]
-            },
-        )
-
-    files = await _client(handler).list_files()
-    assert [f["path"] for f in files] == ["cube.gcode"]
-
-
-class TestResponse:
-    @pytest.mark.asyncio
-    async def test_no_content_response_returns_ok_true(self) -> None:
-        client = _client(lambda request: httpx.Response(204))
-        result = await client.cancel()
-        assert result == {"ok": True}
+        assert isinstance(client, CoreOctoPrintClient)
 
     @pytest.mark.asyncio
-    async def test_invalid_json_response_raises(self) -> None:
-        client = _client(
-            lambda request: httpx.Response(
-                200, content=b"not json", headers={"content-length": "8"}
-            )
-        )
-        with pytest.raises(OctoPrintError) as exc:
-            await client.info()
-        assert exc.value.code == "provider_invalid_response"
-
-
-class TestListFiles:
-    @pytest.mark.asyncio
-    async def test_list_files_flattens_nested_folders(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={
-                    "files": [
-                        {
-                            "name": "sub",
-                            "path": "sub",
-                            "type": "folder",
-                            "children": [
-                                {
-                                    "name": "nested.gcode",
-                                    "path": "sub/nested.gcode",
-                                    "type": "machinecode",
-                                    "size": 9,
-                                }
-                            ],
-                        },
-                        {
-                            "name": "top.gcode",
-                            "path": "top.gcode",
-                            "type": "machinecode",
-                            "size": 5,
-                        },
-                    ]
-                },
-            )
-
-        files = await _client(handler).list_files()
-        paths = {entry["path"] for entry in files}
-        assert paths == {"sub/nested.gcode", "top.gcode"}
-
-    @pytest.mark.asyncio
-    async def test_list_files_returns_empty_when_body_not_list(self) -> None:
-        client = _client(
-            lambda request: httpx.Response(200, json={"files": {"nope": True}})
-        )
-        assert await client.list_files() == []
-
-
-class TestUpload:
-    @pytest.mark.asyncio
-    async def test_upload_to_subfolder_posts_path_field(self, tmp_path: Path) -> None:
-        seen: list[tuple[str, str, bytes]] = []
+    async def test_sends_the_configured_api_key_to_the_configured_url(self) -> None:
+        seen: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
-            seen.append((request.method, request.url.path, request.content))
+            seen.append(request)
             return httpx.Response(200, json={})
 
-        source = tmp_path / "cube.gcode"
-        source.write_text("G28\n")
-        client = _client(handler)
-        await client.upload(source, "sub/dir/cube.gcode")
-        assert ("POST", "/api/files/local") in {(m, p) for m, p, _ in seen}
-        body = next(
-            content for method, path, content in seen if path == "/api/files/local"
-        )
-        assert b'name="path"' in body
-        assert b"sub/dir" in body
-
-    @pytest.mark.asyncio
-    async def test_upload_streams_file_without_reading_it_all_up_front(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        payload = b"G1 X1 Y1\n" * 20_000
-        source = tmp_path / "large.gcode"
-        source.write_bytes(payload)
-        seen_body = b""
-
-        def forbid_read_bytes(_path: Path) -> bytes:
-            raise AssertionError("upload must not call Path.read_bytes()")
-
-        monkeypatch.setattr(Path, "read_bytes", forbid_read_bytes)
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal seen_body
-            seen_body = request.content
-            return httpx.Response(200, json={})
-
-        await _client(handler).upload(source, source.name)
-
-        assert payload in seen_body
-
-
-class TestRaises:
-    @pytest.mark.asyncio
-    async def test_404_without_allow_not_found_raises(self) -> None:
-        client = _client(lambda request: httpx.Response(404))
-        with pytest.raises(OctoPrintError) as exc:
-            await client.delete_file("missing.gcode")
-        assert exc.value.code == "provider_endpoint_not_supported"
-
-
-class TestInfo:
-    @pytest.mark.asyncio
-    async def test_info_returns_provider_and_version(self) -> None:
-        client = _client(lambda request: httpx.Response(200, json={"server": "1.9.0"}))
-        result = await client.info()
-        assert result["result"]["provider"] == "octoprint"
-        assert result["result"]["version"] == {"server": "1.9.0"}
-
-
-class TestSubscribeStatus:
-    @pytest.mark.asyncio
-    async def test_subscribe_status_pushes_once_then_returns_without_stop_event(
-        self,
-    ) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/printer":
-                return httpx.Response(200, json={"state": {"flags": {}}})
-            return httpx.Response(200, json={"job": {}, "progress": {}})
-
-        client = _client(handler)
-        received: list = []
-
-        async def on_status(status):
-            received.append(status)
-
-        await asyncio.wait_for(client.subscribe_status(on_status), timeout=3.0)
-        assert len(received) == 1
-
-    @pytest.mark.asyncio
-    async def test_subscribe_status_times_out_and_returns_when_stop_event_not_set_in_time(
-        self,
-    ) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/printer":
-                return httpx.Response(200, json={"state": {"flags": {}}})
-            return httpx.Response(200, json={"job": {}, "progress": {}})
-
-        client = _client(handler)
-        stop = asyncio.Event()
-
-        async def on_status(status):
-            pass
-
-        # Never set `stop`, so the internal wait_for(..., timeout=2.0) times out
-        # and subscribe_status returns via the TimeoutError branch.
-        await asyncio.wait_for(
-            client.subscribe_status(on_status, stop_event=stop), timeout=3.0
+        client = OctoPrintClient(
+            "http://printer.local",
+            api_key=API_KEY,
+            transport=httpx.MockTransport(handler),
         )
 
-    @pytest.mark.asyncio
-    async def test_subscribe_status_returns_when_stop_event_set(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/printer":
-                return httpx.Response(200, json={"state": {"flags": {}}})
-            return httpx.Response(200, json={"job": {}, "progress": {}})
+        await client.info()
 
-        client = _client(handler)
-        stop = asyncio.Event()
-        stop.set()
+        # The whole point of the facade: `base_url` and `api_key` have to land
+        # where the core config puts them, or every existing printer row builds
+        # a client that talks to nowhere with no credentials.
+        assert str(seen[0].url) == "http://printer.local/api/version"
+        assert seen[0].headers["X-Api-Key"] == API_KEY
 
-        async def on_status(status):
-            pass
+    def test_strips_a_trailing_slash_from_the_configured_url(self) -> None:
+        client = OctoPrintClient("http://printer.local/", api_key=API_KEY)
 
-        await asyncio.wait_for(
-            client.subscribe_status(on_status, stop_event=stop), timeout=3.0
-        )
+        # Stored hosts routinely carry the slash a browser adds; keeping it would
+        # produce `//api/version` on every request.
+        assert client.base_url == "http://printer.local"
+
+    def test_re_exports_the_error_class_core_actually_raises(self) -> None:
+        # Call sites `except OctoPrintError`. An alias that drifted from core's
+        # class would turn every provider failure into an unhandled 500.
+        assert OctoPrintError is CoreOctoPrintError

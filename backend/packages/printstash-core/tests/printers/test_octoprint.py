@@ -539,6 +539,52 @@ class TestSubscribeStatus:
         # envelope.
         assert received == [PRINTING_ENVELOPE["result"]["status"]]
 
+    @pytest.mark.asyncio
+    async def test_returns_after_one_poll_when_no_stop_event_is_given(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        slept: list[float] = []
+
+        async def record(seconds: float) -> None:
+            slept.append(seconds)
+
+        monkeypatch.setattr(asyncio, "sleep", record)
+        received: list[dict[str, Any]] = []
+
+        async def on_status(status: dict[str, Any]) -> None:
+            received.append(status)
+
+        await printing_client().subscribe_status(on_status)
+
+        # A caller with no stop event gets one reading, then the client paces
+        # itself before returning so the hub's loop cannot become a busy poll of
+        # the printer. The sleep is stubbed because the alternative is a test
+        # that takes two real seconds to prove a constant.
+        assert len(received) == 1
+        assert slept == [2.0]
+
+    @pytest.mark.asyncio
+    async def test_returns_when_the_stop_event_never_arrives(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def timeout(awaitable: Any, timeout: float) -> None:
+            awaitable.close()
+            raise asyncio.TimeoutError
+
+        monkeypatch.setattr(asyncio, "wait_for", timeout)
+        received: list[dict[str, Any]] = []
+
+        async def on_status(status: dict[str, Any]) -> None:
+            received.append(status)
+
+        await printing_client().subscribe_status(on_status, stop_event=asyncio.Event())
+
+        # The wait is bounded, so a stop event that is never set returns rather
+        # than parking the task forever — otherwise a printer removed from the
+        # hub leaks its subscriber. `wait_for` is stubbed for the same reason as
+        # above: the real bound is two seconds of wall clock.
+        assert len(received) == 1
+
 
 class TestSubscribeSnapshots:
     @pytest.mark.asyncio
