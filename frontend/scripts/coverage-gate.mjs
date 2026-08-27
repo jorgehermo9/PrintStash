@@ -83,8 +83,8 @@ const SUITES = [
     name: "@printstash/ui",
     summary: "packages/ui/coverage/coverage-summary.json",
     command: "pnpm --filter @printstash/ui test:coverage",
-    total: { statements: 32.0, branches: 15.5 },
-    areas: [{ prefix: "src/", statements: 32.0, branches: 15.5 }],
+    total: { statements: 98.5, branches: 97.5 },
+    areas: [{ prefix: "src/", statements: 98.5, branches: 97.5 }],
   },
 ];
 
