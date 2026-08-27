@@ -9,9 +9,11 @@ same schema:
   every self-hoster who upgraded from an earlier release has.
 
 They agree on everything except foreign keys, and the difference is not a rounding
-error: the models declare five that no migration ever created. A fresh install
-enforces them; an upgraded install does not. With `foreign_keys=ON` that is
-different delete behaviour on two supported installations of the same version.
+error: the models declare **eighteen** that no migration ever created — 108 against
+90. A fresh install enforces them; an upgraded install does not. With
+`foreign_keys=ON` that is different delete behaviour on two supported installations
+of the same version, and one of the eighteen is reachable from the HTTP API today
+(see `files.external_library_id` below).
 
 This test does not assert they agree, because today they do not. It pins the exact
 gap, in both directions. A new divergence fails it, and *closing* the gap fails it
@@ -42,24 +44,47 @@ from app.db import migrate as migrate_mod
 # further apart, and a removed one means the gap was closed and this list should
 # shrink with it.
 KNOWN_MISSING_IN_CHAIN = {
+    # The audit columns. Seventeen of the eighteen, across six tables — every
+    # migration that added a `*_by` column declared it as a plain integer.
+    ("collections", "created_by"),
+    ("collections", "deleted_by"),
+    ("collections", "updated_by"),
     ("files", "deleted_by"),
-    ("files", "external_library_id"),
     ("models", "created_by"),
     ("models", "deleted_by"),
     ("models", "updated_by"),
+    ("print_jobs", "created_by"),
+    ("print_jobs", "deleted_by"),
+    ("print_jobs", "updated_by"),
+    ("printers", "created_by"),
+    ("printers", "deleted_by"),
+    ("printers", "updated_by"),
+    ("tags", "created_by"),
+    ("tags", "deleted_by"),
+    ("tags", "updated_by"),
+    ("users", "deleted_by"),
+    # The one that is not an audit column, and the only one of the eighteen that
+    # is reachable today: `DELETE /api/v1/libraries/{id}` trashes the indexed files
+    # but leaves this column pointing at the library it then deletes. On a fresh
+    # install that is a 500; on an upgraded one it succeeds and dangles.
+    ("files", "external_library_id"),
 }
-
-COMPARED_TABLES = ("files", "models")
 
 
 def _foreign_keys(url: str) -> set[tuple[str, str]]:
-    """Every (table, column) foreign key on the compared tables."""
+    """Every (table, column) foreign key in the database.
+
+    Every table, not a chosen few: the first version of this compared `files` and
+    `models` alone, because that is where the flake surfaced, and it therefore
+    reported five of the eighteen. A divergence list that only looks where you
+    already know to look is not a divergence list.
+    """
     engine = create_engine(url)
     try:
         inspector = inspect(engine)
         return {
             (table, column)
-            for table in COMPARED_TABLES
+            for table in inspector.get_table_names()
             for key in inspector.get_foreign_keys(table)
             for column in key["constrained_columns"]
         }
