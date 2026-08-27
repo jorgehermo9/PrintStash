@@ -443,6 +443,21 @@ globally, and the 78 existing `batch_alter_table` calls in this chain all use
 reflection. They will not be changed — they have already run on real installations
 (rule 2) — so this is a rule for new work.
 
+**One more thing `copy_from` buys, which is easy to miss:** offline rendering.
+`alembic upgrade --sql` cannot run a reflecting batch migration on SQLite at all —
+
+```
+This operation cannot proceed in --sql mode; batch mode with dialect sqlite requires
+a live database connection with which to reflect the table "collections".
+```
+
+so a SQLite batch migration without `copy_from` is one an operator cannot review as DDL
+before applying. This repo does not pay that cost — 38 literal `Table` definitions to buy
+offline rendering on the dialect where change-control review is least likely — and
+`test_offline_sqlite_is_unavailable_while_batch_mode_reflects` pins the decision so it is
+a known cost rather than a surprise. If your migration will be applied through a process
+that reviews generated SQL, that is the argument for `copy_from`.
+
 ### Repair before you constrain
 
 Adding a constraint to rows that already violate it leaves a database that cannot be
@@ -582,8 +597,16 @@ cascade has no row left to race for.
 cd backend
 uv run alembic upgrade head                       # forwards
 uv run alembic downgrade -1 && uv run alembic upgrade head   # and back
+uv run alembic upgrade <prev>:head --sql          # renders without a database
 ./scripts/test.sh coverage                        # includes the parity tests below
 ```
+
+The `--sql` render is not optional politeness. It is how an operator reviews DDL before
+letting it near their data, and a migration that reaches for the connection — to read a
+pragma, to count rows — dies there with `MockConnection has no attribute
+exec_driver_sql`. Both convergence migrations did, until the tests below caught it: use
+`op.execute` for statements that must appear in the output, and guard connection reads
+with `if op.get_context().as_sql: return`.
 
 Three tests are the schema's own guard rails:
 

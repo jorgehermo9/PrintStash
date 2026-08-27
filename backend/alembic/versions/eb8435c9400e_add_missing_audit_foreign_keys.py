@@ -51,6 +51,12 @@ def _assert_safe_to_rebuild() -> None:
     assuming it: if a future change gives Alembic a pragma-configured engine, this
     fails with a sentence instead of an `IntegrityError` from inside a rebuild.
     """
+    if op.get_context().as_sql:
+        # Offline (`alembic upgrade --sql`): there is no connection to ask, and an
+        # operator reviewing the generated DDL is not running it yet. Emitting the
+        # pragma as a statement they can see is the useful thing to do instead.
+        op.execute("-- run with foreign_keys=OFF; this migration rebuilds tables")
+        return
     bind = op.get_bind()
     if bind.dialect.name != "sqlite":
         return
@@ -103,9 +109,11 @@ def _detach_orphans() -> None:
     pointing at a library that is gone is already detached in every sense but this
     one.
     """
-    bind = op.get_bind()
     for table, column, referred in _FOREIGN_KEYS:
-        bind.exec_driver_sql(
+        # `op.execute` rather than the bind, so this renders in offline mode too — an
+        # operator reviewing `--sql` output has to see the repair, not just the
+        # constraints it makes possible.
+        op.execute(
             f"UPDATE {table} SET {column} = NULL "  # noqa: S608 - fixed identifiers
             f"WHERE {column} IS NOT NULL "
             f"AND {column} NOT IN (SELECT id FROM {referred})"
@@ -124,6 +132,8 @@ def _assert_no_orphans_in_new_constraints() -> None:
 
     So this asks the same question the repair asked, and expects no answer.
     """
+    if op.get_context().as_sql:
+        return
     bind = op.get_bind()
     for table, column, referred in _FOREIGN_KEYS:
         remaining = bind.exec_driver_sql(

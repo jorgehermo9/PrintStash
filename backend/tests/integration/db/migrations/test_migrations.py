@@ -26,12 +26,15 @@ dropping a job must not take its completed import history with it.
 
 from __future__ import annotations
 
+import contextlib
+import io
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from alembic.util.exc import CommandError
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel
@@ -1146,3 +1149,125 @@ class TestHasApplicationTables:
             assert migrate_mod._has_application_tables(engine) is False
         finally:
             engine.dispose()
+
+
+# The revision the two convergence migrations build on. Offline rendering starts here
+# rather than at `base`, because the baseline is SQLite-authored and documented not to
+# apply to PostgreSQL.
+_POST_BASELINE_REVISION = "a7c9e1b5d3f2"
+
+# Never connected to: `--sql` mode renders DDL without a database.
+_POSTGRES_URL = "postgresql+psycopg://user:pass@localhost/db"
+
+
+class TestWholeChain:
+    """The chain runs forwards and backwards, end to end.
+
+    Seven migrations have a test that downgrades them one step; the other sixty do not,
+    so a `downgrade()` that was never run could sit in the chain indefinitely. It would
+    surface at the worst time — an operator rolling back a bad release, which is the one
+    moment a downgrade is load-bearing.
+
+    Cheap enough to be unconditional: the round trip is under two seconds on SQLite.
+    """
+
+    def test_the_chain_downgrades_all_the_way_to_base(self, tmp_path: Path) -> None:
+        url = _url(tmp_path, "round-trip.sqlite")
+        cfg = migrate_mod._alembic_config(url)  # noqa: SLF001
+        command.upgrade(cfg, "head")
+
+        command.downgrade(cfg, "base")
+
+        assert _current(url) is None
+        remaining = _table_names(url) - {"alembic_version"}
+        assert not remaining, (
+            "downgrading to base left tables behind, so at least one `downgrade()` "
+            f"does not undo its `upgrade()`: {sorted(remaining)}"
+        )
+
+    def test_the_chain_upgrades_again_after_a_full_downgrade(
+        self, tmp_path: Path
+    ) -> None:
+        # Forwards, backwards, forwards. A `downgrade()` that leaves a stray index or
+        # constraint behind passes the test above and fails here, on the re-upgrade.
+        url = _url(tmp_path, "re-upgrade.sqlite")
+        cfg = migrate_mod._alembic_config(url)  # noqa: SLF001
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "base")
+
+        command.upgrade(cfg, "head")
+
+        assert _current(url) == _head_revision()
+
+
+class TestOfflineRendering:
+    """Every migration renders without a database, and on both dialects.
+
+    `alembic upgrade --sql` is how an operator reviews DDL before letting it near their
+    data, and how anyone applies a migration through a change-control process. A
+    migration that reaches for the connection — to read a pragma, to count rows — dies
+    there with `MockConnection has no attribute exec_driver_sql`, which is how both new
+    migrations were written before this test existed.
+
+    The PostgreSQL render matters for a second reason. A Postgres installation is built
+    by `create_all` and stamped at head, because the chain's baseline cannot bootstrap
+    Postgres — but it then runs every *later* migration incrementally, and nothing else
+    in this suite exercises that. Rendering for the Postgres dialect is the cheap half of
+    that check: it catches SQLite-only DDL without needing a live server.
+    """
+
+    def test_the_migrations_after_the_baseline_render_offline_for_postgres(
+        self,
+    ) -> None:
+        buffer = io.StringIO()
+
+        with contextlib.redirect_stdout(buffer):
+            command.upgrade(
+                migrate_mod._alembic_config(_POSTGRES_URL),  # noqa: SLF001
+                f"{_POST_BASELINE_REVISION}:head",
+                sql=True,
+            )
+
+        assert buffer.getvalue().strip()
+
+    def test_offline_sqlite_is_unavailable_while_batch_mode_reflects(self) -> None:
+        """A limitation, pinned so it is a known cost rather than a surprise.
+
+        Batch mode rebuilds a table from what it reflects, and reflection needs a live
+        connection — so `--sql` on SQLite refuses unless every `batch_alter_table` was
+        given `copy_from`. That is 38 literal `Table` definitions across the two
+        convergence migrations, each one a chance to omit a column and have the rebuild
+        drop it silently, to buy offline rendering on the dialect where an operator is
+        least likely to want it.
+
+        Not paid, deliberately. The PostgreSQL render above is the one that matters:
+        Postgres is where DDL review through a change-control process actually happens,
+        and where migrations run as plain `ALTER TABLE` anyway.
+
+        If a future migration does pass `copy_from` throughout, this test fails and says
+        so — at which point the limitation is gone and this goes with it.
+        """
+        with pytest.raises(CommandError, match="cannot proceed in --sql mode"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                command.upgrade(
+                    migrate_mod._alembic_config("sqlite://"),  # noqa: SLF001
+                    f"{_POST_BASELINE_REVISION}:head",
+                    sql=True,
+                )
+
+    def test_the_postgres_render_uses_no_sqlite_table_rebuild(self) -> None:
+        # `batch_alter_table` rebuilds only where the dialect cannot ALTER. On Postgres
+        # it must emit plain `ALTER TABLE`; a `_alembic_tmp_` table in this output would
+        # mean a migration hard-coded the SQLite path.
+        buffer = io.StringIO()
+
+        with contextlib.redirect_stdout(buffer):
+            command.upgrade(
+                migrate_mod._alembic_config(
+                    "postgresql+psycopg://user:pass@localhost/db"
+                ),  # noqa: SLF001
+                f"{_POST_BASELINE_REVISION}:head",
+                sql=True,
+            )
+
+        assert "_alembic_tmp" not in buffer.getvalue()
