@@ -74,7 +74,7 @@ class TestSubscribeStatus:
         ]
 
     @pytest.mark.asyncio
-    async def test_subscribes_and_asks_for_a_full_push_before_waiting(self) -> None:
+    async def test_asks_for_a_full_push_before_waiting_for_messages(self) -> None:
         wire = ScriptedMqttClient(messages=[PRINTING_REPORT])
         client = make_client(
             mqtt_client_factory=lambda: wire, sequence_id_factory=lambda: "push-id"

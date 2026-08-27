@@ -15,7 +15,7 @@ from tests.factories import build_file, build_model
 
 class TestTrash:
     @pytest.mark.asyncio
-    async def test_trash_reports_size_and_purges_matching_pre_ledger_artifact(
+    async def test_trash_purges_a_pre_ledger_artifact_it_can_verify(
         self, api, superuser_headers, e2e_db
     ) -> None:
         backend = get_backend()

@@ -109,9 +109,7 @@ class TestBootstrap:
 
 
 class TestCrud:
-    def test_postgres_crud_enums_rbac_and_default_uniqueness(
-        self, postgres_engine
-    ) -> None:
+    def test_the_core_contracts_hold_on_postgres(self, postgres_engine) -> None:
         with Session(postgres_engine) as session:
             user = build_user(session, "pg-user")
             collection = build_collection(

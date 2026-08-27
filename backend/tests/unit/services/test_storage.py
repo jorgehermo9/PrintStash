@@ -83,7 +83,7 @@ class TestEnsureUniqueSlug:
 
 
 class TestSlugify:
-    def test_slugify_normalises_unicode_and_punctuation(self) -> None:
+    def test_slugify_normalises_unicode_punctuation(self) -> None:
         assert slugify("  Café Racer — Bracket v2!! ") == "cafe-racer-bracket-v2"
 
     def test_slugify_falls_back_for_a_name_with_nothing_sluggable(self) -> None:

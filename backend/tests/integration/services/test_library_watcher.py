@@ -288,9 +288,7 @@ class TestComputeDesired:
 
 
 class TestStopWatcher:
-    def test_a_watchers_task_lifecycle_is_symmetrical(
-        self, tmp_path: Path
-    ) -> None:
+    def test_a_watchers_task_lifecycle_is_symmetrical(self, tmp_path: Path) -> None:
         watcher = lw.LibraryWatcher()
 
         async def _run() -> None:

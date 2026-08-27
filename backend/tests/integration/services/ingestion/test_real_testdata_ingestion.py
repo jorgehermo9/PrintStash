@@ -153,7 +153,7 @@ class TestMetadata:
         assert md.filament_weight_g == pytest.approx(4.61, abs=0.05)
 
     @_requires(CUBE_STL)
-    def test_ingest_real_stl_extracts_geometry_and_thumbnail(
+    def test_a_real_stl_ingest_produces_geometry_with_a_thumbnail(
         self, tmp_path: Path, db_session: Session
     ) -> None:
         use_local_storage(tmp_path)
@@ -271,7 +271,7 @@ class TestModel:
 class TestFirst:
     @_requires(BENCHY_GCODE_A)
     @_requires(BENCHY_GCODE_B)
-    def test_real_gcode_revisions_version_and_keep_first_recommended(
+    def test_a_second_gcode_revision_leaves_the_first_recommended(
         self, tmp_path: Path, db_session: Session
     ) -> None:
         use_local_storage(tmp_path)

@@ -55,7 +55,7 @@ async def _begin_login(api) -> tuple[str, str]:
 
 class TestOidcLogin:
     @pytest.mark.asyncio
-    async def test_full_login_provisions_admin_via_pkce_and_sets_session(
+    async def test_a_full_pkce_login_signs_in_a_provisioned_admin(
         self, api, idp, e2e_db
     ):
         _enable_oidc(idp)

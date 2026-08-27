@@ -230,7 +230,7 @@ class TestCreateChannel:
 
         assert set(body["events"]) == {"print_completed", "print_failed"}
 
-    def test_drops_unknown_and_duplicate_events(
+    def test_drops_every_event_it_cannot_use(
         self, client: TestClient, auth_headers: dict[str, str]
     ) -> None:
         body = _create(

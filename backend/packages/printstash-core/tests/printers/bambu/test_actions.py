@@ -64,7 +64,7 @@ class TestInfo:
 
 class TestQueryStatus:
     @pytest.mark.asyncio
-    async def test_asks_for_a_full_push_and_returns_the_normalized_envelope(
+    async def test_returns_the_normalized_envelope_after_a_full_push(
         self,
     ) -> None:
         wire = ScriptedMqttClient(messages=[RUNNING_REPORT])

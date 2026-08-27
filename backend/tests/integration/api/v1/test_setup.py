@@ -208,7 +208,7 @@ class TestCompleteSetup:
         assert config.data_dir == str((runtime_dirs / "files").resolve())
         assert config.thumb_dir == str((runtime_dirs / "thumbs").resolve())
 
-    def test_persists_the_s3_and_backup_choices(
+    def test_persists_every_storage_choice_from_setup(
         self, client: TestClient, db_session: Session
     ) -> None:
         response = _complete(

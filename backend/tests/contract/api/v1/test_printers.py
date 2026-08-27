@@ -252,7 +252,7 @@ class TestSyncPrinterFiles:
 
 
 class TestSendToPrinter:
-    def test_send_to_printer_uploads_real_file_and_records_inventory(
+    def test_send_to_printer_records_what_it_uploaded(
         self,
         client: TestClient,
         auth_headers: dict[str, str],

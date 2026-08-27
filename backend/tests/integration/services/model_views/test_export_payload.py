@@ -75,7 +75,7 @@ def _source(
 
 
 class TestExportPayload:
-    def test_reports_the_collection_path_and_tag_names(self, db_session: Session):
+    def test_reports_the_models_taxonomy_in_the_export(self, db_session: Session):
         user = build_user(db_session, "export-names", superuser=True)
         collection = build_collection(
             db_session, name="ExportCol", slug="export-col", path="export-col"
@@ -95,7 +95,7 @@ class TestExportPayload:
         assert row["collection"] == "export-col"
         assert row["tags"] == ["Neat"]
 
-    def test_counts_the_exported_models_and_files(self, db_session: Session):
+    def test_counts_everything_the_export_contains(self, db_session: Session):
         user = build_user(db_session, "export-counts", superuser=True)
         model = build_model(db_session, "Counted")
         build_file(db_session, model, file_type=FileType.STL, filename="counted.stl")

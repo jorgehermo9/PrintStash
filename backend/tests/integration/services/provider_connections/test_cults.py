@@ -149,7 +149,7 @@ class TestHasActiveProviderConnection:
 
 
 class TestConnectCults:
-    def test_stores_the_username_and_password_as_one_secret(
+    def test_stores_the_credential_pair_as_one_secret(
         self, db_session: Session, user: User
     ) -> None:
         assert user.id is not None

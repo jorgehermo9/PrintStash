@@ -327,9 +327,7 @@ class TestChannelSubscribes:
 
 
 class TestClaimDueDeliveries:
-    def test_claim_due_deliveries_survives_unparseable_stored_json(
-        self, db_session
-    ):
+    def test_claim_due_deliveries_survives_unparseable_stored_json(self, db_session):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         ch.config_json = "not json"
@@ -408,7 +406,9 @@ class TestDispatchDue:
         assert await notifications.dispatch_due() == 0
 
     @pytest.mark.asyncio
-    async def test_a_successful_dispatch_records_the_channel_as_healthy(self, db_session):
+    async def test_a_successful_dispatch_records_the_channel_as_healthy(
+        self, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(

@@ -109,7 +109,7 @@ class TestPairingUserLockStatement:
 
 
 class TestClaimPairingCode:
-    def test_hands_back_a_credential_and_the_device_it_made(
+    def test_hands_back_a_credential_with_the_device_it_made(
         self, db_session: Session, user: User
     ) -> None:
         assert user.id is not None

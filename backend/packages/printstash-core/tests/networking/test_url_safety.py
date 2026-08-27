@@ -100,10 +100,10 @@ class TestIsPublicIp:
 
 
 class TestNormalizeHttpUrl:
-    def test_lowercases_the_scheme_and_host_and_adds_a_root_path(self) -> None:
+    def test_normalizes_an_authority_to_lower_case_with_a_root_path(self) -> None:
         assert normalize_http_url(" HTTP://Example.COM ") == "http://example.com/"
 
-    def test_keeps_a_non_default_port_query_and_fragment(self) -> None:
+    def test_keeps_everything_that_changes_the_target(self) -> None:
         assert (
             normalize_http_url("https://example.com:8443/hook?a=1#frag")
             == "https://example.com:8443/hook?a=1#frag"

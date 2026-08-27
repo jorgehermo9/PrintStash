@@ -203,7 +203,7 @@ class TestSummaryLines:
 
 
 class TestRenderWebhook:
-    def test_posts_the_event_and_its_whole_context_as_json(self) -> None:
+    def test_posts_the_whole_context_as_json(self) -> None:
         request = render_webhook(_context(), {"url": "https://example.test/hook"})
 
         assert request.method == "POST"

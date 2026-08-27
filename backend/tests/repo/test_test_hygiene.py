@@ -279,12 +279,29 @@ class TestSuiteHygiene:
             "PENDING_DUPLICATE_BUILDERS so the list keeps meaning something."
         )
 
-    def test_no_new_test_names_join_two_behaviours(self) -> None:
-        """A test whose name needs "and" usually asserts two things.
+    def test_no_test_name_joins_two_behaviours(self) -> None:
+        """No test name contains `_and_`. The rule is absolute; there is no cap.
 
-        When it does, a failure cannot say which half broke, and the fix is two
-        tests. This does not split the existing ones — it stops the count growing,
-        and every one removed lowers the cap.
+        It was a ratchet at 313 while the backlog came down, and the backlog is
+        gone, so the exception went with it. Two shapes of offender turned up, and
+        both are worth keeping out:
+
+        A name joining two behaviours is two tests. When it fails, the failure
+        cannot say which half broke — and splitting them repeatedly turned up
+        assertions that were passing for the wrong reason, because one half had
+        silently set up the other. `progress_is_monotonic_below_terminal_and_
+        completed_forces_100` asserted a lower clamp that does not exist: the 99.0
+        it checked was the *earlier* value being kept, and a fresh job handed -3.0
+        reports 0.0.
+
+        A name listing the assertions of a single behaviour is just a worse name.
+        `gc_hard_deletes_expired_artifact_and_its_derivatives` is one behaviour —
+        the derivatives are part of what "hard delete" means.
+
+        The one honest false positive is a name that embeds a production symbol
+        containing "and", like `_download_and_collect`. The unit's name belongs to
+        the `class Test…` group, not to the test, so those became behaviour names
+        and the rule stayed absolute.
         """
         offenders = []
         for module in _all_test_modules():
@@ -297,24 +314,10 @@ class TestSuiteHygiene:
                 ):
                     offenders.append(f"{_relative(module)}::{node.name}")
 
-        assert len(offenders) <= MAX_CONJUNCTION_NAMES, (
-            f"{len(offenders)} test names contain `_and_`, over the cap of "
-            f'{MAX_CONJUNCTION_NAMES}. A name needing "and" usually means two '
-            "behaviours in one test — split it, so a failure says which half broke. "
-            "New: " + ", ".join(sorted(offenders)[:5])
+        assert not offenders, (
+            "these test names contain `_and_`. If the name joins two behaviours, "
+            "split it so a failure says which half broke; if it lists the "
+            "assertions of one behaviour, name the behaviour instead. If the `and` "
+            "is part of a production symbol, the `class Test…` group already "
+            "carries the unit's name.\n  " + "\n  ".join(sorted(offenders))
         )
-        if len(offenders) < MAX_CONJUNCTION_NAMES:
-            raise AssertionError(
-                f"{len(offenders)} names now, cap is {MAX_CONJUNCTION_NAMES}. Lower "
-                "MAX_CONJUNCTION_NAMES to match so the cap keeps meaning something."
-            )
-
-
-# Test names containing `_and_`, across both test trees. Some are two behaviours
-# in one test, which the skill forbids because a failure cannot say which half
-# broke; others describe a single invariant that happens to need the word. Both
-# are worth reducing, and neither is worth a *mechanical* split — that produces
-# duplicated setup and assertions in the wrong test. So the count is capped and
-# may only fall, and the honest fix per test is one of two things: split it, or
-# rename it to say the single behaviour it actually asserts.
-MAX_CONJUNCTION_NAMES = 91

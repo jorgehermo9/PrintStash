@@ -579,7 +579,7 @@ class TestMoonrakerWS:
                 pass
 
     @pytest.mark.asyncio
-    async def test_subscribe_backs_off_and_reconnects_after_os_error(self):
+    async def test_subscribe_reconnects_after_a_socket_error(self):
         client = MoonrakerClient("http://printer.local:7125")
         stop = asyncio.Event()
 

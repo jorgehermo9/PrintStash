@@ -15,7 +15,9 @@ from tests.factories import build_user
 
 class TestAuthFlow:
     @pytest.mark.asyncio
-    async def test_setup_login_refresh_apikey_and_rbac(self, api, tmp_path, e2e_db):
+    async def test_the_whole_authentication_lifecycle_over_the_real_app(
+        self, api, tmp_path, e2e_db
+    ):
         # Fresh instance: setup is required, app is unconfigured.
         status = (await api.get("/api/v1/setup/status")).json()
         assert status["configured"] is False

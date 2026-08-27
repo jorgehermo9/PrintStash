@@ -39,6 +39,70 @@ def _config(url: str) -> Config:
     return config
 
 
+def _seeded_pre_fe17(db_path: Path) -> str:
+    """A database at `fd16b7f0c9e5` holding one job and the lease that points at it.
+
+    The row is the point. `fe17` cannot `DROP CONSTRAINT` on SQLite, so it rebuilds
+    `staging_leases` — and a rebuild that loses rows orphans the staged bytes a lease
+    is the only owner of. Seeding one before every direction of the migration is what
+    makes that checkable.
+    """
+    url = f"sqlite:///{db_path}"
+    command.upgrade(_config(url), "fd16b7f0c9e5")
+
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO background_jobs "
+                    "(id, visible, kind, state, status_json, replay_safe, attempts, "
+                    "created_at, updated_at) VALUES "
+                    "('old-job', 1, 'ingest', 'pending', '{}', 0, 0, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO staging_leases "
+                    "(id, path, background_job_id, size_bytes, sha256, expires_at, "
+                    "created_at) VALUES "
+                    "('old-lease', '/tmp/old', 'old-job', 1, :sha, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {"sha": "a" * 64},
+            )
+    finally:
+        engine.dispose()
+    return url
+
+
+def _lease_unique_columns(url: str) -> set[tuple[str, ...]]:
+    """The unique constraints on `staging_leases`, as column tuples."""
+    engine = create_engine(url)
+    try:
+        return {
+            tuple(constraint["column_names"])
+            for constraint in inspect(engine).get_unique_constraints("staging_leases")
+        }
+    finally:
+        engine.dispose()
+
+
+def _old_lease_job(url: str) -> str:
+    """The job the seeded lease points at, so a rebuild that lost it fails loudly."""
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            return connection.execute(
+                text(
+                    "SELECT background_job_id FROM staging_leases WHERE id = 'old-lease'"
+                )
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+
 class TestUpgrade:
     def test_fe17_resolves_postgresql_generated_job_unique_name(
         self, monkeypatch
@@ -186,89 +250,66 @@ class TestUpgrade:
 
 
 class TestDowngrade:
-    def test_fe17_sqlite_upgrade_drops_old_job_unique_and_downgrade_restores_it(
-        self,
-        tmp_path: Path,
+    def test_fe17_replaces_the_job_unique_with_one_per_owner_kind(
+        self, tmp_path: Path
     ) -> None:
-        url = f"sqlite:///{tmp_path / 'capture-upload-slots.sqlite'}"
+        url = _seeded_pre_fe17(tmp_path / "fe17-upgrade.sqlite")
+
+        command.upgrade(_config(url), "fe17c8d1a0f2")
+
+        assert _lease_unique_columns(url) == {
+            ("path",),
+            ("inbox_item_id",),
+            ("model_source_cover_id",),
+            ("capture_upload_slot_id",),
+        }
+
+    def test_fe17_carries_an_existing_lease_through_the_rebuild(
+        self, tmp_path: Path
+    ) -> None:
+        # SQLite cannot drop a constraint, so this migration rebuilds the table. The
+        # rows are the thing a rebuild loses, and a lost lease orphans staged bytes.
+        url = _seeded_pre_fe17(tmp_path / "fe17-rows.sqlite")
+
+        command.upgrade(_config(url), "fe17c8d1a0f2")
+
+        assert _old_lease_job(url) == "old-job"
+
+    def test_fe17_downgrade_restores_the_job_unique(self, tmp_path: Path) -> None:
+        url = _seeded_pre_fe17(tmp_path / "fe17-downgrade.sqlite")
         config = _config(url)
-        command.upgrade(config, "fd16b7f0c9e5")
-
-        engine = create_engine(url)
-        try:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "INSERT INTO background_jobs "
-                        "(id, visible, kind, state, status_json, replay_safe, attempts, "
-                        "created_at, updated_at) VALUES "
-                        "('old-job', 1, 'ingest', 'pending', '{}', 0, 0, "
-                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-                    )
-                )
-                connection.execute(
-                    text(
-                        "INSERT INTO staging_leases "
-                        "(id, path, background_job_id, size_bytes, sha256, expires_at, "
-                        "created_at) VALUES "
-                        "('old-lease', '/tmp/old', 'old-job', 1, :sha, "
-                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-                    ),
-                    {"sha": "a" * 64},
-                )
-        finally:
-            engine.dispose()
-
         command.upgrade(config, "fe17c8d1a0f2")
-        engine = create_engine(url)
-        try:
-            unique_constraints = inspect(engine).get_unique_constraints(
-                "staging_leases"
-            )
-            assert {
-                tuple(constraint["column_names"]) for constraint in unique_constraints
-            } == {
-                ("path",),
-                ("inbox_item_id",),
-                ("model_source_cover_id",),
-                ("capture_upload_slot_id",),
-            }
-            with engine.connect() as connection:
-                assert (
-                    connection.execute(
-                        text(
-                            "SELECT background_job_id FROM staging_leases WHERE id = 'old-lease'"
-                        )
-                    ).scalar_one()
-                    == "old-job"
-                )
-        finally:
-            engine.dispose()
 
         command.downgrade(config, "fd16b7f0c9e5")
+
+        assert ("background_job_id",) in _lease_unique_columns(url)
+
+    def test_fe17_downgrade_drops_the_column_it_added(self, tmp_path: Path) -> None:
+        url = _seeded_pre_fe17(tmp_path / "fe17-downgrade-column.sqlite")
+        config = _config(url)
+        command.upgrade(config, "fe17c8d1a0f2")
+
+        command.downgrade(config, "fd16b7f0c9e5")
+
         engine = create_engine(url)
         try:
-            unique_constraints = inspect(engine).get_unique_constraints(
-                "staging_leases"
-            )
-            assert ("background_job_id",) in {
-                tuple(constraint["column_names"]) for constraint in unique_constraints
-            }
             assert "capture_upload_slot_id" not in {
                 column["name"]
                 for column in inspect(engine).get_columns("staging_leases")
             }
-            with engine.connect() as connection:
-                assert (
-                    connection.execute(
-                        text(
-                            "SELECT background_job_id FROM staging_leases WHERE id = 'old-lease'"
-                        )
-                    ).scalar_one()
-                    == "old-job"
-                )
         finally:
             engine.dispose()
+
+    def test_fe17_downgrade_carries_an_existing_lease_back(
+        self, tmp_path: Path
+    ) -> None:
+        url = _seeded_pre_fe17(tmp_path / "fe17-downgrade-rows.sqlite")
+        config = _config(url)
+        command.upgrade(config, "fe17c8d1a0f2")
+
+        command.downgrade(config, "fd16b7f0c9e5")
+
+        assert _old_lease_job(url) == "old-job"
 
     def test_fe17_sqlite_downgrade_drops_transferred_multifile_capture_leases(
         self,

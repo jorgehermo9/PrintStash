@@ -199,9 +199,7 @@ class TestMalformedEdges:
         assert bgcode.read_metadata_text(p) is None
         assert list(bgcode.iter_thumbnails(p)) == []
 
-    def test_unknown_block_type_has_no_params_and_is_skipped(
-        self, tmp_path: Path
-    ) -> None:
+    def test_an_unknown_block_type_is_skipped(self, tmp_path: Path) -> None:
         # _block_param_len falls through to 0 for block types it doesn't
         # recognize (line 81), and the walker still parses what follows.
         assert bgcode._block_param_len(99) == 0

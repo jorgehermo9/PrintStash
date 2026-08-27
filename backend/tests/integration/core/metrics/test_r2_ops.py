@@ -53,7 +53,7 @@ class TestMetricsEndpoint:
         assert "printstash_ingestion_job_duration_seconds" in body
         assert "printstash_ingestion_stuck_jobs" in body
 
-    def test_metrics_exposes_fleet_queue_and_scheduler_state(
+    def test_metrics_exposes_the_fleet_scheduler_state(
         self,
         client: TestClient,
         db_session: Session,

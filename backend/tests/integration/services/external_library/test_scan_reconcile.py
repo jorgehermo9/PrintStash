@@ -163,7 +163,7 @@ class TestScanLibrary:
         assert len(live_files) == 1
         assert live_files[0].path == str(new_dir / "widget.gcode")
 
-    def test_removed_file_is_trashed_and_model_soft_deleted(
+    def test_a_removed_file_trashes_the_model_it_was_alone_in(
         self, tmp_path: Path, db_session: Session
     ) -> None:
         use_local_storage(tmp_path)

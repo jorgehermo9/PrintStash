@@ -190,7 +190,7 @@ class TestFetchMmfModelMetadata:
         assert expires_at is not None
         assert expires_at.replace(tzinfo=timezone.utc) > utcnow()
 
-    def test_refreshes_once_and_retries_after_the_provider_rejects_the_token(
+    def test_refreshes_once_before_retrying_a_rejected_token(
         self,
         db_session: Session,
         connect,
@@ -388,7 +388,7 @@ class TestFetchMmfFileDownloadUrl:
 
         assert "transient" not in repr(_row(db_session, user.id))
 
-    def test_refreshes_once_and_retries_after_the_provider_rejects_the_token(
+    def test_refreshes_once_before_retrying_a_rejected_token(
         self,
         db_session: Session,
         connect,

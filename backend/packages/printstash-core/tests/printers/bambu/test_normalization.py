@@ -50,7 +50,7 @@ def slots_by_key(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 class TestNormalizeStatus:
-    def test_maps_state_progress_and_filename(self) -> None:
+    def test_maps_the_reported_job_fields_into_the_envelope(self) -> None:
         status = make_client()._normalize_status(
             {
                 "print": {
@@ -188,7 +188,7 @@ class TestNormalizeStatus:
 
         assert "material_tools" not in status
 
-    def test_exposes_ams_trays_and_the_external_spool_as_slots(self) -> None:
+    def test_exposes_every_material_source_as_a_slot(self) -> None:
         status = make_client()._normalize_status(
             {
                 "print": {

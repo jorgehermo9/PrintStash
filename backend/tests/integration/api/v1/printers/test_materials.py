@@ -57,7 +57,7 @@ def _state(client: TestClient, printer: Printer, headers: dict[str, str]) -> dic
 
 
 class TestGetPrinterMaterialState:
-    def test_reports_the_printers_tools_and_slots(
+    def test_reports_the_printers_whole_material_inventory(
         self, client: TestClient, auth_headers, printer: Printer
     ) -> None:
         response = client.get(

@@ -25,7 +25,7 @@ def _default_secret(monkeypatch: pytest.MonkeyPatch):
 
 
 class TestEnsureJwtSecret:
-    def test_generates_and_persists_secret_when_default(
+    def test_persists_the_secret_it_generates_over_the_default(
         self, db_session: Session
     ) -> None:
         ensure_jwt_secret(db_session)

@@ -108,7 +108,7 @@ class TestEnqueueOwnedKey:
         ):
             enqueue_owned_key(db_session, backend, key, required_proof=True)
 
-    def test_refuses_when_verification_fails_and_proof_is_required(
+    def test_refuses_to_delete_without_verifiable_proof(
         self, db_session: Session, owned, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         key, _receipt = owned()

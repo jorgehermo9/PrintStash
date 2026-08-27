@@ -185,7 +185,7 @@ class TestMatchingFilamentProfile:
         md = Metadata(file_id=1, material_brand="hatchbox pla")
         assert mv._matching_filament_profile(_profiles(), md).name == "Hatchbox PLA"
 
-    def test_type_and_brand_match(self) -> None:
+    def test_matches_on_type_together_with_brand(self) -> None:
         md = Metadata(file_id=1, material_type="PLA", material_brand="Hatchbox")
         assert mv._matching_filament_profile(_profiles(), md).name == "Hatchbox PLA"
 

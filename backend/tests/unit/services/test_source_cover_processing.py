@@ -59,10 +59,23 @@ class TestProcessSourceCoverUpload:
         assert processed.data == converted
         assert calls == [source]
 
-    def test_strips_source_metadata_and_honours_configured_thumbnail_width(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_resizes_to_the_configured_thumbnail_width(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setitem(_overlay, "model_thumbnail_width", 320)
+
+        processed = source_cover_processing.process_source_cover_upload(
+            _image_bytes("PNG"), "image/png"
+        )
+
+        with Image.open(io.BytesIO(processed.data)) as output:
+            assert output.size == (320, 240)
+
+    def test_strips_every_metadata_block_from_the_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A cover comes from a third-party page, so its metadata is untrusted input
+        # we would otherwise re-serve to every viewer.
         monkeypatch.setitem(_overlay, "model_thumbnail_width", 320)
         source = _image_bytes("PNG", pnginfo=_png_info("do not retain"))
 
@@ -71,7 +84,6 @@ class TestProcessSourceCoverUpload:
         )
 
         with Image.open(io.BytesIO(processed.data)) as output:
-            assert output.size == (320, 240)
             assert "comment" not in output.info
             assert "exif" not in output.info
             assert "icc_profile" not in output.info

@@ -418,7 +418,7 @@ class TestSharedGcode:
 
 
 class TestCreateShare:
-    def test_returns_a_token_and_its_url(
+    def test_returns_a_share_token_with_its_url(
         self, client: TestClient, db_session: Session, auth_headers: dict[str, str]
     ) -> None:
         model = _make_model(db_session, slug="creatable", hash_="b1" * 32)

@@ -95,13 +95,13 @@ class TestCanonicalizeUrl:
             == "https://example.test/model/42"
         )
 
-    def test_lowercases_the_scheme_and_host(self) -> None:
+    def test_lowercases_the_authority(self) -> None:
         assert (
             provenance.canonicalize_url("HTTPS://Example.TEST/model/42")
             == "https://example.test/model/42"
         )
 
-    def test_drops_the_query_and_fragment(self) -> None:
+    def test_drops_everything_after_the_path(self) -> None:
         # A provider link carries tracking parameters that are not part of the
         # page's identity, and sometimes a signed credential that must not be
         # stored at all.

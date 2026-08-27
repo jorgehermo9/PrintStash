@@ -46,7 +46,7 @@ class TestMultiArchWorkflows:
         assert len(build_steps) == 1
         assert build_steps[0]["with"]["platforms"] == "${{ matrix.platform }}"
 
-    def test_full_arm_image_is_loaded_and_step_smoked_in_its_build_job(self) -> None:
+    def test_the_arm_image_is_smoke_tested_in_its_own_build_job(self) -> None:
         workflow = _ci_workflow()
         jobs = workflow["jobs"]
         job = jobs["docker-build"]

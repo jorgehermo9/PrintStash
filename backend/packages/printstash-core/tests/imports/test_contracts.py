@@ -143,7 +143,7 @@ class TestSanitizeCanonicalUrl:
             == "https://example.test/a"
         )
 
-    def test_lower_cases_the_scheme_and_host(self) -> None:
+    def test_lower_cases_the_authority(self) -> None:
         # Two spellings of one page must not become two captures.
         assert (
             sanitize_canonical_url("HTTPS://Example.TEST/Model/1")
@@ -428,7 +428,7 @@ class TestCapturedField:
         with pytest.raises(CaptureContractError):
             CapturedField.from_dict("Example", "title")
 
-    def test_normalizes_unicode_and_line_endings(self) -> None:
+    def test_normalizes_text_before_hashing(self) -> None:
         field = CapturedField.from_dict(
             {"value": "é\r\nsecond", "origin": "confirmed"}, "title"
         )

@@ -295,7 +295,7 @@ class TestMoonrakerConfig:
 
 
 class TestBambuConfig:
-    def test_requires_a_host_a_serial_and_an_access_code(self) -> None:
+    def test_requires_every_bambu_connection_field(self) -> None:
         config = BambuConfig("printer.local", "SERIAL", ACCESS_CODE)
 
         # All three are load-bearing: the serial is the TLS identity and the
@@ -364,7 +364,7 @@ class TestPrusaLinkConfig:
 
 
 class TestOctoPrintConfig:
-    def test_requires_a_url_and_an_api_key(self) -> None:
+    def test_requires_every_api_key_connection_field(self) -> None:
         config = OctoPrintConfig("http://octoprint.local", API_KEY)
 
         assert config.api_key == API_KEY

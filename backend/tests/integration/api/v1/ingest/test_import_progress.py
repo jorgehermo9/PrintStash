@@ -413,9 +413,7 @@ class TestDownloadAndCollect:
         assert [name for _path, name in result] == ["cube.stl"]
 
     @pytest.mark.asyncio
-    async def test_returns_a_direct_mesh_file_unchanged(
-        self, monkeypatch
-    ) -> None:
+    async def test_returns_a_direct_mesh_file_unchanged(self, monkeypatch) -> None:
         async def fake_download(url: str):
             staged = Path.cwd() / "cube.stl"
             staged.write_bytes(_cube_stl_bytes())

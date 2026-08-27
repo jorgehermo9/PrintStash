@@ -195,7 +195,7 @@ class TestRequest:
             await client.aclose()
 
     @pytest.mark.asyncio
-    async def test_carries_the_status_and_body_of_a_refusal(self) -> None:
+    async def test_carries_a_refusals_status_with_its_body(self) -> None:
         client = _client(lambda _request: httpx.Response(503, text="offline"))
         try:
             with pytest.raises(MoonrakerError, match="moonraker 503: offline"):

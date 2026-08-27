@@ -145,7 +145,7 @@ class TestLogin:
         assert response.status_code == 200, response.text
         assert response.json()["access_token"]
 
-    def test_rejects_a_password_and_an_api_key_together(
+    def test_rejects_a_request_carrying_two_credentials(
         self, client: TestClient, db_session: Session, account
     ) -> None:
         user = account("dual-user")

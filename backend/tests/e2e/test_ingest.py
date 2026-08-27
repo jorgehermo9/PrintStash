@@ -197,7 +197,9 @@ def _embedded_3mf() -> tuple[bytes, tuple[int, int, int]]:
 
 class TestMetadata:
     @pytest.mark.asyncio
-    async def test_gcode_upload_parses_metadata_and_dedups(self, api, tmp_path, e2e_db):
+    async def test_a_repeated_gcode_upload_dedupes_by_content_hash(
+        self, api, tmp_path, e2e_db
+    ):
         headers = await _setup_and_login(api, tmp_path)
 
         job = await _await_job(

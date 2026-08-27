@@ -78,7 +78,7 @@ class TestStart:
 
 
 class TestSubscribeStatus:
-    def test_status_subscription_uses_one_mqtt_session_and_one_bootstrap_pushall(
+    def test_status_subscription_bootstraps_once_per_mqtt_session(
         self,
     ) -> None:
         sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)

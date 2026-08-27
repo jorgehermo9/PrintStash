@@ -196,7 +196,7 @@ class TestConnectionFailed:
 
 
 class TestMqttRequest:
-    def test_subscribes_before_publishing_and_shuts_the_loop_down(self) -> None:
+    def test_subscribes_before_it_publishes_anything(self) -> None:
         wire = ScriptedMqttClient(messages=[PAUSE_ACCEPTED])
         client = make_client(mqtt_client_factory=lambda: wire)
         payload = {"print": {"command": "pause"}}
@@ -324,7 +324,7 @@ class TestMqttRequest:
 
 class TestSendCommand:
     @pytest.mark.asyncio
-    async def test_accepts_a_reply_matching_the_command_and_sequence_id(self) -> None:
+    async def test_accepts_only_the_reply_to_its_own_request(self) -> None:
         client = make_client()
         seen: dict[str, Any] = {}
 

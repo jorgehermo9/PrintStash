@@ -89,7 +89,7 @@ def _persist(db_session: Session, model: Model, **overrides): ...  # builder
 
 
 class TestPersistArtifact:                          # ↔ ingestion.persist_artifact (integration/services/test_ingestion.py)
-    def test_persists_file_and_metadata_together(self, db_session, model, staged):
+    def test_persists_a_file_row_with_its_metadata_in_one_commit(self, db_session, model, staged):
         file_row = ingestion.persist_artifact(db_session, model=model, staged_path=staged, ...)
 
         md = db_session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).one()

@@ -43,7 +43,7 @@ from tests.integration.services.external_library._helpers import (
 
 
 class TestScanLibrary:
-    def test_scan_indexes_new_files_and_mirrors_collections(
+    def test_a_scan_mirrors_the_directory_tree_as_collections(
         self, tmp_path: Path, db_session: Session
     ) -> None:
         use_local_storage(tmp_path)
@@ -73,7 +73,7 @@ class TestScanLibrary:
         assert model.collection_rel is not None
         assert model.collection_rel.path == "functional"
 
-    def test_scan_indexes_mixed_mesh_and_gcode(
+    def test_a_scan_indexes_every_supported_file_type(
         self, tmp_path: Path, db_session: Session
     ) -> None:
         """A realistic folder mixes meshes and slicer output; both index in place."""

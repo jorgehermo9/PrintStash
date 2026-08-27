@@ -56,41 +56,61 @@ def _sender(responses: list[httpx.Response]):
     return send, seen
 
 
+_URL = "https://api.example/models/1"
+
+
+def _retrying_transport() -> tuple[ProviderTransport, dict[str, list]]:
+    """A transport whose first two attempts fail, with every side effect recorded.
+
+    429 with an over-long `Retry-After`, then a bare 503, then success — the two
+    distinct backoff paths in one sequence, which is why both tests below share it.
+    """
+    sender, seen = _sender(
+        [
+            httpx.Response(429, headers={"Retry-After": "120"}),
+            httpx.Response(503),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
+    state: dict[str, list] = {"resolved": [], "delays": [], "seen": seen}
+
+    def resolve(url: str) -> PinnedTarget:
+        state["resolved"].append(url)
+        return _target(url)
+
+    async def sleep(delay: float) -> None:
+        state["delays"].append(delay)
+
+    transport = ProviderTransport(
+        resolver=resolve, sender=sender, sleep=sleep, random=lambda: 0.5
+    )
+    return transport, state
+
+
 class TestRequest:
     """One outbound provider request, and every way it must refuse to become another."""
 
     @pytest.mark.anyio
-    async def test_revalidates_every_retry_and_uses_bounded_jitter(self) -> None:
-        sender, seen = _sender(
-            [
-                httpx.Response(429, headers={"Retry-After": "120"}),
-                httpx.Response(503),
-                httpx.Response(200, json={"ok": True}),
-            ]
-        )
-        resolved: list[str] = []
-        delays: list[float] = []
+    async def test_revalidates_the_target_on_every_retry(self) -> None:
+        # Re-resolving each time is what stops a DNS record from being rebound to a
+        # private address between the first attempt and the retry.
+        transport, state = _retrying_transport()
 
-        def resolve(url: str) -> PinnedTarget:
-            resolved.append(url)
-            return _target(url)
+        await transport.request("GET", _URL)
 
-        async def sleep(delay: float) -> None:
-            delays.append(delay)
+        assert state["resolved"] == [_URL] * 3
+        assert state["seen"] == [(_URL, "GET")] * 3
 
-        transport = ProviderTransport(
-            resolver=resolve,
-            sender=sender,
-            sleep=sleep,
-            random=lambda: 0.5,
-        )
+    @pytest.mark.asyncio
+    async def test_honours_retry_after_then_falls_back_to_bounded_jitter(self) -> None:
+        transport, state = _retrying_transport()
 
-        response = await transport.request("GET", "https://api.example/models/1")
+        response = await transport.request("GET", _URL)
 
         assert response.status_code == 200
-        assert resolved == ["https://api.example/models/1"] * 3
-        assert seen == [("https://api.example/models/1", "GET")] * 3
-        assert delays == [10.0, 0.5]
+        # 10.0 is the capped `Retry-After: 120`; 0.5 is the jittered backoff for the
+        # 503, with `random` pinned so the bound is checkable at all.
+        assert state["delays"] == [10.0, 0.5]
 
     @pytest.mark.anyio
     async def test_redirect_is_revalidated_before_following(self) -> None:

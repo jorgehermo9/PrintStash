@@ -39,7 +39,7 @@ class TestResolveTags:
         names = {t.name for t in tags}
         assert names == {"prototype", "v2"}
 
-    def test_resolve_skips_blank_and_duplicate_names(self, db_session) -> None:
+    def test_resolve_skips_every_unusable_name(self, db_session) -> None:
         from app.services.taxonomy import resolve_or_create_tags
 
         tags = resolve_or_create_tags(db_session, ["  ", "Bracket", "bracket"])
@@ -187,7 +187,7 @@ class TestListAndDescendantPaths:
 
 
 class TestResolveTagsInTransaction:
-    def test_creates_and_dedupes(self, db_session) -> None:
+    def test_creates_each_name_once(self, db_session) -> None:
         from app.services.taxonomy import resolve_or_create_tags_in_transaction
 
         tags = resolve_or_create_tags_in_transaction(

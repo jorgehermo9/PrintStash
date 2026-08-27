@@ -23,49 +23,69 @@ def _grant(session: Session, user: User, cid: int, role: CollectionRole) -> None
     grant_collection_role(session, user, cid, role)
 
 
+def _editable_collection(session: Session, tmp_path: Path):
+    """A collection plus the headers of a user who may edit it.
+
+    `EDIT` rather than admin, so these tests keep proving the endpoints are reachable
+    on the role the UI actually grants a collaborator.
+    """
+    _overlay["thumb_dir"] = tmp_path / "thumbs"
+    collection = taxonomy.resolve_or_create_collection(session, "Brackets")
+    editor = build_user(session, "editor")
+    _grant(session, editor, collection.id, CollectionRole.EDIT)
+    return collection, bearer(editor)
+
+
 class TestCollectionReadme:
-    def test_readme_roundtrip_and_image_lifecycle(
+    def test_a_readme_reads_back_as_it_was_written(
         self, db_session: Session, client: TestClient, tmp_path: Path
     ) -> None:
-        _overlay["thumb_dir"] = tmp_path / "thumbs"
-        col = taxonomy.resolve_or_create_collection(db_session, "Brackets")
-        editor = build_user(db_session, "editor")
-        _grant(db_session, editor, col.id, CollectionRole.EDIT)
-        h = bearer(editor)
+        collection, headers = _editable_collection(db_session, tmp_path)
 
-        # Set + read back the markdown.
-        r = client.put(
-            f"/api/v1/collections/{col.id}/readme",
+        put = client.put(
+            f"/api/v1/collections/{collection.id}/readme",
             json={"readme": "# Notes"},
-            headers=h,
+            headers=headers,
         )
-        assert r.status_code == 200
+
+        assert put.status_code == 200, put.text
         assert (
-            client.get(f"/api/v1/collections/{col.id}/readme", headers=h).json()[
-                "readme"
-            ]
+            client.get(
+                f"/api/v1/collections/{collection.id}/readme", headers=headers
+            ).json()["readme"]
             == "# Notes"
         )
 
-        # Upload an image; the returned URL serves the bytes back.
-        up = client.post(
-            f"/api/v1/collections/{col.id}/images",
+    def test_an_uploaded_image_is_served_from_the_url_it_returned(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        collection, headers = _editable_collection(db_session, tmp_path)
+
+        uploaded = client.post(
+            f"/api/v1/collections/{collection.id}/images",
             files={"file": ("pic.png", _PNG, "image/png")},
-            headers=h,
+            headers=headers,
         )
-        assert up.status_code == 201
-        url = up.json()["url"]
-        served = client.get(url, headers=h)
+
+        assert uploaded.status_code == 201, uploaded.text
+        served = client.get(uploaded.json()["url"], headers=headers)
         assert served.status_code == 200
         assert served.content == _PNG
 
-        # Non-image extension is rejected.
-        bad = client.post(
-            f"/api/v1/collections/{col.id}/images",
+    def test_an_upload_that_is_not_an_image_is_rejected(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        # SVG specifically: it is an image to a browser and a script host to an
+        # attacker, so serving one back from our own origin is the risk here.
+        collection, headers = _editable_collection(db_session, tmp_path)
+
+        rejected = client.post(
+            f"/api/v1/collections/{collection.id}/images",
             files={"file": ("x.svg", b"<svg/>", "image/svg+xml")},
-            headers=h,
+            headers=headers,
         )
-        assert bad.status_code == 400
+
+        assert rejected.status_code == 400, rejected.text
 
     def test_readme_rbac(
         self, db_session: Session, client: TestClient, tmp_path: Path

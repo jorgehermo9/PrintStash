@@ -125,7 +125,7 @@ class TestRamTriangleCap:
         monkeypatch.setattr(mesh_processing, "_detect_memory_limit_bytes", _boom)
         assert mesh_processing._ram_triangle_cap(".stl") is not None
 
-    def test_ram_cap_scales_with_memory_and_format(self, monkeypatch) -> None:
+    def test_the_ram_cap_scales_per_format(self, monkeypatch) -> None:
         # Pin a 4 GB ceiling so the result is host-independent.
         monkeypatch.setattr(mesh_processing, "_MEMORY_LIMIT_BYTES", 4 * 1024**3)
         monkeypatch.setitem(_overlay, "mesh_memory_budget_fraction", 0.5)

@@ -355,7 +355,9 @@ class TestListItems:
         assert direct_model.id in ids
         assert nested_model.id in ids
 
-    def test_the_slicer_metadata_filters_narrow_by_exact_value(self, db_session: Session) -> None:
+    def test_the_slicer_metadata_filters_narrow_by_exact_value(
+        self, db_session: Session
+    ) -> None:
         user = build_user(db_session, "slicer-admin", superuser=True)
         orca = build_model(db_session, "Orca")
         prusa = build_model(db_session, "Prusa")

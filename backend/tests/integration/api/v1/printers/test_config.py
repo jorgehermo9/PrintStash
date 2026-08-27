@@ -19,7 +19,7 @@ from tests.factories import build_printer
 
 
 class TestPrinterConfig:
-    def test_moonraker_config_returns_server_and_klipper_config(
+    def test_moonraker_config_returns_both_config_documents(
         self, client: TestClient, auth_headers, db_session: Session
     ):
         p = build_printer(

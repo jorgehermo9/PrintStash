@@ -79,7 +79,7 @@ class TestEstimateTriangleCount:
         assert est is not None
         assert est >= n
 
-    def test_ascii_stl_is_detected_and_estimated_by_text_density(
+    def test_an_ascii_stl_is_estimated_from_its_text_density(
         self, tmp_path: Path
     ) -> None:
         facet = (

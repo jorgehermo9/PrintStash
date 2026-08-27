@@ -30,7 +30,7 @@ def _mock_resp(status_code: int, json_value=None, text: str = ""):
 
 
 class TestSpoolmanClient:
-    def test_list_spools_passes_archive_flag_and_unwraps(self):
+    def test_list_spools_unwraps_the_providers_envelope(self):
         client = SpoolmanClient("http://spoolman.local:7912")
         resp = _mock_resp(200, [{"id": 1}, {"id": 2}])
         with patch("app.services.spoolman.get_http_client") as mock_get_client:

@@ -117,9 +117,7 @@ class TestBeginOauth:
 
 
 class TestAuthorizationUrl:
-    def test_carries_the_state_and_redirect_uri_the_callback_will_check(
-        self, mmf_configured
-    ) -> None:
+    def test_carries_what_the_callback_will_check(self, mmf_configured) -> None:
         query = parse_qs(
             urlparse(service.authorization_url("state-value", REDIRECT_URI)).query
         )

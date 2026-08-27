@@ -134,7 +134,7 @@ class TestCreateQueueJobRouting:
         assert response.status_code == 200, response.text
         assert [job["id"] for job in response.json()] == [queued["id"]]
 
-    def test_reports_the_default_printer_and_its_drain_state(
+    def test_reports_the_default_printer_with_its_drain_state(
         self,
         client: TestClient,
         auth_headers: dict[str, str],

@@ -44,7 +44,7 @@ class TestExtract:
         )
         assert extract(f) == large
 
-    def test_unterminated_block_is_bounded_and_returns_none(
+    def test_an_unterminated_block_is_bounded_before_giving_up(
         self, tmp_path: Path
     ) -> None:
         # Regression: a "thumbnail begin" with no "thumbnail end" must not buffer

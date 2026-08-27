@@ -34,7 +34,7 @@ class _Transport:
 
 
 class TestFileDownloadUrl:
-    def test_mmf_file_url_is_transient_and_requires_public_https(self) -> None:
+    def test_an_mmf_file_url_is_refused_unless_it_is_public_https(self) -> None:
         transport = _Transport(
             {"download_url": "https://downloads.example.test/signed?token=secret"}
         )

@@ -641,7 +641,7 @@ class TestRenderStlPreviewIsolated:
             for image_shape, zbuffer_shape, raster_width, raster_height in observed
         )
 
-    def test_streaming_preview_is_deterministic_and_keeps_background_transparent(
+    def test_a_streaming_preview_is_byte_identical_on_a_second_run(
         self,
         tmp_path: Path,
     ) -> None:

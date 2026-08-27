@@ -149,7 +149,7 @@ class TestCreateOnlyWrites:
 
 
 class TestCreateStream:
-    def test_writes_the_bytes_and_returns_a_receipt_for_them(
+    def test_returns_a_receipt_for_the_bytes_it_wrote(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         data_dir = tmp_path / "files"

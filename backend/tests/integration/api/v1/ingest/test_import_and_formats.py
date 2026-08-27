@@ -44,7 +44,7 @@ def _completed(client: TestClient, resp, headers: dict[str, str]) -> dict:
 
 
 class TestIngestModel:
-    def test_ingest_step_is_accepted_and_typed(
+    def test_a_step_upload_is_stored_with_its_file_type(
         self,
         tmp_path: Path,
         client: TestClient,

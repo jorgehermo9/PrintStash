@@ -301,7 +301,7 @@ class TestUpdateConfig:
         assert response.status_code == 409, response.text
         assert response.json()["detail"] == "storage_migration_required"
 
-    def test_stores_a_secret_and_reports_it_as_present(
+    def test_a_stored_secret_is_reported_as_present(
         self, client: TestClient, auth_headers: dict[str, str]
     ) -> None:
         response = client.put(

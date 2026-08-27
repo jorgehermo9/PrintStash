@@ -807,7 +807,7 @@ def _fake_download_seq(items: list[tuple[bytes, str]]) -> AsyncMock:
 
 class TestIngestUrl:
     @_requires(BENCHY_STL)
-    def test_ingest_url_downloads_and_ingests_for_real(
+    def test_ingest_url_imports_a_real_download(
         self,
         tmp_path: Path,
         client: TestClient,

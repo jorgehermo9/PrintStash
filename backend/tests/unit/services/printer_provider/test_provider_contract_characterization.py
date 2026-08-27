@@ -69,7 +69,7 @@ class TestQueryStatus:
         assert result == expected
 
     @pytest.mark.asyncio
-    async def test_bambu_status_contract_is_sparse_and_preserves_external_metadata(
+    async def test_the_bambu_status_contract_preserves_external_metadata(
         self,
     ) -> None:
         report = {

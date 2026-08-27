@@ -116,7 +116,9 @@ class TestProfileParsers:
             (None, None),
         ],
     )
-    def test_to_float_rejects_anything_but_a_positive_number(self, value, expected) -> None:
+    def test_to_float_rejects_anything_but_a_positive_number(
+        self, value, expected
+    ) -> None:
         assert pd._to_float(value) == expected
 
     def test_infer_cost_per_kg_scales_to_kilogram(self) -> None:

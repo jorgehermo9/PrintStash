@@ -58,7 +58,7 @@ def _payload(data: bytes) -> CaptureUploadSlotsCreate:
 
 
 class TestRecoverCaptureStaging:
-    def test_capture_staging_recovery_removes_owned_partial_and_preserves_foreign(
+    def test_staging_recovery_removes_only_what_it_owns(
         self, db_session: Session, tmp_path: Path, monkeypatch
     ) -> None:
         monkeypatch.setitem(_overlay, "staging_dir", tmp_path)

@@ -27,29 +27,46 @@ def _config(db_path: Path) -> Config:
     return cfg
 
 
+def _table_names(db_path: Path) -> set[str]:
+    """The tables in *db_path*, with the engine disposed before returning.
+
+    Disposing matters on SQLite: a live connection holds the file, and the next
+    `command.upgrade` in these tests would then be writing behind a reader.
+    """
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        return set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
 class TestSavedViewsMigration:
-    def test_saved_views_migration_is_additive_and_reversible(
-        self, tmp_path: Path
-    ) -> None:
+    def test_the_saved_views_migration_only_adds(self, tmp_path: Path) -> None:
         db_path = tmp_path / "saved-views.sqlite"
         cfg = _config(db_path)
         command.upgrade(cfg, PREVIOUS)
-        engine = create_engine(f"sqlite:///{db_path}")
-        before = set(inspect(engine).get_table_names())
-        engine.dispose()
+        before = _table_names(db_path)
 
         command.upgrade(cfg, REVISION)
-        engine = create_engine(f"sqlite:///{db_path}")
-        upgraded = set(inspect(engine).get_table_names())
+
+        upgraded = _table_names(db_path)
         assert before <= upgraded
         assert {"saved_views", "model_stars"} <= upgraded
-        assert {"user_id", "name", "filters_json"} <= {
-            column["name"] for column in inspect(engine).get_columns("saved_views")
-        }
-        engine.dispose()
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            assert {"user_id", "name", "filters_json"} <= {
+                column["name"] for column in inspect(engine).get_columns("saved_views")
+            }
+        finally:
+            engine.dispose()
+
+    def test_the_saved_views_migration_downgrades_cleanly(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "saved-views-downgrade.sqlite"
+        cfg = _config(db_path)
+        command.upgrade(cfg, PREVIOUS)
+        before = _table_names(db_path)
+        command.upgrade(cfg, REVISION)
 
         command.downgrade(cfg, PREVIOUS)
-        engine = create_engine(f"sqlite:///{db_path}")
-        downgraded = set(inspect(engine).get_table_names())
-        engine.dispose()
-        assert downgraded == before
+
+        assert _table_names(db_path) == before

@@ -167,7 +167,7 @@ class TestImportArchive:
         with pytest.raises(ValueError, match="portable_manifest_invalid"):
             library_transfer.import_archive(db_session, wrong_format, user)
 
-    def test_library_import_creates_new_model_star_and_print_job(
+    def test_a_library_import_recreates_everything_attached_to_the_model(
         self, db_session: Session, auth_headers: dict[str, str], tmp_path: Path
     ) -> None:
         """A manifest hash the target DB has never seen: the 'model not found'
@@ -329,7 +329,7 @@ class TestImportArchive:
         finally:
             archive_path.unlink(missing_ok=True)
 
-    def test_library_archive_manifest_blobs_and_idempotent_import(
+    def test_re_importing_the_same_archive_changes_nothing(
         self, db_session: Session, auth_headers: dict[str, str], tmp_path: Path
     ) -> None:
         user, _, file_row = _seed(db_session, tmp_path)

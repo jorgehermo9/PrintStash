@@ -373,7 +373,9 @@ class TestOctoPrintPrinter:
         row = db_session.exec(select(Printer).where(Printer.name == "OctoPi")).one()
         assert row.octoprint_api_key == "secret-key"
 
-    def test_create_requires_url_and_api_key(self, client: TestClient, auth_headers):
+    def test_create_requires_every_api_key_field(
+        self, client: TestClient, auth_headers
+    ):
         resp = client.post(
             "/api/v1/printers",
             json={"name": "OctoPi", "provider": "octoprint"},

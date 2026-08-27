@@ -17,11 +17,30 @@ import asyncio
 
 import httpx
 
+from app.services import release_check
 from app.services.release_check import (
     GITHUB_LATEST_RELEASE_URL,
     _fetch_release_status,
     is_newer_release,
 )
+
+
+def _stub_fetch(monkeypatch) -> dict[str, int]:
+    """Replace the upstream fetch with a counter, and start from an empty cache.
+
+    Emptying `_cache` is the load-bearing half: it is module state, so a previous
+    test's entry would make the first call here a cache hit and both of the tests
+    below would pass without exercising anything.
+    """
+    calls = {"n": 0}
+
+    async def _fake_fetch(current_version: str, **_kwargs):
+        calls["n"] += 1
+        return {"status": "up_to_date", "current_version": current_version}
+
+    monkeypatch.setattr(release_check, "_fetch_release_status", _fake_fetch)
+    monkeypatch.setattr(release_check, "_cache", {})
+    return calls
 
 
 class TestFetchReleaseStatus:
@@ -79,28 +98,23 @@ class TestFetchReleaseStatus:
 
 
 class TestGetReleaseStatus:
-    def test_get_release_status_caches_and_forces_refresh(self, monkeypatch) -> None:
-        from app.services import release_check
+    def test_get_release_status_serves_a_second_call_from_cache(
+        self, monkeypatch
+    ) -> None:
+        calls = _stub_fetch(monkeypatch)
 
-        calls = {"n": 0}
-
-        async def _fake_fetch(current_version: str, **_kwargs):
-            calls["n"] += 1
-            return {"status": "up_to_date", "current_version": current_version}
-
-        monkeypatch.setattr(release_check, "_fetch_release_status", _fake_fetch)
-        monkeypatch.setattr(release_check, "_cache", {})
-
-        first = asyncio.run(release_check.get_release_status("0.10.0"))
-        assert first["status"] == "up_to_date"
-        assert calls["n"] == 1
-
-        # Second call within TTL is served from cache — no extra fetch.
         asyncio.run(release_check.get_release_status("0.10.0"))
+        asyncio.run(release_check.get_release_status("0.10.0"))
+
         assert calls["n"] == 1
 
-        # force=True bypasses the cache and re-fetches.
-        asyncio.run(release_check.get_release_status("0.10.0", force=True))
+    def test_get_release_status_re_fetches_when_forced(self, monkeypatch) -> None:
+        calls = _stub_fetch(monkeypatch)
+        asyncio.run(release_check.get_release_status("0.10.0"))
+
+        forced = asyncio.run(release_check.get_release_status("0.10.0", force=True))
+
+        assert forced["status"] == "up_to_date"
         assert calls["n"] == 2
 
     def test_release_versions_compare_semantically(self) -> None:

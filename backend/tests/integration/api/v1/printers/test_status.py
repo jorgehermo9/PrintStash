@@ -36,7 +36,7 @@ from tests.integration.api.v1.printers._helpers import user_headers
 
 
 class TestPrinterStatus:
-    def test_status_returns_printer_and_snapshot(
+    def test_status_returns_the_printer_with_its_snapshot(
         self, client: TestClient, auth_headers, db_session: Session
     ):
         p = build_printer(

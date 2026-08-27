@@ -160,13 +160,13 @@ class TestFromLegacyPayload:
         assert snapshot.print.filament_used == 1234.5
         assert snapshot.print.message == ""
 
-    def test_exposes_the_bed_and_extruder_temperatures(self) -> None:
+    def test_exposes_every_reported_temperature(self) -> None:
         snapshot = PrinterSnapshot.from_legacy_payload(MOONRAKER_PAYLOAD)
 
         assert snapshot.bed == TemperatureSnapshot(59.5, 60.0)
         assert snapshot.extruder == TemperatureSnapshot(214.0, 215.0)
 
-    def test_exposes_the_toolhead_position_and_homed_axes(self) -> None:
+    def test_exposes_the_toolhead_state(self) -> None:
         snapshot = PrinterSnapshot.from_legacy_payload(MOONRAKER_PAYLOAD)
 
         assert snapshot.position == (1.0, 2.0, 3.0, 4.0)

@@ -88,7 +88,13 @@ prove the exhaustive bar is met instead of asserting it.
 
 - **One row per observable behaviour**, which is also one test function / one
   `it` (see "One behaviour per test"). If a row's name needs the word "and",
-  split it into two rows.
+  split it into two rows. This is enforced, not advisory: no test name in either
+  Python tree may contain `_and_` (`backend/tests/repo/test_test_hygiene.py`).
+  Two shapes trip it, and the fix differs — a name *joining* two behaviours is
+  two tests; a name *listing* the assertions of one behaviour just needs to name
+  the behaviour. Where the "and" belongs to a production symbol
+  (`_download_and_collect`), the `class Test…` group carries the unit's name and
+  the test names the behaviour.
 - **Derive rows from requirements, never from the implementation.** Reading
   the source and matrixing what it happens to do reproduces its bugs as
   "expected." Requirements live in the issue, `CONTEXT.md`,
@@ -100,7 +106,7 @@ prove the exhaustive bar is met instead of asserting it.
 
 | # | Behaviour (test name) | Category | Precondition / input | Observable outcome asserted | Tier | Status |
 |---|----------------------|----------|----------------------|-----------------------------|------|--------|
-| 1 | persists the file row and metadata together | Happy | staged STL, well-formed meta | `File` + `Metadata` rows exist; returned row has id | Integration | ✅ `unit/services/test_ingestion.py::TestPersistArtifact::test_persists_file_and_metadata_together` |
+| 1 | persists the file row with its metadata in one commit | Happy | staged STL, well-formed meta | `File` + `Metadata` rows exist; returned row has id | Integration | ✅ `integration/services/ingestion/test_ingestion_atomicity.py::TestPersistArtifact::test_persists_a_file_row_with_its_metadata_in_one_commit` |
 | 2 | dedupes a re-upload by content hash | Edge | same bytes uploaded twice | job state `duplicate`; one `Model` row | E2E | ✅ `e2e/test_ingest.py::test_gcode_upload_dedups_by_content_hash` |
 | 3 | accepts a model name at the length limit | Edge | name = MAX chars | 201; row persisted untruncated | Integration | ❌ missing |
 | 4 | hides a trashed model from the list | Edge | model with `deleted_at` set | `GET /models` omits it | Integration | ❌ missing |
@@ -472,7 +478,8 @@ Runtime mechanics are in the references.
 ### One behaviour per test
 
 Each test asserts on **one observable behaviour**, and its name says exactly
-which. If the natural name needs the word "and", split.
+which. A name needing "and" is the tell, and it is guarded absolutely — see the
+matrix rules above.
 
 ```python
 # ❌ two behaviours in one test
@@ -483,6 +490,14 @@ def test_returns_the_created_printer(): ...
 def test_persists_a_row(): ...
 def test_rejects_read_scope(): ...
 ```
+
+Splitting one of these is not cosmetic. Doing it across this suite repeatedly
+turned up assertions that had been passing for the wrong reason, because the
+first half of the test silently set up the second:
+`test_progress_is_monotonic_below_terminal_and_completed_forces_100` asserted a
+lower clamp that does not exist — the `99.0` it checked was the *earlier* value
+being kept, and a fresh job handed `-3.0` reports `0.0`. Nothing in the combined
+test could have told you that.
 
 Why: the failing test's name tells you which behaviour broke; each test is
 independently skippable; setup is paid per fixture, not per test, so splitting

@@ -157,7 +157,7 @@ class TestModel:
         assert Path(nas_path).exists()
         assert Path(nas_path).read_bytes() == nas_bytes
 
-    def test_hard_delete_tagged_model_succeeds_and_keeps_the_tag(
+    def test_hard_deleting_a_tagged_model_leaves_the_tag(
         self,
         db_session: Session,
     ) -> None:

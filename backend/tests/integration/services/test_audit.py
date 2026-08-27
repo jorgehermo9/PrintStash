@@ -28,7 +28,7 @@ from tests.factories import build_file, build_model
 
 
 class TestAuditListener:
-    def test_provenance_audit_diff_redacts_snapshot_and_remote_identifiers(
+    def test_a_provenance_audit_diff_redacts_every_identifier(
         self,
         db_session,
     ) -> None:
@@ -55,7 +55,7 @@ class TestAuditListener:
         assert diff["provider"]["after"] == "printables-v2"
         assert diff["source_item_id"]["after"] == "[redacted]"
 
-    def test_audit_listener_redacts_provenance_on_insert_and_update(
+    def test_the_audit_listener_redacts_provenance_on_every_write(
         self, db_session
     ) -> None:
         install_audit_listeners()

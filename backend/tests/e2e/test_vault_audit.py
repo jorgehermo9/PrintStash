@@ -59,7 +59,7 @@ async def _await_job(api, headers: dict[str, str], job_id: str) -> dict:
 
 class TestVaultAudit:
     @pytest.mark.asyncio
-    async def test_quick_audit_finds_and_repairs_missing_thumbnail(
+    async def test_a_quick_audit_repairs_a_missing_thumbnail(
         self, api, tmp_path, e2e_db
     ):
         headers = await _setup_and_login(api, tmp_path)

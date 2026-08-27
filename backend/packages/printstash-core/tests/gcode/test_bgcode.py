@@ -319,7 +319,7 @@ class TestBlockParamLen:
         # Format, width, height — the reader needs all three to emit a preview.
         assert bgcode._block_param_len(_THUMBNAIL) == 6
 
-    def test_reports_two_parameter_bytes_for_metadata_and_gcode(self) -> None:
+    def test_reports_two_parameter_bytes_for_every_block_kind(self) -> None:
         assert bgcode._block_param_len(_FILE_METADATA) == 2
         assert bgcode._block_param_len(_GCODE) == 2
 

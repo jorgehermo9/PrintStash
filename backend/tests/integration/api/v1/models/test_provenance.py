@@ -313,7 +313,7 @@ class TestPatchModelProvenance:
         assert field["user_override_set"] is False
         assert field["effective_value"] == "Captured Bracket"
 
-    def test_refuses_to_set_and_clear_the_same_field_at_once(
+    def test_refuses_a_contradictory_override_request(
         self,
         client: TestClient,
         model: Model,

@@ -302,7 +302,7 @@ class TestCloseFtps:
 
 
 class TestUploadViaFtps:
-    def test_stores_under_a_temporary_name_and_renames_on_success(
+    def test_publishes_an_upload_by_renaming_it_into_place(
         self, source_file: Path
     ) -> None:
         ftp = FakeFtpsClient()

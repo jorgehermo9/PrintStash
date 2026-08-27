@@ -104,7 +104,7 @@ class TestScanLibrary:
         assert result == {"coalesced": True, "job_id": "existing-job"}
         assert external_files(db_session, live_only=False) == []
 
-    def test_per_file_error_is_isolated_and_scan_continues(
+    def test_a_scan_continues_past_a_file_that_fails(
         self, tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """One unparseable/locked file must not abort the whole NAS sync: it is

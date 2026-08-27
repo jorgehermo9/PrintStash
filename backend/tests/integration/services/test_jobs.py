@@ -60,19 +60,35 @@ class TestJobRegistry:
         assert job.progress == 20.0
         assert job.started_at is not None
 
-    def test_progress_is_monotonic_below_terminal_and_completed_forces_100(
-        self,
-    ) -> None:
+    def test_progress_over_range_is_clamped_below_completion(self) -> None:
+        # 99.0 rather than 100.0: only reaching a terminal state may report 100, so a
+        # provider sending 250 must not make the UI say the print finished.
         registry = JobRegistry()
         job_id = registry.create()
 
         registry.update(job_id, progress=250.0)
+
         assert registry.get(job_id).progress == 99.0
+
+    def test_progress_never_moves_backwards(self) -> None:
+        # Splitting the old combined test exposed that this is monotonicity, not a
+        # lower clamp: a fresh job handed -3.0 reports 0.0, and the 99.0 below is the
+        # earlier value being *kept* rather than a floor being applied.
+        registry = JobRegistry()
+        job_id = registry.create()
+        registry.update(job_id, progress=250.0)
 
         registry.update(job_id, progress=-3.0)
+
         assert registry.get(job_id).progress == 99.0
 
+    def test_completing_a_job_forces_progress_to_one_hundred(self) -> None:
+        registry = JobRegistry()
+        job_id = registry.create()
+        registry.update(job_id, progress=250.0)
+
         registry.update(job_id, state="completed")
+
         job = registry.get(job_id)
         assert job.progress == 100.0
         assert job.finished_at is not None

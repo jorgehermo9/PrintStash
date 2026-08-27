@@ -327,7 +327,7 @@ class TestServerInfo:
 
 class TestQueryStatus:
     @pytest.mark.asyncio
-    async def test_normalizes_state_progress_and_every_temperature(self) -> None:
+    async def test_normalizes_a_status_into_the_shared_envelope(self) -> None:
         assert await make_client().query_status() == PRINTING_ENVELOPE
 
     @pytest.mark.asyncio
@@ -660,7 +660,7 @@ class TestElegooCentauriFactory:
         assert isinstance(client, ElegooCentauriClient)
         assert client.config is config
 
-    def test_passes_the_injected_connector_and_logger_through(self) -> None:
+    def test_passes_injected_dependencies_through_to_the_client(self) -> None:
         logger = logging.getLogger("test.elegoo.factory")
 
         async def connector(_enable_control: bool) -> FakeConnection:

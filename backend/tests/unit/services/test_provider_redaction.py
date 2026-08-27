@@ -83,7 +83,7 @@ class TestRedactUrl:
     ) -> None:
         assert redact_url(value) == expected
 
-    def test_lowercases_the_scheme_and_host(self) -> None:
+    def test_lowercases_the_authority(self) -> None:
         assert redact_url("HTTPS://EXAMPLE.TEST/a") == "https://example.test/a"
 
     def test_keeps_a_non_default_port(self) -> None:

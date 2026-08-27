@@ -74,7 +74,7 @@ class TestVerifyDownloadToken:
 
 
 class TestAuth:
-    def test_slicer_url_returns_token_and_downloads_without_auth(
+    def test_a_slicer_url_token_downloads_without_a_session(
         self,
         tmp_path: Path,
         client: TestClient,
