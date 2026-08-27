@@ -75,6 +75,7 @@ def build_file(
     status: FileRevisionStatus | None = None,
     trashed: bool | datetime = False,
     external: bool = False,
+    metadata: dict[str, Any] | None = None,
     **overrides: Any,
 ) -> File:
     """One artifact under *model*, at the model's next version.
@@ -82,6 +83,12 @@ def build_file(
     `recommended=True` also demotes whatever revision held the recommendation, so
     the "exactly one recommended live G-code" invariant holds without the test
     having to know about it.
+
+    `metadata={"material_type": "PLA"}` attaches the slicer metadata row in the
+    same call. Twenty test files need the pair, and the reason is structural: the
+    structured filters and the cost calculations read the metadata of *this*
+    artifact, so a file whose metadata hangs off a sibling matches nothing — a
+    result that looks like a filter bug and is a setup bug.
     """
     reject_aliases(
         overrides,
@@ -108,7 +115,7 @@ def build_file(
     overrides.setdefault("path", f"{model.slug}/v{version}/{name}")
     overrides.setdefault("size_bytes", 1)
     overrides.setdefault("sha256", unique_hash("file_sha"))
-    return save(
+    row = save(
         session,
         File(
             model_id=model.id,
@@ -121,6 +128,9 @@ def build_file(
             **overrides,
         ),
     )
+    if metadata is not None:
+        build_metadata(session, row, **metadata)
+    return row
 
 
 def _demote_current_recommendation(session: Session, model: Model) -> None:

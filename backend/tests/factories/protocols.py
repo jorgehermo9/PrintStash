@@ -107,6 +107,7 @@ class MakeFile(Protocol):
         status: FileRevisionStatus | None = None,
         trashed: bool | datetime = False,
         external: bool = False,
+        metadata: dict[str, Any] | None = None,
         **overrides: Any,
     ) -> File: ...
 

@@ -9,7 +9,6 @@ from app.db.models import (
     File,
     FileRevisionStatus,
     FileType,
-    Metadata,
     Model,
     Printer,
     PrinterFile,
@@ -20,43 +19,7 @@ from app.db.models import (
 )
 from app.schemas.models import ModelFilters
 from app.services import model_views
-
-
-def _model(session: Session, name: str, suffix: str) -> Model:
-    row = Model(name=name, slug=name.lower(), hash=suffix * 64)
-    session.add(row)
-    session.commit()
-    session.refresh(row)
-    return row
-
-
-def _artifact(
-    session: Session,
-    model: Model,
-    *,
-    filename: str,
-    file_type: FileType,
-    material: str | None = None,
-    status: FileRevisionStatus | None = None,
-) -> File:
-    version = model.next_file_version
-    model.next_file_version += 1
-    row = File(
-        model_id=model.id,
-        path=filename,
-        original_filename=filename,
-        file_type=file_type,
-        version=version,
-        revision_status=status,
-        size_bytes=1,
-        sha256=(filename[0] * 64),
-    )
-    session.add(row)
-    session.commit()
-    session.refresh(row)
-    session.add(Metadata(file_id=row.id, material_type=material))
-    session.commit()
-    return row
+from tests.factories import build_file, build_model, build_user
 
 
 def test_structured_filters_require_metadata_on_same_artifact(
@@ -66,26 +29,30 @@ def test_structured_filters_require_metadata_on_same_artifact(
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    split = _model(db_session, "Split", "c")
-    _artifact(
-        db_session, split, filename="split.stl", file_type=FileType.STL, material="PLA"
+    split = build_model(db_session, "Split")
+    build_file(
+        db_session,
+        split,
+        filename="split.stl",
+        file_type=FileType.STL,
+        metadata={"material_type": "PLA"},
     )
-    _artifact(
+    build_file(
         db_session,
         split,
         filename="split.gcode",
         file_type=FileType.GCODE,
-        material="PETG",
         status=FileRevisionStatus.KNOWN_GOOD,
+        metadata={"material_type": "PETG"},
     )
-    same = _model(db_session, "Same", "d")
-    _artifact(
+    same = build_model(db_session, "Same")
+    build_file(
         db_session,
         same,
         filename="same.gcode",
         file_type=FileType.GCODE,
-        material="PLA",
         status=FileRevisionStatus.KNOWN_GOOD,
+        metadata={"material_type": "PLA"},
     )
 
     rows = model_views.list_items(
@@ -105,17 +72,21 @@ def test_facets_count_distinct_models(db_session: Session) -> None:
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    model = _model(db_session, "Facet", "e")
-    _artifact(
-        db_session, model, filename="one.stl", file_type=FileType.STL, material="PLA"
+    model = build_model(db_session, "Facet")
+    build_file(
+        db_session,
+        model,
+        filename="one.stl",
+        file_type=FileType.STL,
+        metadata={"material_type": "PLA"},
     )
-    _artifact(
+    build_file(
         db_session,
         model,
         filename="two.stl",
         file_type=FileType.STL,
-        material="PLA",
         status=FileRevisionStatus.KNOWN_GOOD,
+        metadata={"material_type": "PLA"},
     )
     result = model_views.facets(db_session, user, ModelFilters())
     assert next(item.count for item in result.material_type if item.value == "PLA") == 1
@@ -134,25 +105,17 @@ def test_facets_count_distinct_models(db_session: Session) -> None:
     ]
 
 
-def _admin(db_session: Session, username: str) -> User:
-    user = User(username=username, hashed_password="x", is_superuser=True)
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    return user
-
-
 # --------------------------------------------------------------------------- #
 # _apply_structured_filters — storage / uploaded window / slicer / printer_model
 # --------------------------------------------------------------------------- #
 
 
 def test_storage_filter_single_value_matches_external_only(db_session: Session) -> None:
-    user = _admin(db_session, "storage-admin")
-    external = _model(db_session, "External", "1")
-    _artifact(db_session, external, filename="e.stl", file_type=FileType.STL)
-    vault = _model(db_session, "Vault", "2")
-    _artifact(db_session, vault, filename="v.stl", file_type=FileType.STL)
+    user = build_user(db_session, "storage-admin", superuser=True)
+    external = build_model(db_session, "External")
+    build_file(db_session, external, filename="e.stl", file_type=FileType.STL)
+    vault = build_model(db_session, "Vault")
+    build_file(db_session, vault, filename="v.stl", file_type=FileType.STL)
     ext_file = db_session.exec(
         __import__("sqlmodel").select(File).where(File.model_id == external.id)
     ).first()
@@ -167,13 +130,15 @@ def test_storage_filter_single_value_matches_external_only(db_session: Session) 
 
 
 def test_uploaded_after_and_before_bound_the_window(db_session: Session) -> None:
-    user = _admin(db_session, "uploaded-admin")
-    early = _model(db_session, "Early", "3")
-    late = _model(db_session, "Late", "4")
-    early_file = _artifact(
+    user = build_user(db_session, "uploaded-admin", superuser=True)
+    early = build_model(db_session, "Early")
+    late = build_model(db_session, "Late")
+    early_file = build_file(
         db_session, early, filename="early.stl", file_type=FileType.STL
     )
-    late_file = _artifact(db_session, late, filename="late.stl", file_type=FileType.STL)
+    late_file = build_file(
+        db_session, late, filename="late.stl", file_type=FileType.STL
+    )
     early_file.uploaded_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
     late_file.uploaded_at = datetime(2030, 1, 1, tzinfo=timezone.utc)
     db_session.add(early_file)
@@ -196,28 +161,23 @@ def test_uploaded_after_and_before_bound_the_window(db_session: Session) -> None
 
 
 def test_slicer_name_and_printer_model_filters(db_session: Session) -> None:
-    user = _admin(db_session, "slicer-admin")
-    orca = _model(db_session, "Orca", "5")
-    prusa = _model(db_session, "Prusa", "6")
-    orca_file = _artifact(
-        db_session, orca, filename="orca.gcode", file_type=FileType.GCODE
+    user = build_user(db_session, "slicer-admin", superuser=True)
+    orca = build_model(db_session, "Orca")
+    prusa = build_model(db_session, "Prusa")
+    build_file(
+        db_session,
+        orca,
+        filename="orca.gcode",
+        file_type=FileType.GCODE,
+        metadata={"slicer_name": "OrcaSlicer", "printer_model": "Voron 2.4"},
     )
-    prusa_file = _artifact(
-        db_session, prusa, filename="prusa.gcode", file_type=FileType.GCODE
+    build_file(
+        db_session,
+        prusa,
+        filename="prusa.gcode",
+        file_type=FileType.GCODE,
+        metadata={"slicer_name": "PrusaSlicer", "printer_model": "MK4"},
     )
-    orca_meta = db_session.exec(
-        __import__("sqlmodel").select(Metadata).where(Metadata.file_id == orca_file.id)
-    ).first()
-    orca_meta.slicer_name = "OrcaSlicer"
-    orca_meta.printer_model = "Voron 2.4"
-    prusa_meta = db_session.exec(
-        __import__("sqlmodel").select(Metadata).where(Metadata.file_id == prusa_file.id)
-    ).first()
-    prusa_meta.slicer_name = "PrusaSlicer"
-    prusa_meta.printer_model = "MK4"
-    db_session.add(orca_meta)
-    db_session.add(prusa_meta)
-    db_session.commit()
 
     by_slicer = model_views.list_items(
         db_session, user, filters=ModelFilters(slicer_name=["orcaslicer"])
@@ -231,10 +191,10 @@ def test_slicer_name_and_printer_model_filters(db_session: Session) -> None:
 
 
 def test_printed_true_and_false_filters(db_session: Session) -> None:
-    user = _admin(db_session, "printed-admin")
-    printed = _model(db_session, "Printed", "7")
-    unprinted = _model(db_session, "Unprinted", "8")
-    printed_file = _artifact(
+    user = build_user(db_session, "printed-admin", superuser=True)
+    printed = build_model(db_session, "Printed")
+    unprinted = build_model(db_session, "Unprinted")
+    printed_file = build_file(
         db_session, printed, filename="p.gcode", file_type=FileType.GCODE
     )
     db_session.add(
@@ -260,13 +220,13 @@ def test_printed_true_and_false_filters(db_session: Session) -> None:
 
 
 def test_print_outcome_filter(db_session: Session) -> None:
-    user = _admin(db_session, "outcome-admin")
-    failed = _model(db_session, "FailedModel", "9")
-    completed = _model(db_session, "CompletedModel", "a")
-    failed_file = _artifact(
+    user = build_user(db_session, "outcome-admin", superuser=True)
+    failed = build_model(db_session, "FailedModel")
+    completed = build_model(db_session, "CompletedModel")
+    failed_file = build_file(
         db_session, failed, filename="f.gcode", file_type=FileType.GCODE
     )
-    completed_file = _artifact(
+    completed_file = build_file(
         db_session, completed, filename="c.gcode", file_type=FileType.GCODE
     )
     db_session.add(
@@ -301,7 +261,7 @@ def test_print_outcome_filter(db_session: Session) -> None:
 def test_direct_filter_with_collection_restricts_to_exact_path(
     db_session: Session,
 ) -> None:
-    user = _admin(db_session, "direct-admin")
+    user = build_user(db_session, "direct-admin", superuser=True)
     parent = Collection(name="Parent", slug="parent", path="parent")
     child = Collection(name="Child", slug="child", path="parent/child")
     db_session.add(parent)
@@ -329,7 +289,7 @@ def test_direct_filter_with_collection_restricts_to_exact_path(
 def test_direct_filter_without_collection_matches_uncategorised_only(
     db_session: Session,
 ) -> None:
-    user = _admin(db_session, "direct-admin2")
+    user = build_user(db_session, "direct-admin2", superuser=True)
     col = Collection(name="Cat", slug="cat", path="cat")
     db_session.add(col)
     db_session.commit()
@@ -350,7 +310,7 @@ def test_direct_filter_without_collection_matches_uncategorised_only(
 
 
 def test_indirect_collection_filter_includes_descendants(db_session: Session) -> None:
-    user = _admin(db_session, "indirect-admin")
+    user = build_user(db_session, "indirect-admin", superuser=True)
     parent = Collection(name="Parent2", slug="parent2", path="parent2")
     child = Collection(name="Child2", slug="child2", path="parent2/child2")
     db_session.add(parent)
@@ -377,9 +337,9 @@ def test_indirect_collection_filter_includes_descendants(db_session: Session) ->
 
 
 def test_tag_filter_matches_by_slug(db_session: Session) -> None:
-    user = _admin(db_session, "tag-admin")
-    tagged = _model(db_session, "Tagged", "2")
-    untagged = _model(db_session, "Untagged", "3")
+    user = build_user(db_session, "tag-admin", superuser=True)
+    tagged = build_model(db_session, "Tagged")
+    untagged = build_model(db_session, "Untagged")
     tag = Tag(name="Functional", slug="functional")
     db_session.add(tag)
     db_session.commit()
@@ -400,10 +360,10 @@ def test_tag_filter_matches_by_slug(db_session: Session) -> None:
 def test_printer_presence_any_matches_models_present_on_a_printer(
     db_session: Session,
 ) -> None:
-    user = _admin(db_session, "presence-admin")
-    present = _model(db_session, "Present", "4")
-    absent = _model(db_session, "Absent", "5")
-    present_file = _artifact(
+    user = build_user(db_session, "presence-admin", superuser=True)
+    present = build_model(db_session, "Present")
+    absent = build_model(db_session, "Absent")
+    present_file = build_file(
         db_session, present, filename="present.gcode", file_type=FileType.GCODE
     )
     printer = Printer(name="Fleet1", moonraker_url="http://10.0.0.1:7125")
@@ -435,8 +395,8 @@ def test_printer_presence_any_matches_models_present_on_a_printer(
 def test_list_items_picks_newest_version_mesh_file_for_preview(
     db_session: Session,
 ) -> None:
-    user = _admin(db_session, "mesh-admin")
-    model = _model(db_session, "MeshPreview", "6")
+    user = build_user(db_session, "mesh-admin", superuser=True)
+    model = build_model(db_session, "MeshPreview")
     v1 = File(
         model_id=model.id,
         path="v1.stl",
