@@ -8,6 +8,7 @@ import math
 import signal
 import struct
 import time
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,30 @@ def _binary_triangle_stl(
         b"streaming-test".ljust(80, b"\0")
         + struct.pack("<I", count)
         + b"".join(triangles)
+    )
+
+
+def _png_declaring(width: int, height: int) -> bytes:
+    """A structurally valid PNG whose header claims *width* x *height* pixels.
+
+    Pillow reads the dimensions out of IHDR and refuses the image before it
+    decodes a single row, so a decompression bomb is a few hundred bytes.
+    """
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(b"\0"))
+        + chunk(b"IEND", b"")
     )
 
 
@@ -1039,6 +1064,72 @@ class TestDecodeResult:
             self._decode(tmp_path, self._manifest(), b"\x89PNG\r\n\x1a\ntruncated")
             is None
         )
+
+    def test_refuses_a_decompression_bomb_without_raising(
+        self, tmp_path: Path
+    ) -> None:
+        # A few hundred bytes that declare 30000x30000 pixels. Pillow raises
+        # DecompressionBombError — not an OSError — straight out of `open()`, and
+        # the bare `except Exception` is the only thing keeping a hostile worker
+        # output from taking the ingestion job down with it.
+        bomb = _png_declaring(30_000, 30_000)
+
+        assert self._decode(tmp_path, self._manifest(), bomb) is None
+
+
+class TestRenderStlPreviewIsolated:
+    """Everything checked in the parent, before a worker process is spawned.
+
+    Each of these refusals happens before `fork`. That ordering is the point: a
+    worker is a process with its own memory and CPU ceilings, and paying for one
+    only to have it fail on an input the parent could have rejected is how a
+    preview queue turns into a fork bomb under a directory of junk files.
+    """
+
+    @pytest.mark.parametrize(
+        ("width", "height"),
+        [
+            pytest.param(0, 480, id="zero-width"),
+            pytest.param(640, 0, id="zero-height"),
+            pytest.param(stl_streaming._MAX_RENDER_DIMENSION + 1, 480, id="too-wide"),
+            pytest.param(640, stl_streaming._MAX_RENDER_DIMENSION + 1, id="too-tall"),
+        ],
+    )
+    def test_refuses_a_resolution_it_will_not_render(
+        self, tmp_path: Path, width: int, height: int
+    ) -> None:
+        source = tmp_path / "cube.stl"
+        _binary_triangle_stl(source)
+
+        assert render_stl_preview_isolated(source, width=width, height=height) is None
+
+    def test_refuses_a_file_that_is_not_an_stl(self, tmp_path: Path) -> None:
+        source = tmp_path / "cube.3mf"
+        _binary_triangle_stl(source)
+
+        # The worker only speaks STL; the suffix is the only thing the parent has
+        # to go on before it spends a process on the file.
+        assert render_stl_preview_isolated(source) is None
+
+    def test_refuses_a_budget_that_would_weaken_the_isolation(
+        self, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "cube.stl"
+        _binary_triangle_stl(source)
+
+        # A caller may only ever tighten the built-in ceilings. An unbounded
+        # address space would defeat the isolation the worker exists to provide.
+        assert (
+            render_stl_preview_isolated(
+                source, limits=STLStreamingLimits(address_space_bytes=10**12)
+            )
+            is None
+        )
+
+    def test_refuses_a_source_that_is_no_longer_there(self, tmp_path: Path) -> None:
+        # A queued preview races the library: the artifact can be purged between
+        # the job being enqueued and the render starting.
+        assert render_stl_preview_isolated(tmp_path / "gone.stl") is None
 
 
 class TestTerminateProcessGroup:
