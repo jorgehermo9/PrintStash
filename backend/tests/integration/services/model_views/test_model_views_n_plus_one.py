@@ -13,23 +13,10 @@ import pytest
 from sqlalchemy import event
 from sqlmodel import Session
 
-from app.db.models import CollectionPermission, CollectionRole, Model, User
+from app.db.models import CollectionPermission, CollectionRole, Model
 from app.schemas.models import ModelFilters, ModelSort
 from app.services import model_views, taxonomy
-from app.services.auth import hash_password
-
-
-def _user(session: Session, username: str, *, superuser: bool = False) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=superuser,
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
+from tests.factories import build_user
 
 
 def _seed_models(session: Session, count: int, collection_id: int | None) -> None:
@@ -66,7 +53,7 @@ def test_list_query_count_is_independent_of_page_size(
 ) -> None:
     collection = taxonomy.resolve_or_create_collection(db_session, "Parts")
     assert collection is not None
-    user = _user(db_session, f"lister-{superuser}", superuser=superuser)
+    user = build_user(db_session, f"lister-{superuser}", superuser=superuser)
     if not superuser:
         db_session.add(
             CollectionPermission(
@@ -109,7 +96,7 @@ def test_effective_role_is_still_correct_per_row(db_session: Session) -> None:
     parts = taxonomy.resolve_or_create_collection(db_session, "Parts")
     toys = taxonomy.resolve_or_create_collection(db_session, "Toys")
     assert parts is not None and toys is not None
-    user = _user(db_session, "mixed")
+    user = build_user(db_session, "mixed")
     db_session.add(
         CollectionPermission(
             user_id=user.id, collection_id=parts.id, role=CollectionRole.ADMIN
@@ -134,7 +121,7 @@ def test_effective_role_is_still_correct_per_row(db_session: Session) -> None:
 
 
 def test_facets_are_consolidated_into_one_query(db_session: Session) -> None:
-    user = _user(db_session, "facet-query-count", superuser=True)
+    user = build_user(db_session, "facet-query-count", superuser=True)
     _seed_models(db_session, 3, collection_id=None)
     _ = user.is_superuser  # refresh the expired fixture row outside the counter
 
@@ -149,7 +136,7 @@ def test_facets_are_consolidated_into_one_query(db_session: Session) -> None:
 def test_vault_stats_counts_are_consolidated_into_one_query(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    user = _user(db_session, "stats-query-count", superuser=True)
+    user = build_user(db_session, "stats-query-count", superuser=True)
     monkeypatch.setattr(
         model_views,
         "_cached_storage_usage",
@@ -164,7 +151,7 @@ def test_vault_stats_counts_are_consolidated_into_one_query(
 
 
 def test_cursor_total_is_counted_only_on_the_first_page(db_session: Session) -> None:
-    user = _user(db_session, "cursor-count", superuser=True)
+    user = build_user(db_session, "cursor-count", superuser=True)
     _seed_models(db_session, 4, collection_id=None)
     _ = user.is_superuser
     first_page = None

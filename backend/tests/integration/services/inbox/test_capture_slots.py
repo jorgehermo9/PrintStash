@@ -56,6 +56,7 @@ from app.services.auth import create_access_token, hash_password
 from app.services.source_covers import SourceCoverWrite
 from app.services.storage_backend import CreationReceipt
 from app.services.storage_deletion import process_storage_delete_intents
+from tests.factories import build_user
 
 
 @pytest.fixture(autouse=True)
@@ -119,8 +120,8 @@ def _slot_payload(data: bytes = b"slot-owned") -> CaptureUploadSlotsCreate:
 def test_capture_slots_are_owner_scoped_idempotent_and_finalize_gated(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-owner")
-    other = _user(db_session, "slot-other", admin=False)
+    owner = build_user(db_session, "slot-owner", superuser=True)
+    other = build_user(db_session, "slot-other")
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = slots[0]
     with pytest.raises(HTTPException, match="not_found"):
@@ -165,7 +166,7 @@ async def test_capture_slot_upload_cleans_temp_file_after_stream_disconnect(
     monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
     incoming_dir = inbox.settings.incoming_dir
     incoming_dir.mkdir(parents=True)
-    owner = _user(db_session, "slot-disconnect")
+    owner = build_user(db_session, "slot-disconnect", superuser=True)
     payload = _slot_payload(data=b"disconnect-me")
     _, slots = inbox.create_capture_upload_slots(db_session, owner, payload)
     slot = slots[0]
@@ -240,7 +241,7 @@ def test_capture_cover_service_temp_is_cleaned_when_processing_fails(
         "size_bytes": len(cover_bytes),
         "sha256": hashlib.sha256(cover_bytes).hexdigest(),
     }
-    owner = _user(db_session, f"cover-service-{failure}")
+    owner = build_user(db_session, f"cover-service-{failure}", superuser=True)
     _, slots = inbox.create_capture_upload_slots(
         db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
     )
@@ -272,7 +273,7 @@ def test_capture_cover_service_temp_is_cleaned_when_processing_fails(
 
 def test_capture_slot_lease_uses_slot_owner_for_dismiss(db_session: Session) -> None:
     """Dismiss finds the lease through the same capture-slot identity that created it."""
-    owner = _user(db_session, "slot-dismiss-owner")
+    owner = build_user(db_session, "slot-dismiss-owner", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
 
     inbox.dismiss(db_session, row)
@@ -293,7 +294,7 @@ def test_capture_slot_lease_uses_slot_owner_for_dismiss(db_session: Session) -> 
 def test_dismiss_durably_releases_uploaded_capture_slot_bytes(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-dismiss-uploaded")
+    owner = build_user(db_session, "slot-dismiss-uploaded", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = inbox.upload_capture_slot(
         db_session,
@@ -323,7 +324,7 @@ def test_dismiss_durably_releases_uploaded_capture_slot_bytes(
 def test_dismiss_keeps_capture_slot_when_delete_intent_cannot_be_enqueued(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    owner = _user(db_session, "slot-dismiss-retry")
+    owner = build_user(db_session, "slot-dismiss-retry", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = inbox.upload_capture_slot(
         db_session,
@@ -358,7 +359,7 @@ def test_capture_slot_cleanup_enqueues_before_post_commit_delete(
     from app.db.models import StorageDeleteIntent
     from app.services.storage_deletion import process_storage_delete_intents
 
-    owner = _user(db_session, "slot-outbox-owner")
+    owner = build_user(db_session, "slot-outbox-owner", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = inbox.upload_capture_slot(
         db_session,
@@ -383,7 +384,7 @@ def test_capture_slot_cleanup_enqueues_before_post_commit_delete(
 def test_expired_uploaded_capture_slot_fails_inbox_after_durable_cleanup(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-expiry-owner")
+    owner = build_user(db_session, "slot-expiry-owner", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = inbox.upload_capture_slot(
         db_session,
@@ -410,7 +411,7 @@ def test_capture_slot_cleanup_rollback_preserves_receipt_lease_and_bytes(
 ) -> None:
     from app.db.models import StorageDeleteIntent
 
-    owner = _user(db_session, "slot-rollback-owner")
+    owner = build_user(db_session, "slot-rollback-owner", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = inbox.upload_capture_slot(
         db_session,
@@ -439,7 +440,7 @@ def test_delete_intent_processor_retries_backend_failure_and_blocks_mismatch(
     from app.db.models import StorageDeleteIntent
     from app.services import storage_deletion
 
-    owner = _user(db_session, "slot-retry-owner")
+    owner = build_user(db_session, "slot-retry-owner", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = inbox.upload_capture_slot(
         db_session,
@@ -476,7 +477,7 @@ def test_delete_intent_processor_retries_backend_failure_and_blocks_mismatch(
 
 
 def test_capture_source_mismatch_rejects_before_slot_write(db_session: Session) -> None:
-    owner = _user(db_session, "slot-source")
+    owner = build_user(db_session, "slot-source", superuser=True)
     raw = _slot_payload().model_dump(mode="json")
     # Two different pages on the same provider: the request says it is uploading
     # for model 1234 while the captured source declares model 9999, so the bytes
@@ -503,7 +504,7 @@ def test_capture_source_mismatch_rejects_before_slot_write(db_session: Session) 
 def test_capture_source_from_another_provider_rejects_before_slot_write(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-source-provider")
+    owner = build_user(db_session, "slot-source-provider", superuser=True)
     raw = _slot_payload().model_dump(mode="json")
     raw["capture_source"]["canonical_url"] = "https://printables.com/model/1"
 
@@ -520,7 +521,7 @@ def test_capture_source_from_another_provider_rejects_before_slot_write(
 def test_capture_source_page_of_another_item_rejects_before_slot_write(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-source-item")
+    owner = build_user(db_session, "slot-source-item", superuser=True)
     raw = _slot_payload().model_dump(mode="json")
     raw["capture_source"]["canonical_url"] = (
         "https://makerworld.com/en/models/9999-other"
@@ -538,7 +539,7 @@ def test_capture_source_page_of_another_item_rejects_before_slot_write(
 def test_capture_slot_replay_survives_fresh_session_and_reassigns_two_leases(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-restart")
+    owner = build_user(db_session, "slot-restart", superuser=True)
     payload = _slot_payload()
     raw = payload.model_dump(mode="json")
     raw["files"].append(
@@ -600,7 +601,7 @@ def test_capture_slot_replay_survives_fresh_session_and_reassigns_two_leases(
 def test_capture_slot_restart_reconciles_published_object_without_receipt(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-crash-restart")
+    owner = build_user(db_session, "slot-crash-restart", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = slots[0]
     backend = inbox.get_backend()
@@ -629,7 +630,7 @@ def test_capture_slot_restart_reconciles_published_object_without_receipt(
 def test_capture_slot_dismiss_preserves_unadoptable_collision(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "slot-collision-preserved")
+    owner = build_user(db_session, "slot-collision-preserved", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     slot = slots[0]
     assert slot.storage_key is not None
@@ -646,7 +647,7 @@ def test_retry_returns_transferred_capture_slot_leases_to_review(
     db_session: Session,
 ) -> None:
     """A failed durable capture can be retried after its import job owned slots."""
-    owner = _user(db_session, "slot-retry-after-transfer")
+    owner = build_user(db_session, "slot-retry-after-transfer", superuser=True)
     row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
     inbox.upload_capture_slot(
         db_session,
@@ -689,7 +690,7 @@ def test_capture_slot_cleanup_later_failure_preserves_all_slot_ownership(
             "sha256": hashlib.sha256(b"two").hexdigest(),
         }
     )
-    owner = _user(db_session, "slot-cleanup-atomic")
+    owner = build_user(db_session, "slot-cleanup-atomic", superuser=True)
     row, slots = inbox.create_capture_upload_slots(
         db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
     )
@@ -733,7 +734,7 @@ def test_capture_cover_attaches_before_raw_slot_receipt_is_released(
 ) -> None:
     from PIL import Image
 
-    owner = _user(db_session, "slot-cover")
+    owner = build_user(db_session, "slot-cover", superuser=True)
     image = io.BytesIO()
     Image.new("RGB", (8, 8), "navy").save(image, format="PNG")
     cover_bytes = image.getvalue()
@@ -807,7 +808,7 @@ def test_capture_cover_attaches_before_raw_slot_receipt_is_released(
 def test_finished_capture_rolls_back_cover_write_when_commit_fails(
     db_session: Session, monkeypatch: pytest.MonkeyPatch, created: bool
 ) -> None:
-    owner = _user(db_session, f"cover-commit-failure-{created}")
+    owner = build_user(db_session, f"cover-commit-failure-{created}", superuser=True)
     row = InboxItem(
         owner_user_id=owner.id,
         source_kind="browser",
@@ -883,19 +884,6 @@ def _make_item(db_session: Session, owner: User, **overrides) -> InboxItem:
     return row
 
 
-def _user(db_session: Session, username: str, *, admin: bool = True) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=admin,
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    return user
-
-
 class _BackgroundTaskRecorder:
     def __init__(self) -> None:
         self.tasks: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
@@ -908,7 +896,7 @@ class _BackgroundTaskRecorder:
 def test_import_route_rejects_invalid_v2_selection_before_scheduling(
     db_session: Session, requested: list[str]
 ) -> None:
-    owner = _user(db_session, f"import-selection-route-{len(requested)}")
+    owner = build_user(db_session, f"import-selection-route-{len(requested)}", superuser=True)
     row = _make_item(
         db_session,
         owner,
@@ -951,7 +939,7 @@ def test_retry_item_schedules_resolve_when_returned_to_captured(
     client: TestClient, db_session: Session, monkeypatch
 ) -> None:
     headers = _headers(db_session, "retry-success", admin=True)
-    owner = _user(db_session, "retry-success-owner")
+    owner = build_user(db_session, "retry-success-owner", superuser=True)
     row = _make_item(
         db_session,
         owner,
@@ -976,7 +964,7 @@ def test_retry_item_schedules_resolve_when_returned_to_captured(
 def test_retry_partial_schedules_failed_selection_only(
     client: TestClient, db_session: Session, monkeypatch
 ) -> None:
-    owner = _user(db_session, "retry-partial-api")
+    owner = build_user(db_session, "retry-partial-api", superuser=True)
     row = _make_item(
         db_session,
         owner,
@@ -1016,7 +1004,7 @@ def test_retry_partial_schedules_failed_selection_only(
 def test_retry_route_rejects_invalid_v2_selection_before_scheduling(
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "retry-selection-route")
+    owner = build_user(db_session, "retry-selection-route", superuser=True)
     row = _make_item(
         db_session,
         owner,

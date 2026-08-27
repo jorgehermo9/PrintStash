@@ -28,11 +28,12 @@ from app.db.models import (
     User,
 )
 from app.services import ingestion as ingestion_service
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import hash_password
 from app.services.jobs import registry
 from app.services.storage_backend import get_backend
 from app.services.storage_ownership import record_creation
 from tests._env import use_local_storage
+from tests.factories import bearer
 from tests.integration.api.v1._ingest_assertions import (
     assert_file_created,
     completed_job,
@@ -742,12 +743,6 @@ def _regular_user(session: Session, username: str = "regular") -> User:
     return user
 
 
-def _headers_for(user: User) -> dict[str, str]:
-    scope = "admin" if user.is_superuser else "write"
-    token = create_access_token(user.id, user.username, scope=scope)
-    return {"Authorization": f"Bearer {token}"}
-
-
 def _post_empty_filename_multipart(
     client: TestClient, url: str, headers: dict[str, str]
 ) -> Any:
@@ -827,7 +822,7 @@ def test_ingest_model_requires_collection_for_non_superuser(
     user = _regular_user(db_session)
     response = client.post(
         "/api/v1/ingest/model",
-        headers=_headers_for(user),
+        headers=bearer(user),
         files={"file": ("cube.stl", _cube_stl(), "application/sla")},
     )
     assert response.status_code == 403, response.text
@@ -841,7 +836,7 @@ def test_ingest_model_unknown_collection_denied_for_non_superuser(
     user = _regular_user(db_session)
     response = client.post(
         "/api/v1/ingest/model",
-        headers=_headers_for(user),
+        headers=bearer(user),
         files={"file": ("cube.stl", _cube_stl(), "application/sla")},
         data={"collection": "does-not-exist"},
     )
@@ -861,7 +856,7 @@ def test_ingest_model_requires_role_on_existing_collection(
 
     response = client.post(
         "/api/v1/ingest/model",
-        headers=_headers_for(user),
+        headers=bearer(user),
         files={"file": ("cube.stl", _cube_stl(), "application/sla")},
         data={"collection": "brackets"},
     )
@@ -888,7 +883,7 @@ def test_ingest_model_succeeds_with_granted_collection_role(
         client,
         client.post(
             "/api/v1/ingest/model",
-            headers=_headers_for(user),
+            headers=bearer(user),
             files={"file": ("cube.stl", _cube_stl(), "application/sla")},
             data={"collection": "brackets"},
         ),
@@ -932,7 +927,7 @@ def test_ingest_jobs_list_and_get_scoped_to_owner(
 
     other = _regular_user(db_session, "other-owner")
     forbidden = client.get(
-        f"/api/v1/ingest/jobs/{jobs.json()[0]['job_id']}", headers=_headers_for(other)
+        f"/api/v1/ingest/jobs/{jobs.json()[0]['job_id']}", headers=bearer(other)
     )
     assert forbidden.status_code == 404, forbidden.text
 

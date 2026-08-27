@@ -19,26 +19,8 @@ from app.core.time import utcnow
 from app.db.models import AuditLog, Collection, File, FileType, Model, Tag, User
 from app.schemas.auth import UserUpdate
 from app.services.audit import install_audit_listeners
-from app.services.auth import create_access_token, hash_password
-
-
-def _user(
-    session: Session,
-    username: str,
-    *,
-    superuser: bool = True,
-    active: bool = True,
-) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=active,
-        is_superuser=superuser,
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
+from app.services.auth import create_access_token
+from tests.factories import build_user
 
 
 def _headers(user: User) -> dict[str, str]:
@@ -51,7 +33,7 @@ class TestRequireSuperuser:
     def test_non_superuser_blocked(
         self, client: TestClient, db_session: Session
     ) -> None:
-        user = _user(db_session, "regular", superuser=False)
+        user = build_user(db_session, "regular")
         resp = client.get("/api/v1/admin/users", headers=_headers(user))
         assert resp.status_code == 403
         assert resp.json()["detail"] == "admin_required"
@@ -61,8 +43,8 @@ class TestListUsers:
     def test_list_excludes_deleted(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin1")
-        gone = _user(db_session, "gone", superuser=False)
+        admin = build_user(db_session, "admin1", superuser=True)
+        gone = build_user(db_session, "gone")
         gone.deleted_at = utcnow()
         db_session.add(gone)
         db_session.commit()
@@ -78,7 +60,7 @@ class TestCreateUser:
     def test_create_duplicate_username_conflict(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin2")
+        admin = build_user(db_session, "admin2", superuser=True)
         payload = {"username": "dupe", "password": "Password123"}
         first = client.post(
             "/api/v1/admin/users", json=payload, headers=_headers(admin)
@@ -93,7 +75,7 @@ class TestCreateUser:
     def test_create_user_success_not_superuser(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin3")
+        admin = build_user(db_session, "admin3", superuser=True)
         resp = client.post(
             "/api/v1/admin/users",
             json={"username": "newbie", "password": "Password123"},
@@ -107,7 +89,7 @@ class TestCreateUser:
 
 class TestUpdateUser:
     def test_update_not_found(self, client: TestClient, db_session: Session) -> None:
-        admin = _user(db_session, "admin4")
+        admin = build_user(db_session, "admin4", superuser=True)
         resp = client.patch(
             "/api/v1/admin/users/999",
             json={"email": "x@x.com"},
@@ -119,8 +101,8 @@ class TestUpdateUser:
     def test_update_deleted_user_404(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin5")
-        target = _user(db_session, "deleted-target", superuser=False)
+        admin = build_user(db_session, "admin5", superuser=True)
+        target = build_user(db_session, "deleted-target")
         target.deleted_at = utcnow()
         db_session.add(target)
         db_session.commit()
@@ -135,7 +117,7 @@ class TestUpdateUser:
     def test_demote_last_superuser_blocked(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "sole-admin")
+        admin = build_user(db_session, "sole-admin", superuser=True)
         resp = client.patch(
             f"/api/v1/admin/users/{admin.id}",
             json={"is_superuser": False},
@@ -147,7 +129,7 @@ class TestUpdateUser:
     def test_deactivate_last_superuser_blocked(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "sole-admin-2")
+        admin = build_user(db_session, "sole-admin-2", superuser=True)
         resp = client.patch(
             f"/api/v1/admin/users/{admin.id}",
             json={"is_active": False},
@@ -159,8 +141,8 @@ class TestUpdateUser:
     def test_demote_superuser_allowed_when_another_remains(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin1 = _user(db_session, "admin-a")
-        admin2 = _user(db_session, "admin-b")
+        admin1 = build_user(db_session, "admin-a", superuser=True)
+        admin2 = build_user(db_session, "admin-b", superuser=True)
         resp = client.patch(
             f"/api/v1/admin/users/{admin1.id}",
             json={"is_superuser": False},
@@ -172,8 +154,8 @@ class TestUpdateUser:
     def test_update_email_and_flags(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-c")
-        other = _user(db_session, "plain-user", superuser=False)
+        admin = build_user(db_session, "admin-c", superuser=True)
+        other = build_user(db_session, "plain-user")
         resp = client.patch(
             f"/api/v1/admin/users/{other.id}",
             json={"email": "user@example.com", "is_superuser": True, "is_active": True},
@@ -188,8 +170,8 @@ class TestUpdateUser:
         self, client: TestClient, db_session: Session
     ) -> None:
         # Guard only fires for users who ARE currently superuser+active.
-        admin = _user(db_session, "admin-d")
-        plain = _user(db_session, "plain-2", superuser=False)
+        admin = build_user(db_session, "admin-d", superuser=True)
+        plain = build_user(db_session, "plain-2")
         resp = client.patch(
             f"/api/v1/admin/users/{plain.id}",
             json={"is_active": False},
@@ -201,7 +183,7 @@ class TestUpdateUser:
     def test_allows_an_edit_that_leaves_a_superuser_a_superuser(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-still-super")
+        admin = build_user(db_session, "admin-still-super", superuser=True)
 
         response = client.patch(
             f"/api/v1/admin/users/{admin.id}",
@@ -219,7 +201,7 @@ class TestResetPassword:
     def test_reset_password_not_found(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-e")
+        admin = build_user(db_session, "admin-e", superuser=True)
         resp = client.post(
             "/api/v1/admin/users/999/password",
             json={"password": "NewPassword123"},
@@ -230,8 +212,8 @@ class TestResetPassword:
     def test_reset_password_success(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-f")
-        target = _user(db_session, "reset-me", superuser=False)
+        admin = build_user(db_session, "admin-f", superuser=True)
+        target = build_user(db_session, "reset-me")
         resp = client.post(
             f"/api/v1/admin/users/{target.id}/password",
             json={"password": "NewPassword123"},
@@ -242,8 +224,8 @@ class TestResetPassword:
     def test_reset_password_lets_the_user_sign_in_with_the_new_one(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-reset-login")
-        target = _user(db_session, "reset-then-login", superuser=False)
+        admin = build_user(db_session, "admin-reset-login", superuser=True)
+        target = build_user(db_session, "reset-then-login")
         client.post(
             f"/api/v1/admin/users/{target.id}/password",
             json={"password": "NewPassword123"},
@@ -260,8 +242,8 @@ class TestResetPassword:
     def test_reset_password_invalidates_existing_access_and_refresh_tokens(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-reset-sessions")
-        target = _user(db_session, "reset-sessions", superuser=False)
+        admin = build_user(db_session, "admin-reset-sessions", superuser=True)
+        target = build_user(db_session, "reset-sessions")
         login = client.post(
             "/api/v1/auth/login",
             json={"username": "reset-sessions", "password": "Password123"},
@@ -304,15 +286,15 @@ class TestDeactivateUser:
     def test_deactivate_not_found(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-g")
+        admin = build_user(db_session, "admin-g", superuser=True)
         resp = client.delete("/api/v1/admin/users/999", headers=_headers(admin))
         assert resp.status_code == 404
 
     def test_deactivate_already_deleted_404(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-h")
-        target = _user(db_session, "already-gone", superuser=False)
+        admin = build_user(db_session, "admin-h", superuser=True)
+        target = build_user(db_session, "already-gone")
         target.deleted_at = utcnow()
         db_session.add(target)
         db_session.commit()
@@ -324,14 +306,14 @@ class TestDeactivateUser:
     def test_deactivate_last_superuser_blocked(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "sole-admin-3")
+        admin = build_user(db_session, "sole-admin-3", superuser=True)
         resp = client.delete(f"/api/v1/admin/users/{admin.id}", headers=_headers(admin))
         assert resp.status_code == 400
         assert resp.json()["detail"] == "last_superuser_required"
 
     def test_deactivate_success(self, client: TestClient, db_session: Session) -> None:
-        admin = _user(db_session, "admin-i")
-        target = _user(db_session, "deactivate-me", superuser=False)
+        admin = build_user(db_session, "admin-i", superuser=True)
+        target = build_user(db_session, "deactivate-me")
         resp = client.delete(
             f"/api/v1/admin/users/{target.id}", headers=_headers(admin)
         )
@@ -342,8 +324,8 @@ class TestDeactivateUser:
     def test_deactivate_denies_a_later_login(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-deactivate-login")
-        target = _user(db_session, "deactivated-user", superuser=False)
+        admin = build_user(db_session, "admin-deactivate-login", superuser=True)
+        target = build_user(db_session, "deactivated-user")
         client.delete(f"/api/v1/admin/users/{target.id}", headers=_headers(admin))
 
         denied = client.post(
@@ -356,8 +338,8 @@ class TestDeactivateUser:
     def test_deactivate_invalidates_existing_access_and_refresh_tokens(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-deactivate-sessions")
-        target = _user(db_session, "deactivate-sessions", superuser=False)
+        admin = build_user(db_session, "admin-deactivate-sessions", superuser=True)
+        target = build_user(db_session, "deactivate-sessions")
         login = client.post(
             "/api/v1/auth/login",
             json={"username": target.username, "password": "Password123"},
@@ -405,8 +387,8 @@ class TestDeactivateUser:
         )
         SQLModel.metadata.create_all(engine)
         with Session(engine) as session:
-            first = _user(session, "race-admin-a")
-            second = _user(session, "race-admin-b")
+            first = build_user(session, "race-admin-a", superuser=True)
+            second = build_user(session, "race-admin-b", superuser=True)
             user_ids = [first.id, second.id]
 
         original_count = admin_api._active_superuser_count  # noqa: SLF001
@@ -452,7 +434,7 @@ class TestAdminDeleteResource:
     def test_unknown_resource_404(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-j")
+        admin = build_user(db_session, "admin-j", superuser=True)
         resp = client.delete("/api/v1/admin/bogus/1", headers=_headers(admin))
         assert resp.status_code == 404
         assert resp.json()["detail"] == "resource_not_found"
@@ -460,13 +442,13 @@ class TestAdminDeleteResource:
     def test_unknown_resource_id_404(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-k")
+        admin = build_user(db_session, "admin-k", superuser=True)
         resp = client.delete("/api/v1/admin/tags/999", headers=_headers(admin))
         assert resp.status_code == 404
         assert resp.json()["detail"] == "resource_id_not_found"
 
     def test_soft_delete_tag(self, client: TestClient, db_session: Session) -> None:
-        admin = _user(db_session, "admin-l")
+        admin = build_user(db_session, "admin-l", superuser=True)
         tag = Tag(name="soft", slug="soft")
         db_session.add(tag)
         db_session.commit()
@@ -480,7 +462,7 @@ class TestAdminDeleteResource:
     def test_hard_delete_collection(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-m")
+        admin = build_user(db_session, "admin-m", superuser=True)
         col = Collection(name="Hard", slug="hard", path="hard")
         db_session.add(col)
         db_session.commit()
@@ -500,7 +482,7 @@ class TestAdminDeleteResource:
         from app.services.storage_backend import get_backend
         from app.services.storage_ownership import record_creation
 
-        admin = _user(db_session, "admin-n")
+        admin = build_user(db_session, "admin-n", superuser=True)
         backend = get_backend()
         key = backend.blob_key("host", 1, "test-admin-hard-delete.bin")
         record_creation(
@@ -540,7 +522,7 @@ class TestAdminDeleteResource:
     def test_hard_delete_external_file_preserves_nas_bytes(
         self, client: TestClient, db_session: Session, tmp_path
     ) -> None:
-        admin = _user(db_session, "admin-external-file")
+        admin = build_user(db_session, "admin-external-file", superuser=True)
         nas_path = tmp_path / "linked-model.stl"
         original = b"user-owned-nas-bytes"
         nas_path.write_bytes(original)
@@ -578,7 +560,7 @@ class TestAdminDeleteResource:
     ) -> None:
         from app.db.models import Document, DocumentKind
 
-        admin = _user(db_session, "admin-doc-hard")
+        admin = build_user(db_session, "admin-doc-hard", superuser=True)
         document = Document(name="Manual", kind=DocumentKind.MARKDOWN, body="# Manual")
         db_session.add(document)
         db_session.commit()
@@ -597,7 +579,7 @@ class TestAdminDeleteResource:
     def test_hard_deletes_a_model(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-model-hard")
+        admin = build_user(db_session, "admin-model-hard", superuser=True)
         model = Model(name="Doomed", slug="doomed-admin", hash="c" * 64)
         db_session.add(model)
         db_session.commit()
@@ -617,7 +599,7 @@ class TestAdminDeleteResource:
     ) -> None:
         from app.db.models import Printer
 
-        admin = _user(db_session, "admin-printer-hard")
+        admin = build_user(db_session, "admin-printer-hard", superuser=True)
         printer = Printer(name="Retired", moonraker_url="http://retired.local:7125")
         db_session.add(printer)
         db_session.commit()
@@ -638,7 +620,7 @@ class TestAdminDeleteResource:
     ) -> None:
         from app.services.storage_ownership import UnsafeStorageDeleteError
 
-        admin = _user(db_session, "admin-unproven")
+        admin = build_user(db_session, "admin-unproven", superuser=True)
         model = Model(name="Unowned", slug="unowned-admin", hash="b" * 64)
         db_session.add(model)
         db_session.commit()
@@ -663,7 +645,7 @@ class TestAdminDeleteResource:
     ) -> None:
         from app.services.storage_ownership import UnsafeStorageDeleteError
 
-        admin = _user(db_session, "admin-unproven-kept")
+        admin = build_user(db_session, "admin-unproven-kept", superuser=True)
         model = Model(name="Unowned kept", slug="unowned-kept", hash="a" * 64)
         db_session.add(model)
         db_session.commit()
@@ -688,7 +670,7 @@ class TestRestoreResource:
     def test_restore_unknown_resource_404(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-o")
+        admin = build_user(db_session, "admin-o", superuser=True)
         resp = client.post("/api/v1/admin/bogus/1/restore", headers=_headers(admin))
         assert resp.status_code == 404
         assert resp.json()["detail"] == "resource_not_found"
@@ -696,13 +678,13 @@ class TestRestoreResource:
     def test_restore_unknown_id_404(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-p")
+        admin = build_user(db_session, "admin-p", superuser=True)
         resp = client.post("/api/v1/admin/tags/999/restore", headers=_headers(admin))
         assert resp.status_code == 404
         assert resp.json()["detail"] == "resource_id_not_found"
 
     def test_restore_success(self, client: TestClient, db_session: Session) -> None:
-        admin = _user(db_session, "admin-q")
+        admin = build_user(db_session, "admin-q", superuser=True)
         tag = Tag(name="restorable", slug="restorable", deleted_at=utcnow())
         db_session.add(tag)
         db_session.commit()
@@ -722,7 +704,7 @@ class TestAuditLog:
         self, client: TestClient, db_session: Session
     ) -> None:
         install_audit_listeners()
-        admin = _user(db_session, "cookie-audit-admin")
+        admin = build_user(db_session, "cookie-audit-admin", superuser=True)
         login = client.post(
             "/api/v1/auth/login",
             json={"username": admin.username, "password": "Password123"},
@@ -752,7 +734,7 @@ class TestAuditLog:
         # Other admin actions in this suite auto-log to audit_logs on their own
         # committed sessions (not rolled back with db_session), so this can't
         # assert an empty list — only that the endpoint returns valid shape.
-        admin = _user(db_session, "admin-r")
+        admin = build_user(db_session, "admin-r", superuser=True)
         resp = client.get("/api/v1/admin/audit", headers=_headers(admin))
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
@@ -760,7 +742,7 @@ class TestAuditLog:
     def test_list_audit_filters_by_resource_and_id(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _user(db_session, "admin-s")
+        admin = build_user(db_session, "admin-s", superuser=True)
         db_session.add(
             AuditLog(
                 actor_id=admin.id,
@@ -792,7 +774,7 @@ class TestAuditLog:
 
 class TestRunGc:
     def test_run_gc(self, client: TestClient, db_session: Session) -> None:
-        admin = _user(db_session, "admin-t")
+        admin = build_user(db_session, "admin-t", superuser=True)
         resp = client.post("/api/v1/admin/gc", headers=_headers(admin))
         assert resp.status_code == 200
         assert isinstance(resp.json(), dict)

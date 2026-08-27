@@ -24,13 +24,14 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.db.models import CollectionPermission, CollectionRole, Document, User
 from app.services import taxonomy
-from app.services.auth import create_access_token, hash_password
 from app.services.storage_backend import get_backend
+from tests.factories import bearer, build_user
 
 _PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
     "890000000a49444154789c6360000002000154a24f6f0000000049454e44ae426082"
 )
+
 PDF_BYTES = b"%PDF-1.4 hi"
 
 
@@ -40,25 +41,6 @@ def document_storage(tmp_path: Path) -> Path:
     _overlay["thumb_dir"] = tmp_path / "thumbs"
     _overlay["data_dir"] = tmp_path / "files"
     return tmp_path
-
-
-def _user(session: Session, name: str, *, superuser: bool = False) -> User:
-    user = User(
-        username=name,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=superuser,
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
-
-
-def _headers(user: User) -> dict[str, str]:
-    scope = "admin" if user.is_superuser else "write"
-    token = create_access_token(user.id, user.username, scope=scope)
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _grant(
@@ -72,12 +54,12 @@ def _grant(
 
 @pytest.fixture
 def admin(db_session: Session) -> User:
-    return _user(db_session, "doc-admin", superuser=True)
+    return build_user(db_session, "doc-admin", superuser=True)
 
 
 @pytest.fixture
 def admin_headers(admin: User) -> dict[str, str]:
-    return _headers(admin)
+    return bearer(admin)
 
 
 @pytest.fixture
@@ -174,7 +156,7 @@ class TestListDocuments:
     ) -> None:
         theirs = taxonomy.resolve_or_create_collection(db_session, "Theirs")
         mine = taxonomy.resolve_or_create_collection(db_session, "Mine")
-        member = _user(db_session, "partial-access")
+        member = build_user(db_session, "partial-access")
         _grant(db_session, member, mine.id, CollectionRole.VIEW)
         visible = client.post(
             "/api/v1/documents",
@@ -187,16 +169,16 @@ class TestListDocuments:
             headers=admin_headers,
         )
 
-        listed = client.get("/api/v1/documents", headers=_headers(member)).json()
+        listed = client.get("/api/v1/documents", headers=bearer(member)).json()
 
         assert [row["id"] for row in listed] == [visible["id"]]
 
     def test_returns_nothing_to_a_user_with_no_collection_access(
         self, client: TestClient, db_session: Session
     ) -> None:
-        outsider = _user(db_session, "no-access")
+        outsider = build_user(db_session, "no-access")
 
-        listed = client.get("/api/v1/documents", headers=_headers(outsider)).json()
+        listed = client.get("/api/v1/documents", headers=bearer(outsider)).json()
 
         assert listed == []
 
@@ -235,13 +217,13 @@ class TestCreateDocument:
         self, client: TestClient, db_session: Session
     ) -> None:
         collection = taxonomy.resolve_or_create_collection(db_session, "Locked")
-        viewer = _user(db_session, "doc-viewer")
+        viewer = build_user(db_session, "doc-viewer")
         _grant(db_session, viewer, collection.id, CollectionRole.VIEW)
 
         response = client.post(
             "/api/v1/documents",
             json={"name": "Nope", "collection_id": collection.id, "body": ""},
-            headers=_headers(viewer),
+            headers=bearer(viewer),
         )
 
         assert response.status_code == 403, response.text
@@ -384,18 +366,18 @@ class TestGetDocument:
 
     def test_allows_a_viewer(self, client: TestClient, db_session: Session) -> None:
         collection = taxonomy.resolve_or_create_collection(db_session, "Locked")
-        owner = _user(db_session, "doc-owner")
+        owner = build_user(db_session, "doc-owner")
         _grant(db_session, owner, collection.id, CollectionRole.EDIT)
-        viewer = _user(db_session, "doc-viewer")
+        viewer = build_user(db_session, "doc-viewer")
         _grant(db_session, viewer, collection.id, CollectionRole.VIEW)
         doc = client.post(
             "/api/v1/documents",
             json={"name": "Secret", "collection_id": collection.id, "body": "x"},
-            headers=_headers(owner),
+            headers=bearer(owner),
         ).json()
 
         response = client.get(
-            f"/api/v1/documents/{doc['id']}", headers=_headers(viewer)
+            f"/api/v1/documents/{doc['id']}", headers=bearer(viewer)
         )
 
         assert response.status_code == 200, response.text
@@ -448,20 +430,20 @@ class TestUpdateDocument:
         self, client: TestClient, db_session: Session
     ) -> None:
         collection = taxonomy.resolve_or_create_collection(db_session, "Locked")
-        owner = _user(db_session, "doc-owner")
+        owner = build_user(db_session, "doc-owner")
         _grant(db_session, owner, collection.id, CollectionRole.EDIT)
-        viewer = _user(db_session, "doc-viewer")
+        viewer = build_user(db_session, "doc-viewer")
         _grant(db_session, viewer, collection.id, CollectionRole.VIEW)
         doc = client.post(
             "/api/v1/documents",
             json={"name": "Secret", "collection_id": collection.id, "body": "x"},
-            headers=_headers(owner),
+            headers=bearer(owner),
         ).json()
 
         response = client.put(
             f"/api/v1/documents/{doc['id']}",
             json={"body": "y"},
-            headers=_headers(viewer),
+            headers=bearer(viewer),
         )
 
         assert response.status_code == 403, response.text
@@ -486,18 +468,18 @@ class TestTrashDocument:
         self, client: TestClient, db_session: Session
     ) -> None:
         collection = taxonomy.resolve_or_create_collection(db_session, "Locked")
-        owner = _user(db_session, "doc-owner")
+        owner = build_user(db_session, "doc-owner")
         _grant(db_session, owner, collection.id, CollectionRole.EDIT)
-        viewer = _user(db_session, "doc-viewer")
+        viewer = build_user(db_session, "doc-viewer")
         _grant(db_session, viewer, collection.id, CollectionRole.VIEW)
         doc = client.post(
             "/api/v1/documents",
             json={"name": "Secret", "collection_id": collection.id, "body": "x"},
-            headers=_headers(owner),
+            headers=bearer(owner),
         ).json()
 
         response = client.delete(
-            f"/api/v1/documents/{doc['id']}", headers=_headers(viewer)
+            f"/api/v1/documents/{doc['id']}", headers=bearer(viewer)
         )
 
         assert response.status_code == 403, response.text
@@ -518,12 +500,12 @@ class TestListDocumentTrash:
         self, client: TestClient, db_session: Session, admin_headers: dict[str, str]
     ) -> None:
         collection = taxonomy.resolve_or_create_collection(db_session, "Shared")
-        member = _user(db_session, "trash-member")
+        member = build_user(db_session, "trash-member")
         _grant(db_session, member, collection.id, CollectionRole.EDIT)
         mine = client.post(
             "/api/v1/documents",
             json={"name": "Mine", "collection_id": collection.id, "body": "x"},
-            headers=_headers(member),
+            headers=bearer(member),
         ).json()
         theirs = client.post(
             "/api/v1/documents",
@@ -533,7 +515,7 @@ class TestListDocumentTrash:
         client.delete(f"/api/v1/documents/{mine['id']}", headers=admin_headers)
         client.delete(f"/api/v1/documents/{theirs['id']}", headers=admin_headers)
 
-        trashed = client.get("/api/v1/documents/trash", headers=_headers(member)).json()
+        trashed = client.get("/api/v1/documents/trash", headers=bearer(member)).json()
 
         assert [row["id"] for row in trashed] == [mine["id"]]
 
@@ -546,10 +528,10 @@ class TestListDocumentTrash:
             headers=admin_headers,
         ).json()
         client.delete(f"/api/v1/documents/{doc['id']}", headers=admin_headers)
-        outsider = _user(db_session, "trash-outsider")
+        outsider = build_user(db_session, "trash-outsider")
 
         trashed = client.get(
-            "/api/v1/documents/trash", headers=_headers(outsider)
+            "/api/v1/documents/trash", headers=bearer(outsider)
         ).json()
 
         assert trashed == []
@@ -590,7 +572,7 @@ class TestRestoreDocument:
         self, client: TestClient, db_session: Session, admin_headers: dict[str, str]
     ) -> None:
         collection = taxonomy.resolve_or_create_collection(db_session, "Locked")
-        viewer = _user(db_session, "restore-viewer")
+        viewer = build_user(db_session, "restore-viewer")
         _grant(db_session, viewer, collection.id, CollectionRole.VIEW)
         doc = client.post(
             "/api/v1/documents",
@@ -600,7 +582,7 @@ class TestRestoreDocument:
         client.delete(f"/api/v1/documents/{doc['id']}", headers=admin_headers)
 
         response = client.post(
-            f"/api/v1/documents/{doc['id']}/restore", headers=_headers(viewer)
+            f"/api/v1/documents/{doc['id']}/restore", headers=bearer(viewer)
         )
 
         assert response.status_code == 403, response.text
@@ -730,10 +712,10 @@ class TestPermanentlyDeleteDocument:
     ) -> None:
         doc = markdown_doc("Purgeable")
         client.delete(f"/api/v1/documents/{doc['id']}", headers=admin_headers)
-        operator = _user(db_session, "purge-operator")
+        operator = build_user(db_session, "purge-operator")
 
         response = client.delete(
-            f"/api/v1/documents/{doc['id']}/permanent", headers=_headers(operator)
+            f"/api/v1/documents/{doc['id']}/permanent", headers=bearer(operator)
         )
 
         assert response.status_code == 403, response.text

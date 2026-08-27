@@ -15,26 +15,7 @@ from app.db.models import (
     User,
 )
 from app.services import rbac, taxonomy
-from app.services.auth import create_access_token, hash_password
-
-
-def _user(session: Session, username: str, *, superuser: bool = False) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=superuser,
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
-
-
-def _headers(user: User) -> dict[str, str]:
-    scope = "admin" if user.is_superuser else "write"
-    token = create_access_token(user.id, user.username, scope=scope)
-    return {"Authorization": f"Bearer {token}"}
+from tests.factories import bearer, build_user
 
 
 def _grant(
@@ -67,7 +48,7 @@ def _model(session: Session, name: str, collection_id: int | None) -> Model:
 
 
 def test_effective_role_inherits_from_parent(db_session: Session) -> None:
-    user = _user(db_session, "viewer")
+    user = build_user(db_session, "viewer")
     parent = taxonomy.resolve_or_create_collection(db_session, "Shared")
     child = taxonomy.resolve_or_create_collection(db_session, "Shared/Fixtures")
     assert parent is not None and child is not None
@@ -83,7 +64,7 @@ def test_effective_role_inherits_from_parent(db_session: Session) -> None:
 def test_grant_does_not_leak_to_prefix_sibling(db_session: Session) -> None:
     """A grant on 'func' must not reach a sibling 'func-tools' that merely
     shares the string prefix — inheritance is path-segment based, not substring."""
-    user = _user(db_session, "viewer")
+    user = build_user(db_session, "viewer")
     func = taxonomy.resolve_or_create_collection(db_session, "Func")
     func_tools = taxonomy.resolve_or_create_collection(db_session, "Func Tools")
     assert func is not None and func_tools is not None
@@ -101,7 +82,7 @@ def test_grant_does_not_leak_to_prefix_sibling(db_session: Session) -> None:
 
 def test_grant_on_child_does_not_leak_up_to_parent(db_session: Session) -> None:
     """Permissions inherit downward (parent→child), never upward."""
-    user = _user(db_session, "viewer")
+    user = build_user(db_session, "viewer")
     parent = taxonomy.resolve_or_create_collection(db_session, "Shared")
     child = taxonomy.resolve_or_create_collection(db_session, "Shared/Fixtures")
     assert parent is not None and child is not None
@@ -118,7 +99,7 @@ def test_grant_on_child_does_not_leak_up_to_parent(db_session: Session) -> None:
 
 def test_trashed_collection_grants_no_role(db_session: Session) -> None:
     """A grant on a collection that has been trashed must not grant access."""
-    user = _user(db_session, "viewer")
+    user = build_user(db_session, "viewer")
     coll = taxonomy.resolve_or_create_collection(db_session, "Temp")
     assert coll is not None
     _grant(db_session, user, coll.id, CollectionRole.EDIT)
@@ -139,7 +120,7 @@ def test_model_reads_filter_denied_collections(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    user = _user(db_session, "reader")
+    user = build_user(db_session, "reader")
     allowed = taxonomy.resolve_or_create_collection(db_session, "Allowed")
     denied = taxonomy.resolve_or_create_collection(db_session, "Denied")
     assert allowed is not None and denied is not None
@@ -147,13 +128,13 @@ def test_model_reads_filter_denied_collections(
     allowed_model = _model(db_session, "Allowed Model", allowed.id)
     denied_model = _model(db_session, "Denied Model", denied.id)
 
-    response = client.get("/api/v1/models", headers=_headers(user))
+    response = client.get("/api/v1/models", headers=bearer(user))
     assert response.status_code == 200
     assert [row["id"] for row in response.json()] == [allowed_model.id]
 
     denied_detail = client.get(
         f"/api/v1/models/{denied_model.id}",
-        headers=_headers(user),
+        headers=bearer(user),
     )
     assert denied_detail.status_code == 404
 
@@ -162,7 +143,7 @@ def test_file_download_denies_collection_without_view(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    user = _user(db_session, "no-files")
+    user = build_user(db_session, "no-files")
     collection = taxonomy.resolve_or_create_collection(db_session, "Private")
     assert collection is not None
     model = _model(db_session, "Private Model", collection.id)
@@ -181,7 +162,7 @@ def test_file_download_denies_collection_without_view(
 
     response = client.get(
         f"/api/v1/files/{file_row.id}/download",
-        headers=_headers(user),
+        headers=bearer(user),
     )
     assert response.status_code == 403
 
@@ -190,7 +171,7 @@ def test_view_role_cannot_edit_but_edit_role_can(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    user = _user(db_session, "editor")
+    user = build_user(db_session, "editor")
     collection = taxonomy.resolve_or_create_collection(db_session, "Work")
     assert collection is not None
     _grant(db_session, user, collection.id, CollectionRole.VIEW)
@@ -198,7 +179,7 @@ def test_view_role_cannot_edit_but_edit_role_can(
 
     denied = client.patch(
         f"/api/v1/models/{model.id}",
-        headers=_headers(user),
+        headers=bearer(user),
         json={"description": "nope"},
     )
     assert denied.status_code == 403
@@ -215,7 +196,7 @@ def test_view_role_cannot_edit_but_edit_role_can(
 
     allowed = client.patch(
         f"/api/v1/models/{model.id}",
-        headers=_headers(user),
+        headers=bearer(user),
         json={"description": "ok"},
     )
     assert allowed.status_code == 200
@@ -226,15 +207,15 @@ def test_collection_admin_can_manage_direct_permissions(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    admin = _user(db_session, "collection-admin")
-    viewer = _user(db_session, "share-target")
+    admin = build_user(db_session, "collection-admin")
+    viewer = build_user(db_session, "share-target")
     collection = taxonomy.resolve_or_create_collection(db_session, "Shared")
     assert collection is not None
     _grant(db_session, admin, collection.id, CollectionRole.ADMIN)
 
     put = client.put(
         f"/api/v1/collections/{collection.id}/permissions/{viewer.id}",
-        headers=_headers(admin),
+        headers=bearer(admin),
         json={"role": "view"},
     )
     assert put.status_code == 200
@@ -242,7 +223,7 @@ def test_collection_admin_can_manage_direct_permissions(
 
     listed = client.get(
         f"/api/v1/collections/{collection.id}/permissions",
-        headers=_headers(admin),
+        headers=bearer(admin),
     )
     assert listed.status_code == 200
     assert {row["username"] for row in listed.json()} == {
@@ -255,10 +236,10 @@ def test_non_superuser_ingest_requires_collection(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    user = _user(db_session, "uploader")
+    user = build_user(db_session, "uploader")
     response = client.post(
         "/api/v1/ingest/model",
-        headers=_headers(user),
+        headers=bearer(user),
         files={"file": ("cube.stl", b"solid cube\nendsolid cube\n", "application/sla")},
         data={"model_name": "Cube"},
     )
@@ -270,7 +251,7 @@ def test_non_superuser_cannot_see_printer_presence(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    user = _user(db_session, "printer-blind")
+    user = build_user(db_session, "printer-blind")
     collection = taxonomy.resolve_or_create_collection(db_session, "Visible")
     assert collection is not None
     _grant(db_session, user, collection.id, CollectionRole.VIEW)
@@ -299,24 +280,24 @@ def test_non_superuser_cannot_see_printer_presence(
     )
     db_session.commit()
 
-    listed = client.get("/api/v1/models", headers=_headers(user))
+    listed = client.get("/api/v1/models", headers=bearer(user))
     assert listed.status_code == 200
     assert listed.json()[0]["printer_presence"] == []
 
-    filtered = client.get("/api/v1/models?printer_presence=any", headers=_headers(user))
+    filtered = client.get("/api/v1/models?printer_presence=any", headers=bearer(user))
     assert filtered.status_code == 403
     assert filtered.json()["detail"] == "admin_required"
 
     printer_files = client.get(
         f"/api/v1/models/{model.id}/printer-files",
-        headers=_headers(user),
+        headers=bearer(user),
     )
     assert printer_files.status_code == 403
     assert printer_files.json()["detail"] == "admin_required"
 
     print_jobs = client.get(
         f"/api/v1/models/{model.id}/print-jobs",
-        headers=_headers(user),
+        headers=bearer(user),
     )
     assert print_jobs.status_code == 403
     assert print_jobs.json()["detail"] == "admin_required"
@@ -330,8 +311,8 @@ def test_deleting_a_child_does_not_block_deleting_the_parent(
     The non-recursive has-children guard previously counted trashed children, so
     create-child -> delete-child -> delete-parent returned 409 forever.
     """
-    admin = _user(db_session, "admin-del", superuser=True)
-    h = _headers(admin)
+    admin = build_user(db_session, "admin-del", superuser=True)
+    h = bearer(admin)
 
     parent = client.post(
         "/api/v1/collections", json={"name": "Parent"}, headers=h
@@ -368,7 +349,7 @@ def test_role_revocation_takes_effect_immediately(
     Access is resolved per request, so nothing may cache a stale grant — a
     revoked collaborator who can still read is the whole point of the feature.
     """
-    user = _user(db_session, "revoked")
+    user = build_user(db_session, "revoked")
     collection = taxonomy.resolve_or_create_collection(db_session, "Secrets")
     assert collection is not None
     child = taxonomy.resolve_or_create_collection(db_session, "Secrets/Inner")
@@ -376,7 +357,7 @@ def test_role_revocation_takes_effect_immediately(
     _grant(db_session, user, collection.id, CollectionRole.VIEW)
     model = _model(db_session, "Inner Model", child.id)
 
-    before = client.get(f"/api/v1/models/{model.id}", headers=_headers(user))
+    before = client.get(f"/api/v1/models/{model.id}", headers=bearer(user))
     assert before.status_code == 200
 
     permission = db_session.exec(
@@ -388,12 +369,12 @@ def test_role_revocation_takes_effect_immediately(
     db_session.delete(permission)
     db_session.commit()
 
-    after = client.get(f"/api/v1/models/{model.id}", headers=_headers(user))
+    after = client.get(f"/api/v1/models/{model.id}", headers=bearer(user))
     # 404, not 403: the model is filtered out before the role check, so a revoked
     # user cannot even confirm it exists.
     assert after.status_code == 404, "revoked user still reads an inherited model"
 
-    listed = client.get("/api/v1/models", headers=_headers(user))
+    listed = client.get("/api/v1/models", headers=bearer(user))
     assert listed.status_code == 200
     body = listed.json()
     rows = body["items"] if isinstance(body, dict) else body
@@ -404,7 +385,7 @@ def test_collection_rename_updates_descendant_paths(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    owner = _user(db_session, "rename-owner")
+    owner = build_user(db_session, "rename-owner")
     parent = taxonomy.resolve_or_create_collection(db_session, "Projects")
     child = taxonomy.resolve_or_create_collection(db_session, "Projects/Parts")
     assert parent is not None and child is not None
@@ -412,7 +393,7 @@ def test_collection_rename_updates_descendant_paths(
 
     response = client.patch(
         f"/api/v1/collections/{parent.id}",
-        headers=_headers(owner),
+        headers=bearer(owner),
         json={"name": "Active projects"},
     )
 
@@ -428,7 +409,7 @@ class TestEffectiveRolesForCollections:
     def test_gives_a_superuser_admin_everywhere_including_the_root(
         self, db_session: Session
     ) -> None:
-        admin = _user(db_session, "bulk-admin", superuser=True)
+        admin = build_user(db_session, "bulk-admin", superuser=True)
         collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
         assert collection is not None
 
@@ -440,7 +421,7 @@ class TestEffectiveRolesForCollections:
     def test_returns_nothing_for_a_user_with_no_grants_at_all(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "bulk-nobody")
+        user = build_user(db_session, "bulk-nobody")
         collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
         assert collection is not None
 
@@ -451,14 +432,14 @@ class TestEffectiveRolesForCollections:
     def test_answers_an_empty_request_without_touching_the_database(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "bulk-empty")
+        user = build_user(db_session, "bulk-empty")
 
         assert rbac.effective_roles_for_collections(db_session, user, []) == {
             None: None
         }
 
     def test_inherits_a_grant_down_the_tree(self, db_session: Session) -> None:
-        user = _user(db_session, "bulk-inheritor")
+        user = build_user(db_session, "bulk-inheritor")
         parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
         child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
         assert parent is not None and child is not None
@@ -471,7 +452,7 @@ class TestEffectiveRolesForCollections:
     def test_keeps_the_strongest_of_two_overlapping_grants(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "bulk-strongest")
+        user = build_user(db_session, "bulk-strongest")
         parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
         child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
         assert parent is not None and child is not None
@@ -486,7 +467,7 @@ class TestEffectiveRolesForCollections:
     def test_does_not_leak_a_grant_to_a_prefix_sibling(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "bulk-sibling")
+        user = build_user(db_session, "bulk-sibling")
         granted = taxonomy.resolve_or_create_collection(db_session, "Art")
         sibling = taxonomy.resolve_or_create_collection(db_session, "Artillery")
         assert granted is not None and sibling is not None
@@ -504,8 +485,8 @@ class TestEffectiveRolesForUserCollectionPairs:
     def test_resolves_every_user_against_every_collection(
         self, db_session: Session
     ) -> None:
-        first = _user(db_session, "pairs-one")
-        second = _user(db_session, "pairs-two")
+        first = build_user(db_session, "pairs-one")
+        second = build_user(db_session, "pairs-two")
         collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
         assert collection is not None
         _grant(db_session, first, collection.id, CollectionRole.EDIT)
@@ -519,7 +500,7 @@ class TestEffectiveRolesForUserCollectionPairs:
         assert pairs[(second.id, collection.id)] == CollectionRole.VIEW
 
     def test_leaves_out_a_pair_with_no_grant(self, db_session: Session) -> None:
-        user = _user(db_session, "pairs-ungranted")
+        user = build_user(db_session, "pairs-ungranted")
         collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
         assert collection is not None
 
@@ -531,7 +512,7 @@ class TestEffectiveRolesForUserCollectionPairs:
         assert (user.id, collection.id) not in pairs
 
     def test_inherits_a_grant_down_the_tree(self, db_session: Session) -> None:
-        user = _user(db_session, "pairs-inheritor")
+        user = build_user(db_session, "pairs-inheritor")
         parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
         child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
         assert parent is not None and child is not None
@@ -546,7 +527,7 @@ class TestEffectiveRolesForUserCollectionPairs:
     def test_keeps_the_strongest_of_two_overlapping_grants(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "pairs-strongest")
+        user = build_user(db_session, "pairs-strongest")
         parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
         child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
         assert parent is not None and child is not None
@@ -562,7 +543,7 @@ class TestEffectiveRolesForUserCollectionPairs:
     def test_does_not_leak_a_grant_to_a_prefix_sibling(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "pairs-sibling")
+        user = build_user(db_session, "pairs-sibling")
         granted = taxonomy.resolve_or_create_collection(db_session, "Art")
         sibling = taxonomy.resolve_or_create_collection(db_session, "Artillery")
         assert granted is not None and sibling is not None
@@ -585,7 +566,7 @@ class TestEffectiveRolesForUserCollectionPairs:
     def test_answers_an_empty_request_without_touching_the_database(
         self, db_session: Session, users: bool, collections: bool
     ) -> None:
-        user = _user(db_session, f"pairs-empty-{users}-{collections}")
+        user = build_user(db_session, f"pairs-empty-{users}-{collections}")
         collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
         assert collection is not None
 
@@ -602,7 +583,7 @@ class TestEffectiveCollectionRole:
     def test_gives_an_ordinary_user_no_role_at_the_root(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "root-nobody")
+        user = build_user(db_session, "root-nobody")
 
         # The root is not a collection anyone can be granted; only a superuser
         # reaches it, which is what keeps a shared deployment shareable.
@@ -613,7 +594,7 @@ class TestRequireModelCollectionRole:
     def test_refuses_an_ordinary_user_at_the_root(self, db_session: Session) -> None:
         from fastapi import HTTPException as _HTTPException
 
-        user = _user(db_session, "root-model-nobody")
+        user = build_user(db_session, "root-model-nobody")
 
         with pytest.raises(_HTTPException) as exc_info:
             rbac.require_model_collection_role(
@@ -624,7 +605,7 @@ class TestRequireModelCollectionRole:
         assert exc_info.value.detail == "root_collection_admin_required"
 
     def test_allows_a_superuser_at_the_root(self, db_session: Session) -> None:
-        admin = _user(db_session, "root-model-admin", superuser=True)
+        admin = build_user(db_session, "root-model-admin", superuser=True)
 
         assert (
             rbac.require_model_collection_role(

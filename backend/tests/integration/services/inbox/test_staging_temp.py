@@ -8,21 +8,10 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.core.time import utcnow
-from app.db.models import CaptureUploadSlot, CaptureUploadSlotState, StagingLease, User
+from app.db.models import CaptureUploadSlot, CaptureUploadSlotState, StagingLease
 from app.schemas.inbox import CaptureUploadSlotsCreate
 from app.services import inbox, staging_leases
-from app.services.auth import hash_password
-
-
-def _user(session: Session, username: str) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_superuser=True,
-    )
-    session.add(user)
-    session.flush()
-    return user
+from tests.factories import build_user
 
 
 def _payload(data: bytes) -> CaptureUploadSlotsCreate:
@@ -55,7 +44,7 @@ def test_capture_staging_recovery_removes_owned_partial_and_preserves_foreign(
     db_session: Session, tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
-    owner = _user(db_session, "staging-recovery")
+    owner = build_user(db_session, "staging-recovery", superuser=True)
     data = b"complete upload bytes"
     _, slots = inbox.create_capture_upload_slots(db_session, owner, _payload(data))
     slot = slots[0]
@@ -79,7 +68,7 @@ def test_capture_staging_recovery_preserves_replaced_path(
     db_session: Session, tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
-    owner = _user(db_session, "staging-replaced")
+    owner = build_user(db_session, "staging-replaced", superuser=True)
     _, slots = inbox.create_capture_upload_slots(
         db_session, owner, _payload(b"upload bytes")
     )
@@ -100,7 +89,7 @@ def test_expired_capture_slot_prune_removes_owned_partial(
     db_session: Session, tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
-    owner = _user(db_session, "staging-expiry")
+    owner = build_user(db_session, "staging-expiry", superuser=True)
     _, slots = inbox.create_capture_upload_slots(
         db_session, owner, _payload(b"upload bytes")
     )
@@ -124,7 +113,7 @@ def test_capture_upload_still_publishes_after_owned_temp_setup(
     db_session: Session, tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
-    owner = _user(db_session, "staging-success")
+    owner = build_user(db_session, "staging-success", superuser=True)
     data = b"upload bytes"
     _, slots = inbox.create_capture_upload_slots(db_session, owner, _payload(data))
     slot = slots[0]

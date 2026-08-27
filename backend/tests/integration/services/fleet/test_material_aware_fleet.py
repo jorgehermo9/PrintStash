@@ -37,6 +37,7 @@ from app.schemas.materials import (
     MaterialToolWrite,
 )
 from app.services import fleet, materials
+from tests.factories import build_user
 from tests.integration.api.v1.test_fleet import _gcode
 
 
@@ -60,16 +61,6 @@ def test_material_and_fleet_schema_validation_edges() -> None:
     now = datetime.now(timezone.utc)
     with pytest.raises(ValueError, match="maintenance_window_invalid"):
         MaintenanceWindowCreate(starts_at=now, ends_at=now)
-
-
-def _user(session: Session) -> User:
-    user = User(
-        username="material-operator", hashed_password="unused", is_superuser=True
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
 
 
 def _requirements(session: Session, material: str = "PLA", nozzle: float = 0.4):
@@ -96,7 +87,7 @@ def _requirements(session: Session, material: str = "PLA", nozzle: float = 0.4):
 def test_manual_material_state_drives_compatibility_and_confirmation(
     db_session: Session,
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "material-operator", superuser=True)
     printer = Printer(
         name="Material aware",
         moonraker_url="http://material-aware",
@@ -221,7 +212,7 @@ def test_manual_material_state_drives_compatibility_and_confirmation(
 def test_batch_creation_is_atomic_and_spreads_least_busy_copies(
     db_session: Session,
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "material-operator", superuser=True)
     printers = [
         Printer(
             name=f"Batch {index}",
@@ -249,7 +240,7 @@ def test_batch_creation_is_atomic_and_spreads_least_busy_copies(
 
 
 def test_operator_hold_resolves_gate_and_enables_drain(db_session: Session) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "material-operator", superuser=True)
     printer = Printer(
         name="Release gate",
         moonraker_url="http://release-gate",
@@ -282,7 +273,7 @@ def test_operator_hold_resolves_gate_and_enables_drain(db_session: Session) -> N
 def test_material_routing_prefers_compatible_then_unknown_and_color_is_advisory(
     db_session: Session,
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "material-operator", superuser=True)
     pla = Printer(name="PLA", moonraker_url="http://pla", status=PrinterStatus.READY)
     unknown = Printer(
         name="Unknown", moonraker_url="http://unknown", status=PrinterStatus.READY
@@ -480,7 +471,7 @@ def test_unresolved_tracked_spool_is_unknown_not_a_proven_mismatch(
 def test_manual_material_state_validation_and_provider_precedence(
     db_session: Session,
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "material-operator", superuser=True)
     materials.ensure_default_tool(db_session, Printer(name="Unsaved"))
     with pytest.raises(materials.MaterialStateError, match="printer_not_found"):
         materials.read_material_state(db_session, 999_999)
@@ -580,7 +571,7 @@ def test_manual_material_state_validation_and_provider_precedence(
 def test_compatibility_unknown_inputs_multitool_mapping_and_report(
     db_session: Session,
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "material-operator", superuser=True)
     printer = Printer(
         name="Compatibility edges",
         moonraker_url="http://compatibility-edges",
@@ -778,7 +769,7 @@ def test_material_state_compatibility_batch_and_release_apis(
 
 
 def test_batch_queue_and_operator_edge_paths(db_session: Session) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "material-operator", superuser=True)
     printer = Printer(
         name="Fleet edges",
         moonraker_url="http://fleet-edges",

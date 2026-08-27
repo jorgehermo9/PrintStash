@@ -13,15 +13,8 @@ from alembic import command
 from app.core.time import utcnow
 from app.db.models import BackgroundJob, InboxItem, StagingLease, User
 from app.services import staging_leases
-from app.services.auth import hash_password
+from tests.factories import build_user
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
-
-
-def _user(session: Session) -> User:
-    user = User(username="lease-user", hashed_password=hash_password("Password123"))
-    session.add(user)
-    session.flush()
-    return user
 
 
 def _inbox(session: Session, user: User) -> InboxItem:
@@ -41,7 +34,7 @@ def _job(session: Session, user: User) -> BackgroundJob:
 def test_review_lease_rejects_replaced_path_without_unlink(
     db_session: Session, tmp_path: Path
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "lease-user")
     inbox = _inbox(db_session, user)
     staged = tmp_path / "capture.3mf"
     staged.write_bytes(b"original")
@@ -66,7 +59,7 @@ def test_review_lease_rejects_replaced_path_without_unlink(
 
 
 def test_prune_expired_unlinks_exact_file(db_session: Session, tmp_path: Path) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "lease-user")
     inbox = _inbox(db_session, user)
     staged = tmp_path / "capture.gcode"
     staged.write_bytes(b"staged")
@@ -147,7 +140,7 @@ def test_fc15_upgrade_and_downgrade_preserve_job_lease_data(tmp_path: Path) -> N
 def test_transfer_is_atomic_and_preserves_exactly_one_owner(
     db_session: Session, tmp_path: Path
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "lease-user")
     inbox = _inbox(db_session, user)
     staged = tmp_path / "capture.stl"
     staged.write_bytes(b"staged")
@@ -191,7 +184,7 @@ def test_transfer_is_atomic_and_preserves_exactly_one_owner(
 def test_inbox_delete_cascades_review_lease(
     db_session: Session, tmp_path: Path
 ) -> None:
-    user = _user(db_session)
+    user = build_user(db_session, "lease-user")
     inbox = _inbox(db_session, user)
     staged = tmp_path / "capture.obj"
     staged.write_bytes(b"staged")

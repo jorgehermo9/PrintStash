@@ -62,7 +62,7 @@ class MakeUser(Protocol):
 
 
 class HeadersFor(Protocol):
-    def __call__(self, user: User, *, scope: str = "write") -> dict[str, str]: ...
+    def __call__(self, user: User, *, scope: str | None = None) -> dict[str, str]: ...
 
 
 class UserHeaders(Protocol):

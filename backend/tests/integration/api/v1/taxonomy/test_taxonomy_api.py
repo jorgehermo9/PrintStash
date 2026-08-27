@@ -11,29 +11,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.db.models import CollectionPermission, CollectionRole, Model, User
+from app.db.models import CollectionPermission, CollectionRole, Model
 from app.services import taxonomy
-from app.services.auth import create_access_token, hash_password
 from app.services.storage_backend import get_backend
-
-
-def _user(session: Session, username: str, *, superuser: bool = False) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=superuser,
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
-
-
-def _headers(user: User) -> dict[str, str]:
-    scope = "admin" if user.is_superuser else "write"
-    token = create_access_token(user.id, user.username, scope=scope)
-    return {"Authorization": f"Bearer {token}"}
+from tests.factories import bearer, build_user
 
 
 class TestListCollections:
@@ -64,8 +45,8 @@ class TestListCollections:
         self, client: TestClient, db_session: Session
     ) -> None:
         taxonomy.resolve_or_create_collection(db_session, "Private")
-        user = _user(db_session, "no-access")
-        resp = client.get("/api/v1/collections", headers=_headers(user))
+        user = build_user(db_session, "no-access")
+        resp = client.get("/api/v1/collections", headers=bearer(user))
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -75,7 +56,7 @@ class TestListCollections:
         col = taxonomy.resolve_or_create_collection(db_session, "Granted")
         assert col is not None
         db_session.add(Model(name="gm", slug="gm", hash="f" * 64, collection_id=col.id))
-        user = _user(db_session, "granted-viewer")
+        user = build_user(db_session, "granted-viewer")
         db_session.add(
             CollectionPermission(
                 user_id=user.id, collection_id=col.id, role=CollectionRole.VIEW
@@ -83,7 +64,7 @@ class TestListCollections:
         )
         db_session.commit()
 
-        resp = client.get("/api/v1/collections", headers=_headers(user))
+        resp = client.get("/api/v1/collections", headers=bearer(user))
         assert resp.status_code == 200
         body = resp.json()
         assert len(body) == 1
@@ -94,9 +75,9 @@ class TestCreateCollection:
     def test_create_root_requires_superuser(
         self, client: TestClient, db_session: Session
     ) -> None:
-        user = _user(db_session, "writer")
+        user = build_user(db_session, "writer")
         resp = client.post(
-            "/api/v1/collections", json={"name": "Root"}, headers=_headers(user)
+            "/api/v1/collections", json={"name": "Root"}, headers=bearer(user)
         )
         assert resp.status_code == 403
         assert resp.json()["detail"] == "root_collection_admin_required"
@@ -115,11 +96,11 @@ class TestCreateCollection:
     def test_create_root_with_slash_requires_superuser(
         self, client: TestClient, db_session: Session
     ) -> None:
-        user = _user(db_session, "writer")
+        user = build_user(db_session, "writer")
         resp = client.post(
             "/api/v1/collections",
             json={"name": "Functional/Brackets"},
-            headers=_headers(user),
+            headers=bearer(user),
         )
         assert resp.status_code == 403
 
@@ -228,7 +209,7 @@ class TestMoveCollection:
         parent = taxonomy.resolve_or_create_collection(db_session, "Parent")
         child = taxonomy.resolve_or_create_collection(db_session, "Parent/Child")
         assert parent is not None and child is not None
-        user = _user(db_session, "writer")
+        user = build_user(db_session, "writer")
         db_session.add(
             CollectionPermission(
                 user_id=user.id, collection_id=child.id, role=CollectionRole.ADMIN
@@ -238,7 +219,7 @@ class TestMoveCollection:
         resp = client.patch(
             f"/api/v1/collections/{child.id}",
             json={"parent_id": None},
-            headers=_headers(user),
+            headers=bearer(user),
         )
         assert resp.status_code == 403
         assert resp.json()["detail"] == "root_collection_admin_required"
@@ -546,8 +527,8 @@ class TestTags:
         # Tags are a flat, ungated namespace — no-collection-access only zeroes
         # out the per-tag model counts, it doesn't hide the tags themselves.
         taxonomy.resolve_or_create_tags(db_session, ["hidden"])
-        user = _user(db_session, "no-access-2")
-        resp = client.get("/api/v1/tags", headers=_headers(user))
+        user = build_user(db_session, "no-access-2")
+        resp = client.get("/api/v1/tags", headers=bearer(user))
         assert resp.status_code == 200
         body = resp.json()
         assert len(body) == 1
@@ -566,7 +547,7 @@ class TestTags:
         from app.db.models import ModelTagLink
 
         db_session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
-        user = _user(db_session, "scoped-viewer")
+        user = build_user(db_session, "scoped-viewer")
         db_session.add(
             CollectionPermission(
                 user_id=user.id, collection_id=col.id, role=CollectionRole.VIEW
@@ -574,7 +555,7 @@ class TestTags:
         )
         db_session.commit()
 
-        resp = client.get("/api/v1/tags", headers=_headers(user))
+        resp = client.get("/api/v1/tags", headers=bearer(user))
         assert resp.status_code == 200
         by_name = {t["name"]: t for t in resp.json()}
         assert by_name["scoped"]["model_count"] == 1
@@ -619,7 +600,7 @@ class TestCollectionPermissions:
     ) -> None:
         col = taxonomy.resolve_or_create_collection(db_session, "Perms")
         assert col is not None
-        user = _user(db_session, "grantee")
+        user = build_user(db_session, "grantee")
         db_session.add(
             CollectionPermission(
                 user_id=user.id, collection_id=col.id, role=CollectionRole.VIEW
@@ -638,7 +619,7 @@ class TestCollectionPermissions:
     ) -> None:
         col = taxonomy.resolve_or_create_collection(db_session, "Perms2")
         assert col is not None
-        target = _user(db_session, "target")
+        target = build_user(db_session, "target")
         resp = client.put(
             f"/api/v1/collections/{col.id}/permissions/{target.id}",
             json={"role": "view"},
@@ -673,7 +654,7 @@ class TestCollectionPermissions:
     ) -> None:
         col = taxonomy.resolve_or_create_collection(db_session, "Perms4")
         assert col is not None
-        target = _user(db_session, "no-grant")
+        target = build_user(db_session, "no-grant")
         resp = client.delete(
             f"/api/v1/collections/{col.id}/permissions/{target.id}",
             headers=auth_headers,
@@ -686,7 +667,7 @@ class TestCollectionPermissions:
     ) -> None:
         col = taxonomy.resolve_or_create_collection(db_session, "Perms5")
         assert col is not None
-        target = _user(db_session, "revoke-me")
+        target = build_user(db_session, "revoke-me")
         db_session.add(
             CollectionPermission(
                 user_id=target.id, collection_id=col.id, role=CollectionRole.VIEW

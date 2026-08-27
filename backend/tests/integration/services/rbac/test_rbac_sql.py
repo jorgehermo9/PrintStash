@@ -18,8 +18,8 @@ from app.db.models import (
 )
 from app.db.scopes import live
 from app.services import rbac, taxonomy
-from app.services.auth import hash_password
 from app.services.rbac import ROLE_ORDER, role_allows
+from tests.factories import build_user
 
 
 def _oracle(
@@ -52,19 +52,6 @@ def _oracle(
     return out
 
 
-def _user(session: Session, username: str, *, superuser: bool = False) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-        is_superuser=superuser,
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
-
-
 def _grant(
     session: Session, user: User, collection_id: int, role: CollectionRole
 ) -> None:
@@ -94,14 +81,14 @@ def _seed_tree(session: Session) -> dict[str, Collection]:
 
 def test_sql_matches_python_for_superuser(db_session: Session) -> None:
     _seed_tree(db_session)
-    root = _user(db_session, "root", superuser=True)
+    root = build_user(db_session, "root", superuser=True)
 
     assert rbac.accessible_collection_ids(db_session, root) == _oracle(db_session, root)
 
 
 def test_sql_matches_python_with_no_grants(db_session: Session) -> None:
     _seed_tree(db_session)
-    nobody = _user(db_session, "nobody")
+    nobody = build_user(db_session, "nobody")
 
     assert rbac.accessible_collection_ids(db_session, nobody) == set()
     assert rbac.accessible_collection_ids(db_session, nobody) == _oracle(
@@ -116,7 +103,7 @@ def test_sql_matches_python_on_nested_grants(
     db_session: Session, minimum: CollectionRole
 ) -> None:
     tree = _seed_tree(db_session)
-    user = _user(db_session, "alice")
+    user = build_user(db_session, "alice")
     _grant(db_session, user, tree["Parts/Brackets"].id, CollectionRole.EDIT)
     _grant(db_session, user, tree["Toys"].id, CollectionRole.VIEW)
 
@@ -128,7 +115,7 @@ def test_sql_matches_python_on_nested_grants(
 def test_grant_does_not_leak_to_prefix_sibling(db_session: Session) -> None:
     """ "Parts" must not grant "Parts Extra" — they only share a string prefix."""
     tree = _seed_tree(db_session)
-    user = _user(db_session, "bob")
+    user = build_user(db_session, "bob")
     _grant(db_session, user, tree["Parts"].id, CollectionRole.VIEW)
 
     got = rbac.accessible_collection_ids(db_session, user)
@@ -140,7 +127,7 @@ def test_grant_does_not_leak_to_prefix_sibling(db_session: Session) -> None:
 
 def test_highest_grant_wins_across_overlapping_scopes(db_session: Session) -> None:
     tree = _seed_tree(db_session)
-    user = _user(db_session, "carol")
+    user = build_user(db_session, "carol")
     _grant(db_session, user, tree["Parts"].id, CollectionRole.VIEW)
     _grant(db_session, user, tree["Parts/Brackets"].id, CollectionRole.ADMIN)
 
@@ -156,7 +143,7 @@ def test_trashed_collection_is_excluded(db_session: Session) -> None:
     from app.core.time import utcnow
 
     tree = _seed_tree(db_session)
-    user = _user(db_session, "dave")
+    user = build_user(db_session, "dave")
     _grant(db_session, user, tree["Parts"].id, CollectionRole.VIEW)
 
     brackets = tree["Parts/Brackets"]
@@ -186,7 +173,7 @@ def test_like_metacharacters_in_path_do_not_widen_the_grant(
     for c in (granted, sibling_child, granted_child):
         db_session.refresh(c)
 
-    user = _user(db_session, "erin")
+    user = build_user(db_session, "erin")
     _grant(db_session, user, granted.id, CollectionRole.VIEW)
 
     got = rbac.accessible_collection_ids(db_session, user)
@@ -204,7 +191,7 @@ def test_sql_matches_python_on_a_wide_tree(db_session: Session) -> None:
     prefix match would show up.
     """
     tree = _seed_tree(db_session)
-    user = _user(db_session, "frank")
+    user = build_user(db_session, "frank")
     _grant(db_session, user, tree["Parts/Brackets"].id, CollectionRole.EDIT)
     _grant(db_session, user, tree["Toys"].id, CollectionRole.VIEW)
 

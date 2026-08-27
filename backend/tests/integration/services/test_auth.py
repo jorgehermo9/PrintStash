@@ -49,23 +49,7 @@ from app.services.auth import (
     verify_file_download_token,
     verify_password,
 )
-
-
-def _user(
-    session: Session,
-    username: str,
-    *,
-    is_active: bool = True,
-) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=is_active,
-    )
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
+from tests.factories import build_user
 
 
 def _legacy_bcrypt_hash(password: str) -> str:
@@ -157,7 +141,7 @@ class TestPasswordsAndSessions:
         self,
         db_session: Session,
     ) -> None:
-        user = _user(db_session, "inactive-user", is_active=False)
+        user = build_user(db_session, "inactive-user", active=False)
         _, raw_key = create_api_key(db_session, user.id, "CI key")
 
         assert authenticate_user(db_session, user.username, "Password123") is None
@@ -166,7 +150,7 @@ class TestPasswordsAndSessions:
     def test_successful_api_key_login_updates_last_used_at(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "api-key-user")
+        user = build_user(db_session, "api-key-user")
         record, raw_key = create_api_key(db_session, user.id, "Orca uploader")
         assert record.last_used_at is None
 
@@ -178,7 +162,7 @@ class TestPasswordsAndSessions:
         assert record.last_used_at is not None
 
     def test_expired_refresh_token_does_not_rotate(self, db_session: Session) -> None:
-        user = _user(db_session, "refresh-user")
+        user = build_user(db_session, "refresh-user")
         raw_token = create_refresh_token(db_session, user.id, minutes=-1)
 
         assert rotate_refresh_token(db_session, raw_token) is None
@@ -192,7 +176,7 @@ class TestPasswordsAndSessions:
         )
         SQLModel.metadata.create_all(engine)
         with Session(engine) as session:
-            user = _user(session, "refresh-race")
+            user = build_user(session, "refresh-race")
             raw_token = create_refresh_token(session, user.id)
 
         start = threading.Barrier(3)
@@ -237,7 +221,7 @@ class TestPasswordsAndSessions:
         self,
         db_session: Session,
     ) -> None:
-        user = _user(db_session, "refresh-prune")
+        user = build_user(db_session, "refresh-prune")
         expired = [
             create_refresh_token(db_session, user.id, minutes=-1) for _ in range(3)
         ]
@@ -255,13 +239,13 @@ class TestPasswordsAndSessions:
 
 class TestTokenRevocation:
     def test_revokes_a_refresh_token(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         raw = create_refresh_token(db_session, user.id)
 
         assert revoke_refresh_token(db_session, raw) is True
 
     def test_stays_revoked_when_asked_twice(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         raw = create_refresh_token(db_session, user.id)
         revoke_refresh_token(db_session, raw)
 
@@ -272,7 +256,7 @@ class TestTokenRevocation:
         assert revoke_refresh_token(db_session, "never-issued") is False
 
     def test_revokes_every_token_a_user_holds(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         first = create_refresh_token(db_session, user.id)
         second = create_refresh_token(db_session, user.id)
 
@@ -283,7 +267,7 @@ class TestTokenRevocation:
         assert rotate_refresh_token(db_session, second) is None
 
     def test_blocks_an_access_token_it_was_given(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         token = create_access_token(user.id, user.username, scope="write")
 
         revoke_access_token(token)
@@ -298,7 +282,7 @@ class TestTokenRevocation:
 
 class TestInvalidateUserSessions:
     def test_bumps_the_auth_version(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         before = user.auth_version
 
         invalidate_user_sessions(db_session, user)
@@ -306,7 +290,7 @@ class TestInvalidateUserSessions:
         assert user.auth_version == before + 1
 
     def test_stops_an_existing_access_token_working(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         token = create_access_token(
             user.id, user.username, scope="write", auth_version=user.auth_version
         )
@@ -319,7 +303,7 @@ class TestInvalidateUserSessions:
         assert payload["auth_version"] != user.auth_version
 
     def test_revokes_every_refresh_token(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         raw = create_refresh_token(db_session, user.id)
 
         invalidate_user_sessions(db_session, user)
@@ -328,7 +312,7 @@ class TestInvalidateUserSessions:
         assert rotate_refresh_token(db_session, raw) is None
 
     def test_leaves_the_commit_to_its_caller(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         raw = create_refresh_token(db_session, user.id)
 
         invalidate_user_sessions(db_session, user)
@@ -355,7 +339,7 @@ class TestPruneExpiredRefreshTokens:
 
 class TestAuthenticateUser:
     def test_signs_a_user_in(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
 
         assert authenticate_user(db_session, user.username, "Password123") is not None
 
@@ -363,14 +347,14 @@ class TestAuthenticateUser:
         assert authenticate_user(db_session, "nobody", "Password123") is None
 
     def test_refuses_a_wrong_password(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
 
         assert authenticate_user(db_session, user.username, "Wrong") is None
 
     def test_refuses_a_user_managed_by_the_identity_provider(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         user.oidc_managed = True
         db_session.add(user)
         db_session.commit()
@@ -394,7 +378,7 @@ class TestFileDownloadToken:
         assert verify_file_download_token(token, 8) is False
 
     def test_refuses_an_ordinary_access_token(self, db_session: Session) -> None:
-        user = _user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
+        user = build_user(db_session, f"auth-{uuid.uuid4().hex[:8]}")
         token = create_access_token(user.id, user.username, scope="write")
 
         # A login token in a URL would be a login token in a proxy log.

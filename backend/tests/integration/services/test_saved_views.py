@@ -13,22 +13,10 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session, select
 
-from app.db.models import SavedView, User
+from app.db.models import SavedView
 from app.schemas.saved_views import SavedViewCreate, SavedViewFilters, SavedViewUpdate
 from app.services import saved_views
-from app.services.auth import hash_password
-
-
-def _user(db_session: Session, username: str) -> User:
-    user = User(
-        username=username,
-        hashed_password=hash_password("Password123"),
-        is_active=True,
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    return user
+from tests.factories import build_user
 
 
 def _payload(name: str, **filters: object) -> SavedViewCreate:
@@ -40,7 +28,7 @@ def _payload(name: str, **filters: object) -> SavedViewCreate:
 
 class TestListForUser:
     def test_orders_views_by_name(self, db_session: Session) -> None:
-        user = _user(db_session, "sorter")
+        user = build_user(db_session, "sorter")
         for name in ("Zebra", "Apple", "Mango"):
             saved_views.create(db_session, user.id, _payload(name))
 
@@ -51,8 +39,8 @@ class TestListForUser:
 
 class TestGetForUser:
     def test_returns_none_for_another_users_view(self, db_session: Session) -> None:
-        owner = _user(db_session, "get-owner")
-        other = _user(db_session, "get-other")
+        owner = build_user(db_session, "get-owner")
+        other = build_user(db_session, "get-other")
         view = saved_views.create(db_session, owner.id, _payload("Private"))
 
         assert saved_views.get_for_user(db_session, other.id, view.id) is None
@@ -62,14 +50,14 @@ class TestCreate:
     def test_trims_surrounding_whitespace_from_the_name(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "trimmer")
+        user = build_user(db_session, "trimmer")
 
         view = saved_views.create(db_session, user.id, _payload("  Favorites  "))
 
         assert view.name == "Favorites"
 
     def test_raises_conflict_on_a_duplicate_name(self, db_session: Session) -> None:
-        user = _user(db_session, "conflicter")
+        user = build_user(db_session, "conflicter")
         saved_views.create(db_session, user.id, _payload("Favorites"))
 
         with pytest.raises(saved_views.SavedViewConflict):
@@ -83,7 +71,7 @@ class TestCreate:
     def test_leaves_the_session_usable_after_a_conflict(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "recoverer")
+        user = build_user(db_session, "recoverer")
         saved_views.create(db_session, user.id, _payload("Favorites"))
         with pytest.raises(saved_views.SavedViewConflict):
             saved_views.create(db_session, user.id, _payload("Favorites"))
@@ -95,7 +83,7 @@ class TestCreate:
 
 class TestUpdate:
     def test_trims_a_renamed_name(self, db_session: Session) -> None:
-        user = _user(db_session, "rename-trimmer")
+        user = build_user(db_session, "rename-trimmer")
         view = saved_views.create(db_session, user.id, _payload("Before"))
 
         updated = saved_views.update(
@@ -110,7 +98,7 @@ class TestDelete:
     def test_reports_whether_a_delete_removed_anything(
         self, db_session: Session
     ) -> None:
-        user = _user(db_session, "reporter")
+        user = build_user(db_session, "reporter")
         view = saved_views.create(db_session, user.id, _payload("Temporary"))
 
         assert saved_views.delete(db_session, user.id, view.id) is True

@@ -65,16 +65,22 @@ def build_user(
     )
 
 
-def bearer(user: User, *, scope: str = "write") -> dict[str, str]:
-    """Authorization headers for *user* at *scope*.
+def bearer(user: User, *, scope: str | None = None) -> dict[str, str]:
+    """Authorization headers for *user*, at the scope they would actually get.
 
-    The scope is separate from the role on purpose: a token can be `read` even
-    for a superuser, and several endpoints are gated on the scope rather than on
-    who the caller is.
+    The default mirrors login: `admin` for a superuser, `write` otherwise. Five
+    byte-identical `_headers(user)` helpers were deriving exactly this, and
+    getting it wrong means an admin endpoint 403s for a reason that has nothing
+    to do with the behaviour under test.
+
+    Scope stays separate from the role, so name it when the *scope* is what is
+    under test — a `read` token belonging to a superuser is a real case, and
+    several endpoints are gated on the scope rather than on who the caller is.
     """
-    return {
-        "Authorization": f"Bearer {create_access_token(user.id, user.username, scope=scope)}"
-    }
+    if scope is None:
+        scope = "admin" if user.is_superuser else "write"
+    token = create_access_token(user.id, user.username, scope=scope)
+    return {"Authorization": f"Bearer {token}"}
 
 
 def grant_collection_role(
