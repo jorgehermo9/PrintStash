@@ -401,14 +401,16 @@ class TestBatchTags:
         db_session.expire_all()
         assert _tag_slugs(db_session, model.id) == {"beta"}
 
-    def test_treats_a_blank_remove_entry_as_the_fallback_slug(
+    def test_ignores_a_blank_remove_entry(
         self, client: TestClient, db_session: Session, auth_headers, model_in
     ) -> None:
-        """`slugify` never returns empty, so a blank entry is not skipped.
+        """A blank entry removes nothing — and specifically not the tag `model`.
 
-        It resolves to the fallback slug `model`. Recorded as finding F-5 in
-        `reports/22-test-overhaul-report.md`: the guard that reads like it skips
-        blanks (`if not slug: continue`) cannot fire.
+        `slugify` falls back to `"model"` for anything it cannot make a slug out
+        of, so the guard used to slug first and then ask whether the *slug* was
+        empty. It never was, so `remove: ["   "]` quietly meant "remove the tag
+        named model" from every model in the batch. Guarding the input instead
+        makes the blank case do what it reads like it does.
         """
         model = model_in("Fallback", None)
         tag = taxonomy.resolve_or_create_tags(db_session, ["model"])[0]
@@ -422,7 +424,7 @@ class TestBatchTags:
         )
 
         db_session.expire_all()
-        assert _tag_slugs(db_session, model.id) == set()
+        assert _tag_slugs(db_session, model.id) == {"model"}
 
     def test_refuses_the_whole_request_when_one_model_is_not_editable(
         self,

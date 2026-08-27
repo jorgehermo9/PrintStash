@@ -26,6 +26,7 @@ from printstash_core.imports.contracts import (
     CaptureContractError,
     canonicalize_provider_url,
     sanitize_canonical_url,
+    sanitize_provider_canonical_url,
 )
 
 MAX_URL_LENGTH = 2048
@@ -373,3 +374,80 @@ class TestCanonicalizeProviderUrlPathSafety:
     def test_refuses_a_bare_host_with_no_path(self) -> None:
         with pytest.raises(CaptureContractError):
             canonicalize_provider_url("printables", "https://www.printables.com/")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            pytest.param("/model/123/../../admin", id="dot-dot"),
+            pytest.param("/model/./123", id="dot"),
+            pytest.param("/model/%2e%2e/123", id="encoded-dot-dot"),
+            pytest.param("/model/%5C123", id="encoded-backslash"),
+            pytest.param("/model/123%00", id="encoded-nul"),
+            pytest.param("", id="no-path"),
+        ],
+    )
+    def test_refuses_a_path_whose_decoded_form_differs(self, path: str) -> None:
+        # If the decoded path is not the one that was validated, the durable
+        # identity is not the URL that was checked.
+        with pytest.raises(CaptureContractError):
+            canonicalize_provider_url("printables", f"https://printables.com{path}")
+
+    def test_refuses_a_port_on_a_known_provider(self) -> None:
+        # No real provider page is served on a non-default port; allowing one
+        # opens a redirect to an attacker-controlled listener on the same host.
+        with pytest.raises(CaptureContractError):
+            canonicalize_provider_url(
+                "printables", "https://printables.com:8443/model/123"
+            )
+
+    def test_refuses_a_malformed_port_on_a_known_provider(self) -> None:
+        # `urlsplit` raises rather than returning a port here, and the refusal has
+        # to survive that rather than becoming a 500.
+        with pytest.raises(CaptureContractError):
+            canonicalize_provider_url(
+                "printables", "https://printables.com:notaport/model/123"
+            )
+
+    @pytest.mark.parametrize(
+        ("provider", "url"),
+        [
+            ("printables", "https://printables.com.attacker.test/model/123"),
+            ("printables", "https://notprintables.com/model/123"),
+            ("makerworld", "https://makerworld.com.attacker.test/models/123"),
+            ("makerworld", "https://evilmakerworld.com/models/123"),
+            ("thingiverse", "https://thingiverse.com.attacker.test/thing:123"),
+            ("cults", "https://cults3d.com.attacker.test/3d-model/a/b"),
+            ("myminifactory", "https://myminifactory.com.attacker.test/object/1"),
+        ],
+    )
+    def test_refuses_a_hostname_that_only_resembles_the_provider(
+        self, provider: str, url: str
+    ) -> None:
+        # The manifest's `provider` is a claim about origin. Accepting a
+        # look-alike host would let a hostile page's metadata be stored as
+        # though a real provider had confirmed it.
+        with pytest.raises(CaptureContractError):
+            canonicalize_provider_url(provider, url)
+
+
+class TestCanonicalizeProviderUrlItemBinding:
+    def test_accepts_a_slug_carrying_the_item_id_as_a_prefix(self) -> None:
+        # Providers render `<id>-<slug>` while their capture ids hold only
+        # `<id>`, so a prefix match is the normal case.
+        assert canonicalize_provider_url(
+            "printables", "https://printables.com/model/123-example", "123"
+        )
+
+    def test_accepts_a_slug_that_is_exactly_the_item_id(self) -> None:
+        # Older portable captures stored the whole slug as the id.
+        assert canonicalize_provider_url(
+            "printables", "https://printables.com/model/123-example", "123-example"
+        )
+
+
+class TestSanitizeProviderCanonicalUrl:
+    def test_is_the_same_function_under_the_older_name(self) -> None:
+        # The alias is the shipped import path for callers written before the
+        # rename, so it has to keep pointing at the same implementation rather
+        # than at a copy that could drift.
+        assert sanitize_provider_canonical_url is canonicalize_provider_url

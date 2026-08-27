@@ -5,12 +5,15 @@ merge/rename/permission paths not covered by tests/test_taxonomy.py
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from app.api.v1 import taxonomy as taxonomy_router
 from app.db.models import CollectionRole
 from app.services import taxonomy
 from app.services.storage_backend import get_backend
@@ -357,6 +360,34 @@ class TestCollectionImages:
         )
         assert resp.status_code == 413
         assert resp.json()["detail"] == "upload_too_large"
+
+    @pytest.mark.asyncio
+    async def test_upload_oversized_without_a_declared_size_rejected(
+        self, db_session: Session
+    ) -> None:
+        # Starlette fills `UploadFile.size` for a multipart part, so over HTTP the
+        # declared-size check above always fires first. The second check, after the
+        # bytes are buffered, is what protects a caller that supplies no size — and
+        # calling the endpoint directly is the only way to reach it.
+        col = taxonomy.resolve_or_create_collection(db_session, "Imgs7")
+        assert col is not None
+        user = build_user(db_session, "image-uploader", superuser=True)
+        oversized = UploadFile(
+            filename="big.png",
+            file=io.BytesIO(b"x" * (11 * 1024 * 1024)),
+            size=None,
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            await taxonomy_router.upload_collection_image(
+                collection_id=col.id,
+                file=oversized,
+                current_user=user,
+                session=db_session,
+            )
+
+        assert raised.value.status_code == 413
+        assert raised.value.detail == "upload_too_large"
 
     def test_a_collection_image_round_trips(
         self,

@@ -74,19 +74,18 @@ test.describe("upload and capture", () => {
     await expect(page.getByText("Fixture maker")).toBeVisible();
     await expect(page.getByText("CC BY 4.0")).toBeVisible();
     await expect(page.getByText("Print with supports.")).toBeVisible();
-    // Scope to the Creator row rather than taking the first Edit button: every
-    // field renders an identically-named "Edit", so `.first()` silently targets
-    // whichever field the API happens to return first — currently Description.
-    // The field row is the heading's grandparent: h3 -> label+badge wrapper -> row.
-    const creatorRow = page
-      .getByRole("heading", { level: 3, name: "Creator", exact: true })
-      .locator("../..");
-    await creatorRow.getByRole("button", { name: "Edit" }).click();
+    // Each field's edit control names the field it edits, so this addresses the
+    // Creator row directly. It used to walk two levels up from the heading
+    // (`h3 -> label+badge wrapper -> row`) because every button was called
+    // "Edit" — a DOM-shape dependency that silently targeted whichever field the
+    // API returned first, and drove the wrong widget for months.
+    const editCreator = page.getByRole("button", { name: "Edit Creator", exact: true });
+    await editCreator.click();
     await page.getByLabel("Creator override").fill("Corrected maker");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("Corrected maker")).toBeVisible();
     await expect(page.getByText("Edited")).toBeVisible();
-    await creatorRow.getByRole("button", { name: "Edit" }).click();
+    await editCreator.click();
     await page.getByRole("button", { name: "Restore captured value" }).click();
     const dialog = page.getByRole("dialog", { name: "Restore captured value?" });
     await expect(dialog).toBeVisible();

@@ -14,13 +14,16 @@ can change, and only a superuser can purge a trashed document for good.
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.api.v1 import documents as documents_router
 from app.core.config import _overlay
 from app.db.models import CollectionRole, Document, User
 from app.services import taxonomy
@@ -47,6 +50,16 @@ def _grant(
     session: Session, user: User, collection_id: int, role: CollectionRole
 ) -> None:
     grant_collection_role(session, user, collection_id, role)
+
+
+MEGABYTE = 1024 * 1024
+_OVER_A_MEGABYTE = b"%PDF" + b"x" * (2 * MEGABYTE)
+
+
+@pytest.fixture
+def tiny_upload_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 1 MB upload cap, so the size guards can be tripped without 512 MB of bytes."""
+    monkeypatch.setitem(_overlay, "max_upload_mb", 1)
 
 
 @pytest.fixture
@@ -269,6 +282,76 @@ class TestUploadDocument:
 
         assert response.status_code == 201, response.text
         assert response.json()["kind"] == "other"
+
+    @pytest.mark.asyncio
+    async def test_rejects_a_part_that_declares_more_than_the_upload_limit(
+        self, db_session: Session, admin: User, tiny_upload_limit
+    ) -> None:
+        # `BodyLimitMiddleware` reads the *same* setting and rejects the whole
+        # request first, so over HTTP this guard can never fire — a client always
+        # sees `request_too_large`. It is still the right check for a caller that
+        # is not coming through the HTTP stack, and this is the only way to reach
+        # it. The three tests here cover the three sizes this endpoint bounds.
+        oversized = UploadFile(
+            filename="manual.pdf", file=io.BytesIO(_OVER_A_MEGABYTE), size=2 * MEGABYTE
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            await documents_router.upload_document(
+                file=oversized,
+                name=None,
+                collection_id=None,
+                current_user=admin,
+                session=db_session,
+            )
+
+        assert raised.value.status_code == 413
+        assert raised.value.detail == "upload_too_large"
+
+    @pytest.mark.asyncio
+    async def test_rejects_markdown_longer_than_the_upload_limit(
+        self, db_session: Session, admin: User, tiny_upload_limit
+    ) -> None:
+        # A markdown document's body is stored in the row rather than as a blob,
+        # so its length is bounded after the read rather than before it.
+        oversized = UploadFile(
+            filename="notes.md", file=io.BytesIO(_OVER_A_MEGABYTE), size=None
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            await documents_router.upload_document(
+                file=oversized,
+                name=None,
+                collection_id=None,
+                current_user=admin,
+                session=db_session,
+            )
+
+        assert raised.value.status_code == 413
+        assert raised.value.detail == "upload_too_large"
+
+    @pytest.mark.asyncio
+    async def test_rejects_a_blob_that_stored_more_than_the_upload_limit(
+        self, db_session: Session, admin: User, tiny_upload_limit
+    ) -> None:
+        # The binary path streams to storage first, so the authoritative size is
+        # the one the receipt reports — a stream that turned out larger than it
+        # declared is caught here and rolled back rather than kept.
+        oversized = UploadFile(
+            filename="manual.pdf", file=io.BytesIO(_OVER_A_MEGABYTE), size=None
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            await documents_router.upload_document(
+                file=oversized,
+                name=None,
+                collection_id=None,
+                current_user=admin,
+                session=db_session,
+            )
+
+        assert raised.value.status_code == 413
+        assert raised.value.detail == "upload_too_large"
 
     def test_refuses_to_overwrite_an_occupied_destination(
         self, client: TestClient, admin_headers: dict[str, str]
@@ -815,6 +898,33 @@ class TestUploadDocumentImage:
 
         assert response.status_code == 413, response.text
         assert response.json()["detail"] == "upload_too_large"
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_image_that_declared_no_size(
+        self, db_session: Session, admin: User, markdown_doc
+    ) -> None:
+        # Starlette fills `UploadFile.size` for a multipart part, so over HTTP the
+        # declared-size check always fires first. A caller that does not — the
+        # extension's own upload path constructs the file itself — is what the
+        # second, post-buffer check is there for, and this is the only way to
+        # reach it. Called directly for that reason, not for convenience.
+        doc = markdown_doc("Illustrated")
+        oversized = UploadFile(
+            filename="big.png",
+            file=io.BytesIO(_PNG + b"x" * (11 * 1024 * 1024)),
+            size=None,
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            await documents_router.upload_document_image(
+                document_id=doc["id"],
+                file=oversized,
+                current_user=admin,
+                session=db_session,
+            )
+
+        assert raised.value.status_code == 413
+        assert raised.value.detail == "upload_too_large"
 
     def test_refuses_to_overwrite_an_occupied_destination(
         self, client: TestClient, admin_headers: dict[str, str], markdown_doc

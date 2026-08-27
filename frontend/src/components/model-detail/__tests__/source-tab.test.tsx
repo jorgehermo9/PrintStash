@@ -224,9 +224,9 @@ describe("SourceTab", () => {
     expect(screen.getByText(/does not grant, interpret, or expand rights/i)).toBeInTheDocument();
   });
 
-  it("displays, saves, and restores a source field override", async () => {
-    const user = userEvent.setup();
-    const overridden: ModelProvenanceRead = {
+  /** The same provenance with the title carrying a user override. */
+  function withOverriddenTitle(): ModelProvenanceRead {
+    return {
       ...provenance,
       sources: provenance.sources.map((source) => ({
         ...source,
@@ -243,29 +243,62 @@ describe("SourceTab", () => {
         ),
       })),
     };
-    getProvenance.mockResolvedValue(overridden);
-    patchProvenance.mockResolvedValueOnce(overridden).mockResolvedValueOnce(provenance);
+  }
+
+  it("names each field's edit control after that field", async () => {
+    // Every row renders one, so the visible word alone leaves a screen-reader
+    // user hearing "Edit" five times over — and it is what let a Playwright test
+    // drive the wrong one for months.
+    getProvenance.mockResolvedValue(withOverriddenTitle());
+
+    render(<SourceTab modelId={1} canEdit api={api} />);
+
+    expect(await screen.findByRole("button", { name: "Edit Title" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit Description" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit License" })).toBeInTheDocument();
+  });
+
+  it("shows the overridden value rather than the captured one", async () => {
+    getProvenance.mockResolvedValue(withOverriddenTitle());
 
     render(<SourceTab modelId={1} canEdit api={api} />);
 
     expect(await screen.findByText("Edited title")).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  });
+
+  it("saves an edited field as a user override", async () => {
+    const user = userEvent.setup();
+    const overridden = withOverriddenTitle();
+    getProvenance.mockResolvedValue(overridden);
+    patchProvenance.mockResolvedValue(overridden);
+    render(<SourceTab modelId={1} canEdit api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Edit Title" }));
     const input = screen.getByRole("textbox", { name: "Title override" });
     await user.clear(input);
     await user.type(input, "Edited title");
+
     await user.click(screen.getByRole("button", { name: "Save" }));
+
     await waitFor(() => {
-      expect(patchProvenance).toHaveBeenNthCalledWith(1, 1, 8, {
+      expect(patchProvenance).toHaveBeenCalledWith(1, 8, {
         overrides: { title: "Edited title" },
         clear_overrides: [],
       });
     });
+  });
 
-    await user.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  it("clears the override when the captured value is restored", async () => {
+    const user = userEvent.setup();
+    getProvenance.mockResolvedValue(withOverriddenTitle());
+    patchProvenance.mockResolvedValue(provenance);
+    render(<SourceTab modelId={1} canEdit api={api} />);
+    await user.click(await screen.findByRole("button", { name: "Edit Title" }));
+
     await user.click(screen.getByRole("button", { name: "Restore captured value" }));
     await user.click(screen.getByRole("button", { name: /^Restore$/ }));
+
     await waitFor(() => {
-      expect(patchProvenance).toHaveBeenNthCalledWith(2, 1, 8, {
+      expect(patchProvenance).toHaveBeenCalledWith(1, 8, {
         overrides: {},
         clear_overrides: ["title"],
       });

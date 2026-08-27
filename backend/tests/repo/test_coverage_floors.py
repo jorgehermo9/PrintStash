@@ -39,7 +39,7 @@ LANE = "./scripts/test.sh coverage"
 # rises past the slack below it has to be raised here, so the number in this file
 # is always roughly what the suite actually achieves rather than a floor from
 # eighteen months ago that everything clears by ten points.
-TOTAL_FLOOR = 93.3
+TOTAL_FLOOR = 93.56
 # 0.25pp of ~27,400 statements+branches is ~70 units of coverage — enough that a
 # normal PR adding tests for one behaviour does not force an edit here, small
 # enough that a sustained improvement does.
