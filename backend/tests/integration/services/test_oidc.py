@@ -78,9 +78,7 @@ class TestProviderStatus:
 
 
 class TestIssuer:
-    def test_exchange_validates_signature_audience_issuer_and_nonce(
-        self, monkeypatch
-    ) -> None:
+    def test_exchange_validates_every_claim_before_returning(self, monkeypatch) -> None:
         _enable_oidc()
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         public_jwk = json.loads(
@@ -393,7 +391,7 @@ class TestDiscovery:
 
 
 class TestBeginLogin:
-    def test_begin_login_uses_discovery_pkce_and_nonce(self, monkeypatch) -> None:
+    def test_begin_login_builds_a_pkce_authorization_url(self, monkeypatch) -> None:
         _enable_oidc()
 
         async def discovery() -> dict:
@@ -717,7 +715,7 @@ class TestProvisionUser:
                 },
             )
 
-    def test_provision_user_updates_email_and_superuser_on_existing_active_user(
+    def test_provision_updates_an_existing_active_user(
         self,
         db_session: Session,
     ) -> None:
@@ -848,7 +846,7 @@ class TestOidc:
         assert len(cookies) == 3
         assert all("Secure" in cookie for cookie in cookies)
 
-    def test_oidc_callback_jit_provisions_admin_and_sets_session(
+    def test_the_callback_signs_in_a_newly_provisioned_admin(
         self,
         client: TestClient,
         db_session: Session,

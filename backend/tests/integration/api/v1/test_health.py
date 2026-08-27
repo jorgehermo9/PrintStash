@@ -117,7 +117,7 @@ def spoolman_server(monkeypatch: pytest.MonkeyPatch):
 
 
 class TestHealth:
-    def test_reports_status_and_name(self, client: TestClient) -> None:
+    def test_reports_ok_with_the_configured_app_name(self, client: TestClient) -> None:
         response = client.get("/api/v1/health")
 
         assert response.status_code == 200, response.text
@@ -289,7 +289,9 @@ class TestLatestRelease:
 
 
 class TestDatabaseProbe:
-    def test_reports_backend_database_and_counts(self, db_session: Session) -> None:
+    def test_reports_the_database_backend_with_its_row_counts(
+        self, db_session: Session
+    ) -> None:
         _model_with_file(db_session, "Widget")
 
         out = health_mod._database_probe()
@@ -302,7 +304,7 @@ class TestDatabaseProbe:
 
 
 class TestProviderProbe:
-    def test_counts_live_printers_by_provider_and_status(
+    def test_counts_live_printers_per_provider_per_status(
         self, db_session: Session
     ) -> None:
         db_session.add(_printer("Ender"))
@@ -351,7 +353,9 @@ class TestFleetSchedulerProbe:
 
 
 class TestExternalLibrariesProbe:
-    def test_counts_configured_and_enabled_libraries(self, db_session: Session) -> None:
+    def test_counts_enabled_libraries_separately_from_configured(
+        self, db_session: Session
+    ) -> None:
         db_session.add(ExternalLibrary(name="nas", root_path="/mnt/nas", enabled=True))
         db_session.add(
             ExternalLibrary(name="archive", root_path="/mnt/archive", enabled=False)

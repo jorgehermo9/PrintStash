@@ -157,7 +157,7 @@ class TestUpdateUser:
         assert resp.status_code == 200
         assert resp.json()["is_superuser"] is False
 
-    def test_update_email_and_flags(
+    def test_update_writes_every_field_in_the_patch(
         self, client: TestClient, db_session: Session
     ) -> None:
         admin = build_user(db_session, "admin-c", superuser=True)
@@ -245,7 +245,7 @@ class TestResetPassword:
 
         assert relogin.status_code == 200, relogin.text
 
-    def test_reset_password_invalidates_existing_access_and_refresh_tokens(
+    def test_reset_password_invalidates_every_token_already_issued(
         self, client: TestClient, db_session: Session
     ) -> None:
         admin = build_user(db_session, "admin-reset-sessions", superuser=True)
@@ -341,7 +341,7 @@ class TestDeactivateUser:
 
         assert denied.status_code == 401, denied.text
 
-    def test_deactivate_invalidates_existing_access_and_refresh_tokens(
+    def test_deactivate_invalidates_every_token_already_issued(
         self, client: TestClient, db_session: Session
     ) -> None:
         admin = build_user(db_session, "admin-deactivate-sessions", superuser=True)
@@ -728,7 +728,7 @@ class TestAuditLog:
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
-    def test_list_audit_filters_by_resource_and_id(
+    def test_list_audit_narrows_to_one_resource(
         self, client: TestClient, db_session: Session
     ) -> None:
         admin = build_user(db_session, "admin-s", superuser=True)

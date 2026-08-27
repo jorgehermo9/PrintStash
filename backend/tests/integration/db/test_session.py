@@ -50,24 +50,31 @@ _HAS_AIOSQLITE = find_spec("aiosqlite") is not None
 # --------------------------------------------------------------------------- #
 
 
-class TestNormalizeDbUrl:
-    @pytest.mark.parametrize(
-        "db_url",
-        [
-            "postgres://u:p@localhost/db?sslmode=require",
-            "postgresql://u:p@localhost/db?sslmode=require",
-            "postgresql+psycopg2://u:p@localhost/db?sslmode=require",
-            "postgresql+asyncpg://u:p@localhost/db?sslmode=require",
-            "postgresql+psycopg://u:p@localhost/db?sslmode=require",
-        ],
-    )
-    def test_postgres_urls_normalize_to_psycopg_for_sync_and_async(
-        self, db_url: str
-    ) -> None:
-        expected = "postgresql+psycopg://u:p@localhost/db?sslmode=require"
+# Every PostgreSQL URL shape an operator can put in `PRINTSTASH_DATABASE_URL`,
+# including the two drivers we do not use — psycopg2 and asyncpg both appear in
+# copied-in connection strings, and silently honouring either is how an install ends
+# up on a driver the suite never exercises.
+_POSTGRES_URL_VARIANTS = [
+    "postgres://u:p@localhost/db?sslmode=require",
+    "postgresql://u:p@localhost/db?sslmode=require",
+    "postgresql+psycopg2://u:p@localhost/db?sslmode=require",
+    "postgresql+asyncpg://u:p@localhost/db?sslmode=require",
+    "postgresql+psycopg://u:p@localhost/db?sslmode=require",
+]
+_PSYCOPG_URL = "postgresql+psycopg://u:p@localhost/db?sslmode=require"
 
-        assert normalize_database_url(db_url) == expected
-        assert normalize_async_database_url(db_url) == expected
+
+class TestNormalizeDbUrl:
+    @pytest.mark.parametrize("db_url", _POSTGRES_URL_VARIANTS)
+    def test_normalizes_a_postgres_url_for_the_sync_driver(self, db_url: str) -> None:
+        assert normalize_database_url(db_url) == _PSYCOPG_URL
+
+    @pytest.mark.parametrize("db_url", _POSTGRES_URL_VARIANTS)
+    def test_normalizes_a_postgres_url_for_the_async_driver(self, db_url: str) -> None:
+        # Same target as the sync driver: psycopg3 serves both, so a URL that
+        # normalizes one way for the app and another for Alembic would have the two
+        # talking to the database through different drivers.
+        assert normalize_async_database_url(db_url) == _PSYCOPG_URL
 
     def test_sqlite_url_normalization(self) -> None:
         assert normalize_database_url("sqlite:///vault.db") == "sqlite:///vault.db"

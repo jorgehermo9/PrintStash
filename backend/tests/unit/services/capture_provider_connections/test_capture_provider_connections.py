@@ -54,7 +54,7 @@ class RecordingTransport:
 
 class TestMyMiniFactoryMetadataClient:
     @pytest.mark.anyio
-    async def test_mmf_exchanges_and_refreshes_tokens_without_retaining_credentials(
+    async def test_the_mmf_token_flow_never_retains_the_credentials(
         self,
     ) -> None:
         transport = RecordingTransport(
@@ -163,7 +163,7 @@ class TestMyMiniFactoryMetadataClient:
 
 class TestCultsMetadataClient:
     @pytest.mark.anyio
-    async def test_cults_metadata_uses_basic_auth_and_never_requests_files(
+    async def test_the_cults_metadata_query_asks_for_no_download_fields(
         self,
     ) -> None:
         transport = RecordingTransport(
@@ -389,7 +389,7 @@ class TestCultsIdentityFromUrl:
 
 class TestProviderConnectionError:
     @pytest.mark.anyio
-    async def test_connection_errors_are_safe_and_typed(self) -> None:
+    async def test_a_provider_auth_failure_raises_a_typed_error(self) -> None:
         transport = RecordingTransport(
             [httpx.Response(401, json={"error": "secret response"})]
         )
@@ -411,7 +411,7 @@ class TestSecretRepr:
     a property of the type rather than of each call site, because a call site
     that forgets is not visible until the secret is already in a log."""
 
-    def test_credentials_tokens_and_errors_never_render_secrets(self) -> None:
+    def test_no_repr_in_this_module_renders_a_secret(self) -> None:
         credentials = MyMiniFactoryCredentials(
             client_id="client-id", client_secret="client-secret"
         )

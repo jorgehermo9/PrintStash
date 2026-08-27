@@ -44,6 +44,37 @@ from tests.factories import build_user
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
 
 
+def _seeded_duplicate_defaults(tmp_path: Path) -> str:
+    """A database at the revision before the fix, holding two default printers.
+
+    `c7e4a1b9d2f6` is the last revision that allowed it, so seeding there is what
+    reproduces the state real installations reached before the constraint existed.
+    """
+    url = _url(tmp_path, "duplicate-default-printers.sqlite")
+    command.upgrade(migrate_mod._alembic_config(url), "c7e4a1b9d2f6")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            for name in ("First", "Second"):
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO printers (
+                            name, provider, moonraker_url, is_default,
+                            drain_mode, status, created_at, updated_at
+                        ) VALUES (
+                            :name, 'MOONRAKER', '', 1, 0, 'UNKNOWN',
+                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        """
+                    ),
+                    {"name": name},
+                )
+    finally:
+        engine.dispose()
+    return url
+
+
 class TestDataMigrations:
     """The migrations that rewrite rows rather than schema, on real prior data."""
 
@@ -111,7 +142,7 @@ class TestDataMigrations:
         finally:
             engine.dispose()
 
-    def test_bambu_identity_grouping_rejects_fast_reprints_and_transitive_chains(
+    def test_bambu_identity_grouping_only_groups_one_real_job(
         self,
     ) -> None:
         migration_path = (
@@ -336,35 +367,12 @@ class TestDataMigrations:
         finally:
             engine.dispose()
 
-    def test_default_printer_migration_repairs_duplicates_and_enforces_uniqueness(
-        self,
-        tmp_path: Path,
+    def test_default_printer_migration_leaves_one_default_behind(
+        self, tmp_path: Path
     ) -> None:
-        url = _url(tmp_path, "duplicate-default-printers.sqlite")
-        cfg = migrate_mod._alembic_config(url)
-        command.upgrade(cfg, "c7e4a1b9d2f6")
-        engine = create_engine(url)
-        try:
-            with engine.begin() as connection:
-                for name in ("First", "Second"):
-                    connection.execute(
-                        text(
-                            """
-                            INSERT INTO printers (
-                                name, provider, moonraker_url, is_default,
-                                drain_mode, status, created_at, updated_at
-                            ) VALUES (
-                                :name, 'MOONRAKER', '', 1, 0, 'UNKNOWN',
-                                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                            )
-                            """
-                        ),
-                        {"name": name},
-                    )
-        finally:
-            engine.dispose()
+        url = _seeded_duplicate_defaults(tmp_path)
 
-        command.upgrade(cfg, "head")
+        command.upgrade(migrate_mod._alembic_config(url), "head")
 
         engine = create_engine(url)
         try:
@@ -377,6 +385,20 @@ class TestDataMigrations:
                     .all()
                 )
             assert defaults == [1]
+        finally:
+            engine.dispose()
+
+    def test_default_printer_migration_makes_a_second_default_impossible(
+        self, tmp_path: Path
+    ) -> None:
+        # Repairing the existing rows is only half of it: without the constraint the
+        # next write puts the database straight back into the state the migration
+        # just cleaned up.
+        url = _seeded_duplicate_defaults(tmp_path)
+        command.upgrade(migrate_mod._alembic_config(url), "head")
+
+        engine = create_engine(url)
+        try:
             with pytest.raises(IntegrityError):
                 with engine.begin() as connection:
                     connection.execute(
@@ -481,7 +503,7 @@ def _table_names(url: str) -> set[str]:
 class TestRunMigrations:
     """Bringing any database this release might meet up to head, exactly once."""
 
-    def test_runner_fresh_db_migrates_to_head_and_stamps(self, tmp_path: Path) -> None:
+    def test_runner_brings_a_fresh_database_to_head(self, tmp_path: Path) -> None:
         url = _url(tmp_path)
         migrate_mod.run_migrations(url)
 
@@ -756,14 +778,18 @@ _PRE_0_8_0 = "f7a5b3c9d2e1"
 class TestRevisionGraph:
     """The migration history itself: one head, every revision resolvable."""
 
-    def test_single_head_and_revisions_all_resolve(self, tmp_path: Path) -> None:
-        cfg = Config(str(ALEMBIC_INI))
-        script = ScriptDirectory.from_config(cfg)
+    def test_the_revision_graph_has_exactly_one_head(self) -> None:
+        script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
+
         assert len(script.get_heads()) == 1, (
             "multiple alembic heads — `upgrade head` is ambiguous"
         )
-        # Walking every revision resolves each down_revision; a deleted/renamed file
-        # raises here — i.e. the "Can't locate revision X" startup crash, in CI.
+
+    def test_every_revision_in_the_graph_resolves(self) -> None:
+        script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
+
+        # Walking every revision resolves each down_revision; a deleted or renamed
+        # file raises here — i.e. the "Can't locate revision X" startup crash, in CI.
         assert len(list(script.walk_revisions())) > 1
 
 
