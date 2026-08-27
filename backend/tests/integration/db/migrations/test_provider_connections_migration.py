@@ -34,7 +34,7 @@ from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
 
 
 class TestUser:
-    def test_user_hard_delete_cascades_provider_and_pairing_rows(
+    def test_deleting_a_user_cascades_to_every_provider_row(
         self,
         db_session: Session,
     ) -> None:
@@ -70,7 +70,7 @@ class TestUser:
 
 
 class TestDowngrade:
-    def test_fb14_upgrade_and_downgrade_are_structural(self, tmp_path: Path) -> None:
+    def test_fb14_leaves_no_trace_after_a_downgrade(self, tmp_path: Path) -> None:
         config = Config(str(ALEMBIC_INI))
         config.set_main_option("script_location", str(ALEMBIC_DIR))
         config.set_main_option(

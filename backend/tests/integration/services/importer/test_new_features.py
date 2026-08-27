@@ -326,15 +326,22 @@ class TestInspectArchive:
         finally:
             _overlay.pop("max_archive_entries", None)
 
-    def test_inspect_archive_enforces_depth_32_and_rejects_depth_33(self, tmp_path):
+    def test_inspect_archive_accepts_a_path_at_the_depth_limit(self, tmp_path):
         from app.services import importer
 
         accepted = tmp_path / "depth-32.zip"
         accepted.write_bytes(_zip_bytes({"/".join(["d"] * 32 + ["part.stl"]): b"x"}))
+
         assert len(importer.inspect_archive(accepted)) == 1
+
+    def test_inspect_archive_rejects_a_path_one_past_the_depth_limit(self, tmp_path):
+        # Both sides of the boundary, because an off-by-one here either rejects
+        # archives real slicers produce or lets an unbounded path through.
+        from app.services import importer
 
         rejected = tmp_path / "depth-33.zip"
         rejected.write_bytes(_zip_bytes({"/".join(["d"] * 33 + ["part.stl"]): b"x"}))
+
         with pytest.raises(importer.ImportError_, match="archive_path_too_deep"):
             importer.inspect_archive(rejected)
 

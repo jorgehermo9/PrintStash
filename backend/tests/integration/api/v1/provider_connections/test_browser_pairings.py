@@ -41,7 +41,7 @@ def _fill_device_cap(session: Session, user_id: int) -> None:
 
 
 class TestCreatePairing:
-    def test_hands_back_a_code_and_when_it_expires(
+    def test_hands_back_a_pairing_code_with_its_expiry(
         self, client: TestClient, user_headers
     ) -> None:
         response = client.post(
@@ -79,7 +79,7 @@ class TestCreatePairing:
 
 
 class TestClaimPairing:
-    def test_hands_back_a_credential_and_the_device_it_belongs_to(
+    def test_hands_back_a_credential_with_its_device(
         self, client: TestClient, user_headers
     ) -> None:
         code = client.post(

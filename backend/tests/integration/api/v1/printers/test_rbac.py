@@ -31,7 +31,7 @@ from tests.integration.api.v1.printers._helpers import grant_printer, user_heade
 
 
 class TestPrinterRbac:
-    def test_user_only_lists_granted_printers_and_connection_is_redacted(
+    def test_a_granted_printer_is_listed_with_its_connection_redacted(
         self, client: TestClient, db_session: Session
     ) -> None:
         visible = printer_config(
@@ -64,7 +64,7 @@ class TestPrinterRbac:
         hidden_response = client.get(f"/api/v1/printers/{hidden.id}", headers=headers)
         assert hidden_response.status_code == 403
 
-    def test_role_change_and_revocation_take_effect_immediately(
+    def test_a_role_change_takes_effect_without_a_new_token(
         self,
         client: TestClient,
         auth_headers: dict[str, str],

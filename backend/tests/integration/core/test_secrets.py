@@ -45,7 +45,7 @@ class TestKeyMaterial:
 
         assert secrets_mod._key_material() == b"file-backed-key-material"
 
-    def test_key_material_generates_and_persists_a_new_file(
+    def test_key_material_persists_the_key_it_generated(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
         key_file = tmp_path / "nested" / "secrets-key"
@@ -148,7 +148,7 @@ class TestEncryptSecret:
 
 
 class TestDecryptSecret:
-    def test_encrypt_and_decrypt_secret_passthrough_for_none(self) -> None:
+    def test_none_passes_through_in_both_directions(self) -> None:
         assert secrets_mod.encrypt_secret(None) is None
         assert secrets_mod.decrypt_secret(None) is None
 

@@ -83,7 +83,7 @@ class TestFleetOverRealApi:
     can actually complete, and that a restart in the middle of one recovers."""
 
     @pytest.mark.asyncio
-    async def test_queue_jobs_can_be_edited_reordered_and_deleted_via_real_api(
+    async def test_the_queue_can_be_managed_through_the_real_api(
         self, api, superuser_headers, e2e_db
     ):
         printer = build_printer(
@@ -149,7 +149,7 @@ class TestFleetOverRealApi:
         ).json() == []
 
     @pytest.mark.asyncio
-    async def test_two_printers_dispatch_and_complete_via_real_api(
+    async def test_two_printers_complete_their_jobs_through_the_real_api(
         self, api, superuser_headers, e2e_db
     ):
         app_a, _sim_a = create_app(total_mm=500.0, total_seconds=6.0, print_seconds=1.0)
@@ -359,7 +359,7 @@ class TestFleetOverRealApi:
         assert summary["maintenance_printers"] == 1
 
     @pytest.mark.asyncio
-    async def test_restart_reconciles_stranded_dispatch_and_blocks_retry(
+    async def test_a_restart_reconciles_a_stranded_dispatch(
         self, api, superuser_headers, e2e_db
     ):
         printer = build_printer(

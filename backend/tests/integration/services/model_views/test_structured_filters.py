@@ -112,7 +112,7 @@ class TestListItems:
         )
         assert [row.id for row in rows] == [external.id]
 
-    def test_uploaded_after_and_before_bound_the_window(
+    def test_the_uploaded_filters_bound_the_window_at_both_ends(
         self, db_session: Session
     ) -> None:
         user = build_user(db_session, "uploaded-admin", superuser=True)
@@ -148,7 +148,7 @@ class TestListItems:
         )
         assert [row.id for row in before] == [early.id]
 
-    def test_printed_true_and_false_filters(self, db_session: Session) -> None:
+    def test_the_printed_filter_selects_each_side(self, db_session: Session) -> None:
         user = build_user(db_session, "printed-admin", superuser=True)
         printed = build_model(db_session, "Printed")
         unprinted = build_model(db_session, "Unprinted")
@@ -355,7 +355,7 @@ class TestListItems:
         assert direct_model.id in ids
         assert nested_model.id in ids
 
-    def test_slicer_name_and_printer_model_filters(self, db_session: Session) -> None:
+    def test_the_slicer_metadata_filters_narrow_by_exact_value(self, db_session: Session) -> None:
         user = build_user(db_session, "slicer-admin", superuser=True)
         orca = build_model(db_session, "Orca")
         prusa = build_model(db_session, "Prusa")

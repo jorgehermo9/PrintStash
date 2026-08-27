@@ -48,7 +48,7 @@ class TestMoonrakerBuild:
 
 
 class TestPrusaLinkBuild:
-    def test_builds_in_digest_mode_with_a_username_and_password(self) -> None:
+    def test_builds_digest_credentials_from_a_user_pair(self) -> None:
         printer = printer_config(
             "MK4",
             credentials=False,
@@ -118,7 +118,7 @@ class TestPrusaLinkBuild:
 
 
 class TestOctoPrintBuild:
-    def test_builds_from_a_url_and_key(self) -> None:
+    def test_builds_api_key_credentials_from_a_url_pair(self) -> None:
         printer = printer_config(
             "Octo",
             credentials=False,

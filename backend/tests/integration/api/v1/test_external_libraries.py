@@ -86,7 +86,7 @@ class TestFeatureGate:
 
 
 class TestCreateLibrary:
-    def test_api_crud_and_path_validation(
+    def test_the_library_endpoints_accept_only_a_valid_root_path(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
         _enable_feature(db_session)
@@ -214,7 +214,7 @@ class TestCreateLibrary:
 
 
 class TestUpdateLibrary:
-    def test_update_library_changes_root_path_and_recomputes_fs_kind(
+    def test_updating_the_root_path_recomputes_the_filesystem_kind(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
         _enable_feature(db_session)

@@ -53,7 +53,7 @@ class TestPrinterFiles:
         )
         return m, f
 
-    def test_list_printer_files_returns_matched_and_external(
+    def test_list_printer_files_reports_files_we_do_not_own(
         self, client: TestClient, auth_headers, db_session: Session
     ):
         from app.db.models import PrinterFile
@@ -164,7 +164,7 @@ class TestPrinterFiles:
         ).all()
         assert [row.remote_filename for row in remaining] == ["still-there.gcode"]
 
-    def test_delete_printer_file_removes_remote_and_resyncs_inventory(
+    def test_deleting_a_printer_file_resyncs_the_inventory(
         self, client: TestClient, auth_headers, db_session: Session
     ):
         p = build_printer(

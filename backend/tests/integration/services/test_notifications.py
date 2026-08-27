@@ -238,7 +238,7 @@ class TestEventEdges:
         db_session.expire_all()
         assert _deliveries(db_session) == []
 
-    def test_print_completed_fires_once_and_is_idempotent(self, db_session, hub):
+    def test_print_completed_enqueues_exactly_one_delivery(self, db_session, hub):
         set_notifications_enabled(db_session, True)
         p = build_printer(
             db_session,
@@ -327,7 +327,7 @@ class TestChannelSubscribes:
 
 
 class TestClaimDueDeliveries:
-    def test_claim_due_deliveries_handles_corrupt_config_and_context_json(
+    def test_claim_due_deliveries_survives_unparseable_stored_json(
         self, db_session
     ):
         set_notifications_enabled(db_session, True)
@@ -408,7 +408,7 @@ class TestDispatchDue:
         assert await notifications.dispatch_due() == 0
 
     @pytest.mark.asyncio
-    async def test_dispatch_success_marks_sent_and_channel_status(self, db_session):
+    async def test_a_successful_dispatch_records_the_channel_as_healthy(self, db_session):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(

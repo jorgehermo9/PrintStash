@@ -117,7 +117,7 @@ class TestRecordCreation:
 
 
 class TestRequireOwnedKey:
-    def test_require_owned_key_distinguishes_missing_mismatch_and_verification_error(
+    def test_require_owned_key_reports_each_failure_distinctly(
         self,
         db_session,
     ) -> None:
@@ -190,7 +190,7 @@ class TestRequireOrAdoptLegacyArtifact:
 
 
 class TestReplaceOwnedBytes:
-    def test_replace_owned_bytes_requires_current_proof_and_updates_receipt(
+    def test_replace_owned_bytes_swaps_the_proof_with_the_bytes(
         self,
         db_session,
     ) -> None:
@@ -254,7 +254,7 @@ class TestDeleteOwnedKey:
             (True, True, True),
         ],
     )
-    def test_delete_owned_key_handles_positive_and_non_destructive_results(
+    def test_delete_owned_key_distinguishes_a_real_delete_from_a_no_op(
         self, db_session, required: bool, rollback: bool, expected: bool
     ) -> None:
         backend = _LedgerBackend()

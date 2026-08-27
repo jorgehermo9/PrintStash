@@ -83,7 +83,7 @@ class TestAddGcodeRevision:
             2,
         ]
 
-    def test_records_the_label_and_notes_it_was_given(
+    def test_records_the_revision_metadata_it_was_given(
         self, client: TestClient, auth_headers, model: Model, local_storage
     ) -> None:
         response = client.post(
@@ -286,7 +286,7 @@ class TestAddGcodeRevision:
 
 
 class TestUpdateRevision:
-    def test_records_the_status_notes_and_recommendation(
+    def test_records_a_status_change_with_its_justification(
         self, client: TestClient, auth_headers, model: Model, make_file
     ) -> None:
         row = make_file(model)

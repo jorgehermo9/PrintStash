@@ -96,13 +96,13 @@ class TestTraceableFilename:
 
 
 class TestRemoteFieldParsers:
-    def test_remote_name_prefers_path_and_strips_leading_slash(self) -> None:
+    def test_remote_name_prefers_the_path_with_no_leading_slash(self) -> None:
         assert pf._remote_name({"path": "/sub/a.gcode"}) == "sub/a.gcode"
         assert pf._remote_name({"filename": "b.gcode"}) == "b.gcode"
         assert pf._remote_name({"name": "  c.gcode  "}) == "c.gcode"
         assert pf._remote_name({}) is None
 
-    def test_remote_size_coerces_and_tolerates_garbage(self) -> None:
+    def test_remote_size_coerces_whatever_the_printer_reported(self) -> None:
         assert pf._remote_size({"size": "456"}) == 456
         assert pf._remote_size({"size_bytes": 789}) == 789
         assert pf._remote_size({"size": "not-a-number"}) is None
@@ -115,7 +115,7 @@ class TestRemoteFieldParsers:
         assert got == datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)
         assert got.tzinfo is not None
 
-    def test_remote_modified_handles_missing_and_bad(self) -> None:
+    def test_remote_modified_is_none_for_an_unusable_timestamp(self) -> None:
         assert pf._remote_modified({}) is None
         assert pf._remote_modified({"modified": "bad"}) is None
 

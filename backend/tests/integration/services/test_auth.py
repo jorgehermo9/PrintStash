@@ -80,7 +80,7 @@ class TestPasswordsAndSessions:
         assert verify_password("Password123", "not-a-password-hash") is False
         assert verify_password("Password123", "$2b$invalid") is False
 
-    def test_successful_legacy_bcrypt_login_rehashes_and_persists(
+    def test_a_legacy_bcrypt_login_persists_the_rehashed_password(
         self,
         db_session: Session,
     ) -> None:
@@ -210,7 +210,7 @@ class TestPasswordsAndSessions:
         assert outcomes.count(True) == 1
         assert outcomes.count(False) == 1
 
-    def test_prune_expired_refresh_tokens_is_bounded_and_preserves_live_tokens(
+    def test_pruning_expired_refresh_tokens_spares_the_live_ones(
         self,
         db_session: Session,
     ) -> None:

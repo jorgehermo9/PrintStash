@@ -69,7 +69,7 @@ async def _wait_for(condition, *, timeout: float = 5.0) -> None:
 
 
 class TestRefresh:
-    def test_refresh_starts_and_stops_watchers_as_config_changes(
+    def test_refresh_follows_the_configured_set_of_watchers(
         self, db_session: Session, tmp_path: Path
     ) -> None:
         _enable_external_libraries(db_session)
@@ -205,7 +205,7 @@ class TestComputeDesired:
         watcher = lw.LibraryWatcher()
         assert watcher._compute_desired() == {}  # noqa: SLF001
 
-    def test_compute_desired_includes_forced_events_library_and_persists_fs_kind(
+    def test_compute_desired_records_the_filesystem_kind_it_detected(
         self, db_session: Session, tmp_path: Path
     ) -> None:
         _enable_external_libraries(db_session)
@@ -288,7 +288,7 @@ class TestComputeDesired:
 
 
 class TestStopWatcher:
-    def test_start_and_stop_watcher_manages_task_lifecycle(
+    def test_a_watchers_task_lifecycle_is_symmetrical(
         self, tmp_path: Path
     ) -> None:
         watcher = lw.LibraryWatcher()

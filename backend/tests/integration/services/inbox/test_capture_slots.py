@@ -110,50 +110,98 @@ def _slot_payload(data: bytes = b"slot-owned") -> CaptureUploadSlotsCreate:
     )
 
 
+def _upload(session, slot, data: bytes = b"slot-owned"):
+    """Upload *data* into *slot*. Defaults to the same bytes every time.
+
+    Same bytes by default because the interesting cases are the two replays — one
+    identical, one not — and each needs a baseline upload that is byte-for-byte
+    what the replay will be compared against.
+    """
+    return inbox.upload_capture_slot(
+        session,
+        slot,
+        stream=BytesIO(data),
+        media_type="application/octet-stream",
+    )
+
+
 class TestUploadCaptureSlot:
-    def test_capture_slots_are_owner_scoped_idempotent_and_finalize_gated(
-        self,
-        db_session: Session,
+    def test_a_slot_is_invisible_to_anyone_but_its_owner(
+        self, db_session: Session
     ) -> None:
         owner = build_user(db_session, "slot-owner", superuser=True)
         other = build_user(db_session, "slot-other")
+        _row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+
+        # `not_found` rather than `forbidden`: the other user must not learn that
+        # the slot exists, and they are a superuser here to prove the scope is by
+        # ownership rather than by privilege.
+        with pytest.raises(HTTPException, match="not_found"):
+            inbox.require_capture_slot(db_session, other, slots[0].id)
+
+    def test_finalize_refuses_while_a_slot_is_still_empty(
+        self, db_session: Session
+    ) -> None:
+        owner = build_user(db_session, "slot-owner", superuser=True)
+        row, _slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+
+        with pytest.raises(HTTPException, match="incomplete"):
+            inbox.finalize_capture_upload(db_session, owner, row.id)
+
+    def test_re_uploading_the_same_bytes_reuses_the_slot(
+        self, db_session: Session
+    ) -> None:
+        # A browser retrying after a dropped connection. A second row here would
+        # leave the first one's bytes owned by nothing.
+        owner = build_user(db_session, "slot-owner", superuser=True)
+        _row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        first = _upload(db_session, slots[0])
+
+        replay = _upload(db_session, first)
+
+        assert replay.id == first.id
+
+    def test_re_uploading_different_bytes_is_refused(self, db_session: Session) -> None:
+        owner = build_user(db_session, "slot-owner", superuser=True)
+        _row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        uploaded = _upload(db_session, slots[0])
+
+        with pytest.raises(ValueError, match="sha256"):
+            _upload(db_session, uploaded, data=b"different!")
+
+    def test_finalize_moves_the_item_to_review_once_every_slot_is_filled(
+        self, db_session: Session
+    ) -> None:
+        owner = build_user(db_session, "slot-owner", superuser=True)
         row, slots = inbox.create_capture_upload_slots(
             db_session, owner, _slot_payload()
         )
-        slot = slots[0]
-        with pytest.raises(HTTPException, match="not_found"):
-            inbox.require_capture_slot(db_session, other, slot.id)
-        with pytest.raises(HTTPException, match="incomplete"):
-            inbox.finalize_capture_upload(db_session, owner, row.id)
-        first = inbox.upload_capture_slot(
-            db_session,
-            slot,
-            stream=BytesIO(b"slot-owned"),
-            media_type="application/octet-stream",
-        )
-        replay = inbox.upload_capture_slot(
-            db_session,
-            first,
-            stream=BytesIO(b"slot-owned"),
-            media_type="application/octet-stream",
-        )
-        assert replay.id == first.id
-        with pytest.raises(ValueError, match="sha256"):
-            inbox.upload_capture_slot(
-                db_session,
-                replay,
-                stream=BytesIO(b"different!"),
-                media_type="application/octet-stream",
-            )
+        _upload(db_session, slots[0])
+
         finalized = inbox.finalize_capture_upload(db_session, owner, row.id)
+
         assert finalized.state == InboxItemState.REVIEW
+
+    def test_a_finalized_slot_accepts_no_further_upload(
+        self, db_session: Session
+    ) -> None:
+        owner = build_user(db_session, "slot-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        uploaded = _upload(db_session, slots[0])
+        inbox.finalize_capture_upload(db_session, owner, row.id)
+
         with pytest.raises(ValueError, match="not_uploadable"):
-            inbox.upload_capture_slot(
-                db_session,
-                replay,
-                stream=BytesIO(b"slot-owned"),
-                media_type="application/octet-stream",
-            )
+            _upload(db_session, uploaded)
 
     @pytest.mark.anyio
     async def test_capture_slot_upload_cleans_temp_file_after_stream_disconnect(

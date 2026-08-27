@@ -80,7 +80,7 @@ class _NoopSessionFactory:
 
 
 class TestRecordCaptureOperation:
-    def test_records_a_capture_against_its_provider_and_transport(self) -> None:
+    def test_records_a_capture_with_both_of_its_labels(self) -> None:
         record_capture_operation("printables", "provider_api", "success", 0.5)
 
         assert (
@@ -208,7 +208,7 @@ class TestObserveRequest:
 
 
 class TestRecordIngestionTerminal:
-    def test_records_a_terminal_job_by_kind_and_result(self) -> None:
+    def test_records_a_terminal_job_with_both_of_its_labels(self) -> None:
         record_ingestion_terminal("upload", "completed", 1.5)
 
         assert 'kind="upload"' in _exposition()

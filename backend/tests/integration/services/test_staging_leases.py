@@ -50,7 +50,7 @@ def _job(session: Session, user: User) -> BackgroundJob:
 
 
 class TestTransfer:
-    def test_transfer_is_atomic_and_preserves_exactly_one_owner(
+    def test_a_transfer_leaves_exactly_one_owner(
         self, db_session: Session, tmp_path: Path
     ) -> None:
         user = build_user(db_session, "lease-user")
@@ -172,7 +172,7 @@ class TestUnlink:
 
 
 class TestDowngrade:
-    def test_fc15_upgrade_and_downgrade_preserve_job_lease_data(
+    def test_fc15_round_trips_without_losing_job_lease_data(
         self, tmp_path: Path
     ) -> None:
         config = Config(str(ALEMBIC_INI))

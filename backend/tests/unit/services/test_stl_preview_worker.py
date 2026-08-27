@@ -260,7 +260,7 @@ class TestReadAscii:
         assert stats.bounds_min == (0.0, 0.0, 0.0)
         assert stats.bounds_max == (1.0, 1.0, 1.0)
 
-    def test_ignores_blank_lines_and_comments(self, stl, limits) -> None:
+    def test_ignores_lines_that_carry_no_geometry(self, stl, limits) -> None:
         data = _ascii_stl([TRIANGLE]).replace(
             b"solid test\n", b"solid test\n\n# a comment\n// another\n"
         )
@@ -530,7 +530,7 @@ class TestMain:
             *[f"--{key}={value}" for key, value in args.items()],
         ]
 
-    def test_renders_a_binary_stl_and_writes_its_manifest(
+    def test_renders_a_binary_stl_with_a_manifest_beside_it(
         self, stl, tmp_path: Path
     ) -> None:
         import json

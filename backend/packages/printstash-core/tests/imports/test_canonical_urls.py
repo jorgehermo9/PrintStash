@@ -40,7 +40,7 @@ class TestSanitizeCanonicalUrl:
             == "https://example.test/models/42"
         )
 
-    def test_drops_the_query_and_fragment(self) -> None:
+    def test_drops_everything_after_the_path(self) -> None:
         # A provider download link routinely carries a signed credential here,
         # and this value is stored and displayed.
         assert (
@@ -48,7 +48,7 @@ class TestSanitizeCanonicalUrl:
             == "https://example.test/a"
         )
 
-    def test_lowercases_the_scheme_and_host(self) -> None:
+    def test_lowercases_the_authority(self) -> None:
         assert (
             sanitize_canonical_url("HTTPS://EXAMPLE.TEST/a") == "https://example.test/a"
         )
@@ -186,7 +186,7 @@ class TestCanonicalizeProviderUrlMakerworld:
             "makerworld", "https://eu.makerworld.com/models/42"
         ).startswith("https://eu.makerworld.com/")
 
-    def test_lowercases_the_locale_and_route(self) -> None:
+    def test_lowercases_the_path_segments(self) -> None:
         assert canonicalize_provider_url(
             "makerworld", "https://makerworld.com/EN/MODELS/42-Cube"
         ).endswith("/en/models/42-Cube")
