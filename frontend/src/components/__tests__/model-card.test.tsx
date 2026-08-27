@@ -1,3 +1,13 @@
+/*
+ * The revision badge on a model card, when the user has renamed the revision.
+ *
+ * A card can show two different things about the same G-code: its *status*
+ * (known-good, needs testing) and the user's own *label* ("0.2mm draft"). Those
+ * are independent, and showing only one of them is the failure — a card that
+ * displays the custom label alone hides that the revision was never verified,
+ * which is exactly the information somebody about to print it needs.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -26,7 +36,7 @@ const model: ModelListItem = {
   starred: false,
 };
 
-describe("model card revision badge", () => {
+describe("ModelCard", () => {
   it("shows revision status alongside a custom revision label", () => {
     // The card links to the model detail route and prefetches it on hover, so
     // it needs a real router; `thumbnail_url: null` keeps the thumbnail hook

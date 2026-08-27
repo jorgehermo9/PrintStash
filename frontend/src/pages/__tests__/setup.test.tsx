@@ -1,3 +1,20 @@
+/*
+ * First run: the one screen a self-hoster cannot get past by trying again.
+ *
+ * Everything here is about not leaving the operator stuck. Validation is inline
+ * and before advancing, because a rejection after the account step means retyping
+ * a password they cannot see. A recoverable failure preserves what they entered —
+ * losing a filled form on a transient error is how people give up on
+ * self-hosting. And duplicate submissions are blocked while the request is in
+ * flight, since setup is not idempotent: two completions race to create the same
+ * admin.
+ *
+ * The private-vault message is the one piece of real advice on the page: pointing
+ * PrintStash's own storage at an existing library folder would have it index and
+ * then manage somebody else's files. Explaining that is cheaper than the support
+ * thread.
+ */
+
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -85,7 +102,7 @@ beforeEach(() => {
   vi.mocked(deps.completeSetup).mockResolvedValue(setupResponse);
 });
 
-describe("first-run setup", () => {
+describe("SetupPage", () => {
   it("validates account fields inline before advancing", async () => {
     const user = userEvent.setup();
     renderSetup();

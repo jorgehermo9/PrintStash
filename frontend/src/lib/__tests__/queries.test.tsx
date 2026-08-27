@@ -1,3 +1,26 @@
+/*
+ * The query hooks, and the two properties that decide whether the vault feels
+ * broken.
+ *
+ * **Freshness.** Collections, tags, printers, profiles and vault stats all pass
+ * `fresh: true`, because every one of them changes as a *result* of something the
+ * user just did. A cached collection list after creating a collection shows the
+ * user their new folder missing.
+ *
+ * **Continuity.** When a filter changes, the outliner and the facet groups must
+ * stay mounted while the new data loads. Unmounting them is what produces the
+ * layout collapsing and snapping back on every keystroke in a filter box — the
+ * data is right either way, so nothing but a test like this notices.
+ *
+ * The `enabled` gate is asserted in both directions. A hook that fetches while
+ * disabled is a request against a route the user may have no role on, which
+ * surfaces as a spurious 403 in the console on pages that look fine.
+ *
+ * Pagination is server-owned: the sort goes to the server and the next cursor is
+ * requested only on demand. A client that re-sorted locally would paginate a
+ * different order than the one it displays.
+ */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";

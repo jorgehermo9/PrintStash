@@ -1,3 +1,17 @@
+/*
+ * Money, for a self-hoster who may not be American.
+ *
+ * The currency code comes out of a settings field a user typed, so this has to
+ * survive three inputs the UI cannot prevent: nothing (null cost), an empty code,
+ * and a code `Intl` has never heard of. None of them may throw — a cost cell that
+ * crashes takes the whole model page with it — and none may show a number that
+ * misleads: `null` is an em dash rather than "$0.00", because a print with no
+ * recorded cost is not a free print.
+ *
+ * A real zero still renders as currency. That is the same distinction the
+ * formatters in `format.test.ts` make, and it is the one users notice.
+ */
+
 import { describe, expect, it } from "vitest";
 
 import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency";

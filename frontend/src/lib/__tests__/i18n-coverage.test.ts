@@ -1,8 +1,22 @@
+/*
+ * Every translatable string in the app has a Spanish entry, checked by walking
+ * the source rather than the catalog.
+ *
+ * A missing translation does not fail anything at runtime: the key falls through
+ * to English, so a Spanish user sees a sentence in English and nobody notices
+ * until they report it. The only way to catch that is to enumerate the literals
+ * the JSX actually renders and demand a catalog entry for each — which is what
+ * this does.
+ *
+ * It runs over the real component tree, so adding a translatable string without
+ * translating it fails here at the moment it is written, in the PR that wrote it.
+ */
+
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseSync, Visitor } from "oxc-parser";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { hasUiTranslation } from "@/components/ui/localized";
 
@@ -97,18 +111,20 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-it("covers every translatable JSX literal with a Spanish catalog entry", () => {
-  const files = sourceFiles("src").filter(
-    (file) =>
-      !file.includes("/__tests__/") &&
-      !file.endsWith("localized.tsx") &&
-      !file.endsWith("i18n.tsx"),
-  );
-  const missing = files.flatMap((file) =>
-    uiLiterals(file)
-      .filter((value) => !NON_TRANSLATABLE_LITERALS.has(value) && !hasUiTranslation("es", value))
-      .map((value) => `${file}: ${value}`),
-  );
+describe("translationCoverage", () => {
+  it("covers every translatable JSX literal with a Spanish catalog entry", () => {
+    const files = sourceFiles("src").filter(
+      (file) =>
+        !file.includes("/__tests__/") &&
+        !file.endsWith("localized.tsx") &&
+        !file.endsWith("i18n.tsx"),
+    );
+    const missing = files.flatMap((file) =>
+      uiLiterals(file)
+        .filter((value) => !NON_TRANSLATABLE_LITERALS.has(value) && !hasUiTranslation("es", value))
+        .map((value) => `${file}: ${value}`),
+    );
 
-  expect(missing).toEqual([]);
+    expect(missing).toEqual([]);
+  });
 });

@@ -1,3 +1,16 @@
+/*
+ * Which metadata fields a user chose to see, read back from their browser.
+ *
+ * Everything defaults to *visible*, and the merge is one-directional: a stored
+ * preference file written before a field existed is missing that key, and the
+ * missing key has to stay visible rather than becoming hidden. The opposite
+ * default is what makes a release appear to lose data — the fields are still
+ * there, and every existing user has them switched off.
+ *
+ * Only an explicit `false` hides a field. Any other value (a string, a null from
+ * hand-edited JSON) leaves it visible, for the same reason.
+ */
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,7 +20,7 @@ import {
   writeMetadataPreferences,
 } from "@/lib/metadata-preferences";
 
-describe("metadata preferences persistence", () => {
+describe("readMetadataPreferences", () => {
   it("defaults every field to visible", () => {
     const prefs = readMetadataPreferences();
     expect(prefs).toEqual(DEFAULT_METADATA_PREFERENCES);

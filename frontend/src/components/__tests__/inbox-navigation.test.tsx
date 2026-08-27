@@ -1,3 +1,16 @@
+/*
+ * "Pending Imports" stays reachable, in both navigation shells.
+ *
+ * The desktop profile menu and the mobile bottom bar are separate components with
+ * separate lists, so a route added to one and not the other is invisible on the
+ * platform nobody tested on — and this is the screen a user goes to when an
+ * import is waiting for them, so an unreachable entry means the import sits there.
+ *
+ * The nested-route case exists because active-state matching is a prefix check:
+ * an inbox *detail* page must still light up the Pending entry, or the user
+ * appears to have navigated out of the section they are in.
+ */
+
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -46,7 +59,7 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("Pending Imports navigation", () => {
+describe("AppNavigation", () => {
   it("keeps Pending reachable and selected in the desktop profile menu", async () => {
     const user = userEvent.setup();
     renderNavigation(<TopBar />);

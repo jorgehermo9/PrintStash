@@ -1,8 +1,18 @@
+/*
+ * The three provider mappings that are not one-to-one.
+ *
+ * Elegoo's Neptune preset is Moonraker with a variant tag, and both Centauri
+ * models map onto dedicated provider variants rather than sharing one. Those are
+ * the cases a reader gets wrong from the names alone, and getting them wrong
+ * builds a client for the wrong protocol — which surfaces as a printer that never
+ * connects, not as a configuration error.
+ */
+
 import { describe, expect, it } from "vitest";
 
 import { providerAddress, providerLabel, setupProviderFields } from "../printer-providers";
 
-describe("printer provider metadata", () => {
+describe("providerMetadata", () => {
   it("maps Elegoo preset onto Moonraker transport", () => {
     expect(setupProviderFields("elegoo_neptune4")).toEqual({
       provider: "moonraker",

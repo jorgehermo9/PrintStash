@@ -1,3 +1,18 @@
+/*
+ * Which three numbers a user chose to see on their model cards, remembered.
+ *
+ * This reads back a value the user's browser has been holding for months, so
+ * every stored shape is untrusted input: hand-edited JSON, a selection saved
+ * before a metric was renamed, an array of the wrong length from an older
+ * release. Each has to fall back to the defaults rather than throw, because this
+ * runs while the vault page is rendering and an exception here is a blank
+ * library.
+ *
+ * The validation is deliberately strict about *ids* rather than lenient: a
+ * metric id that no longer exists would render an empty slot on every card,
+ * which looks like missing data rather than a stale preference.
+ */
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,7 +23,7 @@ import {
   type CardMetrics,
 } from "@/lib/card-metrics";
 
-describe("card metrics persistence", () => {
+describe("readCardMetrics", () => {
   it("returns defaults when nothing is stored", () => {
     expect(readCardMetrics()).toEqual(DEFAULT_CARD_METRICS);
   });

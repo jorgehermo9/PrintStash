@@ -1,3 +1,22 @@
+/*
+ * Where a model came from, rendered from data a third-party page supplied.
+ *
+ * Every value on this tab was scraped from somebody else's website, so it is
+ * attacker-shaped by construction and the two URL rows are the security half:
+ * only `http`/`https` links render as links, and a canonical source URL is
+ * normalized before it becomes an anchor. A `javascript:` URL that reached the
+ * DOM here is stored XSS triggered by clicking a model's source link.
+ *
+ * The i18n rows are the other axis, and the rule is the same as everywhere: the
+ * *interface* is translated, the captured values are not. A provider name, a tag,
+ * a scraped title are the user's or the source's words — translating them
+ * corrupts the record. The English origin labels are the deliberate fallback when
+ * no provider is known, not a missing translation.
+ *
+ * Cover controls stay out of a view-only tab. Rendering them for a user without
+ * write access offers an action that 403s.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -78,7 +97,7 @@ const provenance: ModelProvenanceRead = {
   ],
 };
 
-describe("SourceTab representative cover", () => {
+describe("SourceTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getProvenance.mockResolvedValue(provenance);

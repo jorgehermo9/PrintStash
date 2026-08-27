@@ -1,3 +1,16 @@
+/*
+ * Notification channels, which carry webhook URLs and are admin-only.
+ *
+ * The permission row is first because it is a leak, not a layout bug: a channel's
+ * configuration includes its target URL, and Discord and Slack webhook URLs *are*
+ * the credential. A non-admin who can see the management surface can read them.
+ *
+ * The auto-disabled state is the other one worth its own test. A channel that
+ * repeatedly failed gets switched off by the backend, and rendering it like any
+ * other channel means the operator believes notifications are going out while
+ * nothing has been sent for days.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";

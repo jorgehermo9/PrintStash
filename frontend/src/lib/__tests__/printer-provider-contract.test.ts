@@ -1,3 +1,17 @@
+/*
+ * The setup options and their transport mappings, pinned.
+ *
+ * A "setup kind" is what the user picks in the form; a transport is what actually
+ * talks to the machine, and several kinds map onto the same transport (an Elegoo
+ * Neptune is Moonraker underneath). Renaming a kind or remapping a transport
+ * silently changes what a form submission means — the user picks their printer and
+ * gets a client for a different protocol.
+ *
+ * The coverage row is the one that catches omissions: every direct provider must
+ * have a setup option, or a supported printer becomes unaddable with nothing
+ * saying so.
+ */
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -50,7 +64,7 @@ const EXPECTED_SETUP_CATALOG: readonly SetupCatalogRow[] = [
   ["bambu_lan", "Bambu LAN (beta)", "bambu_lan", null, "Bambu LAN"],
 ];
 
-describe("printer provider public contract", () => {
+describe("PRINTER_SETUP_OPTIONS", () => {
   it("keeps setup kinds, labels, and transport mappings stable", () => {
     expect(
       PRINTER_SETUP_OPTIONS.map(({ value, label }) => {

@@ -1,3 +1,17 @@
+/*
+ * The three import calls whose bodies the backend branches on.
+ *
+ * Each of these posts a *selection* — which files, which collection members,
+ * whether to stop for review — and the backend has no way to tell an omitted
+ * field from a deliberate one. So the shape is the contract: a review flag that
+ * does not reach the server auto-imports a collection the user wanted to look at
+ * first, and a selection posted to the wrong token endpoint imports somebody
+ * else's staged archive.
+ *
+ * These assert the request rather than the response for that reason: the
+ * response is the backend's business, and it has its own tests.
+ */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ingestUrl, selectCollectionMembers, selectModelFiles } from "@/lib/api/models";

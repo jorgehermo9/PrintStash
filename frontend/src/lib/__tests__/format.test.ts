@@ -1,3 +1,20 @@
+/*
+ * The em dash is the contract. Every formatter here answers the same question —
+ * "what do I show when there is no value?" — and the answer must never be a
+ * number.
+ *
+ * `formatGrams(null)` rendering "0 g" tells a user their print used no filament,
+ * which is a fact they might act on; the em dash tells them PrintStash does not
+ * know, which is the truth. That distinction is why the zero cases are split
+ * per formatter rather than parametrized: percent and temperature have a
+ * meaningful zero (0% complete, 0 °C), and grams, millimetres and cost do not —
+ * a 0 there only ever comes from a field nothing filled in.
+ *
+ * The unit-scaling and duration cases exist because a wrong boundary is silently
+ * plausible: 1023 bytes shown as "1.0 KB" or 59 minutes as "0h 59m" both read as
+ * correct until somebody compares two models side by side.
+ */
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -55,7 +72,7 @@ describe("formatDuration", () => {
   });
 });
 
-describe("scalar formatters", () => {
+describe("formatPercent, formatTemperature, formatGrams, formatMillimeters, formatCost", () => {
   it("render an em dash for null/undefined", () => {
     expect(formatMillimeters(null)).toBe("—");
     expect(formatPercent(undefined)).toBe("—");

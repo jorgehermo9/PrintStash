@@ -1,3 +1,17 @@
+/*
+ * The panel that tells an operator whether their NAS scan worked.
+ *
+ * A scan has three outcomes and the panel is the only place they are visible.
+ * "OK" and "failed" are easy; the one that matters is *partial* — some files
+ * indexed, some errored — because rendering it as a plain count is a green result
+ * for a scan that half worked, and the operator never learns some of their models
+ * are missing. So the partial case asserts both the counts and the warning.
+ *
+ * The panel also must not query the libraries API while the feature is disabled.
+ * That is not an optimisation: on an installation whose operator never enabled
+ * external libraries, the call is a 403 in the console on the settings page.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";

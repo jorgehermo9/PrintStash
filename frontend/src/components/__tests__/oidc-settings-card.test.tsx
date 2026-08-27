@@ -1,6 +1,18 @@
+/*
+ * Editing SSO settings without sending the stored client secret back.
+ *
+ * The card loads the current configuration, which includes a *masked* secret. If
+ * saving replays that mask as though it were the value, the real secret is
+ * overwritten with a row of asterisks and every SSO login stops working — on the
+ * one screen where the operator cannot log in to fix it.
+ *
+ * So the save asserts what leaves the client: the fields the operator changed,
+ * and the secret only when they typed a new one.
+ */
+
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   OidcSettingsCard,
@@ -40,30 +52,32 @@ function savedConfig(payload: OidcConfigUpdate): OidcConfig {
   };
 }
 
-it("loads and saves OIDC settings without replaying stored secret", async () => {
-  const loadConfig = vi.fn<() => Promise<OidcConfig>>().mockResolvedValue(config);
-  const saveConfig = vi
-    .fn<(payload: OidcConfigUpdate) => Promise<OidcConfig>>()
-    .mockImplementation((payload) => Promise.resolve(savedConfig(payload)));
-  const user = userEvent.setup();
-  render(<OidcSettingsCard loadConfig={loadConfig} saveConfig={saveConfig} />);
+describe("OidcSettingsCard", () => {
+  it("loads and saves OIDC settings without replaying stored secret", async () => {
+    const loadConfig = vi.fn<() => Promise<OidcConfig>>().mockResolvedValue(config);
+    const saveConfig = vi
+      .fn<(payload: OidcConfigUpdate) => Promise<OidcConfig>>()
+      .mockImplementation((payload) => Promise.resolve(savedConfig(payload)));
+    const user = userEvent.setup();
+    render(<OidcSettingsCard loadConfig={loadConfig} saveConfig={saveConfig} />);
 
-  expect(await screen.findByDisplayValue("Authentik")).toBeInTheDocument();
-  expect(screen.getByLabelText("Client secret")).toHaveAttribute(
-    "placeholder",
-    "Configured — enter to replace",
-  );
+    expect(await screen.findByDisplayValue("Authentik")).toBeInTheDocument();
+    expect(screen.getByLabelText("Client secret")).toHaveAttribute(
+      "placeholder",
+      "Configured — enter to replace",
+    );
 
-  await user.click(screen.getByRole("checkbox", { name: "Enable SSO login" }));
-  await user.click(screen.getByRole("button", { name: /Save SSO settings/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Enable SSO login" }));
+    await user.click(screen.getByRole("button", { name: /Save SSO settings/ }));
 
-  await waitFor(() => expect(saveConfig).toHaveBeenCalled());
-  expect(saveConfig).toHaveBeenCalledWith(
-    expect.objectContaining({
-      oidc_enabled: true,
-      oidc_issuer_url: config.oidc_issuer_url,
-      oidc_client_id: "printstash",
-    }),
-  );
-  expect(saveConfig.mock.calls[0][0]).not.toHaveProperty("oidc_client_secret");
+    await waitFor(() => expect(saveConfig).toHaveBeenCalled());
+    expect(saveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oidc_enabled: true,
+        oidc_issuer_url: config.oidc_issuer_url,
+        oidc_client_id: "printstash",
+      }),
+    );
+    expect(saveConfig.mock.calls[0][0]).not.toHaveProperty("oidc_client_secret");
+  });
 });

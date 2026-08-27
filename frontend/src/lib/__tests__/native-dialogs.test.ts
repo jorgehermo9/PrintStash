@@ -1,3 +1,13 @@
+/*
+ * No `window.prompt`, `alert` or `confirm` anywhere in the app.
+ *
+ * This is a design rule with teeth: native dialogs cannot be styled, cannot be
+ * localized, block the whole tab, and are suppressed outright in some contexts —
+ * so a `confirm()` guarding a destructive action can silently return false and
+ * make the button appear broken, or silently return true. `DESIGN.md` bans them
+ * and this is what enforces it, by reading the source rather than by hoping.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,7 +19,7 @@ function sourceFiles(root: string): string[] {
   });
 }
 
-describe("dialog design rules", () => {
+describe("nativeDialogUsage", () => {
   it("never uses browser-native prompt, alert, or confirm dialogs", () => {
     const root = path.resolve(__dirname, "../..");
     const findings = sourceFiles(root).flatMap((file) => {

@@ -1,3 +1,24 @@
+/*
+ * Reviewing one captured import before it becomes models.
+ *
+ * The destination collection defaults to the capture's own title, which is the
+ * decision that makes a browser capture one click instead of three. Reusing an
+ * existing collection with that title rather than creating a duplicate is the
+ * other half — without it a user who imports twice from the same source ends up
+ * with "Benchy" and "Benchy (2)".
+ *
+ * Polling stops at a terminal state and not before. An import that answers
+ * "still reviewing" has to be polled again; one that finished must not be, or the
+ * page keeps requesting a job that is done for as long as it stays open.
+ *
+ * Partial results retry *only the failed files*. Retrying everything re-downloads
+ * and re-imports what already succeeded, which duplicates models.
+ *
+ * The source URLs here came from a third-party page, so the same scheme check as
+ * the Source tab applies: safe ones become normalized links, everything else stays
+ * text.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

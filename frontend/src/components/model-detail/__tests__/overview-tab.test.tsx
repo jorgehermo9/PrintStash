@@ -1,3 +1,15 @@
+/*
+ * The legacy source link on the overview tab, and the scheme check on it.
+ *
+ * `source_url` on a Model is the pre-provenance field: a URL a user pasted or an
+ * older release scraped, stored with no validation at all. Rendering it as an
+ * anchor without checking the scheme is stored XSS — a `javascript:` URL that
+ * fires when somebody clicks through to where their model came from.
+ *
+ * Safe URLs are normalized rather than passed through, so the two cases here are
+ * the whole contract: `http`/`https` become links, everything else becomes text.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -62,7 +74,7 @@ function renderOverview(sourceUrl: string) {
   );
 }
 
-describe("OverviewTab legacy source link", () => {
+describe("OverviewTab", () => {
   it("renders a normalized safe HTTP(S) source URL as a link", () => {
     renderOverview("HTTPS://EXAMPLE.TEST/cube");
 

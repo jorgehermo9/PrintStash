@@ -1,3 +1,23 @@
+/*
+ * Where a model came from, and the two manifest versions the inbox still reads.
+ *
+ * Provenance is partly captured from a source page and partly typed by the user,
+ * and the API keeps those separate: a `PATCH` sends *only* the fields the user
+ * explicitly overrode, so sending a full object would silently promote every
+ * captured value to a user-confirmed one. Clearing is its own operation for the
+ * same reason.
+ *
+ * The manifest tests are the interesting half. Installations upgrade, so a
+ * pending import staged by an older release is a V1 manifest and a new one is
+ * V2 — both have to parse. What must *not* happen is a malformed V2 quietly
+ * falling back to the V1 reader: the two disagree about which files were
+ * selected, so the fallback would import a different set than the user chose.
+ *
+ * The source-cover routes are private and multipart. They are pinned exactly
+ * because a cover PUT to the wrong path returns a plausible success and leaves
+ * the model with no image.
+ */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -26,7 +46,7 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("provenance API", () => {
+describe("getModelProvenance", () => {
   it("GETs the explicit model provenance read contract", async () => {
     fetchMock.mockResolvedValue(reply('{"sources":[]}'));
 
@@ -78,7 +98,7 @@ describe("provenance API", () => {
   });
 });
 
-describe("inbox API", () => {
+describe("parseInboxManifest", () => {
   it("parses strict V2 and legacy V1 manifests while rejecting malformed contracts", () => {
     expect(
       parseInboxManifest({

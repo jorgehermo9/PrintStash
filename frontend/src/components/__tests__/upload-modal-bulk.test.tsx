@@ -1,3 +1,17 @@
+/*
+ * Getting a folder of models into the queue, across three browser APIs.
+ *
+ * A user can pick files, pick a folder, or drop a directory tree, and the drop
+ * path uses the `DataTransferItem` entries API — which not every browser exposes.
+ * When it is missing, the drop has to fall back to the flat `FileList` rather than
+ * silently queueing nothing: a drag-and-drop that appears to do nothing is the
+ * worst of the three failures, because the user has no other affordance to try.
+ *
+ * The folder prefix is preserved in the queue. That prefix becomes the collection
+ * path on import, so losing it flattens somebody's organised folder into one
+ * unsorted heap — recoverable only by hand, model by model.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";

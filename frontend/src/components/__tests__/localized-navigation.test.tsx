@@ -1,7 +1,16 @@
+/*
+ * The navigation labels change when the user changes language.
+ *
+ * The shell is mounted for the whole session and the locale is switched from a
+ * settings page inside it, so nothing remounts. A nav that read its labels once at
+ * mount stays in the old language until a reload — on the one component that is
+ * always on screen, which makes the whole app look untranslated.
+ */
+
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { BottomNavBar } from "@/components/bottom-nav-bar";
 import { LocaleToggle } from "@/components/locale-toggle";
@@ -21,23 +30,25 @@ const adminAuth: AuthState = {
 
 beforeEach(() => localStorage.setItem("printstash.locale", "en"));
 
-it("updates navigation menu labels when locale changes", async () => {
-  render(
-    <MemoryRouter>
-      <AuthContext.Provider value={adminAuth}>
-        <I18nProvider>
-          <LocaleToggle />
-          <BottomNavBar />
-        </I18nProvider>
-      </AuthContext.Provider>
-    </MemoryRouter>,
-  );
+describe("AppNavigation", () => {
+  it("updates navigation menu labels when locale changes", async () => {
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={adminAuth}>
+          <I18nProvider>
+            <LocaleToggle />
+            <BottomNavBar />
+          </I18nProvider>
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
 
-  expect(screen.getByText("Vault")).toBeInTheDocument();
-  expect(screen.getByText("Printers")).toBeInTheDocument();
+    expect(screen.getByText("Vault")).toBeInTheDocument();
+    expect(screen.getByText("Printers")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: /Language/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Language/ }));
 
-  expect(screen.getByText("Bóveda")).toBeInTheDocument();
-  expect(screen.getByText("Impresoras")).toBeInTheDocument();
+    expect(screen.getByText("Bóveda")).toBeInTheDocument();
+    expect(screen.getByText("Impresoras")).toBeInTheDocument();
+  });
 });
