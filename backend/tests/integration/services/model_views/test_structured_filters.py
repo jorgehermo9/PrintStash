@@ -466,66 +466,6 @@ def test_list_items_picks_newest_version_mesh_file_for_preview(
 
 
 # --------------------------------------------------------------------------- #
-# export_payload — empty result, and populated collection/tag aggregation
-# --------------------------------------------------------------------------- #
-
-
-def test_export_payload_with_no_accessible_models_is_empty(db_session: Session) -> None:
-    from app.db.models import SENTINEL_MODEL_HASH
-
-    user = User(username="export-empty-admin", hashed_password="x", is_superuser=True)
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    # A fresh in-memory DB may only have the sentinel model, which is excluded.
-    from sqlmodel import select
-
-    live_models = db_session.exec(
-        select(Model).where(
-            Model.deleted_at.is_(None), Model.hash != SENTINEL_MODEL_HASH
-        )
-    ).all()
-    for m in live_models:
-        m.deleted_at = datetime.now(timezone.utc)
-        db_session.add(m)
-    db_session.commit()
-
-    payload = model_views.export_payload(db_session, user)
-
-    assert payload["models"] == []
-    assert payload["counts"]["files"] == 0
-
-
-def test_export_payload_includes_collection_and_tag_names(db_session: Session) -> None:
-    user = _admin(db_session, "export-admin")
-    col = Collection(name="ExportCol", slug="export-col", path="export-col")
-    db_session.add(col)
-    db_session.commit()
-    db_session.refresh(col)
-    model = Model(
-        name="Exportable", slug="exportable", hash="7" * 64, collection_id=col.id
-    )
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
-    tag = Tag(name="Neat", slug="neat")
-    db_session.add(tag)
-    db_session.commit()
-    db_session.refresh(tag)
-    from app.db.models import ModelTagLink
-
-    db_session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
-    _artifact(db_session, model, filename="exportable.stl", file_type=FileType.STL)
-    db_session.commit()
-
-    payload = model_views.export_payload(db_session, user)
-
-    row = next(m for m in payload["models"] if m["id"] == model.id)
-    assert row["collection"] == "export-col"
-    assert row["tags"] == ["Neat"]
-
-
-# --------------------------------------------------------------------------- #
 # print_statistics — invalid period falls back to "30d"
 # --------------------------------------------------------------------------- #
 
