@@ -400,8 +400,17 @@ It also makes the two schemas comparable: without it, `create_all` and the chain
 generate different names for the same constraint, and the parity test cannot tell
 that apart from real divergence.
 
-Declared constraints may still name themselves, and five in `app/db/models.py` do.
-The convention only fills in the rest.
+Declared constraints may still name themselves, and most in `app/db/models.py` do:
+17 unique constraints, 4 check constraints, 4 indexes. The convention fills in the
+rest — every foreign key, every primary key, and every index that comes from a
+`Field(index=True)`.
+
+`tests/repo/test_schema_ddl.py::TestConstraintNaming` is the tripwire. It asserts
+the convention is still attached to the metadata, that no constraint or index is
+anonymous, and that each name carries the prefix for its kind (`pk_`, `fk_`, `uq_`,
+`ck_`; an index takes `ix_` or, for the hand-declared partial unique indexes,
+`uq_`). A model added without a name that the convention cannot fill fails there
+rather than three releases later inside someone's `batch_alter_table`.
 
 ### `copy_from` versus reflection — they do different things
 

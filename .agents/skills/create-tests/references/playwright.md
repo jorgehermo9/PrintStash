@@ -1,12 +1,13 @@
 # Playwright tests
 
-Two suites with different jobs. Policy is in [SKILL.md](../SKILL.md); this is
+Three suites with different jobs. Policy is in [SKILL.md](../SKILL.md); this is
 the runtime-specific how.
 
 | Suite | Dir | Config | Backend | Job |
 | --- | --- | --- | --- | --- |
 | **Real** | `frontend/tests/e2e-real/` | `playwright.real.config.ts` | real uvicorn on a throwaway SQLite (`scripts/start-backend.sh`), Vite, standalone mock printer on `:7530` | the **one e2e test per headline UI capability** AGENTS.md requires; anything with persistence |
 | **Mock-API** | `frontend/tests/e2e/` | `playwright.config.ts` | `mock-api.ts` (node `http` server) | route smoke: every page renders with no console/page errors; PWA |
+| **Performance** | `frontend/tests/performance/` | `playwright.performance.config.ts` | `mock-api.ts` against a **production build** served by `vite preview` | records the timings a human compares between releases; asserts nothing that can fail on a slow machine |
 
 Branch coverage never goes here — it goes to vitest. A Playwright spec proves
 the marquee flow works end to end; the matrix's other rows live in the unit
@@ -73,17 +74,46 @@ Run: `cd frontend && pnpm test:e2e:real` (needs `backend/.venv` or `uv`).
 Run: `cd frontend && pnpm test:e2e` (`pnpm test:e2e:bundle` runs the same
 specs against the experimental bundled dev server).
 
+## Performance suite
+
+This one is deliberately not a gate, and that is the whole design. It measures
+vault load and first interaction against a **production build** — the dev
+server's timings say nothing about what a self-hoster experiences — and prints
+the numbers instead of asserting a threshold on them. A hard budget on a laptop
+under CI load is a flake, a flaky performance gate gets disabled, and then
+nobody has numbers at all.
+
+- `repeatEach: 3`, `workers: 1`, `fullyParallel: false`: the run is a
+  measurement, so it must not contend with itself.
+- The only assertions are that the page actually loaded and that a metric was
+  recorded at all — never a duration. If you want a regression to fail a build,
+  that belongs in a different suite with a deterministic input, not here.
+- Ports come from `PERF_PORT` / `PERF_API_PORT` so a perf run can sit alongside
+  the other two suites.
+
+Run: `cd frontend && pnpm test:perf`
+(`pnpm test:perf:react-compiler` builds with the React Compiler on, which is
+what the two `chromium-${buildMode}` project names are for: the point is
+comparing the two builds' numbers).
+
 ## CI
 
-Both suites run per PR and in the nightly full-matrix rerun
+The real and mock-API suites run per PR and in the nightly full-matrix rerun
 (`.github/workflows/ci.yml`). `retries` are on in CI only; a spec that needs
 the retry to pass is flaky — fix the wait, don't lean on the retry.
+
+The performance suite runs on `workflow_dispatch` only
+(`.github/workflows/tooling-experiments.yml`), which uploads its samples as an
+artifact. That is deliberate: it produces numbers a human compares between
+releases, so putting it on every PR would add several minutes of build time to
+produce a file nobody opens.
 
 ## These specs move no coverage number
 
 `pnpm coverage` and `frontend/scripts/coverage-gate.mjs` measure the vitest run
-and nothing else. A Playwright spec — either suite — is invisible to them: the
-browser executes the app in a separate process the v8 provider never instruments.
+and nothing else. A Playwright spec — any of the three suites — is invisible to
+them: the browser executes the app in a separate process the v8 provider never
+instruments.
 
 Two consequences worth holding onto:
 
