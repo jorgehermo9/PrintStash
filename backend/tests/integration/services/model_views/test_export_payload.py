@@ -28,6 +28,8 @@ from app.db.models import (
     SENTINEL_MODEL_HASH,
     ArtifactProvenanceLink,
     Collection,
+    CollectionPermission,
+    CollectionRole,
     File,
     FileType,
     Model,
@@ -299,6 +301,63 @@ class TestExportPayload:
             by_id[first.id]["provenance"]["sources"][0]["tags"],
             by_id[second.id]["provenance"]["sources"][0]["tags"],
         ) == (["first-only"], ["second-only"])
+
+    def test_omits_a_trashed_artifact_from_a_models_files(self, db_session: Session):
+        user = _admin(db_session, "export-trashed-file")
+        model = _model(db_session, "Partly trashed", "1")
+        kept = _artifact(db_session, model, "kept.stl")
+        discarded = _artifact(db_session, model, "discarded.stl")
+        discarded.deleted_at = datetime.now(timezone.utc)
+        db_session.add(discarded)
+        db_session.commit()
+
+        payload = model_views.export_payload(db_session, user)
+
+        row = next(m for m in payload["models"] if m["id"] == model.id)
+        # An export listing a file the user already trashed would restore it on
+        # the next import.
+        assert [f["id"] for f in row["files"]] == [kept.id]
+
+    def test_exports_only_models_in_collections_the_user_can_view(
+        self, db_session: Session
+    ):
+        member = User(username="export-member", hashed_password="x")
+        visible = Collection(name="Visible", slug="visible", path="visible")
+        hidden = Collection(name="Hidden", slug="hidden", path="hidden")
+        db_session.add_all([member, visible, hidden])
+        db_session.commit()
+        db_session.refresh(member)
+        db_session.refresh(visible)
+        db_session.refresh(hidden)
+        db_session.add(
+            CollectionPermission(
+                user_id=member.id, collection_id=visible.id, role=CollectionRole.VIEW
+            )
+        )
+        allowed = _model(db_session, "Allowed", "2")
+        allowed.collection_id = visible.id
+        denied = _model(db_session, "Denied", "3")
+        denied.collection_id = hidden.id
+        db_session.add_all([allowed, denied])
+        db_session.commit()
+
+        payload = model_views.export_payload(db_session, member)
+
+        assert [m["id"] for m in payload["models"]] == [allowed.id]
+
+    def test_exports_nothing_for_a_user_granted_no_collection(
+        self, db_session: Session
+    ):
+        member = User(username="export-outsider", hashed_password="x")
+        db_session.add(member)
+        db_session.commit()
+        db_session.refresh(member)
+        _model(db_session, "Unreachable", "4")
+
+        payload = model_views.export_payload(db_session, member)
+
+        # No grants is not "everything the superuser sees"; it is nothing.
+        assert payload["models"] == []
 
     def test_reports_a_model_with_no_provenance_as_an_empty_source_list(
         self, db_session: Session
