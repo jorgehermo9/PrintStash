@@ -21,10 +21,10 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from printstash_core.imports.contracts import CaptureManifestV2, ResolvedAsset
 
 from app.core.config import _overlay
 from app.services import inbox
-from printstash_core.imports.contracts import CaptureManifestV2, ResolvedAsset
 
 STL = b"solid cube\nendsolid cube\n"
 
