@@ -21,6 +21,7 @@ import pytest
 import trimesh
 
 from app.services import step_worker
+from tests.paths import FIXTURES_DIR
 
 TRIANGLE_LIMIT_ENV = "PRINTSTASH_STEP_TRIANGLE_LIMIT"
 
@@ -86,3 +87,18 @@ class TestMain:
         monkeypatch.setattr(step_worker.sys, "argv", ["step_worker"])
 
         assert step_worker.main() == 2
+
+    def test_refuses_a_file_that_tessellates_past_the_ceiling(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        source = FIXTURES_DIR / "cascadio_material.stp"
+        destination = tmp_path / "over-cap.glb"
+        monkeypatch.setenv("PRINTSTASH_STEP_TRIANGLE_LIMIT", "1")
+        monkeypatch.setattr(
+            step_worker.sys, "argv", ["step_worker", str(source), str(destination)]
+        )
+
+        # Exit 3, and nothing written: a partial or over-cap mesh on disk would
+        # be indistinguishable to the parent from a usable one.
+        assert step_worker.main() == 3
+        assert not destination.exists()
