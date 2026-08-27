@@ -1540,3 +1540,77 @@ def test_select_collection_members_rejects_unmatched_ids(
     )
     assert response.status_code == 400, response.text
     assert response.json()["detail"] == "no_members_selected"
+
+
+def test_select_archive_entries_rejects_a_selection_claimed_by_another_request(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    """A staged archive is claimed once, and the loser is told so rather than re-importing.
+
+    The claim happens *after* the ownership and selection checks, so two requests can
+    both get past those and only one can win. The loser must not fall through and
+    import the same files a second time.
+    """
+    _configure_storage(tmp_path)
+    upload = client.post(
+        "/api/v1/ingest/archive",
+        headers=auth_headers,
+        files={"file": ("bundle.zip", _zip_bytes(), "application/zip")},
+    )
+    archive_id = upload.json()["archive_id"]
+    monkeypatch.setattr(importer.archives, "claim", lambda _id: None)
+
+    response = client.post(
+        f"/api/v1/ingest/archive/{archive_id}/select",
+        headers=auth_headers,
+        json={"names": ["cube.stl"]},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "archive_already_claimed"
+
+
+def test_select_archive_entries_accepts_entry_ids(
+    tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    _configure_storage(tmp_path)
+    upload = client.post(
+        "/api/v1/ingest/archive",
+        headers=auth_headers,
+        files={"file": ("bundle.zip", _zip_bytes(), "application/zip")},
+    )
+    body = upload.json()
+    entry_id = body["entries"][0]["entry_id"]
+
+    response = client.post(
+        f"/api/v1/ingest/archive/{body['archive_id']}/select",
+        headers=auth_headers,
+        json={"entry_ids": [entry_id]},
+    )
+
+    # Ids rather than names, so a filename with awkward bytes is still selectable.
+    assert response.status_code in (200, 202), response.text
+
+
+def test_select_archive_entries_rejects_an_entry_id_that_is_not_in_the_archive(
+    tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    _configure_storage(tmp_path)
+    upload = client.post(
+        "/api/v1/ingest/archive",
+        headers=auth_headers,
+        files={"file": ("bundle.zip", _zip_bytes(), "application/zip")},
+    )
+    archive_id = upload.json()["archive_id"]
+
+    response = client.post(
+        f"/api/v1/ingest/archive/{archive_id}/select",
+        headers=auth_headers,
+        json={"entry_ids": ["not-a-real-entry"]},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "archive_entry_not_found"

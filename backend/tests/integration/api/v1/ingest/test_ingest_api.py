@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -975,3 +976,102 @@ def test_get_job_unknown_id_returns_404(
     response = client.get("/api/v1/ingest/jobs/does-not-exist", headers=auth_headers)
     assert response.status_code == 404, response.text
     assert response.json()["detail"] == "job_not_found"
+
+
+def test_ingest_orca_rejects_a_source_hash_that_is_not_a_sha256(
+    tmp_path: Path, client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """The hash names an inbox item's bytes, so a malformed one is a client bug."""
+    _configure_storage(tmp_path)
+
+    response = client.post(
+        "/api/v1/ingest/orca",
+        headers=auth_headers,
+        files={"file": ("part.gcode", b"G28\n", "text/plain")},
+        data={"source_hash": "not-a-hash"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "source_hash_invalid"
+
+
+def test_ingest_refuses_an_upload_when_staging_is_full(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+    monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
+
+    response = client.post(
+        "/api/v1/ingest/orca",
+        headers=auth_headers,
+        files={"file": ("part.gcode", b"G28\n", "text/plain")},
+    )
+
+    # 507, not 500: the request was fine, the disk was not.
+    assert response.status_code == 507, response.text
+    assert response.json()["detail"] == "staging_capacity_exceeded"
+
+
+def test_ingest_removes_the_staged_file_when_staging_is_full(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    _configure_storage(tmp_path)
+    monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
+
+    client.post(
+        "/api/v1/ingest/orca",
+        headers=auth_headers,
+        files={"file": ("part.gcode", b"G28\n", "text/plain")},
+    )
+
+    # The bytes were written before the capacity check; leaving them would make
+    # the next request's check even more likely to fail.
+    from app.core.config import settings
+
+    staged = (
+        list(settings.incoming_dir.iterdir()) if settings.incoming_dir.exists() else []
+    )
+    assert staged == []
+
+
+def test_ingest_fails_the_job_when_the_staging_lease_cannot_be_taken(
+    tmp_path: Path,
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    from app.api.v1 import ingest as ingest_api
+
+    _configure_storage(tmp_path)
+    created: list[str] = []
+    real_create = ingest_api.registry.create
+
+    def recording_create(*args: object, **kwargs: object) -> str:
+        job_id = real_create(*args, **kwargs)
+        created.append(job_id)
+        return job_id
+
+    def broken(*_args: object, **_kwargs: object):
+        raise RuntimeError("staging ledger unavailable")
+
+    monkeypatch.setattr(ingest_api.registry, "create", recording_create)
+    monkeypatch.setattr(ingest_api, "_record_staging_lease", broken)
+
+    with pytest.raises(RuntimeError, match="staging ledger unavailable"):
+        client.post(
+            "/api/v1/ingest/orca",
+            headers=auth_headers,
+            files={"file": ("part.gcode", b"G28\n", "text/plain")},
+        )
+
+    # A job left pending forever is a queue an operator cannot clear.
+    status = registry.get(created[0])
+    assert status is not None
+    assert status.state == "failed"
+    assert status.error == "staging_lease_failed"

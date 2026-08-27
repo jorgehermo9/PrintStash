@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -73,9 +74,7 @@ class TestListCollections:
     ) -> None:
         col = taxonomy.resolve_or_create_collection(db_session, "Granted")
         assert col is not None
-        db_session.add(
-            Model(name="gm", slug="gm", hash="f" * 64, collection_id=col.id)
-        )
+        db_session.add(Model(name="gm", slug="gm", hash="f" * 64, collection_id=col.id))
         user = _user(db_session, "granted-viewer")
         db_session.add(
             CollectionPermission(
@@ -317,9 +316,7 @@ class TestCollectionReadme:
         )
         assert put.status_code == 200
         assert put.json()["readme"] == "# Hello"
-        get = client.get(
-            f"/api/v1/collections/{col.id}/readme", headers=auth_headers
-        )
+        get = client.get(f"/api/v1/collections/{col.id}/readme", headers=auth_headers)
         assert get.status_code == 200
         assert get.json()["readme"] == "# Hello"
 
@@ -471,9 +468,7 @@ class TestDeleteCollection:
         parent = taxonomy.resolve_or_create_collection(db_session, "HasKids")
         taxonomy.resolve_or_create_collection(db_session, "HasKids/Kid")
         assert parent is not None
-        resp = client.delete(
-            f"/api/v1/collections/{parent.id}", headers=auth_headers
-        )
+        resp = client.delete(f"/api/v1/collections/{parent.id}", headers=auth_headers)
         assert resp.status_code == 409
         assert resp.json()["detail"] == "collection_has_children"
 
@@ -703,3 +698,44 @@ class TestCollectionPermissions:
             headers=auth_headers,
         )
         assert resp.status_code == 204
+
+    def test_upload_rolls_back_the_written_image_when_the_commit_fails(
+        self, client: TestClient, db_session: Session, auth_headers, monkeypatch
+    ) -> None:
+        """Bytes with no row pointing at them are bytes nothing will ever delete."""
+        import io
+
+        from PIL import Image
+
+        from app.api.v1 import taxonomy as taxonomy_api
+
+        col = taxonomy.resolve_or_create_collection(db_session, "Rollback imgs")
+        assert col is not None
+        db_session.commit()
+        collection_id = col.id
+        db_session.close()
+        image = io.BytesIO()
+        Image.new("RGB", (8, 8), "navy").save(image, format="PNG")
+        rolled_back: list[object] = []
+
+        real_record = taxonomy_api.record_creation
+
+        def failing_record(session, receipt, **kwargs):
+            real_record(session, receipt, **kwargs)
+            raise RuntimeError("ownership ledger unavailable")
+
+        monkeypatch.setattr(taxonomy_api, "record_creation", failing_record)
+        monkeypatch.setattr(
+            get_backend(),
+            "rollback_create",
+            lambda receipt: rolled_back.append(receipt),
+        )
+
+        with pytest.raises(RuntimeError, match="ownership ledger unavailable"):
+            client.post(
+                f"/api/v1/collections/{collection_id}/images",
+                headers=auth_headers,
+                files={"file": ("cover.png", image.getvalue(), "image/png")},
+            )
+
+        assert len(rolled_back) == 1
