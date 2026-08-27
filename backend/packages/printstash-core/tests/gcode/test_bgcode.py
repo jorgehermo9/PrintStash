@@ -1,3 +1,35 @@
+"""Reading PrusaSlicer binary G-code containers without trusting them.
+
+A `.bgcode` file is a length-prefixed block container that arrives by upload,
+which makes every framing field in it attacker-controlled: block count, declared
+data length, declared *uncompressed* length, compression scheme, parameter
+length, checksum type. This reader's job is to answer questions about such a file
+— is it valid, what metadata does it carry, what thumbnail — while never letting
+one of those numbers decide how much memory to allocate.
+
+Three defences, and each has its own rows below.
+
+**Sizes are checked before any read.** A declared length is compared against the
+real file size first, so a block claiming a gigabyte cannot make the parser
+reserve one. Metadata and thumbnails have their own output ceilings.
+
+**Decompression is bounded and exact.** A deflate stream is decoded with an
+explicit output limit, and the decoded length must equal the header's claim. A
+header that disagrees with its own payload is the shape of a decompression bomb,
+and a partial or trailing-garbage stream is refused rather than accepted with
+whatever came out.
+
+**The printable body is skipped, never decoded.** G-code blocks use heatshrink,
+which this reader does not implement and does not need to: validation seeks past
+them. That is also why a printable block may legitimately be larger than the
+metadata cap.
+
+Everything is failure-tolerant by design. A partially written file — a slicer
+interrupted mid-export — must read as "no metadata" rather than crash an ingest
+job, and an unreadable path must answer `False` rather than raise. The upload
+succeeded; the parse is a best effort on top of it.
+"""
+
 from __future__ import annotations
 
 import struct
@@ -14,7 +46,10 @@ from printstash_core.gcode import (
 
 _FILE_METADATA = 0
 _GCODE = 1
+_SLICER_METADATA = 2
 _THUMBNAIL = 5
+# Block type 99 is not in the spec, so it declares no parameter bytes.
+_UNKNOWN_BLOCK = 99
 
 
 def _block(
@@ -35,7 +70,15 @@ def _container(*blocks: bytes) -> bytes:
     return b"GCDE" + struct.pack("<IH", 1, 0) + b"".join(blocks)
 
 
+def _gcode_block(body: bytes = b"body") -> bytes:
+    """A minimal printable block — a container needs one to be valid."""
+
+    return _block(_GCODE, struct.pack("<H", 2), body, compression=0)
+
+
 def _sample_container() -> bytes:
+    """One metadata block, one thumbnail, one heatshrink-compressed body."""
+
     metadata = _block(
         _FILE_METADATA,
         struct.pack("<H", 0),
@@ -57,81 +100,9 @@ def _sample_container() -> bytes:
     return _container(metadata, thumbnail, gcode)
 
 
-def test_valid_container_and_typed_metadata(tmp_path: Path) -> None:
-    path = tmp_path / "sample.bgcode"
-    path.write_bytes(_sample_container())
-
-    assert is_valid_container(path) is True
-    assert parse(path) == GcodeMetadata(
-        slicer_name="PrusaSlicer",
-        slicer_version="PrusaSlicer 2.8.0",
-        material_type="PETG",
-        material_requirements=(MaterialRequirement(0, "PETG"),),
-    )
-    assert list(bgcode.iter_thumbnails(path)) == [(0, 16, 16, b"thumbnail-bytes")]
-
-
-def test_container_validation_rejects_truncation_and_bad_deflate(
-    tmp_path: Path,
-) -> None:
-    truncated = tmp_path / "truncated.bgcode"
-    truncated.write_bytes(_sample_container()[:40])
-    assert is_valid_container(truncated) is False
-
-    corrupt_metadata = (
-        struct.pack("<HHI", _FILE_METADATA, 1, 1000)
-        + struct.pack("<I", len(b"not-deflate"))
-        + struct.pack("<H", 0)
-        + b"not-deflate"
-    )
-    gcode = _block(
-        _GCODE,
-        struct.pack("<H", 2),
-        b"opaque",
-        compression=3,
-    )
-    corrupt = tmp_path / "corrupt.bgcode"
-    corrupt.write_bytes(_container(corrupt_metadata, gcode))
-    assert is_valid_container(corrupt) is False
-
-
-def test_bounded_decompress_rejects_oversize_partial_and_trailing_streams() -> None:
-    compressed = zlib.compress(b"x" * 8192)
-    assert bgcode._decompress(1, compressed, max_output=1024) is None
-
-    valid = zlib.compress(b"metadata")
-    assert bgcode._decompress(1, valid[:-1], max_output=1024) is None
-    assert bgcode._decompress(1, valid + b"trailing", max_output=1024) is None
-
-
-def test_container_requires_a_printable_gcode_block(tmp_path: Path) -> None:
-    metadata_only = tmp_path / "metadata-only.bgcode"
-    metadata_only.write_bytes(
-        _container(
-            _block(
-                _FILE_METADATA,
-                struct.pack("<H", 0),
-                b"Producer=PrusaSlicer 2.8.0\n",
-                compression=0,
-            )
-        )
-    )
-
-    assert is_valid_container(metadata_only) is False
-
-
-def test_container_validation_skips_large_printable_body(tmp_path: Path) -> None:
-    """Printable blocks are seeked, not read, so their size is not metadata-capped."""
-    path = tmp_path / "large-sparse.bgcode"
-    body_size = bgcode._MAX_BLOCK_DATA + 1
-    with path.open("wb") as file:
-        file.write(b"GCDE" + struct.pack("<IH", 1, 0))
-        file.write(struct.pack("<HHI", _GCODE, 0, body_size))
-        file.write(struct.pack("<H", 2))
-        file.seek(body_size - 1, 1)
-        file.write(b"\0")
-
-    assert is_valid_container(path) is True
+def _written(path: Path, payload: bytes) -> Path:
+    path.write_bytes(payload)
+    return path
 
 
 class TestIsBgcode:
@@ -341,3 +312,364 @@ class TestIterThumbnails:
         path.write_bytes(b"G28\n")
 
         assert list(bgcode.iter_thumbnails(path)) == []
+
+
+class TestBlockParamLen:
+    def test_reports_six_parameter_bytes_for_a_thumbnail(self) -> None:
+        # Format, width, height — the reader needs all three to emit a preview.
+        assert bgcode._block_param_len(_THUMBNAIL) == 6
+
+    def test_reports_two_parameter_bytes_for_metadata_and_gcode(self) -> None:
+        assert bgcode._block_param_len(_FILE_METADATA) == 2
+        assert bgcode._block_param_len(_GCODE) == 2
+
+    def test_reports_no_parameter_bytes_for_a_block_type_it_does_not_know(
+        self,
+    ) -> None:
+        # A future block type must be skippable: guessing a parameter length
+        # would shift every subsequent offset and reject a valid file.
+        assert bgcode._block_param_len(_UNKNOWN_BLOCK) == 0
+
+
+class TestDecompress:
+    def test_returns_stored_data_unchanged(self) -> None:
+        assert bgcode._decompress(0, b"metadata", max_output=1024) == b"metadata"
+
+    def test_refuses_stored_data_over_the_output_limit(self) -> None:
+        assert bgcode._decompress(0, b"x" * 2048, max_output=1024) is None
+
+    def test_inflates_a_deflate_stream(self) -> None:
+        assert (
+            bgcode._decompress(1, zlib.compress(b"metadata"), max_output=1024)
+            == b"metadata"
+        )
+
+    def test_refuses_a_stream_that_inflates_past_the_limit(self) -> None:
+        # The bomb case: 8 KiB of zeroes compresses to almost nothing.
+        assert (
+            bgcode._decompress(1, zlib.compress(b"x" * 8192), max_output=1024) is None
+        )
+
+    def test_refuses_a_truncated_stream(self) -> None:
+        # Accepting a partial inflate would silently return half the metadata.
+        valid = zlib.compress(b"metadata")
+
+        assert bgcode._decompress(1, valid[:-1], max_output=1024) is None
+
+    def test_refuses_a_stream_with_trailing_bytes(self) -> None:
+        # Trailing data means the declared length was wrong, or something is
+        # hidden after the stream; either way the block is not what it claims.
+        valid = zlib.compress(b"metadata")
+
+        assert bgcode._decompress(1, valid + b"trailing", max_output=1024) is None
+
+    def test_refuses_a_stream_that_is_not_deflate_at_all(self) -> None:
+        assert bgcode._decompress(1, b"not-deflate", max_output=1024) is None
+
+    def test_refuses_a_compression_scheme_it_does_not_implement(self) -> None:
+        # Heatshrink (2 and 3) is deliberately unimplemented: only the printable
+        # body uses it, and validation seeks past that.
+        assert bgcode._decompress(3, b"opaque", max_output=1024) is None
+
+
+class TestValidContainer:
+    def test_accepts_a_slicer_written_container(self, tmp_path: Path) -> None:
+        path = _written(tmp_path / "sample.bgcode", _sample_container())
+
+        assert is_valid_container(path) is True
+
+    def test_accepts_a_printable_body_larger_than_the_metadata_cap(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "large-sparse.bgcode"
+        body_size = bgcode._MAX_BLOCK_DATA + 1
+        with path.open("wb") as file:
+            file.write(b"GCDE" + struct.pack("<IH", 1, 0))
+            file.write(struct.pack("<HHI", _GCODE, 0, body_size))
+            file.write(struct.pack("<H", 2))
+            file.seek(body_size - 1, 1)
+            file.write(b"\0")
+
+        # Printable blocks are seeked past rather than read, so a large print is
+        # not capped by the metadata ceiling. A sparse file keeps this cheap.
+        assert is_valid_container(path) is True
+
+    def test_accepts_a_block_type_it_does_not_recognise(self, tmp_path: Path) -> None:
+        unknown = struct.pack("<HHI", _UNKNOWN_BLOCK, 0, 4) + b"data"
+        path = _written(tmp_path / "future.bgcode", _container(unknown, _gcode_block()))
+
+        # Forward compatibility: a container gaining a block type must not
+        # become unreadable in older PrintStash releases.
+        assert is_valid_container(path) is True
+
+    def test_rejects_a_container_with_no_printable_block(self, tmp_path: Path) -> None:
+        metadata_only = _container(
+            _block(
+                _FILE_METADATA,
+                struct.pack("<H", 0),
+                b"Producer=PrusaSlicer 2.8.0\n",
+                compression=0,
+            )
+        )
+        path = _written(tmp_path / "metadata-only.bgcode", metadata_only)
+
+        # Nothing to print. Accepting it would let a metadata-only file be
+        # queued and fail on the printer instead of at upload.
+        assert is_valid_container(path) is False
+
+    def test_rejects_a_truncated_file(self, tmp_path: Path) -> None:
+        path = _written(tmp_path / "truncated.bgcode", _sample_container()[:40])
+
+        assert is_valid_container(path) is False
+
+    def test_rejects_a_metadata_block_whose_deflate_stream_is_corrupt(
+        self, tmp_path: Path
+    ) -> None:
+        corrupt_metadata = (
+            struct.pack("<HHI", _FILE_METADATA, 1, 1000)
+            + struct.pack("<I", len(b"not-deflate"))
+            + struct.pack("<H", 0)
+            + b"not-deflate"
+        )
+        path = _written(
+            tmp_path / "corrupt.bgcode",
+            _container(corrupt_metadata, _gcode_block()),
+        )
+
+        assert is_valid_container(path) is False
+
+    def test_rejects_a_block_declaring_more_output_than_the_metadata_cap(
+        self, tmp_path: Path
+    ) -> None:
+        body = zlib.compress(b"Producer=X\n")
+        # Claims 9 MiB of output from a few compressed bytes. The claim is
+        # rejected before the stream is inflated, so the bomb never expands.
+        header = struct.pack("<HHI", _FILE_METADATA, 1, 9 * 1024 * 1024)
+        header += struct.pack("<I", len(body)) + struct.pack("<H", 0)
+        path = _written(
+            tmp_path / "oversize.bgcode", _container(header + body, _gcode_block())
+        )
+
+        assert is_valid_container(path) is False
+
+    def test_rejects_a_container_with_more_blocks_than_the_cap(
+        self, tmp_path: Path
+    ) -> None:
+        # A hostile file can declare an unbounded number of tiny blocks; the
+        # loop is bounded so validation cannot be made to run forever.
+        blocks = b"".join(
+            struct.pack("<HHI", _UNKNOWN_BLOCK, 0, 0)
+            for _ in range(bgcode._MAX_BLOCKS + 1)
+        )
+        path = _written(tmp_path / "many.bgcode", _container(blocks, _gcode_block()))
+
+        assert is_valid_container(path) is False
+
+
+class TestParse:
+    def test_reads_typed_metadata_out_of_a_container(self, tmp_path: Path) -> None:
+        path = _written(tmp_path / "sample.bgcode", _sample_container())
+
+        assert parse(path) == GcodeMetadata(
+            slicer_name="PrusaSlicer",
+            slicer_version="PrusaSlicer 2.8.0",
+            material_type="PETG",
+            material_requirements=(MaterialRequirement(0, "PETG"),),
+        )
+
+
+class TestReadMetadataTextTolerance:
+    def test_reads_every_metadata_block_in_the_container(self, tmp_path: Path) -> None:
+        file_metadata = _block(
+            _FILE_METADATA,
+            struct.pack("<H", 0),
+            b"Producer=PrusaSlicer 2.8.0\n",
+            compression=0,
+        )
+        slicer_metadata = _block(
+            _SLICER_METADATA,
+            struct.pack("<H", 0),
+            b"filament_type=PETG\n",
+            compression=0,
+        )
+        path = _written(
+            tmp_path / "both.bgcode",
+            _container(file_metadata, slicer_metadata, _gcode_block()),
+        )
+
+        text = bgcode.read_metadata_text(path)
+
+        # The four metadata block types carry different halves of what the
+        # parser needs; reading only the first would lose the material.
+        assert text is not None
+        assert "Producer=PrusaSlicer 2.8.0" in text
+        assert "filament_type=PETG" in text
+
+    def test_synthesizes_the_generated_by_line_a_text_parser_expects(
+        self, tmp_path: Path
+    ) -> None:
+        path = _written(tmp_path / "sample.bgcode", _sample_container())
+
+        text = bgcode.read_metadata_text(path)
+
+        # The binary container has no comment header, but the shared text
+        # parser identifies the slicer from `; generated by …`. Emitting it here
+        # is what lets one parser serve both formats.
+        assert text is not None
+        assert "; generated by PrusaSlicer 2.8.0" in text
+
+    def test_skips_a_blank_line_in_a_metadata_block(self, tmp_path: Path) -> None:
+        metadata = _block(
+            _FILE_METADATA,
+            struct.pack("<H", 0),
+            b"Producer=X\n\n   \nfilament_type=PETG\n",
+            compression=0,
+        )
+        path = _written(
+            tmp_path / "blanks.bgcode", _container(metadata, _gcode_block())
+        )
+
+        text = bgcode.read_metadata_text(path)
+
+        # A blank comment line would read as an empty key to the text parser.
+        assert text == ("; Producer=X\n; generated by X\n; filament_type=PETG\n")
+
+    def test_skips_a_block_it_cannot_decode(self, tmp_path: Path) -> None:
+        corrupt = (
+            struct.pack("<HHI", _FILE_METADATA, 1, 11)
+            + struct.pack("<I", len(b"not-deflate"))
+            + struct.pack("<H", 0)
+            + b"not-deflate"
+        )
+        good = _block(
+            _SLICER_METADATA,
+            struct.pack("<H", 0),
+            b"filament_type=PETG\n",
+            compression=0,
+        )
+        path = _written(
+            tmp_path / "partial.bgcode", _container(corrupt, good, _gcode_block())
+        )
+
+        text = bgcode.read_metadata_text(path)
+
+        # One unreadable block is not a reason to lose the rest: a model with
+        # partial metadata is better than a model with none.
+        assert text is not None
+        assert "filament_type=PETG" in text
+
+    def test_stops_reading_once_the_metadata_budget_is_spent(
+        self, tmp_path: Path
+    ) -> None:
+        chunk = b"a=" + b"b" * (5 * 1024 * 1024) + b"\n"
+        blocks = b"".join(
+            _block(_FILE_METADATA, struct.pack("<H", 0), chunk, compression=0)
+            for _ in range(2)
+        )
+        path = _written(tmp_path / "huge.bgcode", _container(blocks, _gcode_block()))
+
+        text = bgcode.read_metadata_text(path)
+
+        # Two blocks each under the per-block cap can still exceed the total, so
+        # the budget is cumulative. What was already read is kept.
+        assert text is not None
+        assert len(text) < 2 * len(chunk)
+
+    def test_stops_at_a_block_declaring_a_missing_compressed_size(
+        self, tmp_path: Path
+    ) -> None:
+        # Declares deflate, so four bytes of compressed size must follow.
+        path = _written(
+            tmp_path / "nosize.bgcode",
+            _container(struct.pack("<HHI", _FILE_METADATA, 1, 10)),
+        )
+
+        assert bgcode.read_metadata_text(path) is None
+
+    def test_stops_at_a_block_whose_parameters_are_cut_short(
+        self, tmp_path: Path
+    ) -> None:
+        path = _written(
+            tmp_path / "noparams.bgcode",
+            _container(struct.pack("<HHI", _FILE_METADATA, 0, 0) + b"\x00"),
+        )
+
+        assert bgcode.read_metadata_text(path) is None
+
+    def test_stops_at_a_block_whose_body_is_cut_short(self, tmp_path: Path) -> None:
+        header = struct.pack("<HHI", _FILE_METADATA, 0, 100) + struct.pack("<H", 0)
+        path = _written(tmp_path / "shortbody.bgcode", _container(header + b"short"))
+
+        assert bgcode.read_metadata_text(path) is None
+
+    def test_refuses_a_block_declaring_more_data_than_the_reader_will_hold(
+        self, tmp_path: Path
+    ) -> None:
+        # The declared length exceeds the hard per-block ceiling, so the walk
+        # stops rather than attempting a 64 MiB+ read for a hostile header.
+        header = struct.pack("<HHI", _FILE_METADATA, 0, bgcode._MAX_BLOCK_DATA + 1)
+        header += struct.pack("<H", 0)
+        path = _written(tmp_path / "huge-block.bgcode", _container(header))
+
+        assert bgcode.read_metadata_text(path) is None
+
+    def test_reads_metadata_past_a_checksum(self, tmp_path: Path) -> None:
+        metadata = (
+            _block(
+                _FILE_METADATA,
+                struct.pack("<H", 0),
+                b"Producer=PrusaSlicer 2.8.0\n",
+                compression=0,
+            )
+            + b"\x00\x00\x00\x00"
+        )
+        payload = b"GCDE" + struct.pack("<IH", 1, 1) + metadata
+        path = _written(tmp_path / "crc-metadata.bgcode", payload)
+
+        # A reader that ignored the checksum length would read it as the next
+        # block header. Here the metadata comes first, so the read succeeds
+        # either way — the assertion is that nothing after it is misparsed.
+        text = bgcode.read_metadata_text(path)
+
+        assert text is not None
+        assert "Producer=PrusaSlicer 2.8.0" in text
+
+
+class TestIterThumbnailsTolerance:
+    def test_yields_the_image_bytes_with_their_format(self, tmp_path: Path) -> None:
+        path = _written(tmp_path / "sample.bgcode", _sample_container())
+
+        assert list(bgcode.iter_thumbnails(path)) == [(0, 16, 16, b"thumbnail-bytes")]
+
+    def test_skips_a_thumbnail_whose_parameters_are_too_short_to_read(
+        self, tmp_path: Path
+    ) -> None:
+        # `_block_param_len` asks for six bytes and gets them, but the block
+        # body is what carries the image — a header claiming a thumbnail with
+        # unreadable dimensions must be skipped, not yield a 0x0 preview.
+        short = struct.pack("<HHI", _THUMBNAIL, 3, 4) + struct.pack("<I", 4)
+        short += struct.pack("<HHH", 0, 16, 16) + b"data"
+        path = _written(
+            tmp_path / "undecodable.bgcode", _container(short, _gcode_block())
+        )
+
+        assert list(bgcode.iter_thumbnails(path)) == []
+
+    def test_yields_every_thumbnail_in_the_container(self, tmp_path: Path) -> None:
+        small = _block(
+            _THUMBNAIL, struct.pack("<HHH", 0, 16, 16), b"small", compression=0
+        )
+        large = _block(
+            _THUMBNAIL, struct.pack("<HHH", 1, 220, 124), b"large", compression=0
+        )
+        path = _written(
+            tmp_path / "two-thumbs.bgcode",
+            _container(small, large, _gcode_block()),
+        )
+
+        # PrusaSlicer embeds several sizes; the caller picks one, so all must
+        # reach it.
+        assert [(fmt, w, h) for fmt, w, h, _data in bgcode.iter_thumbnails(path)] == [
+            (0, 16, 16),
+            (1, 220, 124),
+        ]
