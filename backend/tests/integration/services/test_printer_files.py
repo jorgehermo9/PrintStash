@@ -1,3 +1,27 @@
+"""Deciding whether a file on the printer is one of ours, without guessing.
+
+A printer's storage contains files PrintStash uploaded and files the user put
+there by SD card. Matching them back to library artifacts is what makes "already
+on this printer" work — and a wrong match is worse than no match, because it
+attributes somebody's print to the wrong model and then offers to delete the
+wrong bytes.
+
+So the matching is a strict ladder, and this file pins the order:
+
+1. **Upload history** — we recorded sending this exact file. Strongest evidence.
+2. **A vault marker** embedded in the G-code. Ours by construction.
+3. **Filename**, last and weakest, because two models can produce `cube.gcode`.
+
+The refusals matter as much as the ladder. A marker that is present but does not
+match reports a *mismatch* rather than falling through to filename — falling
+through would silently accept the weaker evidence exactly when the stronger
+evidence says no. And an externally-started job is never treated as upload
+history, since we did not send it and cannot claim what it printed.
+
+A file that stops appearing is marked missing rather than deleted: the printer
+may simply be offline, and forgetting the association would lose the link.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

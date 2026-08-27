@@ -1,3 +1,16 @@
+"""The two ways a request can look authenticated without being authorised.
+
+A valid token is not a licence to write. The scope carried in it is separate from
+who the user is, so a `read` token belonging to an admin must be refused by a
+write endpoint — and a subject claim that is missing or not a number is a token
+that cannot identify anybody, which must fail rather than resolve to whichever
+user id a loose cast produces.
+
+Both are small checks in front of every mutating endpoint, which is exactly why
+they get their own rows: a regression here is not visible in any single
+endpoint's tests.
+"""
+
 from __future__ import annotations
 
 import asyncio

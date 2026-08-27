@@ -1,3 +1,25 @@
+"""Filtering the library, where the answer must come from one artifact.
+
+The library filters look independent and are not. A model with a PLA mesh and a
+PETG G-code file matches "material = PLA" and "material = PETG" separately, but it
+must **not** match a query for both — the two facts live on different artifacts,
+and a filter that ANDs across them claims a combination that does not exist.
+
+That is the property most of this file defends, and it is invisible in a single
+filter: it only appears when two are combined, which is exactly how a user
+searches.
+
+The rest are the boundaries each filter has: a date window that includes its
+edges, `printed=false` meaning "never printed" rather than "no rows", a tag
+matched by slug rather than display name (two tags can render alike), and a
+storage filter that distinguishes external from vault-owned rather than treating
+absence as either.
+
+These run against real rows because the filters are SQL. A mocked query would
+assert the shape of the SQL rather than what it returns, which is the one thing
+that matters here.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

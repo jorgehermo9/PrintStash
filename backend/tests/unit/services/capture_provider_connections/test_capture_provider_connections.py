@@ -1,3 +1,28 @@
+"""Two provider APIs, their credentials, and their deliberately different identities.
+
+MyMiniFactory and Cults are the credentialed providers, and this file covers the
+narrow adapters that talk to them. Three themes, each a promise to the user.
+
+**Credentials are exchanged, never retained.** The OAuth flow trades a code for
+tokens and refreshes them; what it must not do is keep the user's credentials
+anywhere. A retained secret is a secret that can leak later.
+
+**Identity is two things, not one.** Cults returns an opaque creation id *and* a
+URL slug, and they are genuinely different values — comparing the opaque id
+against a slug is how a capture gets attributed to the wrong model. So the slug
+binds the page and the opaque id binds the API object, and a creation URL for a
+different slug is refused outright.
+
+**Their responses are untrusted input.** Everything crossing this boundary is
+bounded before it reaches a database, a UI or a log: body size, string length,
+object width, list length, key length and nesting depth. Each has a row, and each
+refuses with the same opaque code so the provider's own content never becomes the
+error message.
+
+Cults notably returns metadata *only* — the browser supplies the bytes — so the
+"never requests files" row is a contract, not an omission.
+"""
+
 from __future__ import annotations
 
 import httpx

@@ -1,3 +1,28 @@
+"""Sending a job to a farm of printers, and every reason a printer is skipped.
+
+The fleet endpoints decide which physical machine a print goes to. Getting that
+wrong wastes filament at best and starts a print on a machine somebody is
+servicing at worst, so most of this file is about the states that make a printer
+*ineligible* — drain mode, an active maintenance window, a material the loaded
+spool cannot do, an operator gate that has not been released.
+
+Two properties are asserted repeatedly because they are what make a scheduler
+safe rather than merely correct:
+
+**Dispatch happens once.** A job claimed by two workers is a job printed twice.
+The claim is a conditional write, and the scheduler re-checks eligibility *after*
+claiming — a printer put into drain between selection and dispatch must not
+receive the job it was already chosen for.
+
+**The scheduler does not block the event loop.** It runs inside the API process,
+so a query budget and a threadpool boundary are part of its contract: a fleet
+sweep that blocks stalls every request in flight, which looks like the whole
+application hanging rather than like a slow scheduler.
+
+Queue order is the third theme. `queue_position` is what the scheduler reads, and
+reordering, priority lanes and deletion all have to leave a total order behind.
+"""
+
 from __future__ import annotations
 
 import asyncio

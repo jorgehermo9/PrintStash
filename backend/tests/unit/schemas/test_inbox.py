@@ -1,3 +1,15 @@
+"""The schema is the first refusal, before any capture logic runs.
+
+Capture payloads arrive from a browser extension, which means from a page the user
+was visiting. The source URL fields are validated at the schema boundary so an
+unsafe value never reaches the code that would resolve or fetch it — the earliest
+possible rejection, and the one that needs no knowledge of the capture pipeline.
+
+The second row is about not being helpful. A malformed v2 manifest must **not**
+fall back to the legacy v1 parser: a lenient fallback means an attacker chooses
+which parser runs by breaking the payload, and the older one has looser rules.
+"""
+
 from __future__ import annotations
 
 import pytest

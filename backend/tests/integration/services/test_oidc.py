@@ -1,3 +1,27 @@
+"""Accepting an identity from an external provider, and every reason not to.
+
+Single sign-on moves the decision "who is this?" outside PrintStash, so the token
+exchange is the one place where getting a check wrong hands somebody else's
+account to whoever can craft a JWT. The checks are not independent — passing four
+of five is a full bypass — so this file covers each individually:
+
+* **Signature**, against the provider's published keys. Without it every other
+  field is attacker-controlled.
+* **Issuer**, exactly, including the trailing-slash form real providers emit.
+  A token from a different issuer is a valid token for a different system.
+* **Audience**, including the multi-audience case: a token listing several
+  audiences is only ours if the authorized party is us, and accepting one aimed
+  at another client is the classic confused-deputy.
+* **Nonce**, which is what stops a token captured from one login being replayed
+  into another.
+
+The transport rows matter for a different reason. Discovery and token endpoints
+are HTTP calls to a host the *operator* configured, so a non-dict response or a
+network failure must surface as a provider error rather than a traceback — and
+`https` is required unless explicitly relaxed, since an `http` issuer means the
+token travelled in clear text.
+"""
+
 from __future__ import annotations
 
 import asyncio

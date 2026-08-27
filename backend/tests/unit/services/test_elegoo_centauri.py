@@ -1,3 +1,24 @@
+"""Talking to a Centauri over a connection that has to be closed every time.
+
+The Centauri client opens a connection per operation, and the thing that makes it
+different from the HTTP providers is that **the connection is a resource the
+printer only grants a few of**. Leaking one leaves the printer unreachable until
+it is power-cycled — a failure the user experiences as broken hardware, not as a
+bug in a web app.
+
+So the closing behaviour is asserted directly: closed after a normal read, closed
+after an action, and a failure *inside* the close swallowed rather than raised,
+because a close error must not mask the result of the operation that already
+succeeded.
+
+The rest is the usual provider contract with one twist. A control action requires
+a connection opened with control enabled — reading status does not — so the two
+are separate, and a network drop mid-action becomes a provider error rather than
+an ambiguous silence. `connect` reports a printer-level refusal as an
+authentication failure, since from the user's side a wrong access code and a
+refusing printer are the same problem to fix.
+"""
+
 from __future__ import annotations
 
 import asyncio

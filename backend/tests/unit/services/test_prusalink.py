@@ -1,3 +1,26 @@
+"""Reading a PrusaLink printer across two firmware generations and two auth modes.
+
+PrusaLink is the provider with the most shapes to accommodate, and every one of
+them is a real printer somebody owns:
+
+**Two status shapes.** The older flat form and the official v1 form, which nests
+the job and reports temperatures separately. Both normalise to the same snapshot,
+because the UI cannot ask the user which firmware they have.
+
+**Two auth modes.** An API key, and HTTP digest — which requires answering a
+challenge rather than sending a header. A printer configured for digest with only
+an API key set is a printer that fails at the first request, which is why the
+mode is part of the configuration contract rather than something inferred.
+
+The progress rows are there because a low percentage must not be misread as
+complete. That mistake ends the job record while the print is still running, and
+the queue then dispatches onto a busy machine.
+
+Failures carry stable codes for the same reason as every other provider: a caller
+branches on them, and an auth failure in particular must trigger exactly one
+credential prompt rather than a retry loop.
+"""
+
 import asyncio
 from pathlib import Path
 

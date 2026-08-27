@@ -1,3 +1,21 @@
+"""The seam between an ORM row and a printer client that must not hold onto it.
+
+This adapter turns a `Printer` row into an immutable core config. Two things about
+that are worth pinning.
+
+**It must not retain the row.** The client outlives the request and its session; a
+held ORM instance becomes a detached object whose attribute access raises much
+later, from inside a background dispatch. So `build` copies the fields it needs.
+
+**Credential validation belongs to the core, not here.** Duplicating it would let
+the two disagree, and the adapter's copy would be the one that silently accepted a
+half-configured printer.
+
+The legacy-argument rows exist because this constructor and its class-level FTPS
+factory are still called by older code paths; changing their shape breaks a caller
+this file is the only warning for.
+"""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock

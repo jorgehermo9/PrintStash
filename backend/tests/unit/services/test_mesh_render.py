@@ -1,3 +1,24 @@
+"""Choosing a camera and a shading model so a preview looks like the object.
+
+The software rasteriser produces the thumbnail a user scans a library by, so
+"correct" here means recognisable rather than geometrically defensible. Two
+decisions carry that, and both have a wrong answer that still renders.
+
+**The view.** A flat plate photographed from above is a rectangle; a solid part
+from the front is a silhouette. So the camera is chosen from the geometry — front
+for a Z-flat mesh, a broad-face view for an X-flat one, a Z-up hero angle for a
+solid — and a front-facing flat mesh must *not* fall back to the silhouette path,
+which is the case that produced featureless grey squares.
+
+**The shading.** A smooth surface has to render as a gradient, or a curved part
+looks faceted; hard edges have to stay flat, or a mechanical part looks melted.
+Those two pull in opposite directions, which is why both are asserted rather than
+just one.
+
+These are pixel-level assertions on real geometry because there is no other way
+to catch "it renders, and it looks wrong".
+"""
+
 from __future__ import annotations
 
 import io

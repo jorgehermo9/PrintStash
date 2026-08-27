@@ -1,3 +1,15 @@
+"""The audit log must not become the place the secrets ended up.
+
+Audit rows record what changed, which for provenance means a diff of captured
+metadata — and that metadata contains remote identifiers and whole provider
+snapshots. An audit trail is long-lived, widely readable, and exported, so it is
+the worst place for either to land.
+
+Both paths are covered because they are separate code: the explicit diff builder,
+and the ORM listener that fires on insert and update. Redacting one and not the
+other leaves the trail intact through the other.
+"""
+
 from __future__ import annotations
 
 import json

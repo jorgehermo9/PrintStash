@@ -1,3 +1,21 @@
+"""The receipt that proves PrintStash owns a file in the staging directory.
+
+Staging holds bytes that are not yet library artifacts, and the lease is the only
+thing that says which of them are ours. Every operation here is therefore about
+*exactly one owner*: a transfer between owners is atomic and leaves precisely one,
+because zero means bytes nothing will clean up and two means two callers each
+believe they may delete the same file.
+
+The prune rows are the dangerous side. Expiry unlinks the **exact** recorded file,
+proven by device and inode — and refuses to unlink a path that has been replaced
+since the lease was written, without deleting it. A replaced path is somebody
+else's file at a predictable location.
+
+The cascade row exists because a lease outliving its Inbox item is a leak, and the
+migration row because lease data has to survive an upgrade in both directions:
+losing it turns staged uploads into unownable bytes.
+"""
+
 from __future__ import annotations
 
 from datetime import timedelta

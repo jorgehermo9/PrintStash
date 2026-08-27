@@ -1,3 +1,27 @@
+"""Who can see and change which part of the library, resolved down a tree.
+
+Collection permissions inherit: a grant on `Parts` covers `Parts/Brackets`. That
+makes the *boundaries* the interesting cases, and this file is mostly boundaries,
+because every one of them is a way for a grant to reach further than the person
+who made it intended:
+
+* **Down, but not up.** A grant on a child gives no role on its parent, or
+  sharing one folder would expose everything above it.
+* **Not to a prefix sibling.** `Parts` must not match `Parts-Archive`. String
+  prefixes are how materialized-path RBAC leaks, and the two names differ by a
+  character.
+* **Not through the trash.** A trashed collection grants nothing; otherwise
+  deleting a folder would be a way to keep access to it.
+
+Roles are ordered (`view` < `edit` < `admin`), so each level is asserted against
+what it must *not* permit as well as what it must — a `view` grant that can edit
+is indistinguishable from `edit` in practice.
+
+The non-superuser rows exist because `auth_headers` is an admin and proves
+nothing here: every one of these rules is invisible to a superuser, who passes
+every check by definition.
+"""
+
 from __future__ import annotations
 
 import pytest

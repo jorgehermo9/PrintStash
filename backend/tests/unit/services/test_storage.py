@@ -1,3 +1,24 @@
+"""Path handling for the two operations that cannot be taken back.
+
+Deleting a file and choosing where to write one are the two places a path bug
+becomes data loss, so both are checked against symlinks — the mechanism by which
+a path inside the vault resolves to something outside it.
+
+Both directions are covered, because they fail differently: a symlinked **leaf**
+must be refused *without touching its target* (following it deletes somebody
+else's file), and a symlinked **intermediate directory** must be refused too,
+since a safe-looking filename underneath it lands wherever the link points.
+
+The slug rows are a smaller matter with a user-visible edge: a slug is part of a
+URL and a storage key, so it has to be stable, unique, and non-empty even when the
+model name is entirely punctuation or non-Latin — a name that slugifies to nothing
+would otherwise collide with every other such name.
+
+`stream_to_path` hashes the same single pass it writes. Hashing separately means
+reading the file twice and asserting on bytes that may have changed in between,
+which is exactly the window a content-addressed store cannot afford.
+"""
+
 from __future__ import annotations
 
 import hashlib

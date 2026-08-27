@@ -179,6 +179,23 @@ def _is_allowed(path: Path) -> bool:
 
 
 @pytest.mark.parametrize("module", _test_modules(), ids=_relative)
+def test_every_file_opens_with_a_contract_header(module: Path) -> None:
+    """A test file says what it defends, in prose, before its first import.
+
+    Not a restatement of the filename. The header is where the *reason* a rule
+    exists lives — and that reason is the thing a reader needs when the file goes
+    red six months from now and the obvious fix is to delete the assertion.
+    """
+    header = ast.get_docstring(ast.parse(module.read_text(encoding="utf-8")))
+
+    assert header, (
+        f"{_relative(module)} has no module docstring. Open it with a few lines "
+        "on what this file defends and why it matters when it goes red — see "
+        "Inside a test file in .agents/skills/create-tests/SKILL.md"
+    )
+
+
+@pytest.mark.parametrize("module", _test_modules(), ids=_relative)
 def test_no_test_module_imports_another_test_module(module: Path) -> None:
     tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
     offenders = [

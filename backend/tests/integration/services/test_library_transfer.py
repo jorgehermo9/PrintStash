@@ -1,3 +1,26 @@
+"""Moving a library between instances without trusting the archive that carries it.
+
+A portable export is a file a user hands to another machine — a backup they are
+restoring, a library they are migrating, or an archive somebody sent them. On
+import it is **untrusted input that names filesystem paths**, which makes it the
+most dangerous shape of data this application accepts: an entry called
+`/etc/cron.d/x` or `../../secrets` is a write outside the vault if anything
+along the path is taken at face value.
+
+So the import side is written as a series of refusals, and this file is mostly
+those refusals. Every one is checked *before the first byte is written*, because
+a half-applied import is worse than a rejected one: it leaves rows pointing at
+files that were never created and files nothing owns.
+
+The manifest is versioned, and both versions are covered, because a self-hoster
+restores an archive produced by an older release. Dropping v1 support silently
+turns their backup into an unreadable file.
+
+The cover and sidecar rows are about the same principle applied to metadata:
+bytes are only accepted when they match the hash the manifest declared for them,
+so a tampered archive cannot swap an image for something else.
+"""
+
 from __future__ import annotations
 
 import inspect

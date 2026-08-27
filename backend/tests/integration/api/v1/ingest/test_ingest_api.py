@@ -1,3 +1,25 @@
+"""Getting a file into the library, all the way through, over HTTP.
+
+Ingest is a multi-table write plus two blob writes behind one request, and the
+dangerous outcome is not failure — it is a *partial* success. A `File` row whose
+bytes were never written, or a model whose thumbnail points at a missing key,
+looks fine in the database and breaks at the moment a user opens it. So these
+tests assert the whole postcondition together: row, bytes, metadata, and the
+owning model's thumbnail.
+
+The durability row is the load-bearing one. A job is published as terminal only
+after a *fresh* check that its bytes are on disk — publishing first and verifying
+later means a crash in between leaves a job that claims success with nothing to
+show.
+
+The rest are cases a real user hits: a mesh over the triangle cap, which must
+still get an authenticated preview rather than no preview; an upload that outlives
+the pruning of its own completed inbox job; a forced rebuild replacing an existing
+thumbnail; and retention actually being read from configuration rather than
+hard-coded, since a self-hoster who sets 90 days and loses data at 30 has lost
+data.
+"""
+
 from __future__ import annotations
 
 import io

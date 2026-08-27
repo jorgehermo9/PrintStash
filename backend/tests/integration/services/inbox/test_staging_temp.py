@@ -1,3 +1,20 @@
+"""Cleaning up a half-written upload without deleting somebody else's file.
+
+A browser upload writes into a deterministic path in the staging directory, so a
+process killed mid-upload leaves a partial file exactly where the next attempt
+wants to write. Recovery has to remove that partial — otherwise the slot is stuck
+forever — and it must do so on the evidence of the *lease*, not the path.
+
+That distinction is this file. The recovery removes a partial it can prove it owns
+by device and inode, and **preserves** a file at the same path that it cannot:
+either a foreign file, or a replacement written after the lease was recorded.
+Deleting on path alone would make a predictable staging path a way to delete
+arbitrary files.
+
+The last row closes the loop: after the owned temp file is set up, a real upload
+still publishes. A recovery that left the slot unusable would be safe and useless.
+"""
+
 from __future__ import annotations
 
 import hashlib

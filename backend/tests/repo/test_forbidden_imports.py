@@ -1,3 +1,21 @@
+"""Keeping `printstash-core` a library rather than part of the application.
+
+`printstash-core` holds the logic that has no business knowing about FastAPI, a
+database, or a cloud SDK: G-code parsing, mesh rasterising, URL safety, provider
+wire clients. That boundary is what makes the package testable in isolation and
+installable without the application's dependency tree — and it is the kind of
+boundary that erodes one convenient import at a time.
+
+An `import app...` inside it would not fail any other test. It would simply make
+the package depend on the application, and the coupling would be discovered much
+later by whoever tried to reuse it.
+
+So this walks the AST of every module and asserts the forbidden roots are absent,
+with a narrower list for the testkit (which may know about FastAPI, since it
+serves fakes over HTTP) and a check that the runtime package declares no
+*mandatory* dependency on the optional infrastructure ones.
+"""
+
 from __future__ import annotations
 
 import ast

@@ -1,3 +1,16 @@
+"""Two API processes on one vault would corrupt it, so the second must not start.
+
+PrintStash assumes a single writer: SQLite, the storage backend and the job
+registry are all written without cross-process coordination. A second API process
+pointed at the same vault is silent, gradual corruption rather than an error, so
+it is refused at startup by a process lock.
+
+The second row is the one that matters more than it looks. Taking the lock must
+**never truncate** a pre-existing file — a lock implementation that opens for
+writing would destroy the very data it is protecting, in the exact case it exists
+to handle.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

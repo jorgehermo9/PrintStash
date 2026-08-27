@@ -1,3 +1,16 @@
+"""Telling a self-hoster about an update, and never breaking because GitHub is down.
+
+The update check is a convenience that talks to a third party, which makes
+*degrading well* its most important property. Every failure mode returns
+"unavailable" rather than raising: GitHub unreachable, a non-dict payload, a
+release with no tag. A settings page that fails to load because an external API
+changed shape is a much worse outcome than one that cannot report a version.
+
+The comparison rows are semantic rather than lexical, because `0.10.0` is newer
+than `0.9.0` and a string comparison says otherwise — which would either hide a
+real update or nag about a downgrade.
+"""
+
 from __future__ import annotations
 
 import asyncio

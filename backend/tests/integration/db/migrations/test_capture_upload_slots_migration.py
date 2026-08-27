@@ -1,3 +1,17 @@
+"""A constraint whose *name* differs between SQLite and PostgreSQL.
+
+This migration has to drop a unique constraint that neither dialect names the
+same way: PostgreSQL generates one, and SQLite frequently has none at all until
+the batch naming convention supplies it. A migration that hard-codes either name
+fails on the other backend — and on PostgreSQL it fails only when rendering
+offline SQL, which is how an operator generates a migration script to review
+before running it.
+
+So both dialects are covered, in both online and offline modes. The final row
+checks what the constraint change was *for*: at head, one import job may hold
+several staging leases, which is the state the old constraint wrongly forbade.
+"""
+
 from __future__ import annotations
 
 import importlib.util

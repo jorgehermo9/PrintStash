@@ -1,3 +1,28 @@
+"""Fetching from a provider we do not control, with the SSRF guard held open.
+
+This transport downloads bytes from a third-party host on the user's behalf, and
+its whole reason for existing is that a single validation is not enough. Three
+things happen after the first check that can each move the target:
+
+* **A retry** re-resolves the hostname. So every attempt is revalidated, not just
+  the first — otherwise a retry is a free second chance at DNS rebinding.
+* **A redirect** names a new URL entirely. It is revalidated before being
+  followed, and only within an explicit provider allowlist: a 302 to
+  `169.254.169.254` is the cloud metadata service, and following it once is
+  enough.
+* **A hostile provider** can simply not answer. Backoff is bounded and jittered,
+  and the jitter is deterministic under test so the assertion is on the schedule
+  rather than on a sleep.
+
+The retry *policy* matters as much as the safety. A permanent client failure is
+not retried — replaying a 400 sends the same bad request again — while a
+transient network failure is, up to a limit, after which the error is stable and
+**free of the signed URL**, because that error reaches a log and a job record.
+
+The host limit is process-wide rather than per-instance: a per-instance cap is no
+cap at all when the caller constructs a transport per request.
+"""
+
 from __future__ import annotations
 
 import asyncio

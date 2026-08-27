@@ -1,3 +1,25 @@
+"""Refusing to start a print the loaded filament cannot do.
+
+Material-aware routing exists to stop a PETG job starting on a printer loaded
+with PLA — a failure that wastes a spool and can damage a nozzle. The whole
+feature turns on a three-way distinction that this file is built around:
+
+**Compatible**, **incompatible**, and **unknown**. Unknown is not a mismatch. A
+printer that cannot report its material, or is offline, or has a tracked spool
+that cannot be resolved, is *unproven* — and treating unproven as incompatible
+would refuse to print on most of a real fleet, while treating it as compatible
+defeats the feature. So routing prefers proven-compatible, then unknown, and never
+picks a proven mismatch without an operator confirming it.
+
+Colour is advisory only: printing in the wrong colour is a preference, not a
+failure, and blocking on it would be a false positive nobody wants.
+
+Two other guarantees ride along. Batch creation is atomic — a partly-created batch
+leaves copies queued that no batch owns — and it spreads copies across the fleet
+rather than stacking them. And an operator hold resolves the gate *and* enables
+drain, so a machine somebody is standing at stops receiving work.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

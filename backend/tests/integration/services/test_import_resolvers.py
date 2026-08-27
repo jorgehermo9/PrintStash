@@ -1,3 +1,24 @@
+"""Resolving a pasted URL into something importable, with a cache that is per-user.
+
+A provider lookup costs a network round trip and a rate-limit slot, so results are
+cached. That cache is the interesting part, because it holds **credentialed**
+metadata: a response fetched with one user's token must never be served to
+another. So it is owner-scoped, and this file asserts that directly rather than
+trusting the key format.
+
+The invalidation rows follow from the same concern. Connecting or disconnecting a
+provider changes what that user is allowed to see, so both drop their cache; a
+disconnect that left a warm entry would keep serving data the user no longer has
+access to. Expiry is asserted too — a stale entry is a lookup that silently stops
+reflecting the source.
+
+The refusal rows are about failing usefully. "You need to connect this provider"
+is a stable, actionable code rather than a generic error, because it is the one
+failure the user can fix themselves. And the manifest built from provider metadata
+is bounded and omits fields it does not recognise, since an unknown field
+forwarded verbatim is untrusted data reaching the import path.
+"""
+
 from __future__ import annotations
 
 import asyncio

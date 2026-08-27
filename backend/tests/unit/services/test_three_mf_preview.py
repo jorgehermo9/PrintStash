@@ -1,3 +1,27 @@
+"""Picking the right plate image out of an archive that may be lying.
+
+A 3MF is a ZIP a slicer wrote, and its preview images are the fastest way to show
+a user what a model looks like — no rasterising required. But it arrives from
+outside, so every selection rule here is also a refusal.
+
+**Strictly the requested plate.** A multi-plate project has one image per plate,
+and showing plate 2's picture for plate 1 misrepresents what will print. A single
+candidate is a fallback only when no plate was named.
+
+**Ambiguity is stable, not arbitrary.** When candidates cannot be ordered the
+result is the same on every run and on every platform, because a preview that
+changes between two identical imports looks like data corruption to the user.
+
+**Entry names are not paths.** Traversal sequences and case variants are ignored
+rather than normalised-then-used: an archive entry called `../../thumb.png` is an
+attempt to read outside the archive, and one differing only in case is an attempt
+to shadow a real entry on a case-insensitive filesystem.
+
+The limit rows exist because a preview is decoded before it is trusted: a
+non-positive limit is a misconfiguration that would disable the bound entirely,
+and a malformed archive gets a stable code rather than a parser traceback.
+"""
+
 from __future__ import annotations
 
 import io

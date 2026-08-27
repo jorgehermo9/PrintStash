@@ -1,3 +1,29 @@
+"""Upgrading a self-hoster's real database, which nobody can roll back.
+
+A migration runs once, on data somebody cares about, on a machine we cannot see.
+There is no undo — hard rule 1 exists because editing a merged migration breaks
+the upgrade path for everyone still on an older release. So these tests run the
+*real* runner against real data rather than asserting on the SQL.
+
+Two classes of failure, both of which have bitten this project:
+
+**Data-destroying migrations.** A migration that adds a unique constraint has to
+decide what to do with rows that already violate it. Absorbing a duplicate pair
+is correct; deleting one is somebody's print history gone. The Bambu identity
+migration is asserted to group *without deleting*, and to refuse to group a fast
+reprint or a transitive chain — over-grouping merges two genuinely different jobs
+into one.
+
+**Runner states nobody plans for.** A fresh database, one already at head, one
+that predates Alembic entirely, one stamped at a revision that no longer exists.
+The orphan-adoption case is the one that produced real "table already exists"
+failures on upgrade: a database with tables but no version row has to be adopted,
+not migrated from zero.
+
+`SET NULL` migrations get their own rows because the alternative is a cascade:
+dropping a job must not take its completed import history with it.
+"""
+
 from __future__ import annotations
 
 from importlib.util import module_from_spec, spec_from_file_location

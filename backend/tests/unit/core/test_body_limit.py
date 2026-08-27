@@ -1,3 +1,19 @@
+"""Rejecting an oversized upload before it is buffered, not after.
+
+The body-limit middleware exists to refuse a large request *while it is
+streaming*. Reading it all and then checking the size means the memory has
+already been spent, which is the denial of service the limit was meant to prevent.
+
+So the rows are about where the refusal happens: a streamed body over the limit is
+rejected before a response is produced, and one exactly at the limit reaches the
+application — an off-by-one here rejects legitimate uploads at the boundary the
+documentation promises.
+
+A malformed `Content-Length` is deliberately *not* handled here. Guessing at it
+would either reject a valid request or trust an attacker's number; leaving it to
+the application means one place decides, and that place already validates.
+"""
+
 from __future__ import annotations
 
 import asyncio

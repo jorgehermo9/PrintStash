@@ -1,3 +1,26 @@
+"""Keeping "where did this model come from" true across recaptures and merges.
+
+Provenance is the record a user relies on for attribution and licensing, so it
+has to survive being captured twice, captured from two URLs that turn out to be
+the same page, and moved between instances. The properties this file defends are
+all about *identity* rather than content:
+
+**The snapshot hash is canonical.** The same provider page captured twice must
+produce the same hash, or every recapture looks like a change and the history
+becomes noise. That means key order and formatting cannot leak into it.
+
+**Capture is idempotent, and an explicit override wins.** A user who corrected the
+creator name must not have that correction overwritten by the next recapture —
+including when their override is deliberately *empty*, which is a statement
+("the source is wrong, there is no creator") rather than a missing value.
+
+**Merging two sources cannot lose a cover.** A legacy URL-keyed source promoted
+to a stable id can collide with an existing one. Whichever way the merge goes, the
+obsolete cover's bytes are either transferred or their exact receipt is enqueued
+for deletion — never dropped on the floor, since bytes nothing owns are bytes
+nothing will ever clean up.
+"""
+
 from __future__ import annotations
 
 import json

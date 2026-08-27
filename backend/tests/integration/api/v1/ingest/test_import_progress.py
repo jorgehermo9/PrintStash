@@ -1,3 +1,28 @@
+"""What a long import tells the user while it runs, and what it must never tell them.
+
+An import of a folder or an archive takes minutes, so its progress record is the
+only thing standing between the user and a spinner with no information. This file
+defends two independent things about that record.
+
+**It has to be honest about what it does not know.** The total is unknown until
+discovery finishes, and reporting a made-up total produces a bar that jumps
+backwards. A partial success is a distinct outcome from a complete failure — the
+first has files to keep and a safe retry for the rest, the second has neither —
+and collapsing them means a user either loses good files or retries work that
+already succeeded.
+
+**It must not leak.** The progress payload is rendered in a browser, and its
+inputs are filesystem paths, provider URLs and error strings from third-party
+code. A signed download URL *is* a credential; a local path discloses the server's
+layout; a control character can rewrite a terminal or a log line. So the display
+sanitizers have their own rows, and the reconnect listing is scoped by owner
+**before** any status JSON is deserialized — scoping afterwards means the
+deserialization already happened on another user's data.
+
+Terminal history is bounded for the same reason a queue is: an unbounded list of
+finished jobs is a payload that grows until the page stops loading.
+"""
+
 from __future__ import annotations
 
 import io

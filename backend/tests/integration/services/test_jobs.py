@@ -1,3 +1,24 @@
+"""The job record a user watches, and what pruning it must not take with it.
+
+A background job's row is the only window into work that outlives the request
+that started it, so its progress has to behave like progress: monotonic below a
+terminal state, and forced to 100% once complete. A bar that goes backwards, or
+one that sits at 97% on a finished job, reads as a stuck import.
+
+Pruning is where the real risk is. Finished jobs are deleted after a TTL, and the
+rows here exist because two other things point at them:
+
+* A **completed Inbox item** references its job. Pruning must not leave that
+  reference dangling, or the import history stops loading.
+* A **job-owned staging lease** is what proves PrintStash owns the staged bytes a
+  retry would use. Pruning the job while keeping the lease is the safe direction;
+  dropping the lease means the retry has no provable claim on its own files and
+  is refused.
+
+So the pruning tests assert on what *survives*, not just on what is removed —
+which is the only way to catch a cascade that takes a neighbour with it.
+"""
+
 from __future__ import annotations
 
 from datetime import timedelta

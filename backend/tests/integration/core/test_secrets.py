@@ -1,3 +1,23 @@
+"""Printer credentials at rest, and the upgrade that must not lock anyone out.
+
+Every provider credential PrintStash stores — an access code, an API key, a
+password — is a key to hardware on the user's network. This file asserts they are
+encrypted *in the database*, by reading the raw column rather than the model
+attribute: an assertion through the ORM would pass just as happily if encryption
+were a no-op.
+
+The legacy row is the one that matters for an upgrade. Instances that predate
+encryption hold plaintext, and refusing to read it would take every one of their
+printers offline on upgrade with no way back. So plaintext stays readable while
+new writes are encrypted.
+
+The key-material rows cover the states an operator can actually be in: a key set
+in configuration, no key and a key file on disk, and neither — where a key is
+generated and persisted. The concurrent-create race is there because two workers
+starting together both find no file, and two different generated keys means half
+the credentials become permanently undecryptable.
+"""
+
 import pytest
 from sqlalchemy import text
 from sqlmodel import Session

@@ -1,3 +1,18 @@
+"""A snapshot of the public API, so a breaking change has to be deliberate.
+
+The OpenAPI document is what the frontend, the browser extension and any
+self-hoster's script are written against. A renamed field or a changed status code
+is invisible in the backend's own tests and breaks all three.
+
+So the whole document is snapshotted and compared. Release metadata is stripped
+(a version bump is not an API change) and test-only routes are filtered out, since
+`pytest-randomly` would otherwise make the snapshot depend on which test ran
+first.
+
+When this fails the diff is the review: regenerate with
+`UPDATE_OPENAPI_CONTRACT=1` only once the change is confirmed intended.
+"""
+
 from __future__ import annotations
 
 import copy

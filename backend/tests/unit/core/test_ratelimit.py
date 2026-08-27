@@ -1,3 +1,21 @@
+"""The limiter in front of login, and the memory it must not grow.
+
+Rate limiting is what stops a password from being guessed at machine speed, so
+the window arithmetic gets its own rows: up to the limit is allowed, past it is
+blocked, and old hits expire so a legitimate user is not locked out for the rest
+of the day by one bad afternoon. Keys are independent, because a global limit
+means one attacker locks out every user.
+
+The cardinality row is the one that is easy to miss. The limiter keys on client
+IP, which an attacker controls and can churn. Without a bound, every new IP adds
+an entry that is never collected — a slow memory leak reachable from
+unauthenticated requests, which is a denial of service against the whole process
+rather than against the endpoint it was protecting.
+
+A non-positive configuration is refused rather than silently treated as
+unlimited: a typo in a setting must not disable the protection.
+"""
+
 from __future__ import annotations
 
 import time

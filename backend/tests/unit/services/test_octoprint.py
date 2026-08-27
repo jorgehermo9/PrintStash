@@ -1,3 +1,22 @@
+"""Reading an OctoPrint printer's state, where "done" is not one field.
+
+OctoPrint reports progress and a set of activity flags separately, and the
+combination is what means something. A completion of 100% with no active flag is
+finished; 100% with `printing` still set is a print about to finish. Reading the
+percentage alone marks a job complete while the nozzle is still moving, which
+ends the job record early and lets the queue dispatch the next print onto a busy
+machine.
+
+So the normalisation rows cover each state the flags can express, and the
+progress rows cover the boundary in both directions.
+
+The error mapping is the other half. Every failure the client can surface gets a
+*stable code*, because callers branch on it: an auth failure triggers exactly one
+credential prompt, a 409 means "no active job" rather than a fault, and anything
+unrecognised must not be reported as success. OctoPrint is a beta provider, so
+what it cannot do is as much a part of the contract as what it can.
+"""
+
 import asyncio
 from pathlib import Path
 

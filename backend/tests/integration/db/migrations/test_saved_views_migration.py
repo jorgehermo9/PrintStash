@@ -1,3 +1,14 @@
+"""An additive migration that a self-hoster can also step back from.
+
+Saved views were added to an existing schema, so the migration has to be purely
+additive — touching an existing column would rewrite data on every instance that
+upgrades — and reversible, because an operator who upgrades onto a release with a
+problem needs a way back to the one that worked.
+
+One test, asserting both halves against a real database: applied, then reverted,
+with the pre-existing rows unchanged.
+"""
+
 from pathlib import Path
 
 from alembic.config import Config

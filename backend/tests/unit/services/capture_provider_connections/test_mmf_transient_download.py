@@ -1,3 +1,12 @@
+"""A signed download URL is a credential with a short life.
+
+MyMiniFactory returns a pre-signed URL to fetch a file. Two properties follow, and
+both are asserted here: it is **transient**, so it is used immediately rather than
+stored anywhere it could leak or outlive its validity, and it must be **public
+HTTPS** — a non-public host means the download is being aimed back inside the
+network, and plain HTTP means the credential travels in clear text.
+"""
+
 from __future__ import annotations
 
 import asyncio

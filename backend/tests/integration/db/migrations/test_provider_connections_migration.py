@@ -1,3 +1,17 @@
+"""Deleting a user must take their provider credentials with them.
+
+Provider connection and pairing rows hold OAuth tokens belonging to one user. If
+a hard delete leaves them behind, the credentials outlive the account — a data
+retention problem, and rows that point at a user id that no longer exists.
+
+The cascade is asserted against a real delete rather than the schema, because a
+declared `ondelete` that the ORM overrides on its own relationship is a cascade
+that does not happen.
+
+The second row checks the migration is *structural* both ways: an upgrade and a
+downgrade that change data are a downgrade nobody can safely run.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

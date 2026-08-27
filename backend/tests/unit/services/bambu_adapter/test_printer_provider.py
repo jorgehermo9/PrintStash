@@ -1,3 +1,23 @@
+"""What each provider can honestly do, and which printer a row actually is.
+
+Two things this file defends, both of which are promises to the user rather than
+internal detail.
+
+**Capabilities are a contract, not a hope.** The UI builds its controls from this
+block: a printer that reports `can_pause` gets a pause button. Reporting a
+capability the provider does not really have produces a button that fails when
+pressed, mid-print, on hardware — so the beta providers are asserted to be
+*honest*, listing what they cannot do rather than claiming the full set. The
+support level is part of that: `docs/provider-support.md` is what a user reads
+before buying a printer, and it has to match what the code says.
+
+**Model detection is a guess that must fail closed.** A Bambu serial prefix and
+an Elegoo `provider_variant` each identify a specific machine, and the detected
+name reaches the UI as fact. An unrecognised prefix therefore returns `None`
+rather than a nearest match: showing the wrong printer model is worse than
+showing none, because a user configures profiles from it.
+"""
+
 from __future__ import annotations
 
 import asyncio
