@@ -220,7 +220,9 @@ def test_concurrent_identical_provenance_capture_converges_at_savepoints(
             )
             # This write occurs *after* the raced savepoints.  It proves that
             # retrying a unique insert did not abort the outer transaction.
-            session.add(User(username=f"pg-provenance-outer-{index}", hashed_password="x"))
+            session.add(
+                User(username=f"pg-provenance-outer-{index}", hashed_password="x")
+            )
             session.commit()
             assert link.id is not None
             return link.id
@@ -230,23 +232,31 @@ def test_concurrent_identical_provenance_capture_converges_at_savepoints(
 
     assert link_ids[0] == link_ids[1]
     with Session(postgres_engine) as session:
-        assert len(
-            session.exec(
-                select(ModelProvenanceSource).where(
-                    ModelProvenanceSource.model_id == model_id
-                )
-            ).all()
-        ) == 1
+        assert (
+            len(
+                session.exec(
+                    select(ModelProvenanceSource).where(
+                        ModelProvenanceSource.model_id == model_id
+                    )
+                ).all()
+            )
+            == 1
+        )
         assert len(session.exec(select(ProvenanceCapture)).all()) == 1
         assert len(session.exec(select(ArtifactProvenanceLink)).all()) == 1
-        assert len(session.exec(select(File).where(File.model_id == model_id)).all()) == 1
-        assert len(
-            [
-                user
-                for user in session.exec(select(User)).all()
-                if user.username.startswith("pg-provenance-outer-")
-            ]
-        ) == 2
+        assert (
+            len(session.exec(select(File).where(File.model_id == model_id)).all()) == 1
+        )
+        assert (
+            len(
+                [
+                    user
+                    for user in session.exec(select(User)).all()
+                    if user.username.startswith("pg-provenance-outer-")
+                ]
+            )
+            == 2
+        )
 
 
 @pytest.mark.asyncio

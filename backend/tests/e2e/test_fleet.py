@@ -129,7 +129,9 @@ async def test_queue_jobs_can_be_edited_reordered_and_deleted_via_real_api(
     summary = (await api.get("/api/v1/fleet/summary", headers=superuser_headers)).json()
     assert summary["queued_jobs"] == 0
     assert summary["active_jobs"] == 0
-    assert (await api.get("/api/v1/fleet/queue", headers=superuser_headers)).json() == []
+    assert (
+        await api.get("/api/v1/fleet/queue", headers=superuser_headers)
+    ).json() == []
 
 
 @pytest.mark.asyncio

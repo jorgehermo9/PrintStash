@@ -67,7 +67,9 @@ async def test_quick_audit_finds_and_repairs_missing_thumbnail(api, tmp_path, e2
         headers=headers,
     )
     assert upload.status_code == 202, upload.text
-    assert (await _await_job(api, headers, upload.json()["job_id"]))["state"] == "completed"
+    assert (await _await_job(api, headers, upload.json()["job_id"]))[
+        "state"
+    ] == "completed"
 
     model = e2e_db.exec(select(Model).where(Model.name == "Audit fixture")).one()
     assert model.thumbnail_file_id is not None
@@ -85,7 +87,11 @@ async def test_quick_audit_finds_and_repairs_missing_thumbnail(api, tmp_path, e2
         f"/api/v1/maintenance/audits/{started.json()['id']}", headers=headers
     )
     assert audited.status_code == 200, audited.text
-    finding = next(item for item in audited.json()["findings"] if item["code"] == "thumbnail_missing")
+    finding = next(
+        item
+        for item in audited.json()["findings"]
+        if item["code"] == "thumbnail_missing"
+    )
     assert finding["repair_action"] == "regenerate_thumbnail"
 
     repaired = await api.post(
@@ -103,4 +109,6 @@ async def test_quick_audit_finds_and_repairs_missing_thumbnail(api, tmp_path, e2
         f"/api/v1/maintenance/audits/{rerun.json()['id']}", headers=headers
     )
     assert healthy.status_code == 200, healthy.text
-    assert "thumbnail_missing" not in {item["code"] for item in healthy.json()["findings"]}
+    assert "thumbnail_missing" not in {
+        item["code"] for item in healthy.json()["findings"]
+    }

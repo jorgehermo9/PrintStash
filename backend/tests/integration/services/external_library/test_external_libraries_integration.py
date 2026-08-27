@@ -33,7 +33,6 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.core.time import utcnow
 from app.db.models import (
-    ExternalLibrary,
     ExternalLibraryCollectionMode,
     ExternalLibraryScanStatus,
     File,
@@ -45,6 +44,7 @@ from app.services import external_library, runtime_config, taxonomy, trash
 from app.services.ingestion import add_gcode_revision_to_model, ingest_orca_gcode
 from app.services.jobs import registry
 from tests._env import use_local_storage
+from tests.factories import build_external_library
 from tests.paths import FIXTURES_DIR, TESTDATA_DIR
 
 
@@ -175,14 +175,6 @@ def _enable_feature(session: Session) -> None:
     runtime_config.set_external_libraries_enabled(session, True)
 
 
-def _make_library(session: Session, root: Path, **kw) -> ExternalLibrary:
-    lib = ExternalLibrary(name="nas", root_path=str(root), **kw)
-    session.add(lib)
-    session.commit()
-    session.refresh(lib)
-    return lib
-
-
 def _gcode_bytes(marker: str = "") -> bytes:
     """Fixture g-code plus a unique trailer so each marker hashes distinctly
     (a distinct sha256 → a distinct deduplicated Model)."""
@@ -231,7 +223,7 @@ def test_hard_delete_model_never_destroys_nas_bytes(
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "precious.gcode", marker="keep-me")
     original_bytes = path.read_bytes()
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
 
     f = _external_files(db_session)[0]
@@ -255,7 +247,7 @@ def test_gc_never_deletes_external_blobs(tmp_path: Path, db_session: Session) ->
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "onnas.gcode", marker="gc")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
 
     trash.gc_soft_deleted(retention_days=0)
@@ -277,8 +269,11 @@ def test_write_back_never_overwrites_existing_nas_file(
     nas.mkdir(parents=True)
     precious = nas / "part.gcode"
     precious.write_bytes(b"; HAND-PLACED USER FILE - do not touch\n")
-    lib = _make_library(
-        db_session, nas, collection_mode=ExternalLibraryCollectionMode.MIRROR
+    lib = build_external_library(
+        db_session,
+        nas,
+        name="nas",
+        collection_mode=ExternalLibraryCollectionMode.MIRROR,
     )
 
     staged = _stage("part.gcode", _gcode_bytes("upload"))
@@ -312,8 +307,11 @@ def test_write_back_rejects_collection_symlink_escape(
     nas.mkdir(parents=True)
     outside.mkdir()
     (nas / "escaped").symlink_to(outside, target_is_directory=True)
-    lib = _make_library(
-        db_session, nas, collection_mode=ExternalLibraryCollectionMode.MIRROR
+    lib = build_external_library(
+        db_session,
+        nas,
+        name="nas",
+        collection_mode=ExternalLibraryCollectionMode.MIRROR,
     )
 
     staged = _stage("part.gcode", _gcode_bytes("escape"))
@@ -346,7 +344,7 @@ def test_scan_indexes_mixed_mesh_and_gcode(tmp_path: Path, db_session: Session) 
     nas = tmp_path / "nas"
     _drop_stl(nas, "bracket.stl")
     _drop_gcode(nas, "bracket.gcode", marker="g")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     summary = external_library.scan_library(lib.id)
 
@@ -381,7 +379,7 @@ def test_scan_indexes_but_skips_over_cap_mesh(
     # Force the file over the triangle cap so the real guard fires on a real file.
     monkeypatch.setitem(_overlay, "mesh_max_render_triangles", len(mesh.faces) // 2)
     monkeypatch.setitem(_overlay, "mesh_max_load_mb", 0)
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     summary = external_library.scan_library(lib.id)
 
@@ -412,8 +410,11 @@ def test_deep_nested_folders_build_collection_hierarchy(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas / "mechanical" / "brackets" / "v2", "corner.gcode", marker="deep")
-    lib = _make_library(
-        db_session, nas, collection_mode=ExternalLibraryCollectionMode.MIRROR
+    lib = build_external_library(
+        db_session,
+        nas,
+        name="nas",
+        collection_mode=ExternalLibraryCollectionMode.MIRROR,
     )
 
     external_library.scan_library(lib.id)
@@ -438,9 +439,10 @@ def test_single_collection_mode_ignores_folder_structure(
     nas = tmp_path / "nas"
     _drop_gcode(nas / "sub-a", "one.gcode", marker="a")
     _drop_gcode(nas / "sub-b" / "deeper", "two.gcode", marker="b")
-    lib = _make_library(
+    lib = build_external_library(
         db_session,
         nas,
+        name="nas",
         collection_mode=ExternalLibraryCollectionMode.SINGLE,
         target_collection_id=coll.id,
     )
@@ -464,7 +466,7 @@ def test_file_moved_within_nas_is_reconciled(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     old_path = _drop_gcode(nas / "incoming", "widget.gcode", marker="move")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
     assert len(_external_files(db_session)) == 1
 
@@ -490,7 +492,7 @@ def test_mtime_touch_without_content_change_is_skipped(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "stable.gcode", marker="touch")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
     before = _external_files(db_session)[0]
     old_sha = before.sha256
@@ -519,7 +521,7 @@ def test_per_file_error_is_isolated_and_scan_continues(
     _drop_gcode(nas, "good-1.gcode", marker="g1")
     _drop_gcode(nas, "bad.gcode", marker="g2")
     _drop_gcode(nas, "good-2.gcode", marker="g3")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     real_index = external_library._index_external_file
 
@@ -547,7 +549,7 @@ def test_clean_scan_reports_ok(tmp_path: Path, db_session: Session) -> None:
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "good.gcode", marker="ok")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     external_library.scan_library(lib.id)
 
@@ -565,7 +567,7 @@ def test_unexpected_failure_never_strands_scan_running(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "any.gcode", marker="x")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     def boom(_root):  # the walk itself fails, outside any per-file try/except
         raise OSError("transport endpoint is not connected")
@@ -592,7 +594,7 @@ def test_mtime_jitter_within_tolerance_skips_rehash(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "stable.gcode", marker="jitter")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
 
     # Nudge mtime by less than the tolerance (content identical).
@@ -625,8 +627,11 @@ def test_revision_is_written_back_into_library(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "bracket.gcode", marker="v1")
-    lib = _make_library(
-        db_session, nas, collection_mode=ExternalLibraryCollectionMode.MIRROR
+    lib = build_external_library(
+        db_session,
+        nas,
+        name="nas",
+        collection_mode=ExternalLibraryCollectionMode.MIRROR,
     )
     external_library.scan_library(lib.id)
     model = db_session.get(Model, _external_files(db_session)[0].model_id)
@@ -666,25 +671,32 @@ def test_scheduler_selects_only_due_libraries(
     _enable_feature(db_session)
     now = utcnow()
 
-    never = _make_library(db_session, tmp_path / "never", enabled=True)
-    manual = _make_library(
+    never = build_external_library(
+        db_session, tmp_path / "never", name="nas", enabled=True
+    )
+    manual = build_external_library(
         db_session,
         tmp_path / "manual",
+        name="nas",
         enabled=True,
         scan_schedule="",  # manual only → never auto-due
         last_scanned_at=now - timedelta(hours=2),
     )
-    stale = _make_library(
+    stale = build_external_library(
         db_session,
         tmp_path / "stale",
+        name="nas",
         enabled=True,
         scan_schedule="0 * * * *",  # hourly; 2h elapsed → a boundary has passed
         last_scanned_at=now - timedelta(hours=2),
     )
-    disabled = _make_library(db_session, tmp_path / "disabled", enabled=False)
-    running = _make_library(
+    disabled = build_external_library(
+        db_session, tmp_path / "disabled", name="nas", enabled=False
+    )
+    running = build_external_library(
         db_session,
         tmp_path / "running",
+        name="nas",
         enabled=True,
         last_scan_status=ExternalLibraryScanStatus.RUNNING,
     )
@@ -742,7 +754,7 @@ def test_scan_real_world_folder(tmp_path: Path, db_session: Session) -> None:
     expected = _supported_files(root)
     assert expected, f"no supported model/g-code files found under {root}"
 
-    lib = _make_library(db_session, root)
+    lib = build_external_library(db_session, root, name="nas")
     summary = external_library.scan_library(lib.id)
 
     assert summary["aborted"] is False

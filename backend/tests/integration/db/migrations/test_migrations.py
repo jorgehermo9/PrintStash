@@ -271,9 +271,7 @@ def test_inbox_job_set_null_migration_preserves_completed_history(
 
 def test_bambu_identity_grouping_rejects_fast_reprints_and_transitive_chains() -> None:
     migration_path = (
-        ALEMBIC_DIR
-        / "versions"
-        / "f8a6c2d9e1b4_bambu_job_identity_repair.py"
+        ALEMBIC_DIR / "versions" / "f8a6c2d9e1b4_bambu_job_identity_repair.py"
     )
     spec = spec_from_file_location("bambu_identity_repair", migration_path)
     assert spec is not None and spec.loader is not None

@@ -29,9 +29,7 @@ from app.services import provenance, storage_backend
 from app.services.setup_token import current_setup_token
 from tests.paths import FIXTURES_DIR
 
-FIXTURE = (
-    FIXTURES_DIR / "real_orca_ender3_benchy.gcode"
-)
+FIXTURE = FIXTURES_DIR / "real_orca_ender3_benchy.gcode"
 
 
 async def _setup_instance(

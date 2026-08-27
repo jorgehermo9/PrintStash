@@ -1065,9 +1065,7 @@ class TestDecodeResult:
             is None
         )
 
-    def test_refuses_a_decompression_bomb_without_raising(
-        self, tmp_path: Path
-    ) -> None:
+    def test_refuses_a_decompression_bomb_without_raising(self, tmp_path: Path) -> None:
         # A few hundred bytes that declare 30000x30000 pixels. Pillow raises
         # DecompressionBombError — not an OSError — straight out of `open()`, and
         # the bare `except Exception` is the only thing keeping a hostile worker

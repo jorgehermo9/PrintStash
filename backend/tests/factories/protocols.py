@@ -101,7 +101,7 @@ class MakeFile(Protocol):
         self,
         model: Model,
         *,
-        file_type: FileType = ...,
+        file_type: FileType | None = None,
         filename: str | None = None,
         recommended: bool = False,
         status: FileRevisionStatus | None = None,

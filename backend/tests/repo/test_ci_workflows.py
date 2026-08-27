@@ -70,9 +70,7 @@ def test_publish_builds_each_platform_on_its_native_runner() -> None:
     rows = job["strategy"]["matrix"]["include"]
 
     assert len(rows) == 6
-    assert {
-        (row["image"], row["platform"], row["runner"]) for row in rows
-    } == {
+    assert {(row["image"], row["platform"], row["runner"]) for row in rows} == {
         ("printstash-api", "linux/amd64", "ubuntu-latest"),
         ("printstash-api", "linux/arm64", "ubuntu-24.04-arm"),
         ("printstash-api-lite", "linux/amd64", "ubuntu-latest"),

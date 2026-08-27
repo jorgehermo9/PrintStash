@@ -130,7 +130,9 @@ async def test_username_collision_gets_a_unique_suffix(api, idp, e2e_db):
     assert callback.headers["location"] == "/login?oidc=success"
 
     e2e_db.expire_all()
-    provisioned = e2e_db.exec(select(User).where(User.oidc_subject == "e2e-user-3")).one()
+    provisioned = e2e_db.exec(
+        select(User).where(User.oidc_subject == "e2e-user-3")
+    ).one()
     assert provisioned.username != "grillmaster"
     assert provisioned.username.startswith("grillmaster")
 
@@ -141,12 +143,22 @@ async def test_state_mismatch_is_rejected(api, idp, e2e_db):
     _state, nonce = await _begin_login(api)
 
     code = idp.issue_code(
-        {"sub": "e2e-user-4", "aud": "printstash-e2e", "nonce": nonce, "preferred_username": "sneaky"}
+        {
+            "sub": "e2e-user-4",
+            "aud": "printstash-e2e",
+            "nonce": nonce,
+            "preferred_username": "sneaky",
+        }
     )
-    callback = await api.get(f"/api/v1/auth/oidc/callback?code={code}&state=not-the-real-state")
+    callback = await api.get(
+        f"/api/v1/auth/oidc/callback?code={code}&state=not-the-real-state"
+    )
     assert callback.status_code == 302
     assert callback.headers["location"] == "/login?oidc_error=invalid_state"
     assert "printstash_session=" not in callback.headers.get("set-cookie", "")
 
     e2e_db.expire_all()
-    assert e2e_db.exec(select(User).where(User.oidc_subject == "e2e-user-4")).first() is None
+    assert (
+        e2e_db.exec(select(User).where(User.oidc_subject == "e2e-user-4")).first()
+        is None
+    )

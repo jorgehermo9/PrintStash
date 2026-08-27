@@ -34,9 +34,14 @@ def test_readme_roundtrip_and_image_lifecycle(
     h = bearer(editor)
 
     # Set + read back the markdown.
-    r = client.put(f"/api/v1/collections/{col.id}/readme", json={"readme": "# Notes"}, headers=h)
+    r = client.put(
+        f"/api/v1/collections/{col.id}/readme", json={"readme": "# Notes"}, headers=h
+    )
     assert r.status_code == 200
-    assert client.get(f"/api/v1/collections/{col.id}/readme", headers=h).json()["readme"] == "# Notes"
+    assert (
+        client.get(f"/api/v1/collections/{col.id}/readme", headers=h).json()["readme"]
+        == "# Notes"
+    )
 
     # Upload an image; the returned URL serves the bytes back.
     up = client.post(
@@ -67,15 +72,27 @@ def test_readme_rbac(db_session: Session, client: TestClient, tmp_path: Path) ->
     outsider = build_user(db_session, "outsider")
 
     # VIEW can read but not write.
-    assert client.get(f"/api/v1/collections/{col.id}/readme", headers=bearer(viewer)).status_code == 200
+    assert (
+        client.get(
+            f"/api/v1/collections/{col.id}/readme", headers=bearer(viewer)
+        ).status_code
+        == 200
+    )
     assert (
         client.put(
-            f"/api/v1/collections/{col.id}/readme", json={"readme": "x"}, headers=bearer(viewer)
+            f"/api/v1/collections/{col.id}/readme",
+            json={"readme": "x"},
+            headers=bearer(viewer),
         ).status_code
         == 403
     )
     # No grant at all → no read.
-    assert client.get(f"/api/v1/collections/{col.id}/readme", headers=bearer(outsider)).status_code == 403
+    assert (
+        client.get(
+            f"/api/v1/collections/{col.id}/readme", headers=bearer(outsider)
+        ).status_code
+        == 403
+    )
     # Path-traversal-shaped image name is rejected before any disk access.
     assert (
         client.get(

@@ -54,7 +54,9 @@ def oversized_gcode(min_bytes: int = 1_200_000) -> bytes:
     return MINIMAL_GCODE + padding * (min_bytes // len(padding) + 1)
 
 
-def binary_stl(*, triangles: int = 12, offset: tuple[float, float, float] = (0, 0, 0)) -> bytes:
+def binary_stl(
+    *, triangles: int = 12, offset: tuple[float, float, float] = (0, 0, 0)
+) -> bytes:
     """A valid binary STL of *triangles* facets, laid out in a readable grid.
 
     `offset` translates the whole mesh, which is how a test checks that framing
@@ -67,10 +69,18 @@ def binary_stl(*, triangles: int = 12, offset: tuple[float, float, float] = (0, 
         z = offset[2]
         facets.append(
             _STL_TRIANGLE.pack(
-                0.0, 0.0, 1.0,
-                x, y, z,
-                x + 0.8, y, z,
-                x, y + 0.8, z,
+                0.0,
+                0.0,
+                1.0,
+                x,
+                y,
+                z,
+                x + 0.8,
+                y,
+                z,
+                x,
+                y + 0.8,
+                z,
                 0,
             )
         )

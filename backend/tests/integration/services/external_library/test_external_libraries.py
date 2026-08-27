@@ -24,23 +24,14 @@ from app.db.scopes import live
 from app.services import external_library, runtime_config
 from app.services.ingestion import ingest_orca_gcode
 from tests._env import use_local_storage
+from tests.factories import build_external_library
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
 
 
-
-
 def _enable_feature(session: Session) -> None:
     runtime_config.set_external_libraries_enabled(session, True)
-
-
-def _make_library(session: Session, root: Path, **kw) -> ExternalLibrary:
-    lib = ExternalLibrary(name="nas", root_path=str(root), **kw)
-    session.add(lib)
-    session.commit()
-    session.refresh(lib)
-    return lib
 
 
 def _drop_gcode(dest_dir: Path, name: str) -> Path:
@@ -58,7 +49,7 @@ def test_scan_indexes_new_files_and_mirrors_collections(
     nas = tmp_path / "nas"
     _drop_gcode(nas / "functional", "bracket.gcode")
     _drop_gcode(nas, "loose.gcode")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     summary = external_library.scan_library(lib.id)
 
@@ -86,7 +77,7 @@ def test_rescan_is_idempotent(tmp_path: Path, db_session: Session) -> None:
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "a.gcode")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     external_library.scan_library(lib.id)
     summary = external_library.scan_library(lib.id)
@@ -102,7 +93,7 @@ def test_scan_coalesces_while_another_claim_is_active(
     use_local_storage(tmp_path)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "a.gcode")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     lib.scan_claim_token = "active-claim"
     lib.scan_claim_expires_at = utcnow() + timedelta(minutes=5)
     lib.scan_job_id = "existing-job"
@@ -122,7 +113,7 @@ def test_changed_content_reindexes_same_row(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "a.gcode")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     external_library.scan_library(lib.id)
     before = db_session.exec(select(File).where(File.is_external == True)).all()  # noqa: E712
@@ -151,7 +142,7 @@ def test_reindex_metadata_failure_does_not_confirm_new_signature(
     use_local_storage(tmp_path)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "atomic.gcode")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
     file_row = db_session.exec(
         select(File).where(File.original_filename == "atomic.gcode")
@@ -193,7 +184,7 @@ def test_removed_file_is_trashed_and_model_soft_deleted(
     stays = _drop_gcode(nas, "stays.gcode")
     with stays.open("ab") as fh:
         fh.write(b"\n; distinct content\nG1 X5 Y5\n")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
 
     f = db_session.exec(
@@ -219,7 +210,7 @@ def test_unmounted_root_aborts_without_deleting(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     _drop_gcode(nas, "keep.gcode")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
 
     # Simulate an unmount: the whole root disappears.
@@ -245,7 +236,7 @@ def test_empty_root_with_indexed_files_aborts(
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     path = _drop_gcode(nas, "keep.gcode")
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
 
     # Root still exists but is empty (e.g. NAS share mounted but unpopulated).
@@ -265,8 +256,11 @@ def test_write_back_lands_in_nas_folder(tmp_path: Path, db_session: Session) -> 
     _enable_feature(db_session)
     nas = tmp_path / "nas"
     nas.mkdir(parents=True)
-    lib = _make_library(
-        db_session, nas, collection_mode=ExternalLibraryCollectionMode.MIRROR
+    lib = build_external_library(
+        db_session,
+        nas,
+        name="nas",
+        collection_mode=ExternalLibraryCollectionMode.MIRROR,
     )
 
     # Stage an upload and route it into the library (write-back).
@@ -336,7 +330,7 @@ def test_watch_mode_persisted_as_enum_name(tmp_path: Path, db_session: Session) 
 
     nas = tmp_path / "nas"
     nas.mkdir()
-    lib = _make_library(db_session, nas, watch_mode=WM.AUTO)
+    lib = build_external_library(db_session, nas, name="nas", watch_mode=WM.AUTO)
     raw = db_session.execute(
         text("SELECT watch_mode FROM external_libraries WHERE id = :id"),
         {"id": lib.id},
@@ -345,7 +339,6 @@ def test_watch_mode_persisted_as_enum_name(tmp_path: Path, db_session: Session) 
 
 
 def test_detect_fs_kind_and_should_watch(tmp_path: Path) -> None:
-    from app.db.models import ExternalLibrary
     from app.db.models import ExternalLibraryWatchMode as WM
 
     # tmp_path is a local filesystem on the test host.
@@ -377,7 +370,7 @@ def test_feature_disabled_keeps_uploads_in_vault(
     # Feature OFF (default). Even with a target_library_id the blob stays in vault.
     nas = tmp_path / "nas"
     nas.mkdir(parents=True)
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     staged = Path(_overlay["staging_dir"]) / "_incoming" / f"{uuid.uuid4().hex}.gcode"
     shutil.copy(FIXTURE_GCODE, staged)
@@ -405,7 +398,7 @@ def test_to_read_handles_corrupt_scan_summary_json(
 ) -> None:
     nas = tmp_path / "nas"
     nas.mkdir()
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     lib.last_scan_summary = "{not valid json"
     db_session.add(lib)
     db_session.commit()

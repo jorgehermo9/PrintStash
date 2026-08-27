@@ -33,7 +33,9 @@ class FakeOIDCProvider:
     """Mutable state for one fake IdP instance."""
 
     def __init__(self) -> None:
-        self._private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self._private_key = rsa.generate_private_key(
+            public_exponent=65537, key_size=2048
+        )
         self.kid = "e2e-signing-key"
         self.issuer = ""  # set once the loopback server is listening
         self._pending_codes: dict[str, dict[str, Any]] = {}
@@ -45,7 +47,9 @@ class FakeOIDCProvider:
         return code
 
     def _jwk(self) -> dict[str, Any]:
-        jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(self._private_key.public_key()))
+        jwk = json.loads(
+            jwt.algorithms.RSAAlgorithm.to_jwk(self._private_key.public_key())
+        )
         jwk["kid"] = self.kid
         jwk["use"] = "sig"
         jwk["alg"] = "RS256"
@@ -87,7 +91,11 @@ def build_app(state: FakeOIDCProvider) -> Starlette:
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
         id_token = state._mint_id_token(claims)
         return JSONResponse(
-            {"access_token": secrets.token_urlsafe(16), "id_token": id_token, "token_type": "Bearer"}
+            {
+                "access_token": secrets.token_urlsafe(16),
+                "id_token": id_token,
+                "token_type": "Bearer",
+            }
         )
 
     return Starlette(

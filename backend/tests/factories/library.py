@@ -69,7 +69,7 @@ def build_file(
     session: Session,
     model: Model,
     *,
-    file_type: FileType = FileType.GCODE,
+    file_type: FileType | None = None,
     filename: str | None = None,
     recommended: bool = False,
     status: FileRevisionStatus | None = None,
@@ -99,6 +99,7 @@ def build_file(
             "original_filename": "filename",
         },
     )
+    file_type = file_type or _type_from(filename)
     index = nth("file")
     version = overrides.pop("version", None)
     if version is None:
@@ -131,6 +132,26 @@ def build_file(
     if metadata is not None:
         build_metadata(session, row, **metadata)
     return row
+
+
+def _type_from(filename: str | None) -> FileType:
+    """Derive the artifact type from its extension, defaulting to G-code.
+
+    Named types and named filenames have to agree, and when they disagree the
+    result is quietly wrong rather than an error: a `File` row of type `GCODE`
+    called `part.stl` is skipped by every mesh path and picked up by every
+    G-code path, so a test builds what it thinks is a mesh and asserts against
+    a list that never contains it. That happened here. Deriving the type removes
+    the chance to disagree; pass `file_type=` explicitly when the mismatch is
+    the thing under test.
+    """
+    if filename is None:
+        return FileType.GCODE
+    suffix = filename.rsplit(".", 1)[-1].lower()
+    try:
+        return FileType(suffix)
+    except ValueError:
+        return FileType.GCODE
 
 
 def _demote_current_recommendation(session: Session, model: Model) -> None:

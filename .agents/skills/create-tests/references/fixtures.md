@@ -176,6 +176,24 @@ module-level `_build_*` function that duplicates a factory. Single-use setup tha
 is genuinely local stays inline in its test, not in a helper at the top of the
 file — a helper with one caller just moves the reader away from the assertion.
 
+## The migration ratchet
+
+`tests/repo/test_test_hygiene.py` enforces three rules, and two of them carry a
+list of files that have not been migrated yet:
+
+- `PENDING_INLINE_CONSTRUCTION` — files that still build rows by hand.
+- `PENDING_DUPLICATE_BUILDERS` — builder names still defined in more than one file.
+
+**Both lists may only shrink.** A companion test fails if a listed entry has
+already been cleaned up, so the counts are the real remaining debt rather than
+numbers somebody forgot to update. A *new* file or a *new* duplicate name fails
+immediately — the ratchet guards new code while the backlog drains.
+
+If you touch a listed file for any reason, migrating it is usually the cheapest
+part of the change: delete its local builder, call the factory, and make explicit
+whatever state the local default was hiding. Then remove its line from the list in
+the same commit.
+
 ## Environment fixtures
 
 Not every fixture is a row builder. `local_storage`, `backup_env`, `no_egress`

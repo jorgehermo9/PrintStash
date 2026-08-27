@@ -376,9 +376,7 @@ class TestGetDocument:
             headers=bearer(owner),
         ).json()
 
-        response = client.get(
-            f"/api/v1/documents/{doc['id']}", headers=bearer(viewer)
-        )
+        response = client.get(f"/api/v1/documents/{doc['id']}", headers=bearer(viewer))
 
         assert response.status_code == 200, response.text
 
@@ -530,9 +528,7 @@ class TestListDocumentTrash:
         client.delete(f"/api/v1/documents/{doc['id']}", headers=admin_headers)
         outsider = build_user(db_session, "trash-outsider")
 
-        trashed = client.get(
-            "/api/v1/documents/trash", headers=bearer(outsider)
-        ).json()
+        trashed = client.get("/api/v1/documents/trash", headers=bearer(outsider)).json()
 
         assert trashed == []
 

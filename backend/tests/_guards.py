@@ -15,7 +15,15 @@ from typing import Iterator
 import pytest
 
 DB_FIXTURES = frozenset(
-    {"db_session", "client", "app", "hub", "threaded_hub_db", "auth_headers", "db_factory"}
+    {
+        "db_session",
+        "client",
+        "app",
+        "hub",
+        "threaded_hub_db",
+        "auth_headers",
+        "db_factory",
+    }
 )
 
 
@@ -89,7 +97,9 @@ def block_real_network(request: pytest.FixtureRequest) -> Iterator[None]:
     def connect_ex(self: socket.socket, address: object) -> int:
         raise _blocked(node_id, "open a socket", address)
 
-    def getaddrinfo(host: object, port: object, *args: object, **kwargs: object) -> object:
+    def getaddrinfo(
+        host: object, port: object, *args: object, **kwargs: object
+    ) -> object:
         if isinstance(host, str) and _resolves_without_dns(host):
             return real_getaddrinfo(host, port, *args, **kwargs)
         raise _blocked(node_id, "resolve a hostname", host)

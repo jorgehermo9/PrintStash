@@ -29,6 +29,7 @@ from app.services.ingestion import ingest_orca_gcode
 from app.services.storage_backend import get_backend
 from app.services.storage_deletion import process_storage_delete_intents
 from tests._env import use_local_storage
+from tests.factories import build_external_library
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
@@ -36,14 +37,6 @@ FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
 
 def _enable_feature(session: Session) -> None:
     runtime_config.set_external_libraries_enabled(session, True)
-
-
-def _make_library(session: Session, root: Path, **kw) -> ExternalLibrary:
-    lib = ExternalLibrary(name="nas", root_path=str(root), **kw)
-    session.add(lib)
-    session.commit()
-    session.refresh(lib)
-    return lib
 
 
 def _drop(dest_dir: Path, name: str, data: bytes) -> Path:
@@ -88,7 +81,7 @@ def _make_mixed_model(
     # 2) Identical bytes on the NAS, then a scan → dedup attaches it externally.
     nas = tmp_path / "nas"
     _drop(nas, "shared.gcode", payload)
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
 
     db_session.expire_all()
@@ -210,7 +203,7 @@ def test_scan_dedups_identical_nas_files_into_one_model(
     nas = tmp_path / "nas"
     _drop(nas, "a.gcode", payload)
     _drop(nas, "b.gcode", payload)
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
 
     summary = external_library.scan_library(lib.id)
 
@@ -237,7 +230,7 @@ def test_scan_removing_one_duplicate_keeps_model_until_all_gone(
     nas = tmp_path / "nas"
     a = _drop(nas, "a.gcode", payload)
     b = _drop(nas, "b.gcode", payload)
-    lib = _make_library(db_session, nas)
+    lib = build_external_library(db_session, nas, name="nas")
     external_library.scan_library(lib.id)
     db_session.expire_all()
     model_id = (

@@ -31,11 +31,10 @@ from app.db.scopes import live
 from app.services import external_library, runtime_config
 from app.services.jobs import registry
 from tests._env import use_local_storage
+from tests.factories import build_external_library
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
-
-
 
 
 def _enable_feature(session: Session) -> None:
@@ -64,14 +63,6 @@ def _external_files(session: Session, *, live_only: bool = True) -> list[File]:
         stmt = stmt.where(live(File))
     session.expire_all()
     return list(session.exec(stmt).all())
-
-
-def _make_library(session: Session, root: Path, **kw) -> ExternalLibrary:
-    lib = ExternalLibrary(name="nas", root_path=str(root), **kw)
-    session.add(lib)
-    session.commit()
-    session.refresh(lib)
-    return lib
 
 
 class TestFeatureGate:
@@ -230,7 +221,7 @@ class TestUpdateLibrary:
         first_root.mkdir()
         second_root = tmp_path / "second"
         second_root.mkdir()
-        lib = _make_library(db_session, first_root)
+        lib = build_external_library(db_session, first_root, name="nas")
 
         resp = client.patch(
             f"/api/v1/libraries/{lib.id}",
@@ -259,7 +250,7 @@ class TestUpdateLibrary:
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         nas.mkdir()
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
 
         resp = client.patch(
             f"/api/v1/libraries/{lib.id}",
@@ -299,7 +290,7 @@ class TestDeleteLibrary:
         nas = tmp_path / "nas"
         p1 = _drop_gcode(nas, "a.gcode", marker="a")
         p2 = _drop_gcode(nas, "b.gcode", marker="b")
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
         lib_id = lib.id
         external_library.scan_library(lib_id)
         assert len(_external_files(db_session)) == 2
@@ -326,7 +317,7 @@ class TestScanNow:
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas, "a.gcode")
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
 
         resp = client.post(f"/api/v1/libraries/{lib.id}/scan", headers=auth_headers)
         assert resp.status_code == 202, resp.text
@@ -342,7 +333,7 @@ class TestScanNow:
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas, "a.gcode")
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
         lib.scan_claim_token = "held-by-a-running-scan"
         lib.scan_claim_expires_at = utcnow() + timedelta(minutes=30)
         lib.scan_job_id = "running-job"
@@ -364,7 +355,7 @@ class TestScanNow:
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas, "a.gcode")
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
         lib.scan_claim_token = "left-behind-by-a-killed-process"
         lib.scan_claim_expires_at = utcnow() - timedelta(minutes=1)
         lib.scan_job_id = "abandoned-job"
@@ -432,7 +423,7 @@ class TestScanPath:
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas / "functional", "bracket.gcode")
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
 
         resp = client.post(
             f"/api/v1/libraries/{lib.id}/scan-path",
@@ -464,7 +455,7 @@ class TestScanPath:
         nas = tmp_path / "nas"
         nas.mkdir()
         (tmp_path / "outside").mkdir()
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
 
         resp = client.post(
             f"/api/v1/libraries/{lib.id}/scan-path",
@@ -480,7 +471,7 @@ class TestScanPath:
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         nas.mkdir()
-        lib = _make_library(db_session, nas)
+        lib = build_external_library(db_session, nas, name="nas")
 
         resp = client.post(
             f"/api/v1/libraries/{lib.id}/scan-path",
@@ -501,7 +492,7 @@ class TestOverlapGuards:
         _enable_feature(db_session)
         inner = tmp_path / "nas" / "inner"
         inner.mkdir(parents=True)
-        _make_library(db_session, inner)
+        build_external_library(db_session, inner, name="nas")
 
         response = client.post(
             "/api/v1/libraries",

@@ -156,6 +156,27 @@ class TestBuildFile:
 
         assert artifact.id not in live_ids
 
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            pytest.param("part.stl", FileType.STL, id="stl"),
+            pytest.param("plate.3mf", FileType.THREE_MF, id="3mf"),
+            pytest.param("rev.gcode", FileType.GCODE, id="gcode"),
+        ],
+    )
+    def test_derives_the_type_from_the_filename(
+        self, db_session: Session, filename: str, expected: FileType
+    ) -> None:
+        model = factories.build_model(db_session)
+
+        artifact = factories.build_file(db_session, model, filename=filename)
+
+        # A `GCODE` row called `part.stl` is skipped by every mesh path and
+        # picked up by every G-code path, so a test builds what it believes is a
+        # mesh and asserts against a list that never contains it. Deriving the
+        # type removes the chance for the two to disagree.
+        assert artifact.file_type is expected
+
 
 class TestBuildUser:
     def test_is_not_a_superuser_by_default(self, db_session: Session) -> None:

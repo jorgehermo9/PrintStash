@@ -16,42 +16,16 @@ from app.db.models import (
     File,
     FileRevisionStatus,
     FileType,
-    Model,
     Printer,
     PrintJob,
     PrintJobState,
     ShareLink,
 )
+from tests.factories import build_file, build_model
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_model(db_session, *, name="M", slug="m", hash_="h" * 64) -> Model:
-    m = Model(name=name, slug=slug, hash=hash_)
-    db_session.add(m)
-    db_session.commit()
-    db_session.refresh(m)
-    return m
-
-
-def _make_file(
-    db_session, model, *, filename="part.stl", ftype="stl", version=1
-) -> File:
-    f = File(
-        model_id=model.id,
-        path=f"/data/{filename}",
-        original_filename=filename,
-        file_type=ftype,
-        version=version,
-        size_bytes=10,
-        sha256="a" * 64,
-    )
-    db_session.add(f)
-    db_session.commit()
-    db_session.refresh(f)
-    return f
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +214,7 @@ def test_extract_selected_only_returns_importable(tmp_path):
 
 class TestCompletionCapture:
     def _setup(self, db_session, *, revision_status=None):
-        m = _make_model(db_session, slug="cap", hash_="c" * 64)
+        m = build_model(db_session, "cap", slug="cap")
         f = File(
             model_id=m.id,
             path="/data/cap.gcode",
@@ -345,10 +319,10 @@ class TestShareIsolation:
     def test_public_view_and_token_only_grants_one_model(
         self, client, db_session, auth_headers
     ):
-        shared = _make_model(db_session, slug="shared", hash_="s" * 64)
-        _make_file(db_session, shared, filename="shared.stl")
-        other = _make_model(db_session, slug="other", hash_="o" * 64)
-        other_file = _make_file(db_session, other, filename="secret.stl")
+        shared = build_model(db_session, "shared", slug="shared")
+        build_file(db_session, shared, filename="shared.stl")
+        other = build_model(db_session, "other", slug="other")
+        other_file = build_file(db_session, other, filename="secret.stl")
 
         created = self._create_share(client, auth_headers, shared.id)
         token = created["token"]
@@ -356,14 +330,14 @@ class TestShareIsolation:
         # Public detail works without auth.
         res = client.get(f"/api/v1/share/{token}")
         assert res.status_code == 200
-        assert res.json()["name"] == "M"
+        assert res.json()["name"] == shared.name
 
         # A file from a different model is not reachable through this token.
         res = client.get(f"/api/v1/share/{token}/files/{other_file.id}/stl")
         assert res.status_code == 404
 
     def test_garbage_and_revoked_tokens_404(self, client, db_session, auth_headers):
-        m = _make_model(db_session, slug="rev", hash_="r" * 64)
+        m = build_model(db_session, "rev", slug="rev")
         created = self._create_share(client, auth_headers, m.id)
         token = created["token"]
 
@@ -378,7 +352,7 @@ class TestShareIsolation:
 
         from app.core.time import utcnow
 
-        m = _make_model(db_session, slug="exp", hash_="e" * 64)
+        m = build_model(db_session, "exp", slug="exp")
         created = self._create_share(client, auth_headers, m.id)
         link = db_session.get(ShareLink, created["id"])
         link.expires_at = utcnow() - timedelta(days=1)
@@ -387,8 +361,8 @@ class TestShareIsolation:
         assert client.get(f"/api/v1/share/{created['token']}").status_code == 404
 
     def test_download_blocked_when_view_only(self, client, db_session, auth_headers):
-        m = _make_model(db_session, slug="dl", hash_="d" * 64)
-        f = _make_file(db_session, m, filename="dl.stl")
+        m = build_model(db_session, "dl", slug="dl")
+        f = build_file(db_session, m, filename="dl.stl")
         created = self._create_share(client, auth_headers, m.id, allow_download=False)
         res = client.get(f"/api/v1/share/{created['token']}/files/{f.id}/download")
         assert res.status_code == 403
@@ -396,13 +370,13 @@ class TestShareIsolation:
     def test_share_can_scope_to_selected_gcode_revisions(
         self, client, db_session, auth_headers
     ):
-        m = _make_model(db_session, slug="scope", hash_="q" * 64)
-        mesh = _make_file(db_session, m, filename="part.stl", version=1)
-        rev1 = _make_file(
-            db_session, m, filename="rev1.gcode", ftype="gcode", version=2
+        m = build_model(db_session, "scope", slug="scope")
+        mesh = build_file(db_session, m, filename="part.stl", version=1)
+        rev1 = build_file(
+            db_session, m, filename="rev1.gcode", file_type=FileType.GCODE, version=2
         )
-        rev2 = _make_file(
-            db_session, m, filename="rev2.gcode", ftype="gcode", version=3
+        rev2 = build_file(
+            db_session, m, filename="rev2.gcode", file_type=FileType.GCODE, version=3
         )
         rev2.revision_label = "PLA fast"
         rev2.revision_status = FileRevisionStatus.KNOWN_GOOD
@@ -443,7 +417,7 @@ def test_stl_response_streams_raw_stl_without_buffering(db_session, tmp_path):
     data = b"solid raw\n" + b"x" * 4096 + b"\nendsolid raw\n"
     backend.write_bytes(data, str(blob))
 
-    m = _make_model(db_session, slug="rawstl", hash_="f" * 64)
+    m = build_model(db_session, "rawstl", slug="rawstl")
     f = File(
         model_id=m.id,
         path=str(blob),
@@ -479,7 +453,7 @@ def test_stl_response_honours_if_none_match(db_session, tmp_path):
     blob = tmp_path / "files" / "etag.stl"
     get_backend().write_bytes(b"solid etag\nendsolid etag\n", str(blob))
 
-    m = _make_model(db_session, slug="etag", hash_="e" * 64)
+    m = build_model(db_session, "etag", slug="etag")
     f = File(
         model_id=m.id,
         path=str(blob),

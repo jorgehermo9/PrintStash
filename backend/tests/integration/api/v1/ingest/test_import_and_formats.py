@@ -44,7 +44,10 @@ def _completed(client: TestClient, resp, headers: dict[str, str]) -> dict:
 
 
 def test_ingest_obj_creates_model(
-    tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
 ) -> None:
     use_local_storage(tmp_path)
     payload = _completed(
@@ -63,7 +66,10 @@ def test_ingest_obj_creates_model(
 
 
 def test_ingest_3mf_creates_model(
-    tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
 ) -> None:
     use_local_storage(tmp_path)
     payload = _completed(
@@ -82,7 +88,10 @@ def test_ingest_3mf_creates_model(
 
 
 def test_ingest_step_is_accepted_and_typed(
-    tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
 ) -> None:
     """A .step upload is accepted, routed to the CAD pipeline, and stored as STEP.
 
@@ -95,7 +104,13 @@ def test_ingest_step_is_accepted_and_typed(
     resp = client.post(
         "/api/v1/ingest/model",
         headers=auth_headers,
-        files={"file": ("part.step", b"ISO-10303-21;\nnot-a-real-step\n", "application/step")},
+        files={
+            "file": (
+                "part.step",
+                b"ISO-10303-21;\nnot-a-real-step\n",
+                "application/step",
+            )
+        },
         data={"model_name": "STEP Part"},
     )
     assert resp.status_code == 202, resp.text
@@ -125,7 +140,10 @@ def test_ingest_rejects_unsupported_type(
 
 
 def test_import_zip_archive_creates_models(
-    tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
 ) -> None:
     use_local_storage(tmp_path)
     buf = io.BytesIO()
@@ -189,7 +207,10 @@ def test_import_archive_select_unknown_id_404(
 
 
 def test_import_from_url_single_file(
-    tmp_path: Path, client: TestClient, db_session: Session, auth_headers: dict[str, str]
+    tmp_path: Path,
+    client: TestClient,
+    db_session: Session,
+    auth_headers: dict[str, str],
 ) -> None:
     use_local_storage(tmp_path)
 

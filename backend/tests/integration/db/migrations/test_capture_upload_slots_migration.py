@@ -12,8 +12,7 @@ from tests.paths import ALEMBIC_INI, BACKEND_DIR
 
 _MIGRATION_SPEC = importlib.util.spec_from_file_location(
     "fe17c8d1a0f2_capture_upload_slots",
-    BACKEND_DIR
-    / "alembic/versions/fe17c8d1a0f2_capture_upload_slots.py",
+    BACKEND_DIR / "alembic/versions/fe17c8d1a0f2_capture_upload_slots.py",
 )
 assert _MIGRATION_SPEC is not None and _MIGRATION_SPEC.loader is not None
 _MIGRATION = importlib.util.module_from_spec(_MIGRATION_SPEC)

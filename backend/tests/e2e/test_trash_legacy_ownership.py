@@ -53,4 +53,6 @@ async def test_trash_reports_size_and_purges_matching_pre_ledger_artifact(
     assert purged.status_code == 200, purged.text
     assert purged.json()["storage_completed"] == 1
     assert not path.exists()
-    assert (await api.get("/api/v1/models/trash", headers=superuser_headers)).json() == []
+    assert (
+        await api.get("/api/v1/models/trash", headers=superuser_headers)
+    ).json() == []

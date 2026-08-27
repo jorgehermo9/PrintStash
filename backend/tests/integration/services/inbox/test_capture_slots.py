@@ -896,7 +896,9 @@ class _BackgroundTaskRecorder:
 def test_import_route_rejects_invalid_v2_selection_before_scheduling(
     db_session: Session, requested: list[str]
 ) -> None:
-    owner = build_user(db_session, f"import-selection-route-{len(requested)}", superuser=True)
+    owner = build_user(
+        db_session, f"import-selection-route-{len(requested)}", superuser=True
+    )
     row = _make_item(
         db_session,
         owner,

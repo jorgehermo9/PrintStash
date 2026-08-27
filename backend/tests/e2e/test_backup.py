@@ -52,7 +52,9 @@ async def _upload_and_wait(api, headers, *, model_name: str) -> dict:
     assert up.status_code == 202, up.text
     job_id = up.json()["job_id"]
     for _ in range(50):
-        status = (await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)).json()
+        status = (
+            await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
+        ).json()
         if status["state"] in ("completed", "failed", "duplicate"):
             break
         await asyncio.sleep(0.05)
@@ -62,7 +64,9 @@ async def _upload_and_wait(api, headers, *, model_name: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_backup_wipe_restore_round_trips_through_the_real_api(api, tmp_path, e2e_db):
+async def test_backup_wipe_restore_round_trips_through_the_real_api(
+    api, tmp_path, e2e_db
+):
     headers = await _setup_and_login(api, tmp_path)
     model = await _upload_and_wait(api, headers, model_name="Backup Benchy")
     model_id = model["id"]
@@ -111,7 +115,9 @@ async def test_backup_wipe_restore_round_trips_through_the_real_api(api, tmp_pat
 @pytest.mark.asyncio
 async def test_restore_of_unknown_backup_id_is_404(api, tmp_path, e2e_db):
     headers = await _setup_and_login(api, tmp_path)
-    resp = await api.post("/api/v1/backups/not-a-real-backup-id/restore", headers=headers)
+    resp = await api.post(
+        "/api/v1/backups/not-a-real-backup-id/restore", headers=headers
+    )
     assert resp.status_code == 404
     assert resp.json()["detail"] == "backup_not_found"
 
