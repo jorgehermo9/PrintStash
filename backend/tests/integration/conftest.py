@@ -108,9 +108,22 @@ def user_headers(make_user: MakeUser, headers_for) -> UserHeaders:
     return make
 
 
+@pytest.fixture
+def backup_env(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """A file-based vault the backup service can read and rewrite as files.
+
+    Shared by `services/test_backup.py` and `api/v1/test_backup.py`; the harness itself
+    is `tests/integration/_backup_harness.py`.
+    """
+    from tests.integration._backup_harness import build_backup_env
+
+    yield from build_backup_env(tmp_path, monkeypatch)
+
+
 __all__ = [
     "MakeUser",
     "UserHeaders",
+    "backup_env",
     "block_real_network",
     "headers_for",
     "make_user",
