@@ -23,10 +23,9 @@ $EDITOR app/db/models.py
 #    sqlmodel's types as plain SQLAlchemy ones.
 cd backend && uv run alembic revision --autogenerate -m "add model.notes"
 
-# 3. Read it. Should be one `add_column`. If it is not, something drifted — read
-#    the extra operations before deleting them, they are telling you something.
+# 3. Read it — see "How to read a generated migration" below. Should be one
+#    `add_column`. Replace the generated docstring with what the change is for.
 $EDITOR alembic/versions/<rev>_add_model_notes.py
-#    Replace the generated docstring with what the change is for.
 
 # 4. Round-trip it.
 uv run alembic upgrade head && uv run alembic downgrade -1 && uv run alembic upgrade head
@@ -41,7 +40,7 @@ What each step is actually protecting:
 | Step | Without it |
 | --- | --- |
 | 1 before 2 | autogenerate has nothing to compare against and emits an empty migration |
-| 3 | the 890-line convergence migration ships as "add a column" |
+| 3 | the 890-line convergence migration ships as "add a column" — or a rename ships as a `remove_column`, which is silent data loss |
 | 3, docstring | the next person debugging an upgrade has your `-m` message and nothing else |
 | 4 downgrade | a rebuild that loses rows on the way back is found by a self-hoster |
 | 5 | see rule 4 below |
@@ -61,6 +60,58 @@ already leaves off.
 
 **Changing a column's nullability or type** is a rebuild too, so it goes down the
 constraint path, not the column path.
+
+## How to read a generated migration
+
+Step 3 above says "read it", which is only useful if you know what you are reading for.
+Autogenerate is a schema differ. It is very good at that and blind to everything else,
+and the blind spots have a shape worth memorising.
+
+### It cannot see a rename. It sees a deletion
+
+```python
+# You renamed `things.old_name` to `new_name`. Autogenerate emits:
+('add_column',    'things', Column('new_name', String(64)))
+('remove_column', 'things', Column('old_name', VARCHAR(64)))
+```
+
+Ship that and every value in the column is gone. There is no way for a differ to know
+the two are the same column, so **an `add_column` and a `remove_column` on the same
+table in the same migration is the one pattern to stop and stare at.** If it is a
+rename, replace both with `batch_op.alter_column("old_name", new_column_name="new_name")`
+— which is editing the generated file, not authoring DDL.
+
+The same applies to a table rename, and to splitting one column into two.
+
+### What each operation means, and the trap in it
+
+| You see | It means | Check |
+| --- | --- | --- |
+| `add_column` + `remove_column`, same table | a differ that cannot see renames | is it a rename? see above |
+| `alter_column(..., server_default=None)` | **dropping** an existing server default | the model has a Python-side default instead — fine through the ORM, and a raw `INSERT` omitting the column will now fail |
+| `alter_column(..., type_=sa.Enum(...))` | a `VARCHAR` becoming an enum, which on SQLite is a `VARCHAR` + `CHECK` | every stored value must satisfy the new constraint, or the rebuild fails. Repair first |
+| `alter_column(..., nullable=False)` | a NOT NULL over existing rows | any row holding NULL fails the rebuild. Backfill first |
+| `drop_index` + `create_index`, same name | a *definition* change, usually the `unique` flag | not churn — read both lines |
+| `drop_constraint` + `create_foreign_key`, same name | an `ondelete` or target change | which direction? `vault_audit_findings.run_id` was a real one: the chain had `CASCADE`, the models did not, and the models were the ones lagging |
+| any constraint or type change on SQLite | a table rebuild | needs foreign keys off, and the rebuild is what the repair/verify steps exist for |
+
+### What it never emits, so you always add it
+
+- **Anything about rows.** Repairs, backfills, and the verification that they worked.
+  A differ compares schemas.
+- **A docstring worth reading.** It writes your `-m` message. Replace it with what the
+  migration is for and what it assumes about the data it will meet.
+- **Triggers, views, and anything outside `target_metadata`.** Not compared, so not
+  emitted, so not dropped either — which cuts both ways.
+
+### The check that catches the rest
+
+Count the operations against the model change you made. One nullable column should be
+one `add_column`. If the file is bigger than the change, something drifted before you
+got here — read the extra operations rather than deleting them, because they are
+telling you the schemas were already apart. That is exactly how the 890-line
+convergence migration was found, and the parity tests now fail before it can happen
+again.
 
 ## Migrations
 
