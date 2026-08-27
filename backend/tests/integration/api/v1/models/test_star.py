@@ -106,6 +106,18 @@ class TestStarModel:
 
         assert response.status_code == 403, response.text
 
+    def test_reports_a_model_that_does_not_exist(
+        self, client: TestClient, auth_headers
+    ) -> None:
+        response = client.put("/api/v1/models/999999/star", headers=auth_headers)
+
+        assert response.status_code == 404, response.text
+
+    def test_rejects_an_unauthenticated_caller(
+        self, client: TestClient, model: Model
+    ) -> None:
+        assert client.put(f"/api/v1/models/{model.id}/star").status_code == 401
+
 
 class TestUnstarModel:
     def test_reports_the_model_as_unstarred(
@@ -118,6 +130,18 @@ class TestUnstarModel:
 
         assert response.status_code == 200, response.text
         assert response.json()["starred"] is False
+
+    def test_reports_a_model_that_does_not_exist(
+        self, client: TestClient, auth_headers
+    ) -> None:
+        response = client.delete("/api/v1/models/999999/star", headers=auth_headers)
+
+        assert response.status_code == 404, response.text
+
+    def test_rejects_an_unauthenticated_caller(
+        self, client: TestClient, model: Model
+    ) -> None:
+        assert client.delete(f"/api/v1/models/{model.id}/star").status_code == 401
 
 
 class TestFavoritesFilter:

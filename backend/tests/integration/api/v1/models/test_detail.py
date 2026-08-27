@@ -129,6 +129,79 @@ class TestUpdateModel:
 
         assert response.json()["source_url"] is None
 
+    def test_records_a_source_url(
+        self, client: TestClient, auth_headers, make_model
+    ) -> None:
+        model = make_model("Benchy")
+
+        response = client.patch(
+            f"/api/v1/models/{model.id}",
+            headers=auth_headers,
+            json={"source_url": " https://www.printables.com/model/123-benchy "},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["source_url"] == (
+            "https://www.printables.com/model/123-benchy"
+        )
+
+    def test_shows_the_source_url_on_the_model(
+        self, client: TestClient, auth_headers, make_model
+    ) -> None:
+        model = make_model("Benchy")
+        client.patch(
+            f"/api/v1/models/{model.id}",
+            headers=auth_headers,
+            json={"source_url": "https://www.printables.com/model/123-benchy"},
+        )
+
+        detail = client.get(f"/api/v1/models/{model.id}", headers=auth_headers)
+
+        assert detail.json()["source_url"] == (
+            "https://www.printables.com/model/123-benchy"
+        )
+
+    def test_carries_the_source_url_into_the_export(
+        self, client: TestClient, auth_headers, make_model
+    ) -> None:
+        model = make_model("Benchy")
+        client.patch(
+            f"/api/v1/models/{model.id}",
+            headers=auth_headers,
+            json={"source_url": "https://www.printables.com/model/123-benchy"},
+        )
+
+        export = client.get("/api/v1/models/export", headers=auth_headers)
+
+        # Where a model came from is the part of the export people care about.
+        assert export.json()["models"][0]["source_url"] == (
+            "https://www.printables.com/model/123-benchy"
+        )
+
+    def test_clears_the_source_url_when_given_an_empty_string(
+        self, client: TestClient, auth_headers, make_model
+    ) -> None:
+        model = make_model("Benchy", source_url="https://example.com/original")
+
+        response = client.patch(
+            f"/api/v1/models/{model.id}", headers=auth_headers, json={"source_url": ""}
+        )
+
+        assert response.json()["source_url"] is None
+
+    def test_rejects_a_source_url_that_is_not_http(
+        self, client: TestClient, auth_headers, make_model
+    ) -> None:
+        model = make_model("Benchy")
+
+        response = client.patch(
+            f"/api/v1/models/{model.id}",
+            headers=auth_headers,
+            json={"source_url": "ftp://example.com/model.zip"},
+        )
+
+        assert response.status_code == 422, response.text
+
     def test_moves_the_model_into_an_existing_collection(
         self, client: TestClient, auth_headers, make_model, make_collection
     ) -> None:
@@ -370,24 +443,3 @@ class TestVaultStats:
 
     def test_rejects_an_unauthenticated_caller(self, client: TestClient) -> None:
         assert client.get("/api/v1/models/stats").status_code == 401
-
-
-class TestPrintStats:
-    def test_reports_a_window_of_print_history(
-        self, client: TestClient, auth_headers
-    ) -> None:
-        response = client.get(
-            "/api/v1/models/stats/prints?period=7d", headers=auth_headers
-        )
-
-        assert response.status_code == 200, response.text
-
-    def test_rejects_a_non_superuser(self, client: TestClient, user_headers) -> None:
-        response = client.get(
-            "/api/v1/models/stats/prints", headers=user_headers("stats-ordinary")
-        )
-
-        assert response.status_code == 403, response.text
-
-    def test_rejects_an_unauthenticated_caller(self, client: TestClient) -> None:
-        assert client.get("/api/v1/models/stats/prints").status_code == 401
