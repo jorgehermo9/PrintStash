@@ -52,15 +52,14 @@ export default defineConfig(({ mode }) => ({
       reporter: ["text", "html"],
       include: ["src/lib/**/*.{ts,tsx}"],
       exclude: ["src/**/*.{test,spec}.{ts,tsx}", "src/**/*.d.ts"],
-      // Informative floor set just under the current baseline (measured
-      // 2026-07: stmts 52.9 / branches 50.9 / funcs 43.5 / lines 54.6). It
-      // guards against regressions today; ratchet these up toward the real
-      // gate as `src/lib` coverage grows.
+      // Ratcheted, never lowered. Each number sits just under the measured
+      // value (2026-08: stmts 85.6 / branches 76.0 / funcs 87.2 / lines 88.3)
+      // so a real regression fails CI while ordinary drift does not.
       thresholds: {
-        statements: 50,
-        branches: 48,
-        functions: 40,
-        lines: 52,
+        statements: 84,
+        branches: 74,
+        functions: 85,
+        lines: 86,
       },
     },
   },
