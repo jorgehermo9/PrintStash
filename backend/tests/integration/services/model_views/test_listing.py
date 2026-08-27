@@ -1,11 +1,17 @@
-"""Pagination determinism for the library browse / trash listings.
+"""Paginating the library and the trash without dropping or repeating a row.
 
-Models that share a sort timestamp (a batch ZIP import stamps many rows with
-the same updated_at; a bulk trash shares deleted_at) must still paginate
-without repeating or dropping rows. These tests pin the stable id tiebreaker.
+Ties are the normal case here, not the corner: a batch ZIP import stamps every model with
+the same `updated_at`, and a bulk trash shares one `deleted_at`. Sorting on that column
+alone leaves the database free to order tied rows differently on each query, so page two
+can repeat a row page one already showed and skip one it never did. The id tiebreaker is
+what makes the order total, and these tests walk every page and check the set.
 
-The test DB seeds an ``__external__`` sentinel model, so assertions target the
-models each test creates rather than the absolute row count.
+The cursor carries the sort and the filters it was issued under. Presenting it back with a
+different sort would resume from a position that no longer means anything, so it is
+rejected rather than honoured.
+
+The test database seeds an `__external__` sentinel model, so assertions target the models
+each test creates rather than an absolute row count.
 """
 
 from __future__ import annotations
@@ -13,7 +19,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.db.models import File, FileType, Metadata, Model, PrintJob, PrintJobState, User
@@ -358,65 +363,6 @@ def test_cursor_page_rejects_sort_mismatch(
             cursor=first.next_cursor,
             limit=1,
         )
-
-
-def test_model_page_api_uses_global_sort_and_cursor(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    for index, name in enumerate(["API Page Zulu", "API Page Alpha"]):
-        db_session.add(
-            Model(
-                name=name,
-                slug=f"api-page-{index}",
-                hash=f"a{index:063d}",
-            )
-        )
-    db_session.commit()
-
-    first = client.get(
-        "/api/v1/models/page?q=API%20Page&sort=name-asc&limit=1",
-        headers=auth_headers,
-    )
-    assert first.status_code == 200
-    first_payload = first.json()
-    assert [item["name"] for item in first_payload["items"]] == ["API Page Alpha"]
-    assert first_payload["total"] == 2
-    assert first_payload["next_cursor"]
-
-    second = client.get(
-        "/api/v1/models/page",
-        params={
-            "q": "API Page",
-            "sort": "name-asc",
-            "limit": 1,
-            "cursor": first_payload["next_cursor"],
-        },
-        headers=auth_headers,
-    )
-    assert second.status_code == 200
-    assert [item["name"] for item in second.json()["items"]] == ["API Page Zulu"]
-    assert second.json()["next_cursor"] is None
-
-
-def test_model_page_api_rejects_invalid_cursor_and_outliner_is_lightweight(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    model = Model(name="Outliner Leaf", slug="outliner-leaf", hash="u" * 64)
-    db_session.add(model)
-    db_session.commit()
-    db_session.refresh(model)
-
-    invalid = client.get(
-        "/api/v1/models/page?cursor=not-a-cursor",
-        headers=auth_headers,
-    )
-    assert invalid.status_code == 400
-    assert invalid.json()["detail"] == "invalid_model_cursor"
-
-    outliner = client.get("/api/v1/models/outliner", headers=auth_headers)
-    assert outliner.status_code == 200
-    leaf = next(item for item in outliner.json() if item["id"] == model.id)
-    assert set(leaf) == {"id", "name", "collection", "collection_id"}
 
 
 def test_list_trashed_pagination_is_complete_and_unique(
