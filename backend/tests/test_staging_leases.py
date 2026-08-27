@@ -64,6 +64,58 @@ def test_review_lease_rejects_replaced_path_without_unlink(
     assert db_session.get(StagingLease, lease.id) is None
 
 
+def test_review_lease_accepts_already_missing_path(
+    db_session: Session, tmp_path: Path
+) -> None:
+    user = _user(db_session)
+    inbox = _inbox(db_session, user)
+    staged = tmp_path / "missing.3mf"
+    staged.write_bytes(b"staged")
+    lease = staging_leases.create_review_lease(
+        db_session,
+        inbox_item_id=inbox.id,
+        owner_user_id=user.id,
+        path=staged,
+        size_bytes=6,
+        sha256="b" * 64,
+    )
+    db_session.commit()
+    staged.unlink()
+
+    assert (
+        staging_leases.dismiss_review_lease(db_session, inbox_item_id=inbox.id) is True
+    )
+    assert db_session.get(StagingLease, lease.id) is None
+
+
+def test_review_lease_keeps_lease_when_path_is_inaccessible(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = _user(db_session)
+    inbox = _inbox(db_session, user)
+    staged = tmp_path / "inaccessible.3mf"
+    staged.write_bytes(b"staged")
+    lease = staging_leases.create_review_lease(
+        db_session,
+        inbox_item_id=inbox.id,
+        owner_user_id=user.id,
+        path=staged,
+        size_bytes=6,
+        sha256="c" * 64,
+    )
+    db_session.commit()
+
+    def deny_lstat(_path: Path) -> object:
+        raise PermissionError("staging unavailable")
+
+    monkeypatch.setattr(Path, "lstat", deny_lstat)
+
+    assert (
+        staging_leases.dismiss_review_lease(db_session, inbox_item_id=inbox.id) is False
+    )
+    assert db_session.get(StagingLease, lease.id) is not None
+
+
 def test_prune_expired_unlinks_exact_file(db_session: Session, tmp_path: Path) -> None:
     user = _user(db_session)
     inbox = _inbox(db_session, user)

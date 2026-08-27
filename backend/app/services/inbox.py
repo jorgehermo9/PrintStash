@@ -1949,6 +1949,23 @@ def _dismiss_browser_lease(session: Session, row: InboxItem) -> bool:
                 session, inbox_item_id=row.id, job_id=row.background_job_id
             )
         return staging_leases.dismiss_review_lease(session, inbox_item_id=row.id)
+    except staging_leases.StagingLeaseNotFoundError as exc:
+        # Expiry reconciliation can remove an already-missing staged file and
+        # its lease before the user dismisses the terminal review row. With no
+        # lease and no bytes left, there is no owned resource to clean; retain
+        # the fail-closed behavior if a path still exists.
+        if row.staging_key is None:
+            return True
+        try:
+            Path(row.staging_key).lstat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            pass
+        detail = (
+            "staging_expired" if "expired" in str(exc) else "staging_cleanup_failed"
+        )
+        raise HTTPException(status_code=409, detail=detail) from exc
     except staging_leases.StagingLeaseError as exc:
         detail = (
             "staging_expired" if "expired" in str(exc) else "staging_cleanup_failed"

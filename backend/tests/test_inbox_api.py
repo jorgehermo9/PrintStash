@@ -6,6 +6,7 @@ import json
 import uuid
 from datetime import timedelta
 from io import BytesIO
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -1335,6 +1336,260 @@ def test_dismiss_item_returns_204(client: TestClient, db_session: Session) -> No
     db_session.expire_all()
     refreshed = db_session.get(InboxItem, row.id)
     assert refreshed.state == InboxItemState.DISMISSED
+
+
+def test_dismiss_uploaded_browser_capture_removes_staging_and_keeps_model(
+    client: TestClient, db_session: Session
+) -> None:
+    owner = _user(db_session, "dismiss-uploaded-capture", admin=False)
+    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
+    slot = inbox.upload_capture_slot(
+        db_session,
+        slots[0],
+        stream=BytesIO(b"slot-owned"),
+        media_type="application/octet-stream",
+    )
+    assert slot.storage_key is not None
+    slot_id = slot.id
+    storage_key = slot.storage_key
+    model = Model(
+        name="Imported widget",
+        slug="dismiss-uploaded-widget",
+        hash="f" * 64,
+    )
+    db_session.add(model)
+    db_session.commit()
+    db_session.refresh(model)
+    artifact = File(
+        model_id=model.id,
+        path="imported/dismiss-uploaded-widget.stl",
+        original_filename="widget.stl",
+        file_type=FileType.STL,
+        version=1,
+        size_bytes=4,
+        sha256="a" * 64,
+    )
+    db_session.add(artifact)
+    row.state = InboxItemState.COMPLETED
+    row.resulting_model_id = model.id
+    db_session.add(row)
+    db_session.add(artifact)
+    db_session.commit()
+    headers = {
+        "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
+    }
+
+    response = client.delete(f"/api/v1/inbox/{row.id}", headers=headers)
+
+    assert response.status_code == 204, response.text
+    db_session.expire_all()
+    dismissed = db_session.get(InboxItem, row.id)
+    assert dismissed is not None
+    assert dismissed.state == InboxItemState.DISMISSED
+    assert db_session.get(CaptureUploadSlot, slot_id) is None
+    assert (
+        db_session.exec(
+            select(StagingLease).where(
+                StagingLease.capture_upload_slot_origin_id == slot_id
+            )
+        ).all()
+        == []
+    )
+    assert db_session.get(Model, model.id) is not None
+    assert db_session.get(File, artifact.id) is not None
+
+    assert process_storage_delete_intents().completed == 1
+    assert not inbox.get_backend().exists(storage_key)
+
+
+def test_dismiss_missing_browser_staging_removes_item_without_cleanup_error(
+    client: TestClient, db_session: Session
+) -> None:
+    owner = _user(db_session, "dismiss-missing-staging", admin=False)
+    row = inbox.create_browser_upload(
+        db_session,
+        owner,
+        source_url="https://makerworld.com/en/models/1234-widget",
+        title="Widget",
+        capture_source=None,
+        filename="widget.stl",
+        stream=BytesIO(b"staged-widget"),
+    )
+    assert row.id is not None
+    assert row.staging_key is not None
+    staged = Path(row.staging_key)
+    staged.unlink()
+    headers = {
+        "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
+    }
+
+    response = client.delete(f"/api/v1/inbox/{row.id}", headers=headers)
+
+    assert response.status_code == 204, response.text
+    db_session.expire_all()
+    dismissed = db_session.get(InboxItem, row.id)
+    assert dismissed is not None
+    assert dismissed.state == InboxItemState.DISMISSED
+    assert (
+        db_session.exec(
+            select(StagingLease).where(StagingLease.inbox_item_id == row.id)
+        ).all()
+        == []
+    )
+
+
+def test_dismiss_expired_browser_staging_without_lease_removes_item(
+    client: TestClient, db_session: Session
+) -> None:
+    owner = _user(db_session, "dismiss-expired-staging", admin=False)
+    row = inbox.create_browser_upload(
+        db_session,
+        owner,
+        source_url="https://makerworld.com/en/models/1234-widget",
+        title="Widget",
+        capture_source=None,
+        filename="widget.stl",
+        stream=BytesIO(b"staged-widget"),
+    )
+    assert row.id is not None
+    assert row.staging_key is not None
+    staged = Path(row.staging_key)
+    staged.unlink()
+    row.staging_key = None
+    row.state = InboxItemState.FAILED
+    row.error_code = "staging_expired"
+    lease = db_session.exec(
+        select(StagingLease).where(StagingLease.inbox_item_id == row.id)
+    ).one()
+    db_session.delete(lease)
+    db_session.add(row)
+    db_session.commit()
+    headers = {
+        "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
+    }
+
+    response = client.delete(f"/api/v1/inbox/{row.id}", headers=headers)
+
+    assert response.status_code == 204, response.text
+    db_session.expire_all()
+    dismissed = db_session.get(InboxItem, row.id)
+    assert dismissed is not None
+    assert dismissed.state == InboxItemState.DISMISSED
+
+
+def test_dismiss_browser_item_without_lease_keeps_unproven_path(
+    client: TestClient, db_session: Session
+) -> None:
+    owner = _user(db_session, "dismiss-unowned-staging", admin=False)
+    row = inbox.create_browser_upload(
+        db_session,
+        owner,
+        source_url="https://makerworld.com/en/models/1234-widget",
+        title="Widget",
+        capture_source=None,
+        filename="widget.stl",
+        stream=BytesIO(b"staged-widget"),
+    )
+    assert row.id is not None
+    assert row.staging_key is not None
+    staged = Path(row.staging_key)
+    lease = db_session.exec(
+        select(StagingLease).where(StagingLease.inbox_item_id == row.id)
+    ).one()
+    db_session.delete(lease)
+    db_session.commit()
+    headers = {
+        "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
+    }
+
+    response = client.delete(f"/api/v1/inbox/{row.id}", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "staging_cleanup_failed"
+    assert staged.exists()
+    db_session.expire_all()
+    retained = db_session.get(InboxItem, row.id)
+    assert retained is not None
+    assert retained.state == InboxItemState.REVIEW
+
+
+def test_dismiss_ambiguous_job_leases_keeps_item_and_staging(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    owner = _user(db_session, "dismiss-ambiguous-job-leases", admin=False)
+    job = BackgroundJob(
+        id="dismiss-ambiguous-job",
+        owner_user_id=owner.id,
+        state="failed",
+        status_json='{"state":"failed"}',
+    )
+    db_session.add(job)
+    db_session.commit()
+    first_path = tmp_path / "first.stl"
+    first_path.write_bytes(b"staged-first")
+    first_receipt = first_path.stat()
+    second_path = tmp_path / "second.stl"
+    second_path.write_bytes(b"staged-second")
+    second_receipt = second_path.stat()
+    db_session.add_all(
+        [
+            StagingLease(
+                id="ambiguous-lease-0",
+                path=str(first_path),
+                owner_user_id=owner.id,
+                background_job_id=job.id,
+                size_bytes=first_receipt.st_size,
+                sha256="d" * 64,
+                device=first_receipt.st_dev,
+                inode=first_receipt.st_ino,
+                ctime_ns=first_receipt.st_ctime_ns,
+                expires_at=utcnow() + timedelta(hours=1),
+            ),
+            StagingLease(
+                id="ambiguous-lease-1",
+                path=str(second_path),
+                owner_user_id=owner.id,
+                background_job_id=job.id,
+                size_bytes=second_receipt.st_size,
+                sha256="d" * 64,
+                device=second_receipt.st_dev,
+                inode=second_receipt.st_ino,
+                ctime_ns=second_receipt.st_ctime_ns,
+                expires_at=utcnow() + timedelta(hours=1),
+            ),
+        ]
+    )
+    row = _make_item(
+        db_session,
+        owner,
+        source_kind="BROWSER",
+        state=InboxItemState.FAILED,
+        background_job_id=job.id,
+        staging_key=None,
+    )
+    headers = {
+        "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
+    }
+
+    response = client.delete(f"/api/v1/inbox/{row.id}", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "staging_cleanup_failed"
+    db_session.expire_all()
+    retained = db_session.get(InboxItem, row.id)
+    assert retained is not None
+    assert retained.state == InboxItemState.FAILED
+    assert retained.background_job_id == job.id
+    assert retained.staging_key is None
+    retained_leases = db_session.exec(
+        select(StagingLease).where(StagingLease.background_job_id == job.id)
+    ).all()
+    assert {lease.id for lease in retained_leases} == {
+        "ambiguous-lease-0",
+        "ambiguous-lease-1",
+    }
+    assert first_path.exists()
+    assert second_path.exists()
 
 
 def test_dismiss_completed_capture_after_terminal_cleanup_preserves_model(

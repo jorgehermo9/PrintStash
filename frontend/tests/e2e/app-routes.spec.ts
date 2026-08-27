@@ -1,4 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
+/**
+ * These route-level checks defend the authenticated app shell and its
+ * responsive affordances against regressions that would make a page unusable
+ * even when the API responses are healthy.
+ */
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import type { Server } from "node:http";
 
 import { resetMockApiState, setExternalLibrariesEnabled, startMockApi } from "./mock-api";
@@ -60,6 +65,12 @@ async function collectPageProblems(page: Page): Promise<string[]> {
     }
   });
   return problems;
+}
+
+async function expectTouchTarget(locator: Locator): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(40);
 }
 
 test("model detail route renders data and hydrates printer integrations", async ({ page }) => {
@@ -439,6 +450,38 @@ test("mobile vault skips the desktop outliner request", async ({ page }) => {
   await expect(page.getByText("skadis_kitchen-roll_screw").first()).toBeVisible();
   await page.waitForTimeout(200);
   expect(outlinerRequests).toEqual([]);
+});
+
+test("mobile vault toolbar keeps every action reachable without overflow", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "All Models" })).toBeVisible();
+  const filters = page.getByRole("button", { name: "Filters", exact: true });
+  const upload = page.getByRole("button", { name: "Upload", exact: true });
+  const favorites = page.getByRole("button", { name: "Favorites", exact: true });
+  const savedViews = page.getByRole("button", { name: /^Saved views/ });
+  const select = page.getByRole("button", { name: "Select", exact: true });
+  const sort = page.getByRole("button", { name: "Sort models", exact: true });
+  const display = page.getByRole("button", { name: "Display", exact: true });
+
+  await expect(filters).toBeVisible();
+  await expect(upload).toBeVisible();
+  await expect(favorites).toBeVisible();
+  await expect(savedViews).toBeVisible();
+  await expect(select).toBeVisible();
+  await expect(sort).toBeVisible();
+  await expect(display).toBeVisible();
+  await expectTouchTarget(filters);
+  await expectTouchTarget(upload);
+  await expectTouchTarget(favorites);
+  await expectTouchTarget(savedViews);
+  await expectTouchTarget(select);
+  await expectTouchTarget(sort);
+  await expectTouchTarget(display);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 });
 
 test("settings sections are deep-linkable and preserve navigation state", async ({ page }) => {

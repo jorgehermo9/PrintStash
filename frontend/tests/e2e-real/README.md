@@ -23,7 +23,7 @@ Requires the backend dev venv (`backend/.venv`); falls back to `uv run`.
 ## Coverage
 
 auth (UI login, wrong-password, username + API-key login then revoke) ·
-vault (search, tag filter, list/grid toggle, empty state) · collections
+vault (search, tag filter, list/grid toggle, empty state, narrow responsive toolbar) · collections
 (create / nest / delete / recursive-delete non-empty from the sidebar) · tags ·
 uploads (mesh-only source, into a collection) · filament & printer presets
 (create / edit / delete) · model lifecycle (upload → edit → trash → restore →

@@ -1453,15 +1453,18 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                   )}
                 </p>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
-                <div className="flex items-center space-x-2">
-                  <button
+              <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
                     onClick={openDrawer}
-                    className="md:hidden flex items-center px-3 py-2 text-xs font-medium text-foreground bg-background border border-border rounded hover:bg-muted transition-colors"
+                    className="h-10 md:hidden sm:h-8"
                   >
-                    <SlidersHorizontal className="w-4 h-4 mr-1.5 text-muted-foreground" />
+                    <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
                     Filters
-                  </button>
+                  </Button>
                   <Button
                     variant="outline"
                     size="xs"
@@ -1490,12 +1493,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                         ? "Upload artifacts"
                         : "Sign in and get edit access to upload"
                     }
+                    className="h-10 sm:h-8"
                   >
                     Upload
                   </Button>
                 </div>
                 {auth.isAuthenticated && (
-                  <>
+                  <div className="flex w-full flex-wrap items-center gap-2 border-t border-border pt-3 sm:w-auto sm:border-t-0 sm:pt-0">
                     <Button
                       variant={favoritesOnly ? "secondary" : "outline"}
                       size="xs"
@@ -1508,6 +1512,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                         else params.delete("favorites");
                         router.replace(params.size ? `/?${params}` : "/", { scroll: false });
                       }}
+                      className="h-10 sm:h-8"
                     >
                       <Star className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />{" "}
                       Favorites
@@ -1542,6 +1547,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                           if (activeSavedViewId === view.id) setActiveSavedViewId(null);
                         }, "Saved view deleted")
                       }
+                      triggerClassName="h-10 sm:h-8"
                     />
                     <Button
                       variant={selectMode ? "secondary" : "outline"}
@@ -1552,132 +1558,137 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                         if (selectMode) clearSelection();
                         else setSelectMode(true);
                       }}
+                      className="h-10 sm:h-8"
                     >
                       <CheckSquare className="w-4 h-4" />
                       {selectMode ? "Done" : "Select"}
                     </Button>
-                  </>
+                  </div>
                 )}
                 <div className="h-6 w-px bg-muted mx-1 hidden md:block" />
-                <DropdownMenu
-                  open={sortOpen}
-                  onOpenChange={setSortOpen}
-                  align="end"
-                  trigger={
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      data-menu-trigger
-                      aria-haspopup="menu"
-                      aria-expanded={sortOpen}
-                      aria-label={ui("Sort models")}
-                      onClick={() => setSortOpen(!sortOpen)}
-                    >
-                      <ArrowUpDown className="h-3.5 w-3.5" />
-                      <span>
-                        {ui(
-                          SORT_OPTIONS.find((option) => option.value === sortKey)?.label ??
-                            "Newest",
-                        )}
-                      </span>
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                  }
-                  contentClassName="w-52 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-                >
-                  {SORT_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setSortKey(option.value);
-                        localStorage.setItem("ps-vault-sort", option.value);
-                        setSortOpen(false);
-                      }}
-                      className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${sortKey === option.value ? "bg-accent text-accent-foreground" : ""}`}
-                    >
-                      <span className="flex-1">{option.label}</span>
-                      {sortKey === option.value && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                  ))}
-                </DropdownMenu>
-                <DropdownMenu
-                  open={displayOpen}
-                  onOpenChange={setDisplayOpen}
-                  align="end"
-                  trigger={
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      data-menu-trigger
-                      aria-haspopup="menu"
-                      aria-expanded={displayOpen}
-                      onClick={() => setDisplayOpen(!displayOpen)}
-                    >
-                      <Rows3 className="h-3.5 w-3.5" />
-                      {ui("Display")}
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                  }
-                  contentClassName="w-48 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-                >
-                  <p className="px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
-                    Layout
-                  </p>
-                  {(
-                    [
-                      ["grid", "Grid", Grid],
-                      ["list", "List", List],
-                    ] as const
-                  ).map(([mode, label, Icon]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="menuitem"
-                      aria-label={`${label} View`}
-                      onClick={() => {
-                        setViewMode(mode);
-                        localStorage.setItem("ps-vault-view", mode);
-                        setDisplayOpen(false);
-                      }}
-                      className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${viewMode === mode ? "bg-accent text-accent-foreground" : ""}`}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      <span className="flex-1">{label}</span>
-                      {viewMode === mode && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                  ))}
-                  <p className="mt-1 border-t border-border px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
-                    Density
-                  </p>
-                  {(
-                    [
-                      [false, "Comfortable"],
-                      [true, "Compact"],
-                    ] as const
-                  ).map(([isCompact, label]) => (
-                    <button
-                      key={label}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setCompact(isCompact);
-                        localStorage.setItem(
-                          "ps-vault-density",
-                          isCompact ? "compact" : "comfortable",
-                        );
-                        setDisplayOpen(false);
-                      }}
-                      className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${compact === isCompact ? "bg-accent text-accent-foreground" : ""}`}
-                    >
-                      <span className="flex-1">{label}</span>
-                      {compact === isCompact && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                  ))}
-                </DropdownMenu>
+                <div className="flex w-full flex-wrap items-center gap-2 border-t border-border pt-3 sm:w-auto sm:border-t-0 sm:pt-0">
+                  <DropdownMenu
+                    open={sortOpen}
+                    onOpenChange={setSortOpen}
+                    align="end"
+                    trigger={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        data-menu-trigger
+                        aria-haspopup="menu"
+                        aria-expanded={sortOpen}
+                        aria-label={ui("Sort models")}
+                        onClick={() => setSortOpen(!sortOpen)}
+                        className="h-10 sm:h-8"
+                      >
+                        <ArrowUpDown className="h-3.5 w-3.5" />
+                        <span>
+                          {ui(
+                            SORT_OPTIONS.find((option) => option.value === sortKey)?.label ??
+                              "Newest",
+                          )}
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
+                    }
+                    contentClassName="w-52 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                  >
+                    {SORT_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setSortKey(option.value);
+                          localStorage.setItem("ps-vault-sort", option.value);
+                          setSortOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${sortKey === option.value ? "bg-accent text-accent-foreground" : ""}`}
+                      >
+                        <span className="flex-1">{option.label}</span>
+                        {sortKey === option.value && <Check className="h-3.5 w-3.5" />}
+                      </button>
+                    ))}
+                  </DropdownMenu>
+                  <DropdownMenu
+                    open={displayOpen}
+                    onOpenChange={setDisplayOpen}
+                    align="end"
+                    trigger={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        data-menu-trigger
+                        aria-haspopup="menu"
+                        aria-expanded={displayOpen}
+                        onClick={() => setDisplayOpen(!displayOpen)}
+                        className="h-10 sm:h-8"
+                      >
+                        <Rows3 className="h-3.5 w-3.5" />
+                        {ui("Display")}
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
+                    }
+                    contentClassName="w-48 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                  >
+                    <p className="px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
+                      Layout
+                    </p>
+                    {(
+                      [
+                        ["grid", "Grid", Grid],
+                        ["list", "List", List],
+                      ] as const
+                    ).map(([mode, label, Icon]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="menuitem"
+                        aria-label={`${label} View`}
+                        onClick={() => {
+                          setViewMode(mode);
+                          localStorage.setItem("ps-vault-view", mode);
+                          setDisplayOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${viewMode === mode ? "bg-accent text-accent-foreground" : ""}`}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        <span className="flex-1">{label}</span>
+                        {viewMode === mode && <Check className="h-3.5 w-3.5" />}
+                      </button>
+                    ))}
+                    <p className="mt-1 border-t border-border px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
+                      Density
+                    </p>
+                    {(
+                      [
+                        [false, "Comfortable"],
+                        [true, "Compact"],
+                      ] as const
+                    ).map(([isCompact, label]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setCompact(isCompact);
+                          localStorage.setItem(
+                            "ps-vault-density",
+                            isCompact ? "compact" : "comfortable",
+                          );
+                          setDisplayOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${compact === isCompact ? "bg-accent text-accent-foreground" : ""}`}
+                      >
+                        <span className="flex-1">{label}</span>
+                        {compact === isCompact && <Check className="h-3.5 w-3.5" />}
+                      </button>
+                    ))}
+                  </DropdownMenu>
+                </div>
               </div>
             </div>
           </div>

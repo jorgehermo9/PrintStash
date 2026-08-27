@@ -19,6 +19,23 @@ test("search filters the library; list/grid toggle keeps the model visible", asy
   await expect(modelCard(page, name)).toBeVisible();
 });
 
+test("vault toolbar remains reachable on a narrow viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 482, height: 844 });
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: /All Models/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Filters", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upload", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Favorites", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Saved views/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sort models", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Display", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
+
 test("the tag filter narrows the grid to tagged models", async ({ page }) => {
   const stamp = Date.now();
   const tag = `e2e-filter-${stamp}`;

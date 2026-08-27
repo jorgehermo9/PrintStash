@@ -50,6 +50,14 @@ class StagingLeaseError(RuntimeError):
     """A requested lease transition cannot safely be applied."""
 
 
+class StagingLeaseNotFoundError(StagingLeaseError):
+    """No lease exists for the requested owner."""
+
+
+class StagingLeaseAmbiguousError(StagingLeaseError):
+    """Multiple leases exist for an owner that requires exactly one."""
+
+
 class StagingCapacityExceeded(StagingLeaseError):
     """Staging capacity could not be proven available."""
 
@@ -357,8 +365,10 @@ def _one_owner_lease(
         else (StagingLease.capture_upload_slot_id, capture_upload_slot_id)
     )
     leases = list(session.exec(select(StagingLease).where(column == owner_id)))
+    if not leases:
+        raise StagingLeaseNotFoundError("staging lease not found")
     if len(leases) != 1:
-        raise StagingLeaseError("expected exactly one staging lease for owner")
+        raise StagingLeaseAmbiguousError("staging lease ownership ambiguous")
     return leases[0]
 
 
@@ -802,8 +812,25 @@ def renew_job_lease(
 
 
 def dismiss_review_lease(session: Session, *, inbox_item_id: int) -> bool:
-    """Forget a review lease, unlinking only an exact identity match."""
+    """Forget a review lease, unlinking only an exact identity match.
+
+    An already-missing path is treated as successfully cleaned: the lease is
+    stale accounting state, and retaining it would make dismissal impossible.
+    """
     lease = _one_owner_lease(session, inbox_item_id=inbox_item_id)
+    try:
+        Path(lease.path).lstat()
+    except FileNotFoundError:
+        # The bytes may already have been removed by expiry/reconciliation.
+        # There is no remaining object to protect, so release the stale
+        # accounting lease and let dismissal complete idempotently.
+        session.delete(lease)
+        session.flush()
+        return True
+    except OSError:
+        # An inaccessible path is not proof that the staged object is gone.
+        # Keep the lease so capacity accounting and a later retry remain safe.
+        return False
     path = _matching_path(lease)
     unlinked = False
     if path is not None:
