@@ -40,6 +40,7 @@ from app.db.models import (
 )
 from app.services.auth import create_access_token
 from app.services.storage_backend import get_backend
+from tests.containers import s3_endpoint
 from tests.factories import (
     build_file,
     build_model,
@@ -136,8 +137,8 @@ def _auth_headers(env: BackupEnv) -> dict[str, str]:
 # S3 backup destination (independent from vault storage) — needs a real endpoint
 # ---------------------------------------------------------------------------
 
-_S3_ENDPOINT = os.environ.get("PRINTSTASH_TEST_S3_ENDPOINT")
-# conftest.py skips anything marked `s3` when PRINTSTASH_TEST_S3_ENDPOINT is unset.
+# conftest.py resolves the endpoint once per run — the configured one, or a
+# container it starts — and skips anything marked `s3` when there is neither.
 requires_s3 = pytest.mark.s3
 
 
@@ -149,7 +150,7 @@ def backup_s3_env(backup_env: BackupEnv) -> Iterator[BackupEnv]:
     _overlay.update(
         {
             "backup_s3_bucket": bucket,
-            "backup_s3_endpoint_url": _S3_ENDPOINT,
+            "backup_s3_endpoint_url": s3_endpoint(),
             "backup_s3_region": "us-east-1",
             "backup_s3_access_key": os.environ.get(
                 "PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"

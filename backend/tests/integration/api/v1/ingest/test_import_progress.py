@@ -61,32 +61,80 @@ class TestJobUpdate:
         assert status is not None
         assert (status.processed, status.total) == (1, 3)
 
-    def test_partial_success_has_summary_and_safe_retry_details(self) -> None:
+    def test_reports_a_job_that_partly_succeeded_as_partial(self) -> None:
         jobs = JobRegistry()
         job_id = jobs.create(owner_user_id=7)
+
+        jobs.update(job_id, state="completed", succeeded=2, failed=1, retryable=True)
+
+        # Distinct from both "completed" and "failed": some models arrived and
+        # some did not, and the user has to be told which without being told the
+        # whole import worked.
+        status = jobs.get(job_id)
+        assert status is not None
+        assert status.completion == "partial"
+
+    def test_strips_the_server_path_from_a_failed_item(self) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+
         jobs.update(
             job_id,
             state="completed",
-            succeeded=2,
-            deduplicated=1,
-            skipped=1,
             failed=1,
-            retryable=True,
-            result={"errors": ["/srv/private/models/broken.stl: token=secret"]},
             failed_items=[
                 {
                     "name": "/srv/private/models/broken.stl",
-                    "reason": "read /srv/private/models/broken.stl?token=secret failed",
+                    "reason": "read /srv/private/models/broken.stl failed",
                     "retryable": True,
                 }
             ],
         )
+
+        # The path is the *server's* filesystem layout, shown to whoever opens
+        # the import. A name is what the user needs; the directory it sat in is
+        # information about the host.
         status = jobs.get(job_id)
         assert status is not None
-        assert status.completion == "partial"
         assert status.failed_items[0].name == "broken.stl"
         assert "/srv/private" not in status.failed_items[0].reason
+
+    def test_strips_a_credential_from_a_failed_item(self) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+
+        jobs.update(
+            job_id,
+            state="completed",
+            failed=1,
+            failed_items=[
+                {
+                    "name": "broken.stl",
+                    "reason": "read https://host/f.stl?token=secret failed",
+                    "retryable": True,
+                }
+            ],
+        )
+
+        status = jobs.get(job_id)
+        assert status is not None
         assert "secret" not in status.failed_items[0].reason
+
+    def test_strips_a_credential_from_the_result_payload(self) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+
+        jobs.update(
+            job_id,
+            state="completed",
+            failed=1,
+            result={"errors": ["/srv/private/models/broken.stl: token=secret"]},
+        )
+
+        # The result blob is a second path to the same leak, and it is the one
+        # that ends up in the browser's network tab.
+        status = jobs.get(job_id)
+        assert status is not None
         assert "/srv/private" not in str(status.result)
         assert "secret" not in str(status.result)
 
@@ -310,11 +358,20 @@ class TestMakerworldCookie:
 
 
 class TestCollectionTarget:
-    def test_collection_target_nests_under_parent_and_defaults_title(self) -> None:
+    def test_uses_the_capture_title_when_no_parent_is_given(self) -> None:
         assert ingest_module._collection_target(None, "My Model") == "My Model"
+
+    def test_nests_the_title_under_the_chosen_parent(self) -> None:
         assert ingest_module._collection_target("Parent/", "Child") == "Parent/Child"
-        assert ingest_module._collection_target(None, "  ") == "Imported collection"
-        assert ingest_module._collection_target("  ", "  ") == "Imported collection"
+
+    @pytest.mark.parametrize(("parent", "title"), [(None, "  "), ("  ", "  ")])
+    def test_falls_back_to_a_generic_name_when_the_title_is_blank(
+        self, parent: str | None, title: str
+    ) -> None:
+        # A blank title comes from a page we could not read a name off. An empty
+        # collection path would import into the vault root instead, silently
+        # scattering the capture across the library.
+        assert ingest_module._collection_target(parent, title) == "Imported collection"
 
 
 class TestDownloadAndCollect:
@@ -1234,11 +1291,16 @@ class TestInspectArchiveBackground:
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "archive_invalid"
 
-    def test_display_sanitizers_hide_paths_credentials_and_control_characters(
+    def test_strips_a_control_character_and_the_directory_from_an_item_name(
         self,
     ) -> None:
+        # A newline in a filename is what turns one log line into two, and the
+        # directory is the server's layout rather than anything the user needs.
         assert safe_item("/mnt/nas/private/Cube\n.stl") == "Cube.stl"
+
+    def test_strips_the_path_and_credential_from_an_error_message(self) -> None:
         error = safe_error("failed /mnt/nas/private/Cube.stl?api_key=hunter2")
+
         assert error is not None
         assert "/mnt/nas" not in error
         assert "hunter2" not in error

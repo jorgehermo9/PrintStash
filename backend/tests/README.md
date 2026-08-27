@@ -43,9 +43,16 @@ is not a unit — find the unit first.
 ./scripts/test.sh --help
 ```
 
-Resource markers gate subsets *within* a tier and auto-skip when the resource is absent:
-`postgres` (needs `PRINTSTASH_TEST_POSTGRES_URL`), `s3` (needs
-`PRINTSTASH_TEST_S3_ENDPOINT`), `slow` (large real fixtures; out of the fast lane).
+Resource markers gate subsets *within* a tier: `postgres`, `s3`, and `slow` (large real
+fixtures; out of the fast lane).
+
+`postgres` and `s3` need a real service, and `tests/containers.py` finds one — the
+endpoint you configured (`PRINTSTASH_TEST_POSTGRES_URL` / `PRINTSTASH_TEST_S3_ENDPOINT`),
+else a throwaway PostgreSQL or SeaweedFS container if Docker is running, else it skips
+with a reason that says so. **With Docker running you need no setup**: `./scripts/test.sh
+full` covers the dialect and object-store contracts that used to skip silently, which is
+21 tests including the migration path self-hosters upgrade through. Containers start on
+the first test that needs one and stop at the end of the session.
 
 ## Before you add one
 

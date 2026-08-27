@@ -287,7 +287,7 @@ class TestSuiteHygiene:
         and every one removed lowers the cap.
         """
         offenders = []
-        for module in _test_modules():
+        for module in _all_test_modules():
             tree = ast.parse(module.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if (
@@ -310,9 +310,11 @@ class TestSuiteHygiene:
             )
 
 
-# Test names containing `_and_`. Some are two behaviours in one test, which the
-# skill forbids because a failure cannot say which half broke; others describe a
-# single invariant that happens to need the word. Both are worth reducing, and
-# neither is worth a mechanical split — that produces duplicated setup and
-# assertions in the wrong test. So the count is capped and may only fall.
-MAX_CONJUNCTION_NAMES = 295
+# Test names containing `_and_`, across both test trees. Some are two behaviours
+# in one test, which the skill forbids because a failure cannot say which half
+# broke; others describe a single invariant that happens to need the word. Both
+# are worth reducing, and neither is worth a *mechanical* split — that produces
+# duplicated setup and assertions in the wrong test. So the count is capped and
+# may only fall, and the honest fix per test is one of two things: split it, or
+# rename it to say the single behaviour it actually asserts.
+MAX_CONJUNCTION_NAMES = 313

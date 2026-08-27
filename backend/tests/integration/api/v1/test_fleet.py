@@ -83,7 +83,7 @@ def _unused_provider_builder(_printer: Printer) -> PrinterProviderClient:
 class TestCreateQueueJobRouting:
     """Where a queued job lands when the caller does not name a printer."""
 
-    def test_admin_can_enqueue_and_list_least_busy_job(
+    def test_routes_a_job_with_no_named_printer_to_the_least_busy_one(
         self,
         client: TestClient,
         auth_headers: dict[str, str],
@@ -103,16 +103,38 @@ class TestCreateQueueJobRouting:
             json={"file_id": artifact.id, "strategy": "least_busy"},
         )
 
-        assert queued.status_code == 201
-        assert queued.json()["state"] == "queued"
+        assert queued.status_code == 201, queued.text
         assert queued.json()["printer_id"] == printer.id
         assert queued.json()["routing_strategy"] == "least_busy"
+        assert queued.json()["state"] == "queued"
+
+    def test_shows_the_job_it_queued_in_the_queue(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Farm A",
+            moonraker_url="http://farm-a.local",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        queued = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        ).json()
 
         response = client.get("/api/v1/fleet/queue", headers=auth_headers)
-        assert response.status_code == 200
-        assert [job["id"] for job in response.json()] == [queued.json()["id"]]
 
-    def test_default_routing_and_soft_drain_are_visible(
+        # A job accepted with a 201 and then absent from the queue is the worst
+        # of both: the operator believes it is scheduled and nothing will run it.
+        assert response.status_code == 200, response.text
+        assert [job["id"] for job in response.json()] == [queued["id"]]
+
+    def test_reports_the_default_printer_and_its_drain_state(
         self,
         client: TestClient,
         auth_headers: dict[str, str],
@@ -165,7 +187,7 @@ class TestCreateQueueJobRouting:
         assert queued.json()["printer_id"] == second.id
         assert queued.json()["blocked_reason"] == "default_printer_unavailable"
 
-    def test_active_maintenance_blocks_routing_and_log_is_recorded(
+    def test_blocks_routing_onto_a_printer_inside_a_maintenance_window(
         self,
         client: TestClient,
         auth_headers: dict[str, str],
@@ -326,7 +348,7 @@ class TestCreateQueueJobRouting:
 class TestListQueueJobs:
     """Reading and reordering the queue."""
 
-    def test_queued_jobs_can_be_reordered_and_deleted(
+    def test_keeps_a_total_queue_order_through_a_reorder_then_a_delete(
         self,
         client: TestClient,
         auth_headers: dict[str, str],
@@ -383,7 +405,7 @@ class TestListQueueJobs:
         assert first["id"] not in {row["id"] for row in queue}
         assert queue[0]["queue_position"] == 1
 
-    def test_queue_history_is_bounded_and_pageable(
+    def test_returns_the_requested_page_of_terminal_history(
         self,
         client: TestClient,
         auth_headers: dict[str, str],
@@ -1740,7 +1762,7 @@ class TestPrinter:
 
 
 class TestFleet:
-    def test_fleet_summary_counts_queue_drain_and_maintenance(
+    def test_summarises_every_state_that_makes_a_printer_unavailable(
         self,
         client: TestClient,
         auth_headers: dict[str, str],
@@ -1887,7 +1909,7 @@ class TestFleet:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "printer_not_found"
 
-    def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
+    def test_maps_a_fleet_error_from_the_maintenance_routes_to_a_404(
         self,
         client: TestClient,
         auth_headers: dict[str, str],

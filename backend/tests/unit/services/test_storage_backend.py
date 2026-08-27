@@ -133,7 +133,7 @@ class TestCreateOnlyWrites:
 
         assert not (outside / "part.stl").exists()
 
-    def test_unchecked_move_is_disabled_and_preserves_source(
+    def test_refuses_an_unchecked_move_without_touching_the_source(
         self, tmp_path: Path
     ) -> None:
         backend = LocalStorageBackend()
@@ -149,7 +149,7 @@ class TestCreateOnlyWrites:
 
 
 class TestCreateStream:
-    def test_create_stream_is_atomic_create_only_and_receipted(
+    def test_writes_the_bytes_and_returns_a_receipt_for_them(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         data_dir = tmp_path / "files"
@@ -164,11 +164,30 @@ class TestCreateStream:
 
         receipt = backend.create_stream(BytesIO(b"owned"), str(destination))
 
-        assert receipt.key == str(destination)
-        assert receipt.size == 5
+        # The receipt is the proof of ownership every later delete checks, so it
+        # has to describe the object that was actually written.
+        assert (receipt.key, receipt.size) == (str(destination), 5)
         assert destination.read_bytes() == b"owned"
+
+    def test_refuses_a_second_write_to_the_same_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data_dir = tmp_path / "files"
+        thumb_dir = tmp_path / "thumbs"
+        data_dir.mkdir()
+        thumb_dir.mkdir()
+        monkeypatch.setattr(
+            storage_backend, "settings", _FakeSettings(data_dir, thumb_dir)
+        )
+        backend = LocalStorageBackend()
+        destination = data_dir / "model" / "v1" / "part.stl"
+        backend.create_stream(BytesIO(b"owned"), str(destination))
+
         with pytest.raises(StorageCollisionError):
             backend.create_stream(BytesIO(b"attacker"), str(destination))
+
+        # Create-only is the whole safety model: the loser of a race must not be
+        # able to replace bytes somebody else already owns.
         assert destination.read_bytes() == b"owned"
 
     def test_failed_create_stream_never_publishes_partial_destination(
@@ -198,13 +217,21 @@ class TestCreateStream:
         assert not destination.exists()
 
 
-class TestReadBytes:
-    def test_stat_size_and_read_bytes(self, tmp_path: Path) -> None:
+class TestStatSize:
+    def test_reports_the_size_of_the_object(self, tmp_path: Path) -> None:
         backend = LocalStorageBackend()
         blob = tmp_path / "part.stl"
         blob.write_bytes(b"0123456789")
 
         assert backend.stat_size(str(blob)) == 10
+
+
+class TestReadBytes:
+    def test_returns_the_whole_object(self, tmp_path: Path) -> None:
+        backend = LocalStorageBackend()
+        blob = tmp_path / "part.stl"
+        blob.write_bytes(b"0123456789")
+
         assert backend.read_bytes(str(blob)) == b"0123456789"
 
 
@@ -221,7 +248,9 @@ class TestStreamChunks:
 
 
 class TestDownloadToPath:
-    def test_download_to_path_copies_and_creates_parents(self, tmp_path: Path) -> None:
+    def test_copies_into_a_destination_whose_parents_do_not_exist(
+        self, tmp_path: Path
+    ) -> None:
         backend = LocalStorageBackend()
         src = tmp_path / "source.stl"
         src.write_bytes(b"solid")
@@ -296,7 +325,7 @@ class TestUploadFile:
 
 
 class TestEnsureSetup:
-    def test_ensure_setup_creates_data_and_thumb_dirs(
+    def test_creates_every_directory_the_backend_writes_into(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         data_dir = tmp_path / "files"
@@ -312,7 +341,7 @@ class TestEnsureSetup:
 
 
 class TestDelete:
-    def test_unchecked_delete_is_disabled_and_preserves_file(
+    def test_refuses_an_unchecked_delete_without_removing_the_file(
         self, tmp_path: Path
     ) -> None:
         backend = LocalStorageBackend()
@@ -343,35 +372,52 @@ class TestDelete:
         assert destination.read_bytes() == b"replacement"
 
 
+def _nested_tree(root: Path) -> Path:
+    """Two objects, one of them a directory deep, under a single prefix."""
+    (root / "a").mkdir()
+    (root / "a" / "one.stl").write_bytes(b"1")
+    (root / "a" / "b").mkdir()
+    (root / "a" / "b" / "two.stl").write_bytes(b"22")
+    return root / "a"
+
+
 class TestListKeys:
-    def test_list_keys_and_walk_keys_find_files_recursively(
-        self, tmp_path: Path
-    ) -> None:
-        backend = LocalStorageBackend()
-        (tmp_path / "a").mkdir()
-        (tmp_path / "a" / "one.stl").write_bytes(b"1")
-        (tmp_path / "a" / "b").mkdir()
-        (tmp_path / "a" / "b" / "two.stl").write_bytes(b"22")
+    def test_finds_objects_nested_below_the_prefix(self, tmp_path: Path) -> None:
+        prefix = _nested_tree(tmp_path)
 
-        listed = backend.list_keys(str(tmp_path / "a"))
-        walked = list(backend.walk_keys(str(tmp_path / "a")))
+        listed = LocalStorageBackend().list_keys(str(prefix))
 
-        assert len(listed) == 2
-        assert len(walked) == 2
+        # A non-recursive listing would find one of the two and report a vault
+        # smaller than it is — which the audit then reads as missing objects.
         assert {Path(p).name for p in listed} == {"one.stl", "two.stl"}
 
-    def test_list_keys_and_walk_keys_return_empty_for_missing_root(
+    def test_returns_nothing_for_a_prefix_that_does_not_exist(
         self, tmp_path: Path
     ) -> None:
-        backend = LocalStorageBackend()
-        missing = tmp_path / "does-not-exist"
+        # Empty rather than raising: the audit walks prefixes that legitimately
+        # hold nothing yet, and an exception there aborts the whole sweep.
+        assert LocalStorageBackend().list_keys(str(tmp_path / "does-not-exist")) == []
 
-        assert backend.list_keys(str(missing)) == []
-        assert list(backend.walk_keys(str(missing))) == []
+
+class TestWalkKeys:
+    def test_finds_objects_nested_below_the_prefix(self, tmp_path: Path) -> None:
+        prefix = _nested_tree(tmp_path)
+
+        walked = list(LocalStorageBackend().walk_keys(str(prefix)))
+
+        assert {Path(p).name for p in walked} == {"one.stl", "two.stl"}
+
+    def test_returns_nothing_for_a_prefix_that_does_not_exist(
+        self, tmp_path: Path
+    ) -> None:
+        assert (
+            list(LocalStorageBackend().walk_keys(str(tmp_path / "does-not-exist")))
+            == []
+        )
 
 
 class TestUsage:
-    def test_usage_totals_size_and_count(self, tmp_path: Path) -> None:
+    def test_summarises_the_objects_under_a_prefix(self, tmp_path: Path) -> None:
         backend = LocalStorageBackend()
         root = tmp_path / "vault"
         root.mkdir()

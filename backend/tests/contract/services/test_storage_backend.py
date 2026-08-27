@@ -1,16 +1,14 @@
 """S3StorageBackend exercised against a real object store (SeaweedFS).
 
-Skipped unless PRINTSTASH_TEST_S3_ENDPOINT is set, so ``uv run pytest tests``
-stays dependency-free for contributors. Start a throwaway SeaweedFS with:
+The unit tests cover our reaction to an S3 client that misbehaves on cue. What
+they cannot cover is the protocol: conditional writes, version ids, ETag
+semantics and the exact shape of a `ClientError` are properties of the store, and
+a stub that returns what we expect proves only that we expect it.
 
-    docker compose -f docker-compose.test.yml up -d
-    PRINTSTASH_TEST_S3_ENDPOINT=http://localhost:9100 \
-        uv run pytest tests/test_storage_s3.py -v
-    docker compose -f docker-compose.test.yml down -v
-
-``tests/test_storage_seam.py`` covers ``exists()``'s auth-error handling with
-a hand-built client stub; this file covers the read/write round trip that
-only a real (or real-compatible) S3 endpoint can validate.
+The endpoint comes from ``PRINTSTASH_TEST_S3_ENDPOINT`` when it is set and from a
+throwaway SeaweedFS container otherwise, so this runs locally rather than being
+skipped. See ``tests/containers.py``; the whole file skips only when there is no
+endpoint and no Docker.
 """
 
 from __future__ import annotations
@@ -24,12 +22,11 @@ import pytest
 
 from app.core.config import _overlay
 from app.services.storage_backend import S3StorageBackend
+from tests.containers import s3_endpoint
 
-_ENDPOINT = os.environ.get("PRINTSTASH_TEST_S3_ENDPOINT")
-
-# The `s3` marker owns the skip: conftest.py skips anything carrying it when
-# PRINTSTASH_TEST_S3_ENDPOINT is unset, so the reason is worded once for every
-# resource-gated file instead of once per file.
+# The `s3` marker owns the skip: conftest.py resolves the endpoint once per run
+# and skips anything carrying this marker when there is none, so the reason is
+# worded once for every resource-gated file instead of once per file.
 pytestmark = pytest.mark.s3
 
 
@@ -39,7 +36,7 @@ def s3_backend() -> Iterator[S3StorageBackend]:
     _overlay.update(
         {
             "s3_bucket": bucket,
-            "s3_endpoint_url": _ENDPOINT,
+            "s3_endpoint_url": s3_endpoint(),
             "s3_region": "us-east-1",
             "s3_access_key": os.environ.get(
                 "PRINTSTASH_TEST_S3_ACCESS_KEY", "printstash"
@@ -267,7 +264,7 @@ class TestHealthProbe:
             "backend": "s3",
             "ok": True,
             "bucket": s3_backend._bucket,
-            "endpoint": _ENDPOINT,
+            "endpoint": s3_endpoint(),
         }
 
     def test_health_probe_reports_error_for_missing_bucket(

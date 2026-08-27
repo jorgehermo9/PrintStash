@@ -35,13 +35,13 @@ backend/tests/
 
 - **Directory = tier.** `conftest.py::pytest_collection_modifyitems` marks
   `e2e` and `contract` from the path; there is no `integration` marker.
-  **Resource markers** gate subsets: `postgres` (skips without
-  `PRINTSTASH_TEST_POSTGRES_URL`), `s3` (skips without an endpoint), `slow`
-  (large real files, long simulations). All markers are registered in
-  `pyproject.toml`; `--strict-markers` is on.
+  **Resource markers** gate subsets: `postgres`, `s3` (both resolved through
+  `tests/containers.py` — see *Real services* below), `slow` (large real files,
+  long simulations). All markers are registered in `pyproject.toml`;
+  `--strict-markers` is on.
 - **Lanes** (`./scripts/test.sh`): `fast` = `tests/unit tests/integration -m
-  "not slow"` (postgres/s3 auto-skip locally) · `contract` · `e2e` · `full` =
-  everything. CI runs `full` with the coverage gate.
+  "not slow"` · `contract` · `e2e` · `full` = everything. CI runs `full` with the
+  coverage gate.
 - Every directory is a package (`__init__.py`) so same-basename files in
   different tiers coexist.
 - **Never compute a path from `__file__`.** `Path(__file__).resolve().parents[2]`
@@ -273,13 +273,46 @@ style). The cached outbound client is dropped per test, so a fresh
   (`integration/postgres/`, `@pytest.mark.postgres`). Assert the row count and the `IntegrityError`,
   not timing.
 
-## PostgreSQL
+## Real services (`postgres`, `s3`)
 
-`integration/postgres/` (`postgres` marker) skips without `PRINTSTASH_TEST_POSTGRES_URL`; CI
-supplies a real `postgres:16`. Add a case there when a change introduces a
-query, index, constraint, or migration whose behaviour can differ from SQLite
-(JSON operators, `ON CONFLICT`, boolean/enum handling, batch alters). Run it
-locally against a real server before claiming the change is Postgres-safe.
+Two markers need a service the suite cannot fake, and `tests/containers.py`
+resolves each in one fixed order:
+
+1. **The configured endpoint** — `PRINTSTASH_TEST_POSTGRES_URL` /
+   `PRINTSTASH_TEST_S3_ENDPOINT`. Honoured even when it is broken, because
+   silently starting a container instead would hide an operator's
+   misconfiguration.
+2. **A throwaway container** via `testcontainers`, when the variable is unset and
+   a Docker daemon is reachable. Started lazily — on the first *selected* test
+   that carries the marker, never at collection — and stopped once at session
+   end.
+3. **Skip**, when there is neither. The reason names Docker rather than an
+   environment variable the reader has no reason to know about.
+
+**Why not testcontainers in CI as well.** CI sets the variables. GitHub's
+`services:` block starts PostgreSQL in parallel with checkout from the runner's
+image cache, and the SeaweedFS `docker run` is pinned to a digest with a
+development-sized volume limit that is worth reading in the workflow. Starting
+either from inside the step would add wall clock to every run and gain nothing.
+
+**Why not for `scripts/test_minio_migration.sh`.** That rehearses a
+compose-level migration an operator performs by hand, and its value is that it
+runs the same commands they would. Wrapping it in a Python container API would
+make it a different procedure from the one it documents.
+
+**Writing one of these tests.** Carry the marker (or live in
+`integration/postgres/`, which gets it from the directory) and read the endpoint
+through `postgres_url()` / `s3_endpoint()` **inside a fixture or test body** —
+never as a module-level constant. A module-level `os.environ.get` is evaluated at
+import, which is before the resolver has had a chance to start anything, so the
+test would see `None` and skip on a machine that could have run it.
+
+Add a `postgres` case when a change introduces a query, index, constraint, or
+migration whose behaviour can differ from SQLite (JSON operators, `ON CONFLICT`,
+boolean/enum handling, batch alters). Add an `s3` case when a change touches
+storage keys, conditional writes, version ids, or ETag handling — those are
+properties of the object store, and a stub that returns what we expect proves
+only that we expect it.
 
 ## Contract snapshots (`tests/repo/`)
 

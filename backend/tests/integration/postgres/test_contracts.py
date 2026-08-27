@@ -1,12 +1,18 @@
 """Contracts that must run against a real PostgreSQL server.
 
-The ordinary suite remains SQLite-first. CI supplies
-``PRINTSTASH_TEST_POSTGRES_URL`` for this focused dialect and concurrency gate.
+The ordinary suite remains SQLite-first, because SQLite is free and covers the
+application logic. What it cannot cover is the dialect: a partial index, an enum
+column, a concurrent-write conflict and a migration's rendered SQL all behave
+differently on PostgreSQL, and every one of those differences is invisible until
+somebody self-hosts on it.
+
+The server comes from ``PRINTSTASH_TEST_POSTGRES_URL`` when it is set (CI's
+``services:`` block) and from a throwaway container otherwise, so a local run
+covers this instead of skipping it. See ``tests/containers.py``.
 """
 
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from typing import Iterator
@@ -39,6 +45,7 @@ from app.services import provenance
 from app.services.auth import create_refresh_token, rotate_refresh_token
 from app.services.printer_rbac import effective_printer_role
 from app.services.rbac import effective_collection_role
+from tests.containers import postgres_url
 from tests.factories import (
     build_collection,
     build_file,
@@ -50,15 +57,14 @@ from tests.factories import (
 )
 from tests.paths import ALEMBIC_INI
 
-_POSTGRES_URL = os.getenv("PRINTSTASH_TEST_POSTGRES_URL")
-
 
 @pytest.fixture(scope="module")
 def postgres_engine() -> Iterator:
-    if not _POSTGRES_URL:
-        pytest.skip("PRINTSTASH_TEST_POSTGRES_URL is not configured")
-    run_migrations(_POSTGRES_URL)
-    engine = create_engine(normalize_database_url(_POSTGRES_URL), pool_pre_ping=True)
+    url = postgres_url()
+    if not url:
+        pytest.skip("no real PostgreSQL available")
+    run_migrations(url)
+    engine = create_engine(normalize_database_url(url), pool_pre_ping=True)
     try:
         yield engine
     finally:
@@ -147,9 +153,10 @@ class TestCrud:
 class TestAsyncEngine:
     @pytest.mark.asyncio
     async def test_psycopg_async_engine_executes_against_real_postgres(self) -> None:
-        if not _POSTGRES_URL:
-            pytest.skip("PRINTSTASH_TEST_POSTGRES_URL is not configured")
-        engine = create_async_engine_for_db(_POSTGRES_URL)
+        url = postgres_url()
+        if not url:
+            pytest.skip("no real PostgreSQL available")
+        engine = create_async_engine_for_db(url)
         try:
             async with AsyncSession(engine) as session:
                 result = await session.execute(text("SELECT 1"))

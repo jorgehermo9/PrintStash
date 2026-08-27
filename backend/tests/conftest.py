@@ -63,12 +63,20 @@ from app.db.session import (  # noqa: E402
     override_session_factory,
 )
 from app.services.printer_hub import PrinterHub  # noqa: E402
+from tests import containers  # noqa: E402
 
 _TIER_MARKERS = {"contract": "contract", "e2e": "e2e"}
 _RESOURCE_DIRS = {"postgres": "postgres"}
-_RESOURCE_ENV = {
-    "postgres": "PRINTSTASH_TEST_POSTGRES_URL",
-    "s3": "PRINTSTASH_TEST_S3_ENDPOINT",
+# Each resource names the variable that configures it and the resolver that gets
+# one — an env var if the operator set it, else a throwaway container, else
+# `None`. See `tests/containers.py` for why that order.
+_RESOURCES = {
+    "postgres": ("PRINTSTASH_TEST_POSTGRES_URL", "PostgreSQL", containers.postgres_url),
+    "s3": (
+        "PRINTSTASH_TEST_S3_ENDPOINT",
+        "an S3 endpoint (SeaweedFS)",
+        containers.s3_endpoint,
+    ),
 }
 
 
@@ -82,19 +90,42 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     file that did not happen to match.
 
     ``postgres`` and ``s3`` are *resource* markers, not tiers: they gate a subset inside
-    a tier and skip themselves when the resource is absent, so a contributor with
-    neither still runs the whole suite green.
+    a tier. Each resolves its resource on demand — the configured endpoint, or a
+    container started for the run — and skips only when neither is available, so a
+    contributor with Docker runs the same tests CI does and one without still gets a
+    green suite.
+
+    The resolution happens here rather than in a fixture because it must be settled
+    before the skip decision, and it happens only for markers a *selected* test
+    carries, so a run that touches neither resource starts no container.
     """
+    # Markers first, in their own pass: the `postgres` marker comes from the
+    # *directory* rather than a `pytestmark`, so computing what is needed before
+    # adding them would miss every postgres test.
     for item in items:
         parts = Path(str(item.path)).parts
         for directory, marker in {**_TIER_MARKERS, **_RESOURCE_DIRS}.items():
             if directory in parts:
                 item.add_marker(getattr(pytest.mark, marker))
-        for marker, env_var in _RESOURCE_ENV.items():
-            if marker in item.keywords and not os.environ.get(env_var):
-                item.add_marker(
-                    pytest.mark.skip(reason=f"{env_var} is not set; {marker} skipped")
-                )
+
+    needed = {
+        marker
+        for marker in _RESOURCES
+        if any(marker in item.keywords for item in items)
+    }
+    for marker in sorted(needed):
+        env_var, resource, resolve = _RESOURCES[marker]
+        if resolve() is not None:
+            continue
+        reason = containers.unavailable_reason(env_var, resource)
+        for item in items:
+            if marker in item.keywords:
+                item.add_marker(pytest.mark.skip(reason=reason))
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Stop any container this session started, once."""
+    containers.shutdown_containers()
 
 
 # The dev shell exports a short VAULT_JWT_SECRET (e.g. "dev-jwt-secret", 14 bytes),
