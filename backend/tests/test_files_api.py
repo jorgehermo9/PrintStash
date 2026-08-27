@@ -4,6 +4,8 @@ tests/test_slicer_download.py."""
 
 from __future__ import annotations
 
+import io
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -12,6 +14,7 @@ from app.core.time import utcnow
 from app.db.models import File, Model
 from app.services.jobs import registry
 from app.services.storage_backend import LocalStorageBackend, get_backend
+from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 
 
 def _remove_local_fixture(key: str) -> None:
@@ -119,7 +122,9 @@ class TestDownloadUrl:
         f = _make_file(db_session, model)
         backend = get_backend()
         monkeypatch.setattr(
-            backend, "presigned_download_url", lambda key, filename: "https://s3.example/fake"
+            backend,
+            "presigned_download_url",
+            lambda key, filename: "https://s3.example/fake",
         )
         resp = client.get(f"/api/v1/files/{f.id}/download-url", headers=auth_headers)
         assert resp.status_code == 200
@@ -152,7 +157,9 @@ class TestDownloadDirect:
         f = _make_file(db_session, model)
         backend = get_backend()
         monkeypatch.setattr(
-            backend, "presigned_download_url", lambda key, filename: "https://s3.example/redir"
+            backend,
+            "presigned_download_url",
+            lambda key, filename: "https://s3.example/redir",
         )
         resp = client.get(
             f"/api/v1/files/{f.id}/download-direct",
@@ -310,7 +317,11 @@ class TestFileAsStl:
         get_backend().write_bytes(b"fake-3mf-bytes", key)
         sha = "c1" * 32
         f = _make_file(
-            db_session, model, filename="model.3mf", ftype="3mf", path=key,
+            db_session,
+            model,
+            filename="model.3mf",
+            ftype="3mf",
+            path=key,
             sha256=sha,
         )
         backend = get_backend()
@@ -340,6 +351,38 @@ class TestFileAsStl:
         # Cached on the second call — conversion doesn't run again.
         assert calls["n"] == 1
 
+    def test_3d_builder_component_preview_returns_transformed_binary_stl(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        model = _make_model(db_session, slug="stl-3d-builder", hash_="a6" * 32)
+        key = "3d-builder-component.3mf"
+        sha = "c3" * 32
+        backend = get_backend()
+        backend.write_bytes(build_3d_builder_component_project(), key)
+        _remove_local_fixture(backend.stl_cache_key(sha))
+        file_row = _make_file(
+            db_session,
+            model,
+            filename=key,
+            ftype="3mf",
+            path=key,
+            sha256=sha,
+        )
+
+        response = client.get(f"/api/v1/files/{file_row.id}/stl", headers=auth_headers)
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("application/sla")
+        assert response.content
+        import trimesh
+
+        mesh = trimesh.load_mesh(
+            io.BytesIO(response.content), file_type="stl", process=False
+        )
+        assert mesh.bounds.tolist() == pytest.approx(
+            [[110.0, 220.0, 330.0], [112.0, 223.0, 334.0]]
+        )
+
     def test_conversion_failure_500(
         self, client: TestClient, db_session: Session, auth_headers, monkeypatch
     ) -> None:
@@ -347,7 +390,11 @@ class TestFileAsStl:
         key = "broken.obj"
         get_backend().write_bytes(b"not-really-obj", key)
         f = _make_file(
-            db_session, model, filename="broken.obj", ftype="obj", path=key,
+            db_session,
+            model,
+            filename="broken.obj",
+            ftype="obj",
+            path=key,
             sha256="c2" * 32,
         )
 
@@ -358,6 +405,29 @@ class TestFileAsStl:
         resp = client.get(f"/api/v1/files/{f.id}/stl", headers=auth_headers)
         assert resp.status_code == 500
         assert resp.json()["detail"] == "stl_conversion_failed"
+
+    def test_malformed_3mf_preview_fails_safely(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        model = _make_model(db_session, slug="stl-malformed-3mf", hash_="a7" * 32)
+        key = "malformed.3mf"
+        sha = "c4" * 32
+        backend = get_backend()
+        backend.write_bytes(b"not a 3mf archive", key)
+        _remove_local_fixture(backend.stl_cache_key(sha))
+        file_row = _make_file(
+            db_session,
+            model,
+            filename=key,
+            ftype="3mf",
+            path=key,
+            sha256=sha,
+        )
+
+        response = client.get(f"/api/v1/files/{file_row.id}/stl", headers=auth_headers)
+
+        assert response.status_code == 500, response.text
+        assert response.json()["detail"] == "stl_conversion_failed"
 
 
 class TestThumbnailRebuildInternals:
@@ -395,9 +465,7 @@ class TestThumbnailRebuildInternals:
         assert status is not None
         assert model.id in status.result["failed_render"]
 
-    def test_failed_render_recorded(
-        self, db_session: Session, monkeypatch
-    ) -> None:
+    def test_failed_render_recorded(self, db_session: Session, monkeypatch) -> None:
         from app.api.v1.files import _run_thumbnail_rebuild
         from app.db.session import get_session_factory
 
@@ -431,9 +499,7 @@ class TestThumbnailRebuildInternals:
         def boom(_path):
             raise RuntimeError("renderer exploded")
 
-        monkeypatch.setattr(
-            "app.services.mesh_processing.render_thumbnail", boom
-        )
+        monkeypatch.setattr("app.services.mesh_processing.render_thumbnail", boom)
 
         job_id = registry.create(owner_user_id=None)
         _run_thumbnail_rebuild(job_id, True, get_session_factory())

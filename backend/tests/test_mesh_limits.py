@@ -2,7 +2,7 @@
 process during a library scan (issue #24).
 
 Loading + rasterising a mesh costs ~700 MB of peak RSS per million triangles,
-and the cost is paid inside ``trimesh.load_mesh`` — so the only safe defence is to
+and the cost is paid inside the trimesh scene loader — so the only safe defence is to
 estimate the triangle count *before* loading and skip the monster. The file is
 still indexed; a 3MF still yields its embedded slicer preview.
 """
@@ -21,6 +21,7 @@ import pytest
 
 from app.core.config import _overlay
 from app.services import mesh_processing
+from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +73,11 @@ def _write_renderable_binary_stl(path: Path, n_triangles: int) -> None:
                     0,
                 )
             )
+
+
+def _write_3d_builder_component_project(path: Path) -> None:
+    """Write a standards-shaped 3MF with nested build/component placement."""
+    path.write_bytes(build_3d_builder_component_project())
 
 
 def _write_large_projected_binary_stl(path: Path, n_triangles: int) -> None:
@@ -1022,6 +1028,30 @@ def test_valid_embedded_3mf_preview_precedes_mesh_render(
     assert thumb == png
 
 
+def test_3mf_component_scene_transforms_are_baked_into_stl(tmp_path: Path) -> None:
+    path = tmp_path / "3d-builder-component.3mf"
+    _write_3d_builder_component_project(path)
+
+    converted = mesh_processing.to_stl_bytes(path)
+
+    assert converted is not None and len(converted) > 84
+    import trimesh
+
+    mesh = trimesh.load_mesh(io.BytesIO(converted), file_type="stl", process=False)
+    np.testing.assert_allclose(
+        mesh.bounds,
+        np.asarray([[110.0, 220.0, 330.0], [112.0, 223.0, 334.0]]),
+        atol=1e-5,
+    )
+
+
+def test_malformed_3mf_conversion_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "malformed.3mf"
+    path.write_bytes(b"not a zip archive")
+
+    assert mesh_processing.to_stl_bytes(path) is None
+
+
 def test_post_load_backstop_skips_render_when_estimate_missed(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1843,7 +1873,7 @@ def test_step_worker_rejects_tessellation_above_triangle_cap(monkeypatch) -> Non
 
 def test_load_mesh_returns_none_for_unrecognised_extension(tmp_path: Path) -> None:
     # trimesh can't even pick a loader for an unknown extension, so this raises
-    # inside trimesh.load_mesh — exercising _load_mesh's broad except-and-log path.
+    # inside trimesh.load_scene — exercising _load_mesh's broad except-and-log path.
     p = tmp_path / "garbage.foobar"
     p.write_bytes(b"this is not a mesh at all \x00\x01\x02")
     assert mesh_processing._load_mesh(p) is None
@@ -1852,11 +1882,9 @@ def test_load_mesh_returns_none_for_unrecognised_extension(tmp_path: Path) -> No
 def test_load_mesh_flattens_scene_with_multiple_geometries(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # trimesh.load_mesh(...) already concatenates a multi-geometry
-    # Scene into one Trimesh internally, so _load_mesh's own Scene-flattening
-    # branch is normally unreachable through that call. Stub trimesh.load_mesh to
-    # return a real Scene so this (still-real) fallback path is exercised —
-    # it's a legitimate defensive path for a future/edge-case trimesh return.
+    # _load_mesh keeps the scene returned by trimesh.load_scene(...) until dump()
+    # bakes each graph path's transforms. Stub load_scene to return a real Scene
+    # so this scene-flattening path is exercised with real trimesh geometry.
     import trimesh
 
     scene = trimesh.Scene()
@@ -1868,7 +1896,7 @@ def test_load_mesh_flattens_scene_with_multiple_geometries(
     p = tmp_path / "scene.3mf"
     scene.export(p, file_type="3mf")
 
-    monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: scene)
+    monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: scene)
     mesh = mesh_processing._load_mesh(p)
     assert mesh is not None
     # Concatenated geometry from both boxes.
@@ -1883,7 +1911,7 @@ def test_load_mesh_scene_with_no_trimesh_geometry_returns_none(
     empty_scene = trimesh.Scene()  # no geometry at all
     p = tmp_path / "empty.3mf"
     p.write_bytes(b"placeholder")
-    monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: empty_scene)
+    monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: empty_scene)
     assert mesh_processing._load_mesh(p) is None
 
 
@@ -1897,7 +1925,7 @@ def test_load_mesh_scene_with_single_geometry_returns_it_directly(
     scene.add_geometry(box, node_name="a")
     p = tmp_path / "single.3mf"
     p.write_bytes(b"placeholder")
-    monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: scene)
+    monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: scene)
     mesh = mesh_processing._load_mesh(p)
     assert mesh is not None
     assert len(mesh.faces) == 12
@@ -1914,7 +1942,7 @@ def test_load_mesh_returns_none_for_unsupported_loaded_type(
     # some inputs; _load_mesh must decline rather than mishandle it.
     monkeypatch.setattr(
         trimesh,
-        "load_mesh",
+        "load_scene",
         lambda *a, **k: trimesh.points.PointCloud([[0, 0, 0]]),
     )
     assert mesh_processing._load_mesh(p) is None
@@ -1932,7 +1960,7 @@ def test_load_mesh_uses_typed_loader_without_processing(
         calls.append((args, kwargs))
         return expected
 
-    monkeypatch.setattr(trimesh, "load_mesh", typed_loader)
+    monkeypatch.setattr(trimesh, "load_scene", typed_loader)
     path = tmp_path / "typed.stl"
     path.write_bytes(b"placeholder")
 

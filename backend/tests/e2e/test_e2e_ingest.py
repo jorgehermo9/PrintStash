@@ -26,6 +26,7 @@ from app.core.time import utcnow
 from app.db.models import BackgroundJob, InboxItem, InboxItemState, User
 from app.services.jobs import registry
 from app.services.setup_token import current_setup_token
+from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 
 pytestmark = pytest.mark.e2e
 
@@ -315,3 +316,36 @@ async def test_3mf_upload_persists_embedded_preview(api, tmp_path, e2e_db, monke
     with Image.open(io.BytesIO(thumbnail.content)) as image:
         pixels = np.asarray(image.convert("RGB"))
     assert np.all(pixels == color)
+
+
+@pytest.mark.asyncio
+async def test_3d_builder_component_preview_serves_transformed_stl(
+    api, tmp_path, e2e_db
+):
+    """The headline 3MF preview flow preserves component/build placement."""
+    archive = build_3d_builder_component_project()
+    headers = await _setup_and_login(api, tmp_path)
+
+    uploaded = await api.post(
+        "/api/v1/ingest/model",
+        files={"file": ("3d-builder-component.3mf", archive, "model/3mf")},
+        data={"model_name": "3D Builder Component"},
+        headers=headers,
+    )
+    assert uploaded.status_code == 202, uploaded.text
+    job = await _await_job(api, headers, uploaded.json()["job_id"])
+    assert job["state"] == "completed", job
+
+    response = await api.get(f"/api/v1/files/{job['file_id']}/stl", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/sla")
+    assert response.content
+    import trimesh
+
+    mesh = trimesh.load_mesh(
+        io.BytesIO(response.content), file_type="stl", process=False
+    )
+    assert mesh.bounds.tolist() == pytest.approx(
+        [[110.0, 220.0, 330.0], [112.0, 223.0, 334.0]]
+    )

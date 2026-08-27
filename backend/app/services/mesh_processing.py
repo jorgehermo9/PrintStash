@@ -452,28 +452,57 @@ def _load_mesh(path: Path):
         return _load_step_mesh_isolated(path)
 
     try:
-        # process=False skips trimesh's vertex-merge + adjacency build, which we
-        # don't need for bbox/volume/render and which adds ~15% peak memory.
-        loaded = trimesh.load_mesh(str(path), process=False)
+        # Load the scene rather than asking trimesh for a mesh directly. 3MF
+        # projects commonly represent a placed part as a component graph: the
+        # mesh lives on one object while the build item and component carry its
+        # transforms. ``load_mesh`` has changed how it coerces scenes across
+        # trimesh releases, and flattening ``Scene.geometry`` directly drops
+        # those instance transforms. Keep the scene until ``dump`` explicitly
+        # bakes every graph path into each mesh instance.
+        loaded = trimesh.load_scene(str(path), process=False)
     except Exception:
         logger.warning(
-            "mesh_processing: trimesh.load_mesh failed for %s",
+            "mesh_processing: trimesh.load_scene failed for %s",
             path.name,
             exc_info=True,
         )
         return None
 
-    if isinstance(loaded, trimesh.Trimesh):
-        return loaded
-
     if isinstance(loaded, trimesh.Scene):
-        # Flatten all geometry in the scene into a single mesh.
-        meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
+        # ``dump`` applies build and component transforms and retains repeated
+        # instances. Looking only at ``loaded.geometry.values()`` would return
+        # the source mesh once at its untransformed coordinates.
+        try:
+            meshes = [
+                geometry
+                for geometry in loaded.dump()
+                if isinstance(geometry, trimesh.Trimesh)
+            ]
+        except Exception:
+            logger.warning(
+                "mesh_processing: failed to flatten scene for %s",
+                path.name,
+                exc_info=True,
+            )
+            return None
         if not meshes:
             return None
         if len(meshes) == 1:
             return meshes[0]
-        return trimesh.util.concatenate(meshes)
+        try:
+            return trimesh.util.concatenate(meshes)
+        except Exception:
+            logger.warning(
+                "mesh_processing: failed to concatenate scene meshes for %s",
+                path.name,
+                exc_info=True,
+            )
+            return None
+
+    # Keep this defensive branch for custom trimesh loaders and test doubles
+    # that return a mesh directly instead of a Scene.
+    if isinstance(loaded, trimesh.Trimesh):
+        return loaded
 
     return None
 

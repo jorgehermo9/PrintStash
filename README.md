@@ -228,6 +228,21 @@ tessellation but keeps STL/OBJ/3MF thumbnail generation:
 docker compose -f docker-compose.light.yml up -d
 ```
 
+### Bind-mounted data directories
+
+The API image starts with the unprivileged `10001:10001` identity. If you
+replace the named volumes with host bind mounts, set `PUID` and `PGID` to the
+numeric owner that should access those directories; the entrypoint repairs
+ownership before running migrations and the server:
+
+```bash
+PUID=1000 PGID=1000 docker compose up -d
+```
+
+Both values must be positive numeric Linux IDs. The default `10001:10001` is
+used when they are omitted. Changing either value on a later restart safely
+re-keys ownership of the mounted data directories.
+
 For a hardened production setup (API kept internal, frontend bound to localhost
 behind your own TLS reverse proxy), use the production compose instead. That file
 declares `VAULT_JWT_SECRET` as required and refuses to start without it, on the

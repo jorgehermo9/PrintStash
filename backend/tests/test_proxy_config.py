@@ -44,6 +44,21 @@ def test_compose_wires_frontend_proxy_limit_from_upload_setting() -> None:
     assert "VAULT_MAX_UPLOAD_MB: ${VAULT_MAX_UPLOAD_MB:-512}" in compose
 
 
+def test_api_compose_services_wire_runtime_file_identity() -> None:
+    root = _root()
+
+    for name in (
+        "docker-compose.yml",
+        "docker-compose.light.yml",
+        "docker-compose.prod.yml",
+        "docker-compose.manual-test.yml",
+    ):
+        config = yaml.safe_load((root / name).read_text())
+        environment = config["services"]["api"]["environment"]
+        assert environment["PUID"] == "${PUID:-10001}"
+        assert environment["PGID"] == "${PGID:-10001}"
+
+
 def test_default_deployments_do_not_publish_api_port() -> None:
     root = _root()
     for name in ("docker-compose.yml", "docker-compose.light.yml"):
