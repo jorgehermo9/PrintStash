@@ -82,85 +82,6 @@ def _open_namespace_escape(session: Session) -> None:
     session.commit()
 
 
-def test_gc_preserves_document_blobs(db_session: Session, storage) -> None:
-    doc = _binary_document(db_session, storage)
-    key = storage.document_file_key(doc.id, doc.filename)
-
-    _cleanup_orphan_blobs(db_session)
-
-    assert Path(key).exists(), "GC deleted a live document's blob"
-
-
-def test_gc_preserves_model_blobs(db_session: Session, storage) -> None:
-    f = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "widget", slug="widget"),
-        filename="widget.stl",
-    )
-
-    _cleanup_orphan_blobs(db_session)
-
-    assert Path(f.path).exists()
-
-
-def test_gc_preserves_file_derivatives_while_artifact_exists(
-    db_session: Session, storage
-) -> None:
-    artifact = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "derived-live", slug="derived-live"),
-        filename="derived-live.stl",
-    )
-    keys = (
-        storage.thumbnail_key(artifact.id),
-        storage.legacy_thumbnail_key(artifact.id),
-        storage.stl_cache_key(artifact.sha256),
-    )
-    for key in keys:
-        _write(key)
-
-    _cleanup_orphan_blobs(db_session)
-
-    assert all(Path(key).exists() for key in keys)
-
-
-def test_gc_preserves_trashed_model_blobs(db_session: Session, storage) -> None:
-    """A trashed model's bytes must survive until hard delete — restore needs them."""
-    f = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "trashed", slug="trashed"),
-        filename="trashed.stl",
-    )
-    f.deleted_at = utcnow()
-    db_session.add(f)
-    db_session.commit()
-
-    _cleanup_orphan_blobs(db_session)
-
-    assert Path(f.path).exists()
-
-
-def test_gc_preserves_document_blobs_when_models_exist(
-    db_session: Session, storage
-) -> None:
-    """The two censuses must union, not shadow each other."""
-    f = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "widget", slug="widget"),
-        filename="widget.stl",
-    )
-    doc = _binary_document(db_session, storage)
-
-    _cleanup_orphan_blobs(db_session)
-
-    assert Path(f.path).exists()
-    assert Path(storage.document_file_key(doc.id, doc.filename)).exists()
-
-
 def test_gc_preserves_unclaimed_files_in_local_storage(
     db_session: Session, storage
 ) -> None:
@@ -188,19 +109,6 @@ def test_gc_preserves_unclaimed_files_in_local_storage(
     assert removed == 0
 
 
-def test_gc_does_not_guess_ownership_after_document_row_is_missing(
-    db_session: Session, storage
-) -> None:
-    doc = _binary_document(db_session, storage)
-    key = storage.document_file_key(doc.id, doc.filename)
-    db_session.delete(doc)
-    db_session.commit()
-
-    _cleanup_orphan_blobs(db_session)
-
-    assert Path(key).exists()
-
-
 def test_gc_ignores_markdown_documents(db_session: Session, storage) -> None:
     """Markdown docs own no blob — they must not contribute a bogus key."""
     doc = Document(name="notes", kind=DocumentKind.MARKDOWN, body="# hi")
@@ -208,24 +116,6 @@ def test_gc_ignores_markdown_documents(db_session: Session, storage) -> None:
     db_session.commit()
 
     assert _cleanup_orphan_blobs(db_session) == 0
-
-
-def test_gc_hard_deletes_expired_document_and_its_blob(
-    db_session: Session, storage
-) -> None:
-    doc = _binary_document(db_session, storage)
-    document_id = doc.id
-    key = storage.document_file_key(doc.id, doc.filename)
-    doc.deleted_at = utcnow()
-    db_session.add(doc)
-    db_session.commit()
-
-    result = gc_soft_deleted(retention_days=0)
-
-    assert result["rows"] >= 1
-    assert not Path(key).exists()
-    db_session.expire_all()
-    assert db_session.get(Document, document_id) is None
 
 
 def test_gc_hard_deletes_expired_artifact_and_its_derivatives(
@@ -276,63 +166,6 @@ def test_negative_retention_disables_gc_and_preserves_owned_bytes(
     assert Path(artifact.path).exists()
     db_session.expire_all()
     assert db_session.get(File, artifact.id) is not None
-
-
-def test_hard_delete_aborts_when_owned_storage_is_suddenly_unmounted(
-    db_session: Session, storage, tmp_path: Path
-) -> None:
-    artifact = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "unmounted", slug="unmounted"),
-        filename="unmounted.stl",
-    )
-    artifact.deleted_at = utcnow() - timedelta(days=1)
-    db_session.add(artifact)
-    db_session.commit()
-    mounted_root = Path(_overlay["data_dir"])
-    detached_root = tmp_path / "detached-files"
-    mounted_root.rename(detached_root)
-    mounted_root.mkdir()
-
-    result = gc_soft_deleted(retention_days=0)
-
-    assert result["resources_blocked"] == 1
-    db_session.expire_all()
-    assert db_session.get(File, artifact.id) is not None
-    assert (detached_root / "unmounted" / "v1" / "unmounted.stl").exists()
-
-
-def test_hard_delete_aborts_on_read_only_storage_and_preserves_row(
-    db_session: Session,
-    storage,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    artifact = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "readonly", slug="readonly"),
-        filename="readonly.stl",
-    )
-    artifact.deleted_at = utcnow() - timedelta(days=1)
-    db_session.add(artifact)
-    db_session.commit()
-    import tempfile
-
-    original_mkstemp = tempfile.mkstemp
-
-    def denied(*args, **kwargs):
-        if Path(kwargs.get("dir", "")) == Path(artifact.path).parent:
-            raise PermissionError("read-only mount")
-        return original_mkstemp(*args, **kwargs)
-
-    monkeypatch.setattr("app.services.storage_backend.tempfile.mkstemp", denied)
-    result = gc_soft_deleted(retention_days=0)
-
-    assert result["resources_blocked"] == 1
-    db_session.expire_all()
-    assert db_session.get(File, artifact.id) is not None
-    assert Path(artifact.path).exists()
 
 
 def test_gc_skips_legacy_candidate_without_blocking_verifiable_candidates(
@@ -410,142 +243,6 @@ def test_gc_adopts_and_purges_pre_ledger_artifact_with_matching_content(
     assert db_session.get(File, artifact_id) is None
 
 
-def test_hard_delete_late_storage_failure_leaks_remainder_without_db_rollback(
-    db_session: Session, storage, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.services.trash import hard_delete_model
-
-    first = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "two-file-purge", slug="two-file-purge"),
-        filename="two-file-purge.stl",
-    )
-    model = db_session.get(Model, first.model_id)
-    assert model is not None
-    second_key = store_owned_bytes(
-        db_session,
-        storage,
-        storage.blob_key("two-file-purge", 2, "second.stl"),
-        b"second",
-    ).key
-    second = build_file(
-        db_session,
-        model,
-        path=second_key,
-        filename="second.stl",
-        file_type=FileType.STL,
-        version=2,
-        size_bytes=6,
-        sha256="second-file-hash",
-    )
-
-    real_rollback = storage.rollback_create
-    deletes = 0
-
-    def fail_second(receipt):
-        nonlocal deletes
-        deletes += 1
-        if deletes == 2:
-            raise OSError("storage became unavailable")
-        return real_rollback(receipt)
-
-    monkeypatch.setattr(storage, "rollback_create", fail_second)
-
-    hard_delete_model(db_session, model)
-    assert deletes == 0, "storage deletion must never happen before SQL commit"
-    db_session.commit()
-
-    from app.services.storage_deletion import process_storage_delete_intents
-
-    result = process_storage_delete_intents()
-
-    assert not Path(first.path).exists()
-    assert Path(second_key).read_bytes() == b"second"
-    assert result.completed == 1
-    assert result.pending == 1
-    db_session.expire_all()
-    assert db_session.get(Model, model.id) is None
-    assert db_session.get(File, first.id) is None
-    assert db_session.get(File, second.id) is None
-
-
-def test_hard_delete_rollback_preserves_blob_and_discards_intent(
-    db_session: Session, storage, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.services.trash import hard_delete_model
-
-    artifact = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "rollback-safe", slug="rollback-safe"),
-        filename="rollback-safe.stl",
-    )
-    artifact_key = artifact.path
-    model = db_session.get(Model, artifact.model_id)
-    assert model is not None
-    calls = 0
-
-    def _unexpected_delete(_receipt):
-        nonlocal calls
-        calls += 1
-        return True
-
-    monkeypatch.setattr(storage, "rollback_create", _unexpected_delete)
-
-    hard_delete_model(db_session, model)
-    assert calls == 0
-    assert db_session.exec(select(StorageDeleteIntent)).all()
-    db_session.rollback()
-
-    assert calls == 0
-    assert Path(artifact.path).exists()
-    assert db_session.get(Model, model.id) is not None
-    assert (
-        db_session.exec(
-            select(StorageDeleteIntent).where(
-                StorageDeleteIntent.resource_kind == "file",
-                StorageDeleteIntent.key == artifact_key,
-            )
-        ).all()
-        == []
-    )
-
-
-def test_hard_delete_resolves_share_link_before_model_delete(
-    db_session: Session, storage
-) -> None:
-    from app.services.storage_deletion import process_storage_delete_intents
-    from app.services.trash import hard_delete_model
-
-    artifact = build_stored_file(
-        db_session,
-        storage,
-        build_model(db_session, "shared-purge", slug="shared-purge"),
-        filename="shared-purge.stl",
-    )
-    model = db_session.get(Model, artifact.model_id)
-    assert model is not None
-    model.deleted_at = utcnow()
-    db_session.add(model)
-    db_session.add(
-        ShareLink(
-            model_id=model.id,
-            token_hash="f" * 64,
-            expires_at=utcnow() + timedelta(days=1),
-        )
-    )
-    db_session.commit()
-
-    hard_delete_model(db_session, model)
-    assert Path(artifact.path).exists()
-    db_session.commit()
-    process_storage_delete_intents()
-
-    assert db_session.get(Model, model.id) is None
-    assert not Path(artifact.path).exists()
-
-
 def test_gc_preserves_shared_stl_cache_until_last_artifact_is_purged(
     db_session: Session, storage
 ) -> None:
@@ -575,78 +272,6 @@ def test_gc_preserves_shared_stl_cache_until_last_artifact_is_purged(
     assert Path(cache_key).exists()
     db_session.expire_all()
     assert db_session.get(File, survivor.id) is not None
-
-
-def test_gc_preserves_unreferenced_collection_images(
-    db_session: Session, storage
-) -> None:
-    collection = build_collection(db_session, name="Docs", slug="docs", path="docs")
-    unreferenced = _write(storage.collection_image_key(collection.id, "gone.png"))
-
-    removed = _cleanup_orphan_blobs(db_session)
-
-    assert removed == 0
-    assert Path(unreferenced).exists()
-
-
-def test_gc_preserves_referenced_collection_images(
-    db_session: Session, storage
-) -> None:
-    collection = build_collection(db_session, name="Docs", slug="docs", path="docs")
-    name = "a" * 64 + ".png"
-    collection.readme = f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
-    db_session.add(collection)
-    db_session.commit()
-    key = store_owned_bytes(
-        db_session, storage, storage.collection_image_key(collection.id, name)
-    ).key
-
-    _cleanup_orphan_blobs(db_session)
-
-    assert Path(key).exists()
-
-
-def test_gc_does_not_infer_ownership_from_expired_collection_namespace(
-    db_session: Session, storage
-) -> None:
-    collection = build_collection(
-        db_session,
-        name="Old docs",
-        slug="old-docs",
-        path="old-docs",
-        deleted_at=utcnow() - timedelta(days=1),
-    )
-    collection_id = collection.id
-    key = _write(storage.collection_image_key(collection.id, "unlinked.png"))
-
-    gc_soft_deleted(retention_days=0)
-
-    assert Path(key).exists()
-    db_session.expire_all()
-    assert db_session.get(Collection, collection_id) is None
-
-
-def test_gc_hard_deletes_expired_collection_referenced_image(
-    db_session: Session, storage
-) -> None:
-    name = "a" * 64 + ".png"
-    collection = build_collection(
-        db_session,
-        name="Old docs",
-        slug="old-docs",
-        path="old-docs",
-        deleted_at=utcnow() - timedelta(days=1),
-    )
-    collection.readme = f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
-    db_session.add(collection)
-    db_session.commit()
-    key = store_owned_bytes(
-        db_session, storage, storage.collection_image_key(collection.id, name)
-    ).key
-
-    gc_soft_deleted(retention_days=0)
-
-    assert not Path(key).exists()
 
 
 class TestGcSoftDeleted:
@@ -737,3 +362,381 @@ class TestGcSoftDeleted:
         assert result["resources_blocked"] == 1
         db_session.expire_all()
         assert db_session.get(Collection, collection.id) is not None
+
+
+class TestCollection:
+    def test_gc_preserves_unreferenced_collection_images(
+        self, db_session: Session, storage
+    ) -> None:
+        collection = build_collection(db_session, name="Docs", slug="docs", path="docs")
+        unreferenced = _write(storage.collection_image_key(collection.id, "gone.png"))
+
+        removed = _cleanup_orphan_blobs(db_session)
+
+        assert removed == 0
+        assert Path(unreferenced).exists()
+
+    def test_gc_preserves_referenced_collection_images(
+        self, db_session: Session, storage
+    ) -> None:
+        collection = build_collection(db_session, name="Docs", slug="docs", path="docs")
+        name = "a" * 64 + ".png"
+        collection.readme = (
+            f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
+        )
+        db_session.add(collection)
+        db_session.commit()
+        key = store_owned_bytes(
+            db_session, storage, storage.collection_image_key(collection.id, name)
+        ).key
+
+        _cleanup_orphan_blobs(db_session)
+
+        assert Path(key).exists()
+
+    def test_gc_does_not_infer_ownership_from_expired_collection_namespace(
+        self, db_session: Session, storage
+    ) -> None:
+        collection = build_collection(
+            db_session,
+            name="Old docs",
+            slug="old-docs",
+            path="old-docs",
+            deleted_at=utcnow() - timedelta(days=1),
+        )
+        collection_id = collection.id
+        key = _write(storage.collection_image_key(collection.id, "unlinked.png"))
+
+        gc_soft_deleted(retention_days=0)
+
+        assert Path(key).exists()
+        db_session.expire_all()
+        assert db_session.get(Collection, collection_id) is None
+
+    def test_gc_hard_deletes_expired_collection_referenced_image(
+        self, db_session: Session, storage
+    ) -> None:
+        name = "a" * 64 + ".png"
+        collection = build_collection(
+            db_session,
+            name="Old docs",
+            slug="old-docs",
+            path="old-docs",
+            deleted_at=utcnow() - timedelta(days=1),
+        )
+        collection.readme = (
+            f"![diagram](/api/v1/collections/{collection.id}/images/{name})"
+        )
+        db_session.add(collection)
+        db_session.commit()
+        key = store_owned_bytes(
+            db_session, storage, storage.collection_image_key(collection.id, name)
+        ).key
+
+        gc_soft_deleted(retention_days=0)
+
+        assert not Path(key).exists()
+
+
+class TestDocument:
+    def test_gc_preserves_document_blobs(self, db_session: Session, storage) -> None:
+        doc = _binary_document(db_session, storage)
+        key = storage.document_file_key(doc.id, doc.filename)
+
+        _cleanup_orphan_blobs(db_session)
+
+        assert Path(key).exists(), "GC deleted a live document's blob"
+
+    def test_gc_preserves_document_blobs_when_models_exist(
+        self, db_session: Session, storage
+    ) -> None:
+        """The two censuses must union, not shadow each other."""
+        f = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "widget", slug="widget"),
+            filename="widget.stl",
+        )
+        doc = _binary_document(db_session, storage)
+
+        _cleanup_orphan_blobs(db_session)
+
+        assert Path(f.path).exists()
+        assert Path(storage.document_file_key(doc.id, doc.filename)).exists()
+
+    def test_gc_does_not_guess_ownership_after_document_row_is_missing(
+        self, db_session: Session, storage
+    ) -> None:
+        doc = _binary_document(db_session, storage)
+        key = storage.document_file_key(doc.id, doc.filename)
+        db_session.delete(doc)
+        db_session.commit()
+
+        _cleanup_orphan_blobs(db_session)
+
+        assert Path(key).exists()
+
+    def test_gc_hard_deletes_expired_document_and_its_blob(
+        self, db_session: Session, storage
+    ) -> None:
+        doc = _binary_document(db_session, storage)
+        document_id = doc.id
+        key = storage.document_file_key(doc.id, doc.filename)
+        doc.deleted_at = utcnow()
+        db_session.add(doc)
+        db_session.commit()
+
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["rows"] >= 1
+        assert not Path(key).exists()
+        db_session.expire_all()
+        assert db_session.get(Document, document_id) is None
+
+
+class TestModel:
+    def test_gc_preserves_model_blobs(self, db_session: Session, storage) -> None:
+        f = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "widget", slug="widget"),
+            filename="widget.stl",
+        )
+
+        _cleanup_orphan_blobs(db_session)
+
+        assert Path(f.path).exists()
+
+    def test_gc_preserves_trashed_model_blobs(
+        self, db_session: Session, storage
+    ) -> None:
+        """A trashed model's bytes must survive until hard delete — restore needs them."""
+        f = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "trashed", slug="trashed"),
+            filename="trashed.stl",
+        )
+        f.deleted_at = utcnow()
+        db_session.add(f)
+        db_session.commit()
+
+        _cleanup_orphan_blobs(db_session)
+
+        assert Path(f.path).exists()
+
+
+class TestExists:
+    def test_gc_preserves_file_derivatives_while_artifact_exists(
+        self, db_session: Session, storage
+    ) -> None:
+        artifact = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "derived-live", slug="derived-live"),
+            filename="derived-live.stl",
+        )
+        keys = (
+            storage.thumbnail_key(artifact.id),
+            storage.legacy_thumbnail_key(artifact.id),
+            storage.stl_cache_key(artifact.sha256),
+        )
+        for key in keys:
+            _write(key)
+
+        _cleanup_orphan_blobs(db_session)
+
+        assert all(Path(key).exists() for key in keys)
+
+
+class TestDelete:
+    def test_hard_delete_aborts_when_owned_storage_is_suddenly_unmounted(
+        self, db_session: Session, storage, tmp_path: Path
+    ) -> None:
+        artifact = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "unmounted", slug="unmounted"),
+            filename="unmounted.stl",
+        )
+        artifact.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(artifact)
+        db_session.commit()
+        mounted_root = Path(_overlay["data_dir"])
+        detached_root = tmp_path / "detached-files"
+        mounted_root.rename(detached_root)
+        mounted_root.mkdir()
+
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["resources_blocked"] == 1
+        db_session.expire_all()
+        assert db_session.get(File, artifact.id) is not None
+        assert (detached_root / "unmounted" / "v1" / "unmounted.stl").exists()
+
+    def test_hard_delete_aborts_on_read_only_storage_and_preserves_row(
+        self,
+        db_session: Session,
+        storage,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        artifact = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "readonly", slug="readonly"),
+            filename="readonly.stl",
+        )
+        artifact.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(artifact)
+        db_session.commit()
+        import tempfile
+
+        original_mkstemp = tempfile.mkstemp
+
+        def denied(*args, **kwargs):
+            if Path(kwargs.get("dir", "")) == Path(artifact.path).parent:
+                raise PermissionError("read-only mount")
+            return original_mkstemp(*args, **kwargs)
+
+        monkeypatch.setattr("app.services.storage_backend.tempfile.mkstemp", denied)
+        result = gc_soft_deleted(retention_days=0)
+
+        assert result["resources_blocked"] == 1
+        db_session.expire_all()
+        assert db_session.get(File, artifact.id) is not None
+        assert Path(artifact.path).exists()
+
+    def test_hard_delete_resolves_share_link_before_model_delete(
+        self, db_session: Session, storage
+    ) -> None:
+        from app.services.storage_deletion import process_storage_delete_intents
+        from app.services.trash import hard_delete_model
+
+        artifact = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "shared-purge", slug="shared-purge"),
+            filename="shared-purge.stl",
+        )
+        model = db_session.get(Model, artifact.model_id)
+        assert model is not None
+        model.deleted_at = utcnow()
+        db_session.add(model)
+        db_session.add(
+            ShareLink(
+                model_id=model.id,
+                token_hash="f" * 64,
+                expires_at=utcnow() + timedelta(days=1),
+            )
+        )
+        db_session.commit()
+
+        hard_delete_model(db_session, model)
+        assert Path(artifact.path).exists()
+        db_session.commit()
+        process_storage_delete_intents()
+
+        assert db_session.get(Model, model.id) is None
+        assert not Path(artifact.path).exists()
+
+
+class TestRollback:
+    def test_hard_delete_late_storage_failure_leaks_remainder_without_db_rollback(
+        self, db_session: Session, storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.services.trash import hard_delete_model
+
+        first = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "two-file-purge", slug="two-file-purge"),
+            filename="two-file-purge.stl",
+        )
+        model = db_session.get(Model, first.model_id)
+        assert model is not None
+        second_key = store_owned_bytes(
+            db_session,
+            storage,
+            storage.blob_key("two-file-purge", 2, "second.stl"),
+            b"second",
+        ).key
+        second = build_file(
+            db_session,
+            model,
+            path=second_key,
+            filename="second.stl",
+            file_type=FileType.STL,
+            version=2,
+            size_bytes=6,
+            sha256="second-file-hash",
+        )
+
+        real_rollback = storage.rollback_create
+        deletes = 0
+
+        def fail_second(receipt):
+            nonlocal deletes
+            deletes += 1
+            if deletes == 2:
+                raise OSError("storage became unavailable")
+            return real_rollback(receipt)
+
+        monkeypatch.setattr(storage, "rollback_create", fail_second)
+
+        hard_delete_model(db_session, model)
+        assert deletes == 0, "storage deletion must never happen before SQL commit"
+        db_session.commit()
+
+        from app.services.storage_deletion import process_storage_delete_intents
+
+        result = process_storage_delete_intents()
+
+        assert not Path(first.path).exists()
+        assert Path(second_key).read_bytes() == b"second"
+        assert result.completed == 1
+        assert result.pending == 1
+        db_session.expire_all()
+        assert db_session.get(Model, model.id) is None
+        assert db_session.get(File, first.id) is None
+        assert db_session.get(File, second.id) is None
+
+    def test_hard_delete_rollback_preserves_blob_and_discards_intent(
+        self, db_session: Session, storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.services.trash import hard_delete_model
+
+        artifact = build_stored_file(
+            db_session,
+            storage,
+            build_model(db_session, "rollback-safe", slug="rollback-safe"),
+            filename="rollback-safe.stl",
+        )
+        artifact_key = artifact.path
+        model = db_session.get(Model, artifact.model_id)
+        assert model is not None
+        calls = 0
+
+        def _unexpected_delete(_receipt):
+            nonlocal calls
+            calls += 1
+            return True
+
+        monkeypatch.setattr(storage, "rollback_create", _unexpected_delete)
+
+        hard_delete_model(db_session, model)
+        assert calls == 0
+        assert db_session.exec(select(StorageDeleteIntent)).all()
+        db_session.rollback()
+
+        assert calls == 0
+        assert Path(artifact.path).exists()
+        assert db_session.get(Model, model.id) is not None
+        assert (
+            db_session.exec(
+                select(StorageDeleteIntent).where(
+                    StorageDeleteIntent.resource_kind == "file",
+                    StorageDeleteIntent.key == artifact_key,
+                )
+            ).all()
+            == []
+        )

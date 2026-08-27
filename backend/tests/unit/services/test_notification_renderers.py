@@ -203,15 +203,16 @@ def test_facade_keeps_orm_enums_separate_from_core_contracts():
     }
 
 
-@pytest.mark.parametrize(
-    "target,config",
-    [
-        (NotificationTarget.WEBHOOK, {}),
-        (NotificationTarget.DISCORD, {}),
-        (NotificationTarget.TELEGRAM, {"bot_token": "t"}),  # missing chat_id
-        (NotificationTarget.NTFY, {}),
-    ],
-)
-def test_missing_required_config_raises(target, config):
-    with pytest.raises(r.RenderError):
-        r.render(target, _ctx(), config)
+class TestRaises:
+    @pytest.mark.parametrize(
+        "target,config",
+        [
+            (NotificationTarget.WEBHOOK, {}),
+            (NotificationTarget.DISCORD, {}),
+            (NotificationTarget.TELEGRAM, {"bot_token": "t"}),  # missing chat_id
+            (NotificationTarget.NTFY, {}),
+        ],
+    )
+    def test_missing_required_config_raises(self, target, config):
+        with pytest.raises(r.RenderError):
+            r.render(target, _ctx(), config)

@@ -444,41 +444,6 @@ def test_cults_manifest_rejects_opaque_id_substitution_when_canonical_slug_diffe
         )
 
 
-def test_cults_connected_manifest_requires_user_file_at_import(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import_resolvers._provider_metadata_cache.clear()
-
-    async def metadata(_session, _user_id: int, item: str):
-        return ProviderModelMetadata(
-            item,
-            "Cults widget",
-            None,
-            None,
-            None,
-            (),
-            identity=ProviderIdentity(
-                provider_id=item,
-                canonical_slug=item,
-                canonical_url=f"https://cults3d.com/en/3d-model/art/{item}",
-            ),
-        )
-
-    monkeypatch.setattr(
-        import_resolvers.provider_connections, "fetch_cults_model_metadata", metadata
-    )
-    url = "https://cults3d.com/en/3d-model/art/widget"
-    context = import_resolvers.ProviderResolutionContext(1, _factory())
-    manifest = asyncio.run(
-        import_resolvers.resolve_connected_provider_capture(url, context)
-    )
-    assert manifest is not None
-    with pytest.raises(import_resolvers.ImportError_, match="user_file_required"):
-        asyncio.run(
-            import_resolvers.resolve_selected_assets(url, manifest, [], context)
-        )
-
-
 def test_public_capture_resolver_defers_cults_to_connection_context() -> None:
     url = "https://cults3d.com/en/3d-model/art/widget"
 
@@ -680,3 +645,42 @@ def test_mmf_signed_url_is_transient_not_in_persisted_inbox_manifest(
     assert persisted is not None
     assert "never-persist" not in persisted.manifest_json
     assert "never-persist" not in repr(import_resolvers._provider_metadata_cache)
+
+
+class TestUser:
+    def test_cults_connected_manifest_requires_user_file_at_import(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import_resolvers._provider_metadata_cache.clear()
+
+        async def metadata(_session, _user_id: int, item: str):
+            return ProviderModelMetadata(
+                item,
+                "Cults widget",
+                None,
+                None,
+                None,
+                (),
+                identity=ProviderIdentity(
+                    provider_id=item,
+                    canonical_slug=item,
+                    canonical_url=f"https://cults3d.com/en/3d-model/art/{item}",
+                ),
+            )
+
+        monkeypatch.setattr(
+            import_resolvers.provider_connections,
+            "fetch_cults_model_metadata",
+            metadata,
+        )
+        url = "https://cults3d.com/en/3d-model/art/widget"
+        context = import_resolvers.ProviderResolutionContext(1, _factory())
+        manifest = asyncio.run(
+            import_resolvers.resolve_connected_provider_capture(url, context)
+        )
+        assert manifest is not None
+        with pytest.raises(import_resolvers.ImportError_, match="user_file_required"):
+            asyncio.run(
+                import_resolvers.resolve_selected_assets(url, manifest, [], context)
+            )

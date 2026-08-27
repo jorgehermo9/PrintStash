@@ -192,43 +192,6 @@ def test_diagnostics_hits_real_moonraker_http_server(
         assert server.state.status_requests == 1
 
 
-def test_start_existing_printer_file_calls_real_moonraker_start_endpoint(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-    tmp_path: Path,
-) -> None:
-    file_row = _stored_gcode(db_session, tmp_path, name="start-me.gcode")
-    with moonraker_server() as server:
-        printer = build_printer(
-            db_session, name="Real Moonraker", moonraker_url=server.base_url
-        )
-        db_session.add(
-            PrinterFile(
-                printer_id=printer.id,
-                file_id=file_row.id,
-                remote_filename="folder/start-me.gcode",
-                matched_by="filename",
-            )
-        )
-        db_session.commit()
-
-        resp = client.post(
-            f"/api/v1/printers/{printer.id}/start",
-            json={"remote_filename": "folder/start-me.gcode"},
-            headers=auth_headers,
-        )
-
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["source"] == "vault"
-        assert server.state.start_requests == ["folder/start-me.gcode"]
-        job = db_session.exec(
-            select(PrintJob).where(PrintJob.printer_id == printer.id)
-        ).one()
-        assert job.file_id == file_row.id
-        assert job.remote_filename == "folder/start-me.gcode"
-
-
 def test_sync_printer_files_uses_real_provider_list_response(
     client: TestClient,
     auth_headers: dict[str, str],
@@ -335,3 +298,42 @@ class TestSendToPrinter:
             assert inventory.file_id == file_row.id
             assert inventory.remote_filename == "jobs/bracket-release.gcode"
             assert inventory.matched_by == "upload_history"
+
+
+class TestStart:
+    def test_start_existing_printer_file_calls_real_moonraker_start_endpoint(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        tmp_path: Path,
+    ) -> None:
+        file_row = _stored_gcode(db_session, tmp_path, name="start-me.gcode")
+        with moonraker_server() as server:
+            printer = build_printer(
+                db_session, name="Real Moonraker", moonraker_url=server.base_url
+            )
+            db_session.add(
+                PrinterFile(
+                    printer_id=printer.id,
+                    file_id=file_row.id,
+                    remote_filename="folder/start-me.gcode",
+                    matched_by="filename",
+                )
+            )
+            db_session.commit()
+
+            resp = client.post(
+                f"/api/v1/printers/{printer.id}/start",
+                json={"remote_filename": "folder/start-me.gcode"},
+                headers=auth_headers,
+            )
+
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["source"] == "vault"
+            assert server.state.start_requests == ["folder/start-me.gcode"]
+            job = db_session.exec(
+                select(PrintJob).where(PrintJob.printer_id == printer.id)
+            ).one()
+            assert job.file_id == file_row.id
+            assert job.remote_filename == "folder/start-me.gcode"

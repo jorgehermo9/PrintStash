@@ -122,20 +122,21 @@ async def test_restore_of_unknown_backup_id_is_404(api, tmp_path, e2e_db):
     assert resp.json()["detail"] == "backup_not_found"
 
 
-@pytest.mark.asyncio
-async def test_delete_backup_removes_it_from_listing(api, tmp_path, e2e_db):
-    headers = await _setup_and_login(api, tmp_path)
-    await _upload_and_wait(api, headers, model_name="Deletable Backup Benchy")
+class TestDelete:
+    @pytest.mark.asyncio
+    async def test_delete_backup_removes_it_from_listing(self, api, tmp_path, e2e_db):
+        headers = await _setup_and_login(api, tmp_path)
+        await _upload_and_wait(api, headers, model_name="Deletable Backup Benchy")
 
-    created = await api.post("/api/v1/backups", headers=headers)
-    backup_id = created.json()["backup_id"]
+        created = await api.post("/api/v1/backups", headers=headers)
+        backup_id = created.json()["backup_id"]
 
-    deleted = await api.delete(f"/api/v1/backups/{backup_id}", headers=headers)
-    assert deleted.status_code == 200, deleted.text
-    assert deleted.json() == {"backup_id": backup_id, "deleted": True}
+        deleted = await api.delete(f"/api/v1/backups/{backup_id}", headers=headers)
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"backup_id": backup_id, "deleted": True}
 
-    listed = (await api.get("/api/v1/backups", headers=headers)).json()
-    assert all(b["backup_id"] != backup_id for b in listed)
+        listed = (await api.get("/api/v1/backups", headers=headers)).json()
+        assert all(b["backup_id"] != backup_id for b in listed)
 
-    missing = await api.get(f"/api/v1/backups/{backup_id}", headers=headers)
-    assert missing.status_code == 404
+        missing = await api.get(f"/api/v1/backups/{backup_id}", headers=headers)
+        assert missing.status_code == 404

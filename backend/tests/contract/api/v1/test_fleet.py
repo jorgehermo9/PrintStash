@@ -186,44 +186,47 @@ def test_dispatch_to_two_emulated_printers_both_complete(
         running_b.stop()
 
 
-def test_draining_printer_is_skipped_by_least_busy_routing(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    app_available, _sim = create_app(
-        total_mm=500.0, total_seconds=6.0, print_seconds=1.0
-    )
-    running_available = start_server(app_available)
-    try:
-        build_printer(
-            db_session,
-            name="Draining",
-            moonraker_url="http://unreachable-draining.invalid",
-            status=PrinterStatus.READY,
-            drain_mode=True,
-            drain_reason="Maintenance",
+class TestPrinter:
+    def test_draining_printer_is_skipped_by_least_busy_routing(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        app_available, _sim = create_app(
+            total_mm=500.0, total_seconds=6.0, print_seconds=1.0
         )
-        available = build_printer(
-            db_session,
-            name="Available",
-            moonraker_url=running_available.base_url,
-            status=PrinterStatus.READY,
-        )
+        running_available = start_server(app_available)
+        try:
+            build_printer(
+                db_session,
+                name="Draining",
+                moonraker_url="http://unreachable-draining.invalid",
+                status=PrinterStatus.READY,
+                drain_mode=True,
+                drain_reason="Maintenance",
+            )
+            available = build_printer(
+                db_session,
+                name="Available",
+                moonraker_url=running_available.base_url,
+                status=PrinterStatus.READY,
+            )
 
-        artifact = a_gcode_artifact(db_session, "drainjob")
-        queued = client.post(
-            "/api/v1/fleet/queue",
-            headers=auth_headers,
-            json={"file_id": artifact.id, "strategy": "least_busy"},
-        ).json()
+            artifact = a_gcode_artifact(db_session, "drainjob")
+            queued = client.post(
+                "/api/v1/fleet/queue",
+                headers=auth_headers,
+                json={"file_id": artifact.id, "strategy": "least_busy"},
+            ).json()
 
-        with patch("app.services.printer_jobs.get_backend", return_value=_Backend()):
-            from app.services.printer_jobs import dispatch_next
+            with patch(
+                "app.services.printer_jobs.get_backend", return_value=_Backend()
+            ):
+                from app.services.printer_jobs import dispatch_next
 
-            dispatched = asyncio.run(dispatch_next(_provider_builder))
-            assert dispatched == queued["id"]
+                dispatched = asyncio.run(dispatch_next(_provider_builder))
+                assert dispatched == queued["id"]
 
-        with get_session_factory().session() as s:
-            row = s.get(PrintJob, queued["id"])
-            assert row.printer_id == available.id
-    finally:
-        running_available.stop()
+            with get_session_factory().session() as s:
+                row = s.get(PrintJob, queued["id"])
+                assert row.printer_id == available.id
+        finally:
+            running_available.stop()

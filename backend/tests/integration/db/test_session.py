@@ -75,15 +75,6 @@ def test_sqlite_url_normalization() -> None:
     )
 
 
-def test_sqlite_async_without_extra_raises_explicit_capability_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(db_session_mod, "find_spec", lambda _module: None)
-
-    with pytest.raises(AsyncDatabaseCapabilityError, match="async-db"):
-        create_async_engine_for_db("sqlite:///:memory:")
-
-
 # --------------------------------------------------------------------------- #
 # SQLiteSessionFactory
 # --------------------------------------------------------------------------- #
@@ -377,3 +368,14 @@ class TestGetAsyncSession:
             if db_session_mod._default_async_factory is not None:
                 await db_session_mod._default_async_factory.dispose()
             engine.dispose()
+
+
+class TestRaises:
+    def test_sqlite_async_without_extra_raises_explicit_capability_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(db_session_mod, "find_spec", lambda _module: None)
+
+        with pytest.raises(AsyncDatabaseCapabilityError, match="async-db"):
+            create_async_engine_for_db("sqlite:///:memory:")

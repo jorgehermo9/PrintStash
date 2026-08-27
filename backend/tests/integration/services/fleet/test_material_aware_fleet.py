@@ -39,28 +39,6 @@ from app.services import fleet, materials
 from tests.factories import a_gcode_artifact, build_print_job, build_printer, build_user
 
 
-def test_material_and_fleet_schema_validation_edges() -> None:
-    assert (
-        MaterialSlotWrite(slot_key="feed", label="Feed", color_hex=" ").color_hex
-        is None
-    )
-    assert (
-        MaterialSlotWrite(slot_key="feed", label="Feed", color_hex="a1b2c3").color_hex
-        == "#A1B2C3"
-    )
-    with pytest.raises(ValueError, match="material_color_invalid"):
-        MaterialSlotWrite(slot_key="feed", label="Feed", color_hex="not-a-color")
-    with pytest.raises(ValueError, match="printer_id_required"):
-        QueueJobCreate(file_id=1)
-    with pytest.raises(ValueError, match="printer_id_required"):
-        BatchCreate(file_id=1, quantity=1, strategy=RoutingStrategy.MANUAL)
-    with pytest.raises(ValueError, match="automatic_batch_spool_not_allowed"):
-        BatchCreate(file_id=1, quantity=1, spool_id=1)
-    now = datetime.now(timezone.utc)
-    with pytest.raises(ValueError, match="maintenance_window_invalid"):
-        MaintenanceWindowCreate(starts_at=now, ends_at=now)
-
-
 def _requirements(session: Session, material: str = "PLA", nozzle: float = 0.4):
     artifact = a_gcode_artifact(session, "Queue cube")
     session.add(
@@ -918,3 +896,28 @@ def test_tracking_spool_is_resolved_only_when_unambiguous(
         None,
     )
     assert fleet.list_queue(db_session) == []
+
+
+class TestFleet:
+    def test_material_and_fleet_schema_validation_edges(self) -> None:
+        assert (
+            MaterialSlotWrite(slot_key="feed", label="Feed", color_hex=" ").color_hex
+            is None
+        )
+        assert (
+            MaterialSlotWrite(
+                slot_key="feed", label="Feed", color_hex="a1b2c3"
+            ).color_hex
+            == "#A1B2C3"
+        )
+        with pytest.raises(ValueError, match="material_color_invalid"):
+            MaterialSlotWrite(slot_key="feed", label="Feed", color_hex="not-a-color")
+        with pytest.raises(ValueError, match="printer_id_required"):
+            QueueJobCreate(file_id=1)
+        with pytest.raises(ValueError, match="printer_id_required"):
+            BatchCreate(file_id=1, quantity=1, strategy=RoutingStrategy.MANUAL)
+        with pytest.raises(ValueError, match="automatic_batch_spool_not_allowed"):
+            BatchCreate(file_id=1, quantity=1, spool_id=1)
+        now = datetime.now(timezone.utc)
+        with pytest.raises(ValueError, match="maintenance_window_invalid"):
+            MaintenanceWindowCreate(starts_at=now, ends_at=now)

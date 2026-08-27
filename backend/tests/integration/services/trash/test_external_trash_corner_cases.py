@@ -98,163 +98,11 @@ def _make_mixed_model(
 # --------------------------------------------------------------------------- #
 # Mixed vault + external model
 # --------------------------------------------------------------------------- #
-def test_purge_library_index_keeps_model_with_vault_files(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """Removing a NAS library trashes its linked files, but a Model that still
-    owns a vault file must stay live — only the external File is soft-deleted."""
-    lib, model, vault_file, ext_file = _make_mixed_model(tmp_path, db_session)
-
-    trashed = external_library.purge_library_index(db_session, lib.id)
-
-    assert trashed == 1
-    db_session.expire_all()
-    # The model survives because it still has a vault-owned file.
-    assert db_session.get(Model, model.id).deleted_at is None
-    assert db_session.get(File, vault_file.id).deleted_at is None
-    # The external link is trashed (the NAS bytes themselves are untouched).
-    assert db_session.get(File, ext_file.id).deleted_at is not None
-    assert Path(ext_file.path).exists()
-
-
-def test_hard_delete_mixed_model_deletes_vault_blob_keeps_nas_bytes(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """Hard-deleting a model with both file kinds removes the vault blob but must
-    never touch the NAS-linked bytes; both DB rows go."""
-    _lib, model, vault_file, ext_file = _make_mixed_model(tmp_path, db_session)
-    backend = get_backend()
-    assert backend.exists(vault_file.path)
-    nas_path = ext_file.path
-    nas_bytes = Path(nas_path).read_bytes()
-
-    trash.soft_delete_model(db_session, model)
-    trash.hard_delete_model(db_session, model)
-    db_session.commit()
-    storage_result = process_storage_delete_intents()
-
-    db_session.expire_all()
-    assert db_session.get(Model, model.id) is None
-    assert db_session.get(File, vault_file.id) is None
-    assert db_session.get(File, ext_file.id) is None
-    assert storage_result.completed >= 1
-    assert storage_result.pending == 0
-    assert storage_result.blocked == 0
-    # Vault blob purged...
-    assert not backend.exists(vault_file.path)
-    # ...NAS bytes preserved, byte-for-byte.
-    assert Path(nas_path).exists()
-    assert Path(nas_path).read_bytes() == nas_bytes
-
-
-def test_hard_delete_tagged_model_succeeds_and_keeps_the_tag(
-    db_session: Session,
-) -> None:
-    """Regression: purging a *tagged* model must not raise ``StaleDataError``.
-
-    ``Model.tags`` is a ``link_model`` (many-to-many) relationship, so deleting
-    the model already removes its ``ModelTagLink`` rows. A manual bulk-delete of
-    those rows used to run *as well*, so the ORM's cascade then tried to delete
-    rows that were already gone -> ``StaleDataError`` on commit. That 500'd the
-    purge endpoint and the expired-trash cron for any model carrying a tag.
-    """
-    from app.db.models import ModelTagLink, Tag
-
-    uid = uuid.uuid4().hex
-    model = Model(
-        name=f"Tagged {uid[:6]}", slug=f"tagged-{uid[:8]}", hash=(uid * 2)[:64]
-    )
-    tag = Tag(name=f"tag-{uid[:6]}", slug=f"tag-{uid[:6]}")
-    db_session.add(model)
-    db_session.add(tag)
-    db_session.commit()
-    db_session.refresh(model)
-    db_session.refresh(tag)
-    db_session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
-    db_session.commit()
-
-    trash.soft_delete_model(db_session, model)
-    trash.hard_delete_model(db_session, model)
-    db_session.commit()  # must not raise StaleDataError
-
-    db_session.expire_all()
-    assert db_session.get(Model, model.id) is None
-    # The shared tag survives; only the association row is gone.
-    assert db_session.get(Tag, tag.id) is not None
-    assert (
-        db_session.exec(
-            select(ModelTagLink).where(ModelTagLink.model_id == model.id)
-        ).first()
-        is None
-    )
 
 
 # --------------------------------------------------------------------------- #
 # Duplicate content across two NAS files
 # --------------------------------------------------------------------------- #
-def test_scan_dedups_identical_nas_files_into_one_model(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """Two NAS files with identical content index as two linked Files under a
-    single deduplicated Model — not two models, not one dropped file."""
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    payload = FIXTURE_GCODE.read_bytes()
-    nas = tmp_path / "nas"
-    _drop(nas, "a.gcode", payload)
-    _drop(nas, "b.gcode", payload)
-    lib = build_external_library(db_session, nas, name="nas")
-
-    summary = external_library.scan_library(lib.id)
-
-    assert summary["added"] == 2
-    assert summary["aborted"] is False
-    db_session.expire_all()
-    files = db_session.exec(
-        select(File).where(File.is_external == True, live(File))  # noqa: E712
-    ).all()
-    assert len(files) == 2
-    assert len({f.model_id for f in files}) == 1, "identical content → one model"
-    # Exactly one revision carries the recommended marker.
-    assert sum(1 for f in files if f.is_recommended) == 1
-
-
-def test_scan_removing_one_duplicate_keeps_model_until_all_gone(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """When duplicate-content files share a model, removing one from disk trashes
-    only that File; the model is trashed only once every linked File is gone."""
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    payload = FIXTURE_GCODE.read_bytes()
-    nas = tmp_path / "nas"
-    a = _drop(nas, "a.gcode", payload)
-    b = _drop(nas, "b.gcode", payload)
-    lib = build_external_library(db_session, nas, name="nas")
-    external_library.scan_library(lib.id)
-    db_session.expire_all()
-    model_id = (
-        db_session.exec(
-            select(File).where(File.is_external == True)  # noqa: E712
-        )
-        .first()
-        .model_id
-    )
-
-    # Remove one of the two duplicates.
-    a.unlink()
-    summary = external_library.scan_library(lib.id)
-    assert summary["removed"] == 1
-    db_session.expire_all()
-    assert db_session.get(Model, model_id).deleted_at is None, "still has b.gcode"
-
-    # Remove the last one → the model itself is trashed.
-    b.unlink()
-    # Keep the root non-empty so the safety guard doesn't abort the scan.
-    _drop(nas, "unrelated.gcode", payload + b"\n; distinct\nG1 X9 Y9\n")
-    summary = external_library.scan_library(lib.id)
-    db_session.expire_all()
-    assert db_session.get(Model, model_id).deleted_at is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -277,3 +125,159 @@ class TestTrashExpiresAt:
         assert trash.trash_expires_at(deleted, -1) is None
         # A live row (no deleted_at) has no expiry.
         assert trash.trash_expires_at(None, 30) is None
+
+
+class TestModel:
+    def test_hard_delete_mixed_model_deletes_vault_blob_keeps_nas_bytes(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        """Hard-deleting a model with both file kinds removes the vault blob but must
+        never touch the NAS-linked bytes; both DB rows go."""
+        _lib, model, vault_file, ext_file = _make_mixed_model(tmp_path, db_session)
+        backend = get_backend()
+        assert backend.exists(vault_file.path)
+        nas_path = ext_file.path
+        nas_bytes = Path(nas_path).read_bytes()
+
+        trash.soft_delete_model(db_session, model)
+        trash.hard_delete_model(db_session, model)
+        db_session.commit()
+        storage_result = process_storage_delete_intents()
+
+        db_session.expire_all()
+        assert db_session.get(Model, model.id) is None
+        assert db_session.get(File, vault_file.id) is None
+        assert db_session.get(File, ext_file.id) is None
+        assert storage_result.completed >= 1
+        assert storage_result.pending == 0
+        assert storage_result.blocked == 0
+        # Vault blob purged...
+        assert not backend.exists(vault_file.path)
+        # ...NAS bytes preserved, byte-for-byte.
+        assert Path(nas_path).exists()
+        assert Path(nas_path).read_bytes() == nas_bytes
+
+    def test_hard_delete_tagged_model_succeeds_and_keeps_the_tag(
+        self,
+        db_session: Session,
+    ) -> None:
+        """Regression: purging a *tagged* model must not raise ``StaleDataError``.
+
+        ``Model.tags`` is a ``link_model`` (many-to-many) relationship, so deleting
+        the model already removes its ``ModelTagLink`` rows. A manual bulk-delete of
+        those rows used to run *as well*, so the ORM's cascade then tried to delete
+        rows that were already gone -> ``StaleDataError`` on commit. That 500'd the
+        purge endpoint and the expired-trash cron for any model carrying a tag.
+        """
+        from app.db.models import ModelTagLink, Tag
+
+        uid = uuid.uuid4().hex
+        model = Model(
+            name=f"Tagged {uid[:6]}", slug=f"tagged-{uid[:8]}", hash=(uid * 2)[:64]
+        )
+        tag = Tag(name=f"tag-{uid[:6]}", slug=f"tag-{uid[:6]}")
+        db_session.add(model)
+        db_session.add(tag)
+        db_session.commit()
+        db_session.refresh(model)
+        db_session.refresh(tag)
+        db_session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
+        db_session.commit()
+
+        trash.soft_delete_model(db_session, model)
+        trash.hard_delete_model(db_session, model)
+        db_session.commit()  # must not raise StaleDataError
+
+        db_session.expire_all()
+        assert db_session.get(Model, model.id) is None
+        # The shared tag survives; only the association row is gone.
+        assert db_session.get(Tag, tag.id) is not None
+        assert (
+            db_session.exec(
+                select(ModelTagLink).where(ModelTagLink.model_id == model.id)
+            ).first()
+            is None
+        )
+
+    def test_scan_dedups_identical_nas_files_into_one_model(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        """Two NAS files with identical content index as two linked Files under a
+        single deduplicated Model — not two models, not one dropped file."""
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        payload = FIXTURE_GCODE.read_bytes()
+        nas = tmp_path / "nas"
+        _drop(nas, "a.gcode", payload)
+        _drop(nas, "b.gcode", payload)
+        lib = build_external_library(db_session, nas, name="nas")
+
+        summary = external_library.scan_library(lib.id)
+
+        assert summary["added"] == 2
+        assert summary["aborted"] is False
+        db_session.expire_all()
+        files = db_session.exec(
+            select(File).where(File.is_external == True, live(File))  # noqa: E712
+        ).all()
+        assert len(files) == 2
+        assert len({f.model_id for f in files}) == 1, "identical content → one model"
+        # Exactly one revision carries the recommended marker.
+        assert sum(1 for f in files if f.is_recommended) == 1
+
+    def test_scan_removing_one_duplicate_keeps_model_until_all_gone(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        """When duplicate-content files share a model, removing one from disk trashes
+        only that File; the model is trashed only once every linked File is gone."""
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        payload = FIXTURE_GCODE.read_bytes()
+        nas = tmp_path / "nas"
+        a = _drop(nas, "a.gcode", payload)
+        b = _drop(nas, "b.gcode", payload)
+        lib = build_external_library(db_session, nas, name="nas")
+        external_library.scan_library(lib.id)
+        db_session.expire_all()
+        model_id = (
+            db_session.exec(
+                select(File).where(File.is_external == True)  # noqa: E712
+            )
+            .first()
+            .model_id
+        )
+
+        # Remove one of the two duplicates.
+        a.unlink()
+        summary = external_library.scan_library(lib.id)
+        assert summary["removed"] == 1
+        db_session.expire_all()
+        assert db_session.get(Model, model_id).deleted_at is None, "still has b.gcode"
+
+        # Remove the last one → the model itself is trashed.
+        b.unlink()
+        # Keep the root non-empty so the safety guard doesn't abort the scan.
+        _drop(nas, "unrelated.gcode", payload + b"\n; distinct\nG1 X9 Y9\n")
+        summary = external_library.scan_library(lib.id)
+        db_session.expire_all()
+        assert db_session.get(Model, model_id).deleted_at is not None
+
+
+class TestPurgeLibraryIndex:
+    def test_purge_library_index_keeps_model_with_vault_files(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        """Removing a NAS library trashes its linked files, but a Model that still
+        owns a vault file must stay live — only the external File is soft-deleted."""
+        lib, model, vault_file, ext_file = _make_mixed_model(tmp_path, db_session)
+
+        trashed = external_library.purge_library_index(db_session, lib.id)
+
+        assert trashed == 1
+        db_session.expire_all()
+        # The model survives because it still has a vault-owned file.
+        assert db_session.get(Model, model.id).deleted_at is None
+        assert db_session.get(File, vault_file.id).deleted_at is None
+        # The external link is trashed (the NAS bytes themselves are untouched).
+        assert db_session.get(File, ext_file.id).deleted_at is not None
+        assert Path(ext_file.path).exists()

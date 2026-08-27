@@ -32,30 +32,9 @@ from tests.factories import build_file, build_model, build_print_job, build_prin
 # ---------------------------------------------------------------------------
 
 
-def test_step_suffixes_map_to_step_filetype():
-    assert SUFFIX_TO_FILE_TYPE[".step"] == FileType.STEP
-    assert SUFFIX_TO_FILE_TYPE[".stp"] == FileType.STEP
-
-
 # ---------------------------------------------------------------------------
 # Filament conversion
 # ---------------------------------------------------------------------------
-
-
-def test_mm_to_grams_pla_default():
-    from app.services import filament
-
-    # 1000 mm of 1.75 mm PLA ≈ 2.40 g/m * ... ~ 2.98 g
-    grams = filament.mm_to_grams(1000.0, "PLA")
-    assert grams is not None and 2.5 < grams < 3.3
-
-
-def test_mm_to_grams_handles_bad_input():
-    from app.services import filament
-
-    assert filament.mm_to_grams(None) is None
-    assert filament.mm_to_grams(0) is None
-    assert filament.mm_to_grams(-5) is None
 
 
 # ---------------------------------------------------------------------------
@@ -277,70 +256,6 @@ class TestShareIsolation:
 # ---------------------------------------------------------------------------
 
 
-def test_stl_response_streams_raw_stl_without_buffering(db_session, tmp_path):
-    from starlette.responses import FileResponse, Response
-
-    from app.api.v1 import files as files_api
-    from app.core.config import _overlay
-    from app.services.storage_backend import get_backend
-
-    _overlay["data_dir"] = tmp_path / "files"
-    backend = get_backend()
-    blob = tmp_path / "files" / "raw.stl"
-    data = b"solid raw\n" + b"x" * 4096 + b"\nendsolid raw\n"
-    backend.write_bytes(data, str(blob))
-
-    m = build_model(db_session, "rawstl", slug="rawstl")
-    f = build_file(
-        db_session,
-        m,
-        path=str(blob),
-        filename="raw.stl",
-        file_type="stl",
-        version=1,
-        size_bytes=len(data),
-        sha256="b" * 64,
-    )
-
-    request = SimpleNamespace(headers={})
-    res = files_api.stl_response(f, request)
-
-    # Local backend hands back a real path, so the blob is streamed off disk via
-    # FileResponse rather than slurped into an in-memory Response body.
-    assert isinstance(res, FileResponse)
-    assert not (isinstance(res, Response) and getattr(res, "body", None))
-    assert res.media_type == "application/sla"
-    assert res.headers["ETag"] == f'"{f.sha256}"'
-    assert "raw.stl" in res.headers["content-disposition"]
-    assert Path(res.path).read_bytes() == data
-
-
-def test_stl_response_honours_if_none_match(db_session, tmp_path):
-    from app.api.v1 import files as files_api
-    from app.core.config import _overlay
-    from app.services.storage_backend import get_backend
-
-    _overlay["data_dir"] = tmp_path / "files"
-    blob = tmp_path / "files" / "etag.stl"
-    get_backend().write_bytes(b"solid etag\nendsolid etag\n", str(blob))
-
-    m = build_model(db_session, "etag", slug="etag")
-    f = build_file(
-        db_session,
-        m,
-        path=str(blob),
-        filename="etag.stl",
-        file_type="stl",
-        version=1,
-        size_bytes=24,
-        sha256="c" * 64,
-    )
-
-    request = SimpleNamespace(headers={"if-none-match": f'"{f.sha256}"'})
-    res = files_api.stl_response(f, request)
-    assert res.status_code == 304
-
-
 class TestValidatePublicUrl:
     @pytest.mark.parametrize(
         "url",
@@ -460,3 +375,89 @@ class TestExtractSelected:
         staged, name = out[0]
         assert name == "a.stl" and staged.exists()
         staged.unlink(missing_ok=True)
+
+
+class TestFiletype:
+    def test_step_suffixes_map_to_step_filetype(self):
+        assert SUFFIX_TO_FILE_TYPE[".step"] == FileType.STEP
+        assert SUFFIX_TO_FILE_TYPE[".stp"] == FileType.STEP
+
+
+class TestMmToGrams:
+    def test_mm_to_grams_pla_default(self):
+        from app.services import filament
+
+        # 1000 mm of 1.75 mm PLA ≈ 2.40 g/m * ... ~ 2.98 g
+        grams = filament.mm_to_grams(1000.0, "PLA")
+        assert grams is not None and 2.5 < grams < 3.3
+
+    def test_mm_to_grams_handles_bad_input(self):
+        from app.services import filament
+
+        assert filament.mm_to_grams(None) is None
+        assert filament.mm_to_grams(0) is None
+        assert filament.mm_to_grams(-5) is None
+
+
+class TestStlResponse:
+    def test_stl_response_streams_raw_stl_without_buffering(self, db_session, tmp_path):
+        from starlette.responses import FileResponse, Response
+
+        from app.api.v1 import files as files_api
+        from app.core.config import _overlay
+        from app.services.storage_backend import get_backend
+
+        _overlay["data_dir"] = tmp_path / "files"
+        backend = get_backend()
+        blob = tmp_path / "files" / "raw.stl"
+        data = b"solid raw\n" + b"x" * 4096 + b"\nendsolid raw\n"
+        backend.write_bytes(data, str(blob))
+
+        m = build_model(db_session, "rawstl", slug="rawstl")
+        f = build_file(
+            db_session,
+            m,
+            path=str(blob),
+            filename="raw.stl",
+            file_type="stl",
+            version=1,
+            size_bytes=len(data),
+            sha256="b" * 64,
+        )
+
+        request = SimpleNamespace(headers={})
+        res = files_api.stl_response(f, request)
+
+        # Local backend hands back a real path, so the blob is streamed off disk via
+        # FileResponse rather than slurped into an in-memory Response body.
+        assert isinstance(res, FileResponse)
+        assert not (isinstance(res, Response) and getattr(res, "body", None))
+        assert res.media_type == "application/sla"
+        assert res.headers["ETag"] == f'"{f.sha256}"'
+        assert "raw.stl" in res.headers["content-disposition"]
+        assert Path(res.path).read_bytes() == data
+
+    def test_stl_response_honours_if_none_match(self, db_session, tmp_path):
+        from app.api.v1 import files as files_api
+        from app.core.config import _overlay
+        from app.services.storage_backend import get_backend
+
+        _overlay["data_dir"] = tmp_path / "files"
+        blob = tmp_path / "files" / "etag.stl"
+        get_backend().write_bytes(b"solid etag\nendsolid etag\n", str(blob))
+
+        m = build_model(db_session, "etag", slug="etag")
+        f = build_file(
+            db_session,
+            m,
+            path=str(blob),
+            filename="etag.stl",
+            file_type="stl",
+            version=1,
+            size_bytes=24,
+            sha256="c" * 64,
+        )
+
+        request = SimpleNamespace(headers={"if-none-match": f'"{f.sha256}"'})
+        res = files_api.stl_response(f, request)
+        assert res.status_code == 304

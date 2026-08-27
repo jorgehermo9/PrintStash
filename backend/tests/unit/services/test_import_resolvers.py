@@ -72,102 +72,6 @@ def test_id_extractors() -> None:
 # --------------------------------------------------------------------------- #
 # Generic JSON helpers
 # --------------------------------------------------------------------------- #
-def test_first_download_url_prefers_keyed_link() -> None:
-    data = {"a": {"nested": {"downloadUrl": "https://cdn.test/x.zip"}}, "b": [1, 2]}
-    assert r._first_download_url(data) == "https://cdn.test/x.zip"
-
-
-def test_first_download_url_falls_back_to_model_like_string() -> None:
-    data = {"meta": "hello", "links": ["https://cdn.test/model.3mf", "not-a-url"]}
-    assert r._first_download_url(data) == "https://cdn.test/model.3mf"
-
-
-def test_first_download_url_none_when_nothing_matches() -> None:
-    assert (
-        r._first_download_url({"meta": "hello", "n": 3, "page": "https://x.test/about"})
-        is None
-    )
-
-
-def test_pick_printables_pack_prefers_model_files() -> None:
-    packs = [{"id": 5, "fileType": "OTHER"}, {"id": 9, "fileType": "MODEL_FILES"}]
-    assert r._pick_printables_pack(packs) == "9"
-    # Falls back to the first pack with an id when there's no MODEL_FILES pack.
-    assert r._pick_printables_pack([{"id": 7, "fileType": "GCODE"}]) == "7"
-    assert r._pick_printables_pack([]) is None
-
-
-def test_first_download_url_keyed_link_beats_deep_fallback() -> None:
-    # A keyed url anywhere wins over a model-looking bare string.
-    data = {
-        "files": ["https://cdn.test/a.stl"],
-        "meta": {"url": "https://cdn.test/real.zip"},
-    }
-    assert r._first_download_url(data) == "https://cdn.test/real.zip"
-
-
-def test_first_download_url_ignores_non_http_keyed_values() -> None:
-    # A relative or non-http "url" must not be returned as a download link.
-    data = {"url": "/local/path.zip", "links": ["https://cdn.test/model.stl"]}
-    assert r._first_download_url(data) == "https://cdn.test/model.stl"
-
-
-@pytest.mark.parametrize(
-    "url, expected",
-    [
-        ("https://cdn.test/model.stl", True),
-        ("https://cdn.test/model.3MF", True),  # case-insensitive ext
-        ("https://cdn.test/get?file=model.stl", False),  # ext only in query
-        ("https://cdn.test/api/download/123", True),  # /download path
-        ("https://cdn.test/image.png", False),
-        ("https://cdn.test/about", False),
-    ],
-)
-def test_looks_like_download(url: str, expected: bool) -> None:
-    assert r._looks_like_download(url) is expected
-
-
-def test_extract_next_data_round_trips() -> None:
-    html = '<html><script id="__NEXT_DATA__" type="application/json">{"props":{"x":1}}</script></html>'
-    assert r._extract_next_data(html) == {"props": {"x": 1}}
-    assert r._extract_next_data("<html>no next data</html>") is None
-
-
-def test_extract_next_data_invalid_json_returns_none() -> None:
-    html = '<script id="__NEXT_DATA__" type="application/json">{not json}</script>'
-    assert r._extract_next_data(html) is None
-
-
-def test_pick_printables_pack_non_list_returns_none() -> None:
-    assert r._pick_printables_pack(None) is None
-    assert r._pick_printables_pack("nope") is None
-
-
-def test_printables_link_from_output_falls_back_to_files_list() -> None:
-    payload = {
-        "data": {
-            "getDownloadLink": {
-                "output": {"files": [{"link": "https://files.printables.test/a.stl"}]}
-            }
-        }
-    }
-    assert (
-        r._printables_link_from_output(payload) == "https://files.printables.test/a.stl"
-    )
-
-
-def test_printables_links_from_output_falls_back_to_single_link() -> None:
-    payload = {
-        "data": {
-            "getDownloadLink": {
-                "output": {"link": "https://files.printables.test/x.zip"}
-            }
-        }
-    }
-    assert r._printables_links_from_output(payload) == [
-        "https://files.printables.test/x.zip"
-    ]
-    assert r._printables_links_from_output({}) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -218,27 +122,6 @@ async def test_resolve_makerworld_requires_browser_extension() -> None:
     assert str(exc.value) == "makerworld_extension_required"
 
 
-def test_makerworld_collection_members_handles_malformed_next_data() -> None:
-    assert r._makerworld_collection_members({}) == []
-    assert r._makerworld_collection_members({"props": None}) == []
-
-
-def test_makerworld_collection_members_skips_non_dict_and_duplicate_entries() -> None:
-    next_data = {
-        "props": {
-            "pageProps": {
-                "designs": [
-                    "not-a-dict",
-                    {"id": 1, "title": "A"},
-                    {"id": 1, "title": "A dup"},
-                ]
-            }
-        }
-    }
-    members = r._makerworld_collection_members(next_data)
-    assert [m.source_id for m in members] == ["1"]
-
-
 @pytest.mark.asyncio
 async def test_resolve_makerworld_collection_requires_browser_extension() -> None:
     with pytest.raises(ImportError_) as exc:
@@ -252,59 +135,11 @@ async def test_resolve_makerworld_collection_requires_browser_extension() -> Non
 # --------------------------------------------------------------------------- #
 # Provider payload characterization
 # --------------------------------------------------------------------------- #
-def test_looks_like_challenge_detects_interstitial() -> None:
-    html = "<html><head><title>Just a moment...</title></head><body><div class='cf-chl'></div></body>"
-    assert r._looks_like_challenge(html) is True
-
-
-def test_looks_like_challenge_false_when_next_data_present() -> None:
-    # A page that ships __NEXT_DATA__ is real content, even if it name-drops a marker.
-    assert (
-        r._looks_like_challenge('<script id="__NEXT_DATA__">{}</script> just a moment')
-        is False
-    )
-
-
-def test_looks_like_challenge_false_for_plain_page() -> None:
-    assert r._looks_like_challenge("<html><body>hello world</body></html>") is False
 
 
 # --------------------------------------------------------------------------- #
 # Collection classification + id extraction
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize(
-    "url, expected",
-    [
-        (
-            "https://www.printables.com/@JonasHansen_1131321/collections/3525050",
-            "printables",
-        ),
-        ("https://printables.com/collections/3525050", "printables"),
-        (
-            "https://makerworld.com/es/collections/5600774-h2d-sample-projects",
-            "makerworld",
-        ),
-        ("https://makerworld.com/en/collections/5600774", "makerworld"),
-        # A model page is not a collection.
-        ("https://www.printables.com/model/1660232-springy-cat", None),
-        ("https://example.com/collections/5", None),
-        # Look-alike host must not classify as MakerWorld.
-        ("https://evilmakerworld.com/collections/5600774", None),
-    ],
-)
-def test_classify_collection(url: str, expected) -> None:
-    assert r.classify_collection(url) == expected
-
-
-def test_collection_id_extractor() -> None:
-    assert (
-        r._collection_id("https://printables.com/@u/collections/3525050") == "3525050"
-    )
-    assert (
-        r._collection_id("https://makerworld.com/es/collections/5600774-slug")
-        == "5600774"
-    )
-    assert r._collection_id("https://printables.com/model/1660232") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -335,18 +170,6 @@ _SPRINGY_CAT_META = {
 # --------------------------------------------------------------------------- #
 # Collection resolution
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.asyncio
-async def test_resolve_collection_empty_raises_host_error() -> None:
-    name_payload = {"data": {"collection": {"name": "empty"}}}
-    members_payload = {"data": {"moreCollectionModels": {"cursor": "", "items": []}}}
-    with patch.object(
-        r, "_printables_graphql", AsyncMock(side_effect=[name_payload, members_payload])
-    ):
-        with pytest.raises(ImportError_) as exc:
-            await r.resolve_collection_url("https://printables.com/collections/9")
-    assert str(exc.value) == "printables_collection_resolve_failed"
 
 
 @pytest.mark.asyncio
@@ -939,3 +762,202 @@ class TestResolveSelectedAssets:
             ("first", "https://files.test/first.stl"),
             ("second", "https://files.test/second.stl"),
         ]
+
+
+class TestMakerworldCollectionMembers:
+    def test_makerworld_collection_members_handles_malformed_next_data(self) -> None:
+        assert r._makerworld_collection_members({}) == []
+        assert r._makerworld_collection_members({"props": None}) == []
+
+    def test_makerworld_collection_members_skips_non_dict_and_duplicate_entries(
+        self,
+    ) -> None:
+        next_data = {
+            "props": {
+                "pageProps": {
+                    "designs": [
+                        "not-a-dict",
+                        {"id": 1, "title": "A"},
+                        {"id": 1, "title": "A dup"},
+                    ]
+                }
+            }
+        }
+        members = r._makerworld_collection_members(next_data)
+        assert [m.source_id for m in members] == ["1"]
+
+
+class TestFirstDownloadUrl:
+    def test_first_download_url_prefers_keyed_link(self) -> None:
+        data = {"a": {"nested": {"downloadUrl": "https://cdn.test/x.zip"}}, "b": [1, 2]}
+        assert r._first_download_url(data) == "https://cdn.test/x.zip"
+
+    def test_first_download_url_falls_back_to_model_like_string(self) -> None:
+        data = {"meta": "hello", "links": ["https://cdn.test/model.3mf", "not-a-url"]}
+        assert r._first_download_url(data) == "https://cdn.test/model.3mf"
+
+    def test_first_download_url_none_when_nothing_matches(self) -> None:
+        assert (
+            r._first_download_url(
+                {"meta": "hello", "n": 3, "page": "https://x.test/about"}
+            )
+            is None
+        )
+
+    def test_first_download_url_keyed_link_beats_deep_fallback(self) -> None:
+        # A keyed url anywhere wins over a model-looking bare string.
+        data = {
+            "files": ["https://cdn.test/a.stl"],
+            "meta": {"url": "https://cdn.test/real.zip"},
+        }
+        assert r._first_download_url(data) == "https://cdn.test/real.zip"
+
+    def test_first_download_url_ignores_non_http_keyed_values(self) -> None:
+        # A relative or non-http "url" must not be returned as a download link.
+        data = {"url": "/local/path.zip", "links": ["https://cdn.test/model.stl"]}
+        assert r._first_download_url(data) == "https://cdn.test/model.stl"
+
+
+class TestPickPrintablesPack:
+    def test_pick_printables_pack_prefers_model_files(self) -> None:
+        packs = [{"id": 5, "fileType": "OTHER"}, {"id": 9, "fileType": "MODEL_FILES"}]
+        assert r._pick_printables_pack(packs) == "9"
+        # Falls back to the first pack with an id when there's no MODEL_FILES pack.
+        assert r._pick_printables_pack([{"id": 7, "fileType": "GCODE"}]) == "7"
+        assert r._pick_printables_pack([]) is None
+
+    def test_pick_printables_pack_non_list_returns_none(self) -> None:
+        assert r._pick_printables_pack(None) is None
+        assert r._pick_printables_pack("nope") is None
+
+
+class TestLooksLikeDownload:
+    @pytest.mark.parametrize(
+        "url, expected",
+        [
+            ("https://cdn.test/model.stl", True),
+            ("https://cdn.test/model.3MF", True),  # case-insensitive ext
+            ("https://cdn.test/get?file=model.stl", False),  # ext only in query
+            ("https://cdn.test/api/download/123", True),  # /download path
+            ("https://cdn.test/image.png", False),
+            ("https://cdn.test/about", False),
+        ],
+    )
+    def test_looks_like_download(self, url: str, expected: bool) -> None:
+        assert r._looks_like_download(url) is expected
+
+
+class TestExtractNextData:
+    def test_extract_next_data_round_trips(self) -> None:
+        html = '<html><script id="__NEXT_DATA__" type="application/json">{"props":{"x":1}}</script></html>'
+        assert r._extract_next_data(html) == {"props": {"x": 1}}
+        assert r._extract_next_data("<html>no next data</html>") is None
+
+    def test_extract_next_data_invalid_json_returns_none(self) -> None:
+        html = '<script id="__NEXT_DATA__" type="application/json">{not json}</script>'
+        assert r._extract_next_data(html) is None
+
+
+class TestPrintablesLinkFromOutput:
+    def test_printables_link_from_output_falls_back_to_files_list(self) -> None:
+        payload = {
+            "data": {
+                "getDownloadLink": {
+                    "output": {
+                        "files": [{"link": "https://files.printables.test/a.stl"}]
+                    }
+                }
+            }
+        }
+        assert (
+            r._printables_link_from_output(payload)
+            == "https://files.printables.test/a.stl"
+        )
+
+
+class TestPrintablesLinksFromOutput:
+    def test_printables_links_from_output_falls_back_to_single_link(self) -> None:
+        payload = {
+            "data": {
+                "getDownloadLink": {
+                    "output": {"link": "https://files.printables.test/x.zip"}
+                }
+            }
+        }
+        assert r._printables_links_from_output(payload) == [
+            "https://files.printables.test/x.zip"
+        ]
+        assert r._printables_links_from_output({}) == []
+
+
+class TestRaises:
+    @pytest.mark.asyncio
+    async def test_resolve_collection_empty_raises_host_error(self) -> None:
+        name_payload = {"data": {"collection": {"name": "empty"}}}
+        members_payload = {
+            "data": {"moreCollectionModels": {"cursor": "", "items": []}}
+        }
+        with patch.object(
+            r,
+            "_printables_graphql",
+            AsyncMock(side_effect=[name_payload, members_payload]),
+        ):
+            with pytest.raises(ImportError_) as exc:
+                await r.resolve_collection_url("https://printables.com/collections/9")
+        assert str(exc.value) == "printables_collection_resolve_failed"
+
+
+class TestLooksLikeChallenge:
+    def test_looks_like_challenge_detects_interstitial(self) -> None:
+        html = "<html><head><title>Just a moment...</title></head><body><div class='cf-chl'></div></body>"
+        assert r._looks_like_challenge(html) is True
+
+    def test_looks_like_challenge_false_when_next_data_present(self) -> None:
+        # A page that ships __NEXT_DATA__ is real content, even if it name-drops a marker.
+        assert (
+            r._looks_like_challenge(
+                '<script id="__NEXT_DATA__">{}</script> just a moment'
+            )
+            is False
+        )
+
+    def test_looks_like_challenge_false_for_plain_page(self) -> None:
+        assert r._looks_like_challenge("<html><body>hello world</body></html>") is False
+
+
+class TestClassifyCollection:
+    @pytest.mark.parametrize(
+        "url, expected",
+        [
+            (
+                "https://www.printables.com/@JonasHansen_1131321/collections/3525050",
+                "printables",
+            ),
+            ("https://printables.com/collections/3525050", "printables"),
+            (
+                "https://makerworld.com/es/collections/5600774-h2d-sample-projects",
+                "makerworld",
+            ),
+            ("https://makerworld.com/en/collections/5600774", "makerworld"),
+            # A model page is not a collection.
+            ("https://www.printables.com/model/1660232-springy-cat", None),
+            ("https://example.com/collections/5", None),
+            # Look-alike host must not classify as MakerWorld.
+            ("https://evilmakerworld.com/collections/5600774", None),
+        ],
+    )
+    def test_classify_collection(self, url: str, expected) -> None:
+        assert r.classify_collection(url) == expected
+
+
+class TestCollectionId:
+    def test_collection_id_extractor(self) -> None:
+        assert (
+            r._collection_id("https://printables.com/@u/collections/3525050")
+            == "3525050"
+        )
+        assert (
+            r._collection_id("https://makerworld.com/es/collections/5600774-slug")
+            == "5600774"
+        )
+        assert r._collection_id("https://printables.com/model/1660232") is None

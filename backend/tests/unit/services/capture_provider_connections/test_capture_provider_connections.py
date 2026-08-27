@@ -366,23 +366,6 @@ async def test_mmf_rejects_oversized_metadata_without_echoing_it() -> None:
     assert oversized_title not in str(exc.value)
 
 
-@pytest.mark.anyio
-async def test_mmf_rejects_malformed_json_without_exposing_response_content() -> None:
-    response_body = b'{"access_token":"secret-token", malformed'
-    transport = RecordingTransport([httpx.Response(200, content=response_body)])
-
-    with pytest.raises(ProviderConnectionError) as exc:
-        await MyMiniFactoryMetadataClient(transport).exchange_code(
-            MyMiniFactoryCredentials("client", "client-secret"),
-            code="code",
-            redirect_uri="https://vault.example/callback",
-        )
-
-    assert exc.value.code == "provider_response_invalid"
-    assert "secret-token" not in repr(exc.value)
-    assert "secret-token" not in str(exc.value)
-
-
 class TestJsonGuards:
     """Every provider response is bounded before it is read as data.
 
@@ -555,3 +538,23 @@ class TestOpaqueId:
             )
 
         assert exc.value.code == "provider_response_invalid"
+
+
+class TestResponse:
+    @pytest.mark.anyio
+    async def test_mmf_rejects_malformed_json_without_exposing_response_content(
+        self,
+    ) -> None:
+        response_body = b'{"access_token":"secret-token", malformed'
+        transport = RecordingTransport([httpx.Response(200, content=response_body)])
+
+        with pytest.raises(ProviderConnectionError) as exc:
+            await MyMiniFactoryMetadataClient(transport).exchange_code(
+                MyMiniFactoryCredentials("client", "client-secret"),
+                code="code",
+                redirect_uri="https://vault.example/callback",
+            )
+
+        assert exc.value.code == "provider_response_invalid"
+        assert "secret-token" not in repr(exc.value)
+        assert "secret-token" not in str(exc.value)

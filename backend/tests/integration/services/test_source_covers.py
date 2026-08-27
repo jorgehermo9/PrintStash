@@ -136,75 +136,6 @@ def test_replacement_failure_keeps_old_metadata_and_proof(db_session: Session) -
     assert proof.token == "old"
 
 
-def test_commit_failure_rolls_back_new_publish_with_exact_receipt(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    backend = _backend()
-    receipt = _receipt(f"opaque/covers/{source.id}.webp")
-    backend.create_bytes.return_value = receipt
-    result = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png(),
-        content_type="image/png",
-    )
-    db_session.rollback()
-
-    source_covers.rollback_after_commit_failure(db_session, backend, result)
-
-    backend.rollback_create.assert_called_once_with(receipt)
-    assert db_session.exec(select(ModelSourceCover)).all() == []
-    assert db_session.exec(select(StagingLease)).all() == []
-
-
-def test_replacement_commit_failure_restores_bytes_and_a_current_proof(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    backend = get_backend()
-    first = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("navy"),
-        content_type="image/png",
-    )
-    db_session.commit()
-    old_bytes = backend.read_bytes(first.cover.storage_key)
-
-    replacement = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png("maroon"),
-        content_type="image/png",
-    )
-    db_session.rollback()
-    source_covers.rollback_after_commit_failure(db_session, backend, replacement)
-
-    assert backend.read_bytes(first.cover.storage_key) == old_bytes
-    proof = db_session.exec(select(OwnedStorageObject)).one()
-    assert backend.creation_matches(
-        CreationReceipt(
-            key=proof.key,
-            size=proof.size_bytes,
-            token=proof.token,
-            backend=proof.backend,
-            namespace=proof.namespace,
-            etag=proof.etag,
-            version_id=proof.version_id,
-            device=proof.device,
-            inode=proof.inode,
-            ctime_ns=proof.ctime_ns,
-        )
-    )
-
-
 def test_successive_replacements_publish_latest_bytes_and_release_each_lease(
     db_session: Session,
 ) -> None:
@@ -293,97 +224,6 @@ def test_new_replacement_supersedes_a_crashed_prior_generation(
     assert db_session.exec(select(StagingLease)).all() == []
 
 
-def test_soft_delete_and_restore_keep_cover_and_proof(db_session: Session) -> None:
-    source = _source(db_session)
-    model = db_session.get(Model, source.model_id)
-    assert model is not None
-    backend = get_backend()
-    result = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png(),
-        content_type="image/png",
-    )
-    db_session.commit()
-
-    trash.soft_delete_model(db_session, model)
-    assert db_session.get(ModelSourceCover, result.cover.id) is not None
-    assert (
-        db_session.exec(select(OwnedStorageObject)).one().key
-        == result.cover.storage_key
-    )
-    trash.restore_model(db_session, model)
-    assert db_session.get(ModelSourceCover, result.cover.id) is not None
-    assert backend.read_bytes(result.cover.storage_key)
-
-
-def test_hard_delete_enqueues_one_required_proof_intent_for_cover(
-    db_session: Session,
-) -> None:
-    source = _source(db_session)
-    model = db_session.get(Model, source.model_id)
-    assert model is not None
-    backend = get_backend()
-    result = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png(),
-        content_type="image/png",
-    )
-    db_session.commit()
-
-    trash.soft_delete_model(db_session, model)
-    trash.hard_delete_model(db_session, model)
-    db_session.commit()
-
-    intents = db_session.exec(
-        select(StorageDeleteIntent).where(
-            StorageDeleteIntent.resource_kind == "model_source_cover"
-        )
-    ).all()
-    assert len(intents) == 1
-    assert intents[0].key == result.cover.storage_key
-    assert intents[0].resource_id == str(result.cover.id)
-
-
-def test_restart_reconciles_cover_published_before_receipt_commit(
-    db_session: Session,
-) -> None:
-    """A crash after create-only publication leaves a recoverable cover intent."""
-    source = _source(db_session)
-    backend = get_backend()
-    data = _png("navy")
-    result = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=data,
-        content_type="image/png",
-    )
-    assert result.cover.id is not None
-    # The caller's transaction is the receipt/proof commit boundary. A
-    # process crash here rolls back that transaction, while the precommitted
-    # cover + lease and published bytes survive.
-    db_session.rollback()
-
-    assert backend.exists(result.cover.storage_key)
-    assert db_session.exec(select(StagingLease)).all()
-    assert source_covers.reconcile_pending(db_session, backend) == 1
-    db_session.commit()
-
-    assert db_session.exec(select(StagingLease)).all() == []
-    assert (
-        db_session.exec(select(OwnedStorageObject)).one().key
-        == result.cover.storage_key
-    )
-    assert backend.read_bytes(result.cover.storage_key)
-
-
 def test_restart_reconciles_replacement_without_restoring_old_bytes(
     db_session: Session,
 ) -> None:
@@ -432,34 +272,6 @@ def test_restart_reconciles_replacement_without_restoring_old_bytes(
             ctime_ns=proof.ctime_ns,
         )
     )
-
-
-def test_cover_intent_does_not_commit_callers_unrelated_transaction(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = _source(db_session)
-    db_session.commit()
-    caller_commit = db_session.commit
-    commits: list[object] = []
-    monkeypatch.setattr(
-        db_session,
-        "commit",
-        lambda: commits.append(object()),
-    )
-    backend = get_backend()
-    result = source_covers.put(
-        db_session,
-        backend,
-        provenance_source_id=source.id,
-        actor_id=None,
-        data=_png(),
-        content_type="image/png",
-    )
-
-    assert result.cover.id is not None
-    assert commits == []
-    monkeypatch.setattr(db_session, "commit", caller_commit)
-    db_session.rollback()
 
 
 def test_expired_cover_intent_without_bytes_removes_cover_and_lease(
@@ -603,126 +415,6 @@ def test_expired_replacement_intent_keeps_existing_cover_when_old_bytes_remain(
     assert db_session.get(StagingLease, lease.id) is not None
 
 
-def test_finish_import_uses_only_intent_and_final_sqlite_commits(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Cover publication must not open a second writer behind Inbox flushes.
-
-    Two commits and no more: the cover's durable intent (its own engine-bound
-    transaction, which has to land *before* any byte is published so a crash is
-    recoverable) and the final Inbox terminalization. A third would mean cover
-    publication opened a writer while the terminalizing transaction was still
-    open, which on SQLite is a `database is locked` under any concurrency.
-
-    The manifest below carries a full `source` block — provider, item id and
-    canonical URL. That is load-bearing rather than incidental: the cover is
-    attached by matching the manifest against exactly one
-    `ModelProvenanceSource`, so a manifest missing any of the three makes the
-    attach refuse, and the test would then be counting the commits of a code
-    path that never published a cover at all.
-    """
-    engine = create_engine(
-        f"sqlite:///{tmp_path / 'finish-import.sqlite'}",
-        connect_args={"check_same_thread": False},
-    )
-    event.listen(engine, "connect", _set_sqlite_pragmas)
-    SQLModel.metadata.create_all(engine)
-    commits: list[object] = []
-
-    @event.listens_for(engine, "commit")
-    def _count_commit(_connection) -> None:
-        commits.append(object())
-
-    factory = SQLiteSessionFactory(engine)
-    data = _png()
-    with Session(engine) as setup:
-        owner = User(username="finish-owner", hashed_password="hash")
-        setup.add(owner)
-        setup.flush()
-        model = build_model(
-            setup,
-            name="finish-model",
-            slug=f"finish-{uuid.uuid4().hex}",
-            hash=uuid.uuid4().hex * 2,
-        )
-        source = ModelProvenanceSource(
-            model_id=model.id,
-            provider="test",
-            source_item_id="finish-item",
-            canonical_url="https://example.test/finish",
-            identity_key=uuid.uuid4().hex * 2,
-        )
-        row = InboxItem(
-            owner_user_id=owner.id,
-            source_kind=InboxSourceKind.BROWSER,
-            source_url=source.canonical_url,
-            state="importing",
-            manifest_json=json.dumps(
-                {
-                    "source": {
-                        "provider": source.provider,
-                        "source_item_id": source.source_item_id,
-                        "canonical_url": source.canonical_url,
-                    }
-                }
-            ),
-        )
-        setup.add_all([source, row])
-        setup.flush()
-        slot = CaptureUploadSlot(
-            id="finish-cover",
-            inbox_item_id=row.id,
-            role="cover",
-            filename="cover.png",
-            media_type="image/png",
-            size_bytes=len(data),
-            sha256=hashlib.sha256(data).hexdigest(),
-            state=CaptureUploadSlotState.UPLOADED,
-            storage_key="opaque/slot-cover",
-        )
-        setup.add(slot)
-        setup.commit()
-        row_id = row.id
-        model_id = model.id
-        source_id = source.id
-    commits.clear()
-
-    backend = _backend()
-    backend.source_cover_key.side_effect = lambda ident: f"opaque/cover/{ident}"
-    backend.read_bytes.return_value = data
-    processed = process_source_cover_upload(data, "image/png")
-    backend.create_bytes.return_value = CreationReceipt(
-        key=f"opaque/cover/{source_id}",
-        size=len(processed.data),
-        token="finish-cover",
-        backend="fake",
-        namespace="test",
-    )
-    job = type(
-        "Job",
-        (),
-        {"state": "completed", "model_id": model_id, "result": None},
-    )()
-    monkeypatch.setattr(inbox.registry, "get", lambda _job_id: job)
-    monkeypatch.setattr(inbox, "get_backend", lambda: backend)
-    monkeypatch.setattr(inbox, "_record_v2_results", lambda *_args: (True, 1, 0))
-    monkeypatch.setattr(inbox, "_cleanup_capture_slots", lambda *_args: True)
-
-    inbox._finish_import(row_id, "finish-job", factory)
-
-    assert len(commits) == 2  # durable intent + final Inbox terminalization
-    with Session(engine) as check:
-        finished = check.get(InboxItem, row_id)
-        assert finished is not None
-        assert finished.state.value == "completed"
-        assert (
-            check.exec(select(ModelSourceCover))
-            .one()
-            .storage_key.startswith("opaque/cover/")
-        )
-    engine.dispose()
-
-
 class TestCoverLease:
     def test_create_publish_failure_leaves_no_cover_lease_or_proof(
         self,
@@ -796,3 +488,316 @@ class TestCoverLease:
         with pytest.raises(IntegrityError):
             db_session.commit()
         db_session.rollback()
+
+
+class TestCommit:
+    def test_commit_failure_rolls_back_new_publish_with_exact_receipt(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        backend = _backend()
+        receipt = _receipt(f"opaque/covers/{source.id}.webp")
+        backend.create_bytes.return_value = receipt
+        result = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png(),
+            content_type="image/png",
+        )
+        db_session.rollback()
+
+        source_covers.rollback_after_commit_failure(db_session, backend, result)
+
+        backend.rollback_create.assert_called_once_with(receipt)
+        assert db_session.exec(select(ModelSourceCover)).all() == []
+        assert db_session.exec(select(StagingLease)).all() == []
+
+    def test_replacement_commit_failure_restores_bytes_and_a_current_proof(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        backend = get_backend()
+        first = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png("navy"),
+            content_type="image/png",
+        )
+        db_session.commit()
+        old_bytes = backend.read_bytes(first.cover.storage_key)
+
+        replacement = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png("maroon"),
+            content_type="image/png",
+        )
+        db_session.rollback()
+        source_covers.rollback_after_commit_failure(db_session, backend, replacement)
+
+        assert backend.read_bytes(first.cover.storage_key) == old_bytes
+        proof = db_session.exec(select(OwnedStorageObject)).one()
+        assert backend.creation_matches(
+            CreationReceipt(
+                key=proof.key,
+                size=proof.size_bytes,
+                token=proof.token,
+                backend=proof.backend,
+                namespace=proof.namespace,
+                etag=proof.etag,
+                version_id=proof.version_id,
+                device=proof.device,
+                inode=proof.inode,
+                ctime_ns=proof.ctime_ns,
+            )
+        )
+
+    def test_restart_reconciles_cover_published_before_receipt_commit(
+        self,
+        db_session: Session,
+    ) -> None:
+        """A crash after create-only publication leaves a recoverable cover intent."""
+        source = _source(db_session)
+        backend = get_backend()
+        data = _png("navy")
+        result = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=data,
+            content_type="image/png",
+        )
+        assert result.cover.id is not None
+        # The caller's transaction is the receipt/proof commit boundary. A
+        # process crash here rolls back that transaction, while the precommitted
+        # cover + lease and published bytes survive.
+        db_session.rollback()
+
+        assert backend.exists(result.cover.storage_key)
+        assert db_session.exec(select(StagingLease)).all()
+        assert source_covers.reconcile_pending(db_session, backend) == 1
+        db_session.commit()
+
+        assert db_session.exec(select(StagingLease)).all() == []
+        assert (
+            db_session.exec(select(OwnedStorageObject)).one().key
+            == result.cover.storage_key
+        )
+        assert backend.read_bytes(result.cover.storage_key)
+
+    def test_cover_intent_does_not_commit_callers_unrelated_transaction(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = _source(db_session)
+        db_session.commit()
+        caller_commit = db_session.commit
+        commits: list[object] = []
+        monkeypatch.setattr(
+            db_session,
+            "commit",
+            lambda: commits.append(object()),
+        )
+        backend = get_backend()
+        result = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png(),
+            content_type="image/png",
+        )
+
+        assert result.cover.id is not None
+        assert commits == []
+        monkeypatch.setattr(db_session, "commit", caller_commit)
+        db_session.rollback()
+
+
+class TestFinishImport:
+    def test_finish_import_uses_only_intent_and_final_sqlite_commits(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cover publication must not open a second writer behind Inbox flushes.
+
+        Two commits and no more: the cover's durable intent (its own engine-bound
+        transaction, which has to land *before* any byte is published so a crash is
+        recoverable) and the final Inbox terminalization. A third would mean cover
+        publication opened a writer while the terminalizing transaction was still
+        open, which on SQLite is a `database is locked` under any concurrency.
+
+        The manifest below carries a full `source` block — provider, item id and
+        canonical URL. That is load-bearing rather than incidental: the cover is
+        attached by matching the manifest against exactly one
+        `ModelProvenanceSource`, so a manifest missing any of the three makes the
+        attach refuse, and the test would then be counting the commits of a code
+        path that never published a cover at all.
+        """
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'finish-import.sqlite'}",
+            connect_args={"check_same_thread": False},
+        )
+        event.listen(engine, "connect", _set_sqlite_pragmas)
+        SQLModel.metadata.create_all(engine)
+        commits: list[object] = []
+
+        @event.listens_for(engine, "commit")
+        def _count_commit(_connection) -> None:
+            commits.append(object())
+
+        factory = SQLiteSessionFactory(engine)
+        data = _png()
+        with Session(engine) as setup:
+            owner = User(username="finish-owner", hashed_password="hash")
+            setup.add(owner)
+            setup.flush()
+            model = build_model(
+                setup,
+                name="finish-model",
+                slug=f"finish-{uuid.uuid4().hex}",
+                hash=uuid.uuid4().hex * 2,
+            )
+            source = ModelProvenanceSource(
+                model_id=model.id,
+                provider="test",
+                source_item_id="finish-item",
+                canonical_url="https://example.test/finish",
+                identity_key=uuid.uuid4().hex * 2,
+            )
+            row = InboxItem(
+                owner_user_id=owner.id,
+                source_kind=InboxSourceKind.BROWSER,
+                source_url=source.canonical_url,
+                state="importing",
+                manifest_json=json.dumps(
+                    {
+                        "source": {
+                            "provider": source.provider,
+                            "source_item_id": source.source_item_id,
+                            "canonical_url": source.canonical_url,
+                        }
+                    }
+                ),
+            )
+            setup.add_all([source, row])
+            setup.flush()
+            slot = CaptureUploadSlot(
+                id="finish-cover",
+                inbox_item_id=row.id,
+                role="cover",
+                filename="cover.png",
+                media_type="image/png",
+                size_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+                state=CaptureUploadSlotState.UPLOADED,
+                storage_key="opaque/slot-cover",
+            )
+            setup.add(slot)
+            setup.commit()
+            row_id = row.id
+            model_id = model.id
+            source_id = source.id
+        commits.clear()
+
+        backend = _backend()
+        backend.source_cover_key.side_effect = lambda ident: f"opaque/cover/{ident}"
+        backend.read_bytes.return_value = data
+        processed = process_source_cover_upload(data, "image/png")
+        backend.create_bytes.return_value = CreationReceipt(
+            key=f"opaque/cover/{source_id}",
+            size=len(processed.data),
+            token="finish-cover",
+            backend="fake",
+            namespace="test",
+        )
+        job = type(
+            "Job",
+            (),
+            {"state": "completed", "model_id": model_id, "result": None},
+        )()
+        monkeypatch.setattr(inbox.registry, "get", lambda _job_id: job)
+        monkeypatch.setattr(inbox, "get_backend", lambda: backend)
+        monkeypatch.setattr(inbox, "_record_v2_results", lambda *_args: (True, 1, 0))
+        monkeypatch.setattr(inbox, "_cleanup_capture_slots", lambda *_args: True)
+
+        inbox._finish_import(row_id, "finish-job", factory)
+
+        assert len(commits) == 2  # durable intent + final Inbox terminalization
+        with Session(engine) as check:
+            finished = check.get(InboxItem, row_id)
+            assert finished is not None
+            assert finished.state.value == "completed"
+            assert (
+                check.exec(select(ModelSourceCover))
+                .one()
+                .storage_key.startswith("opaque/cover/")
+            )
+        engine.dispose()
+
+
+class TestDelete:
+    def test_soft_delete_and_restore_keep_cover_and_proof(
+        self, db_session: Session
+    ) -> None:
+        source = _source(db_session)
+        model = db_session.get(Model, source.model_id)
+        assert model is not None
+        backend = get_backend()
+        result = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png(),
+            content_type="image/png",
+        )
+        db_session.commit()
+
+        trash.soft_delete_model(db_session, model)
+        assert db_session.get(ModelSourceCover, result.cover.id) is not None
+        assert (
+            db_session.exec(select(OwnedStorageObject)).one().key
+            == result.cover.storage_key
+        )
+        trash.restore_model(db_session, model)
+        assert db_session.get(ModelSourceCover, result.cover.id) is not None
+        assert backend.read_bytes(result.cover.storage_key)
+
+    def test_hard_delete_enqueues_one_required_proof_intent_for_cover(
+        self,
+        db_session: Session,
+    ) -> None:
+        source = _source(db_session)
+        model = db_session.get(Model, source.model_id)
+        assert model is not None
+        backend = get_backend()
+        result = source_covers.put(
+            db_session,
+            backend,
+            provenance_source_id=source.id,
+            actor_id=None,
+            data=_png(),
+            content_type="image/png",
+        )
+        db_session.commit()
+
+        trash.soft_delete_model(db_session, model)
+        trash.hard_delete_model(db_session, model)
+        db_session.commit()
+
+        intents = db_session.exec(
+            select(StorageDeleteIntent).where(
+                StorageDeleteIntent.resource_kind == "model_source_cover"
+            )
+        ).all()
+        assert len(intents) == 1
+        assert intents[0].key == result.cover.storage_key
+        assert intents[0].resource_id == str(result.cover.id)

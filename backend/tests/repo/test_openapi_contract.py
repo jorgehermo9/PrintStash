@@ -32,15 +32,16 @@ def _canonical_contract() -> str:
     return json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-def test_openapi_contract() -> None:
-    current_contract = _canonical_contract()
+class TestOpenapi:
+    def test_openapi_contract(self) -> None:
+        current_contract = _canonical_contract()
 
-    if os.environ.get("UPDATE_OPENAPI_CONTRACT") == "1":
-        CONTRACT_PATH.write_text(current_contract, encoding="utf-8")
+        if os.environ.get("UPDATE_OPENAPI_CONTRACT") == "1":
+            CONTRACT_PATH.write_text(current_contract, encoding="utf-8")
 
-    expected_contract = CONTRACT_PATH.read_text(encoding="utf-8")
-    assert current_contract == expected_contract, (
-        "OpenAPI contract changed. Review the diff; if the change is intentional, "
-        "regenerate the fixture with:\n"
-        "UPDATE_OPENAPI_CONTRACT=1 uv run pytest tests/test_openapi_contract.py -v"
-    )
+        expected_contract = CONTRACT_PATH.read_text(encoding="utf-8")
+        assert current_contract == expected_contract, (
+            "OpenAPI contract changed. Review the diff; if the change is intentional, "
+            "regenerate the fixture with:\n"
+            "UPDATE_OPENAPI_CONTRACT=1 uv run pytest tests/test_openapi_contract.py -v"
+        )

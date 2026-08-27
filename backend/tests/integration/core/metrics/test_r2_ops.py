@@ -32,54 +32,6 @@ from tests.factories import build_file, build_model
 # --- Item 2: background-scan restart cleanup ----------------------------------
 
 
-def test_reset_orphaned_scans_recovers_stranded_library(db_session: Session) -> None:
-    lib = ExternalLibrary(
-        name="nas",
-        root_path="/mnt/nas",
-        enabled=True,
-        scan_schedule="* * * * *",
-        last_scanned_at=None,
-        last_scan_status=ExternalLibraryScanStatus.RUNNING,
-    )
-    db_session.add(lib)
-    db_session.commit()
-    db_session.refresh(lib)
-
-    # While stranded RUNNING, the scheduler skips it.
-    assert lib.id not in external_library.libraries_due_for_scan(db_session)
-
-    reset = external_library.reset_orphaned_scans(db_session)
-    assert reset == 1
-
-    db_session.refresh(lib)
-    assert lib.last_scan_status == ExternalLibraryScanStatus.ERROR
-    assert json.loads(lib.last_scan_summary)["error"] == "interrupted by restart"
-
-    # Loop-breaker (issue #24): the reset stamps last_scanned_at, so a scan that
-    # crashed the process is NOT immediately due again on the next tick — it
-    # waits for the schedule instead of crash-looping the container.
-    assert lib.last_scanned_at is not None
-    assert lib.id not in external_library.libraries_due_for_scan(db_session)
-
-    # Once the schedule has elapsed, it becomes eligible again as normal.
-    lib.last_scanned_at = utcnow() - timedelta(minutes=2)
-    db_session.add(lib)
-    db_session.commit()
-    assert lib.id in external_library.libraries_due_for_scan(db_session)
-
-
-def test_reset_orphaned_scans_noop_without_running(db_session: Session) -> None:
-    db_session.add(
-        ExternalLibrary(
-            name="nas",
-            root_path="/mnt/nas",
-            last_scan_status=ExternalLibraryScanStatus.OK,
-        )
-    )
-    db_session.commit()
-    assert external_library.reset_orphaned_scans(db_session) == 0
-
-
 # --- Item 3: Prometheus metrics -----------------------------------------------
 
 
@@ -153,3 +105,55 @@ def test_metrics_token_enforced_when_set(client: TestClient) -> None:
         )
     finally:
         _overlay.pop("metrics_token", None)
+
+
+class TestResetOrphanedScans:
+    def test_reset_orphaned_scans_recovers_stranded_library(
+        self, db_session: Session
+    ) -> None:
+        lib = ExternalLibrary(
+            name="nas",
+            root_path="/mnt/nas",
+            enabled=True,
+            scan_schedule="* * * * *",
+            last_scanned_at=None,
+            last_scan_status=ExternalLibraryScanStatus.RUNNING,
+        )
+        db_session.add(lib)
+        db_session.commit()
+        db_session.refresh(lib)
+
+        # While stranded RUNNING, the scheduler skips it.
+        assert lib.id not in external_library.libraries_due_for_scan(db_session)
+
+        reset = external_library.reset_orphaned_scans(db_session)
+        assert reset == 1
+
+        db_session.refresh(lib)
+        assert lib.last_scan_status == ExternalLibraryScanStatus.ERROR
+        assert json.loads(lib.last_scan_summary)["error"] == "interrupted by restart"
+
+        # Loop-breaker (issue #24): the reset stamps last_scanned_at, so a scan that
+        # crashed the process is NOT immediately due again on the next tick — it
+        # waits for the schedule instead of crash-looping the container.
+        assert lib.last_scanned_at is not None
+        assert lib.id not in external_library.libraries_due_for_scan(db_session)
+
+        # Once the schedule has elapsed, it becomes eligible again as normal.
+        lib.last_scanned_at = utcnow() - timedelta(minutes=2)
+        db_session.add(lib)
+        db_session.commit()
+        assert lib.id in external_library.libraries_due_for_scan(db_session)
+
+    def test_reset_orphaned_scans_noop_without_running(
+        self, db_session: Session
+    ) -> None:
+        db_session.add(
+            ExternalLibrary(
+                name="nas",
+                root_path="/mnt/nas",
+                last_scan_status=ExternalLibraryScanStatus.OK,
+            )
+        )
+        db_session.commit()
+        assert external_library.reset_orphaned_scans(db_session) == 0

@@ -82,29 +82,6 @@ async def test_full_login_provisions_admin_via_pkce_and_sets_session(api, idp, e
 
 
 @pytest.mark.asyncio
-async def test_non_admin_group_provisions_regular_user(api, idp, e2e_db):
-    _enable_oidc(idp)
-    state, nonce = await _begin_login(api)
-
-    code = idp.issue_code(
-        {
-            "sub": "e2e-user-2",
-            "aud": "printstash-e2e",
-            "nonce": nonce,
-            "preferred_username": "regularjoe",
-            "groups": ["some-other-group"],
-        }
-    )
-    callback = await api.get(f"/api/v1/auth/oidc/callback?code={code}&state={state}")
-    assert callback.status_code == 302
-    assert callback.headers["location"] == "/login?oidc=success"
-
-    e2e_db.expire_all()
-    user = e2e_db.exec(select(User).where(User.username == "regularjoe")).one()
-    assert user.is_superuser is False
-
-
-@pytest.mark.asyncio
 async def test_username_collision_gets_a_unique_suffix(api, idp, e2e_db):
 
     build_user(e2e_db, username="grillmaster", password="Password123", active=True)
@@ -156,3 +133,29 @@ async def test_state_mismatch_is_rejected(api, idp, e2e_db):
         e2e_db.exec(select(User).where(User.oidc_subject == "e2e-user-4")).first()
         is None
     )
+
+
+class TestUser:
+    @pytest.mark.asyncio
+    async def test_non_admin_group_provisions_regular_user(self, api, idp, e2e_db):
+        _enable_oidc(idp)
+        state, nonce = await _begin_login(api)
+
+        code = idp.issue_code(
+            {
+                "sub": "e2e-user-2",
+                "aud": "printstash-e2e",
+                "nonce": nonce,
+                "preferred_username": "regularjoe",
+                "groups": ["some-other-group"],
+            }
+        )
+        callback = await api.get(
+            f"/api/v1/auth/oidc/callback?code={code}&state={state}"
+        )
+        assert callback.status_code == 302
+        assert callback.headers["location"] == "/login?oidc=success"
+
+        e2e_db.expire_all()
+        user = e2e_db.exec(select(User).where(User.username == "regularjoe")).one()
+        assert user.is_superuser is False

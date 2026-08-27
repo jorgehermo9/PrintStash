@@ -35,25 +35,6 @@ from tests.factories import (
 )
 
 
-def test_hub_uses_its_injected_session_factory(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Lifecycle database access stays behind the construction seam."""
-    factory = get_session_factory()
-    hub = PrinterHub(InProcessBus(), session_factory=factory)
-
-    def _unexpected_global_lookup():
-        raise AssertionError("global session lookup")
-
-    monkeypatch.setattr(
-        printer_hub_module,
-        "get_session_factory",
-        _unexpected_global_lookup,
-    )
-
-    asyncio.run(hub.start_all())
-
-
 def test_provider_material_state_sync_creates_updates_and_removes_rows(
     hub: PrinterHub, db_session
 ) -> None:
@@ -1273,3 +1254,24 @@ class TestAttach:
         websocket.send_json.side_effect = RuntimeError("disconnected")
         asyncio.run(hub.attach(3, websocket))
         asyncio.run(hub.detach(3, websocket))
+
+
+class TestSession:
+    def test_hub_uses_its_injected_session_factory(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Lifecycle database access stays behind the construction seam."""
+        factory = get_session_factory()
+        hub = PrinterHub(InProcessBus(), session_factory=factory)
+
+        def _unexpected_global_lookup():
+            raise AssertionError("global session lookup")
+
+        monkeypatch.setattr(
+            printer_hub_module,
+            "get_session_factory",
+            _unexpected_global_lookup,
+        )
+
+        asyncio.run(hub.start_all())

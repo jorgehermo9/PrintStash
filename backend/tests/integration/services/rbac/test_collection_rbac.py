@@ -113,55 +113,6 @@ def test_trashed_collection_grants_no_role(db_session: Session) -> None:
     assert rbac.effective_collection_role(db_session, user, coll.id) is None
 
 
-def test_model_reads_filter_denied_collections(
-    client: TestClient,
-    db_session: Session,
-) -> None:
-    user = build_user(db_session, "reader")
-    allowed = taxonomy.resolve_or_create_collection(db_session, "Allowed")
-    denied = taxonomy.resolve_or_create_collection(db_session, "Denied")
-    assert allowed is not None and denied is not None
-    _grant(db_session, user, allowed.id, CollectionRole.VIEW)
-    allowed_model = _model(db_session, "Allowed Model", allowed.id)
-    denied_model = _model(db_session, "Denied Model", denied.id)
-
-    response = client.get("/api/v1/models", headers=bearer(user))
-    assert response.status_code == 200
-    assert [row["id"] for row in response.json()] == [allowed_model.id]
-
-    denied_detail = client.get(
-        f"/api/v1/models/{denied_model.id}",
-        headers=bearer(user),
-    )
-    assert denied_detail.status_code == 404
-
-
-def test_file_download_denies_collection_without_view(
-    client: TestClient,
-    db_session: Session,
-) -> None:
-    user = build_user(db_session, "no-files")
-    collection = taxonomy.resolve_or_create_collection(db_session, "Private")
-    assert collection is not None
-    model = _model(db_session, "Private Model", collection.id)
-    file_row = build_file(
-        db_session,
-        model,
-        path="/tmp/private.stl",
-        filename="private.stl",
-        file_type=FileType.STL,
-        version=1,
-        size_bytes=1,
-        sha256="f" * 64,
-    )
-
-    response = client.get(
-        f"/api/v1/files/{file_row.id}/download",
-        headers=bearer(user),
-    )
-    assert response.status_code == 403
-
-
 def test_view_role_cannot_edit_but_edit_role_can(
     client: TestClient,
     db_session: Session,
@@ -610,3 +561,56 @@ class TestRequireModelCollectionRole:
             )
             == CollectionRole.ADMIN
         )
+
+
+class TestFile:
+    def test_file_download_denies_collection_without_view(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ) -> None:
+        user = build_user(db_session, "no-files")
+        collection = taxonomy.resolve_or_create_collection(db_session, "Private")
+        assert collection is not None
+        model = _model(db_session, "Private Model", collection.id)
+        file_row = build_file(
+            db_session,
+            model,
+            path="/tmp/private.stl",
+            filename="private.stl",
+            file_type=FileType.STL,
+            version=1,
+            size_bytes=1,
+            sha256="f" * 64,
+        )
+
+        response = client.get(
+            f"/api/v1/files/{file_row.id}/download",
+            headers=bearer(user),
+        )
+        assert response.status_code == 403
+
+
+class TestModel:
+    def test_model_reads_filter_denied_collections(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ) -> None:
+        user = build_user(db_session, "reader")
+        allowed = taxonomy.resolve_or_create_collection(db_session, "Allowed")
+        denied = taxonomy.resolve_or_create_collection(db_session, "Denied")
+        assert allowed is not None and denied is not None
+        _grant(db_session, user, allowed.id, CollectionRole.VIEW)
+        allowed_model = _model(db_session, "Allowed Model", allowed.id)
+        denied_model = _model(db_session, "Denied Model", denied.id)
+
+        response = client.get("/api/v1/models", headers=bearer(user))
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()] == [allowed_model.id]
+
+        denied_detail = client.get(
+            f"/api/v1/models/{denied_model.id}",
+            headers=bearer(user),
+        )
+        assert denied_detail.status_code == 404

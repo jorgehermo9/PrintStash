@@ -43,50 +43,6 @@ def _completed(client: TestClient, resp, headers: dict[str, str]) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def test_ingest_obj_creates_model(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-    payload = _completed(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("widget.obj", _mesh_bytes("obj"), "text/plain")},
-            data={"model_name": "OBJ Widget"},
-        ),
-        auth_headers,
-    )
-    assert payload["state"] == "completed", payload
-    file_row = db_session.get(File, payload["file_id"])
-    assert file_row is not None and file_row.file_type == FileType.OBJ
-
-
-def test_ingest_3mf_creates_model(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-    payload = _completed(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("widget.3mf", _mesh_bytes("3mf"), "model/3mf")},
-            data={"model_name": "3MF Widget"},
-        ),
-        auth_headers,
-    )
-    assert payload["state"] == "completed", payload
-    file_row = db_session.get(File, payload["file_id"])
-    assert file_row is not None and file_row.file_type == FileType.THREE_MF
-
-
 def test_ingest_step_is_accepted_and_typed(
     tmp_path: Path,
     client: TestClient,
@@ -260,3 +216,49 @@ class TestImportFromUrl:
             json={"url": "http://127.0.0.1:7125/secret.stl"},
         )
         assert resp.status_code == 400, resp.text
+
+
+class TestModel:
+    def test_ingest_obj_creates_model(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+        payload = _completed(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("widget.obj", _mesh_bytes("obj"), "text/plain")},
+                data={"model_name": "OBJ Widget"},
+            ),
+            auth_headers,
+        )
+        assert payload["state"] == "completed", payload
+        file_row = db_session.get(File, payload["file_id"])
+        assert file_row is not None and file_row.file_type == FileType.OBJ
+
+    def test_ingest_3mf_creates_model(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+        payload = _completed(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("widget.3mf", _mesh_bytes("3mf"), "model/3mf")},
+                data={"model_name": "3MF Widget"},
+            ),
+            auth_headers,
+        )
+        assert payload["state"] == "completed", payload
+        file_row = db_session.get(File, payload["file_id"])
+        assert file_row is not None and file_row.file_type == FileType.THREE_MF

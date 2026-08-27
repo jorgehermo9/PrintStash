@@ -163,22 +163,6 @@ def test_backup_ignores_external_job_sentinel_but_keeps_vault_artifact(
     assert [entry["key"] for entry in entries] == [vault_key]
 
 
-def test_manifest_is_first_archive_member(backup_env: BackupEnv):
-    """The manifest must be the first entry so listing (a streaming read) can
-    stop after one small member instead of pulling the whole archive."""
-    import gzip
-    import tarfile
-
-    seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
-    seed_model_with_blob(backup_env, name="Gadget", content=b"solid gadget\n")
-    meta = backup.create_backup()
-
-    with gzip.open(Path(meta.path), "rb") as gz:
-        with tarfile.open(fileobj=gz, mode="r|") as tar:
-            first = next(iter(tar))
-    assert first.name == "manifest.json"
-
-
 def test_backup_appears_in_list_and_get(backup_env: BackupEnv):
     seed_model_with_blob(backup_env, name="Widget", content=b"x")
     meta = backup.create_backup()
@@ -290,47 +274,6 @@ def test_restore_recovers_blob_bytes(backup_env: BackupEnv):
     assert Path(key).read_bytes() == content
 
 
-def test_backup_includes_document_blobs(backup_env: BackupEnv):
-    """Documents are vault-owned bytes: a backup that omits them is a lie."""
-    content = b"%PDF-1.4 assembly manual\n"
-    key = _seed_document_with_blob(backup_env, name="manual.pdf", content=content)
-    meta = backup.create_backup()
-
-    Path(key).unlink()
-    result = backup.restore_backup(meta.id)
-
-    assert Path(key).exists(), "document blob was never in the archive"
-    assert Path(key).read_bytes() == content
-    assert result["restored_files"] == 1
-
-
-def test_backup_includes_embedded_document_images(backup_env: BackupEnv):
-    from app.services.storage_ownership import record_creation
-
-    image_name = f"{'a' * 64}.png"
-    with backup_env.new_session() as session:
-        document = Document(name="Build notes", kind=DocumentKind.MARKDOWN)
-        session.add(document)
-        session.commit()
-        session.refresh(document)
-        document.body = (
-            f"![diagram](/api/v1/documents/{document.id}/images/{image_name})"
-        )
-        key = get_backend().document_image_key(document.id, image_name)
-        receipt = get_backend().create_bytes(b"irreplaceable-image", key)
-        record_creation(session, receipt, object_kind="document_image")
-        session.add(document)
-        session.commit()
-
-    meta = backup.create_backup()
-    Path(key).unlink()
-
-    result = backup.restore_backup(meta.id)
-
-    assert Path(key).read_bytes() == b"irreplaceable-image"
-    assert result["restored_files"] == 1
-
-
 def test_download_then_restore_endpoint_round_trip(
     client: TestClient, backup_env: BackupEnv
 ):
@@ -372,11 +315,6 @@ def test_download_then_restore_endpoint_round_trip(
 # ---------------------------------------------------------------------------
 
 
-def test_restore_unknown_backup_raises(backup_env: BackupEnv):
-    with pytest.raises(FileNotFoundError):
-        backup.restore_backup("does-not-exist")
-
-
 # ---------------------------------------------------------------------------
 # Audit trail (0.8.5 item 3): backup/restore mutate the filesystem and swap
 # the DB file, so they don't flow through the ORM after_flush hook — the
@@ -415,30 +353,6 @@ def test_restore_writes_complete_row_on_success(backup_env: BackupEnv):
         ).all()
     assert len(rows) == 1
     assert rows[0].resource_type == "backup"
-
-
-def test_restore_rejected_while_job_running_writes_start_and_failed_rows(
-    backup_env: BackupEnv,
-):
-    from app.db.models import AuditLog
-    from app.services.jobs import registry
-
-    seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-
-    job_id = registry.create()
-    registry.update(job_id, state="running")
-    try:
-        with pytest.raises(backup.RestoreConflictError):
-            backup.restore_backup(meta.id)
-    finally:
-        registry.update(job_id, state="completed")
-
-    # No DB swap happened, so both rows survive in the current database.
-    with backup_env.new_session() as session:
-        actions = {row.action for row in session.exec(select(AuditLog)).all()}
-    assert "restore.start" in actions
-    assert "restore.failed" in actions
 
 
 def test_failed_restore_writes_failed_row(
@@ -614,27 +528,6 @@ def test_mutating_request_is_rejected_during_restore(
     assert response.json() == {"detail": "restore_in_progress"}
 
 
-def test_gate_is_cleared_when_restore_raises(
-    backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
-):
-    seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError("simulated failure mid-restore")
-
-    monkeypatch.setattr(backup, "_download_backup_to_local", _boom)
-
-    with pytest.raises(RuntimeError):
-        backup.restore_backup(meta.id)
-
-    assert not backup.restore_in_progress()
-
-
-def test_delete_unknown_backup_returns_false(backup_env: BackupEnv):
-    assert backup.delete_backup("nope") is False
-
-
 def test_backup_id_round_trips_despite_timestamped_name(backup_env: BackupEnv):
     """The archive name embeds a hyphenated timestamp before the id; the id
     derived on list/get must still equal the one create_backup returned
@@ -677,21 +570,6 @@ def test_purge_keeps_fresh_removes_old(
 # ---------------------------------------------------------------------------
 # Corrupted / invalid archives (local — no S3 endpoint needed)
 # ---------------------------------------------------------------------------
-
-
-def test_restore_of_corrupt_archive_raises_not_found(backup_env: BackupEnv):
-    """A gzip/manifest-corrupt archive fails to even list (see
-    ``test_list_backups_skips_archive_with_unreadable_manifest``), so
-    ``get_backup`` can't find it and restore never reaches ``tarfile.open`` —
-    it's rejected as unknown before any DB/file mutation, not mid-restore."""
-    seed_model_with_blob(backup_env, name="Widget", content=b"x")
-    meta = backup.create_backup()
-    Path(meta.path).write_bytes(Path(meta.path).read_bytes()[:20])
-
-    with pytest.raises(FileNotFoundError):
-        backup.restore_backup(meta.id)
-
-    assert backup.restore_in_progress() is False
 
 
 def test_restore_skips_directory_entries_under_files_prefix(
@@ -1458,3 +1336,128 @@ class TestPurgeOldBackups:
 
         assert removed == 0
         assert "badc0ffeeb00" in {m.id for m in backup.list_backups()}
+
+
+class TestDocument:
+    def test_backup_includes_document_blobs(self, backup_env: BackupEnv):
+        """Documents are vault-owned bytes: a backup that omits them is a lie."""
+        content = b"%PDF-1.4 assembly manual\n"
+        key = _seed_document_with_blob(backup_env, name="manual.pdf", content=content)
+        meta = backup.create_backup()
+
+        Path(key).unlink()
+        result = backup.restore_backup(meta.id)
+
+        assert Path(key).exists(), "document blob was never in the archive"
+        assert Path(key).read_bytes() == content
+        assert result["restored_files"] == 1
+
+    def test_backup_includes_embedded_document_images(self, backup_env: BackupEnv):
+        from app.services.storage_ownership import record_creation
+
+        image_name = f"{'a' * 64}.png"
+        with backup_env.new_session() as session:
+            document = Document(name="Build notes", kind=DocumentKind.MARKDOWN)
+            session.add(document)
+            session.commit()
+            session.refresh(document)
+            document.body = (
+                f"![diagram](/api/v1/documents/{document.id}/images/{image_name})"
+            )
+            key = get_backend().document_image_key(document.id, image_name)
+            receipt = get_backend().create_bytes(b"irreplaceable-image", key)
+            record_creation(session, receipt, object_kind="document_image")
+            session.add(document)
+            session.commit()
+
+        meta = backup.create_backup()
+        Path(key).unlink()
+
+        result = backup.restore_backup(meta.id)
+
+        assert Path(key).read_bytes() == b"irreplaceable-image"
+        assert result["restored_files"] == 1
+
+
+class TestStart:
+    def test_restore_rejected_while_job_running_writes_start_and_failed_rows(
+        self,
+        backup_env: BackupEnv,
+    ):
+        from app.db.models import AuditLog
+        from app.services.jobs import registry
+
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+
+        job_id = registry.create()
+        registry.update(job_id, state="running")
+        try:
+            with pytest.raises(backup.RestoreConflictError):
+                backup.restore_backup(meta.id)
+        finally:
+            registry.update(job_id, state="completed")
+
+        # No DB swap happened, so both rows survive in the current database.
+        with backup_env.new_session() as session:
+            actions = {row.action for row in session.exec(select(AuditLog)).all()}
+        assert "restore.start" in actions
+        assert "restore.failed" in actions
+
+
+class TestRaises:
+    def test_restore_unknown_backup_raises(self, backup_env: BackupEnv):
+        with pytest.raises(FileNotFoundError):
+            backup.restore_backup("does-not-exist")
+
+    def test_gate_is_cleared_when_restore_raises(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ):
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated failure mid-restore")
+
+        monkeypatch.setattr(backup, "_download_backup_to_local", _boom)
+
+        with pytest.raises(RuntimeError):
+            backup.restore_backup(meta.id)
+
+        assert not backup.restore_in_progress()
+
+    def test_restore_of_corrupt_archive_raises_not_found(self, backup_env: BackupEnv):
+        """A gzip/manifest-corrupt archive fails to even list (see
+        ``test_list_backups_skips_archive_with_unreadable_manifest``), so
+        ``get_backup`` can't find it and restore never reaches ``tarfile.open`` —
+        it's rejected as unknown before any DB/file mutation, not mid-restore."""
+        seed_model_with_blob(backup_env, name="Widget", content=b"x")
+        meta = backup.create_backup()
+        Path(meta.path).write_bytes(Path(meta.path).read_bytes()[:20])
+
+        with pytest.raises(FileNotFoundError):
+            backup.restore_backup(meta.id)
+
+        assert backup.restore_in_progress() is False
+
+
+class TestDelete:
+    def test_delete_unknown_backup_returns_false(self, backup_env: BackupEnv):
+        assert backup.delete_backup("nope") is False
+
+
+class TestFirst:
+    def test_manifest_is_first_archive_member(self, backup_env: BackupEnv):
+        """The manifest must be the first entry so listing (a streaming read) can
+        stop after one small member instead of pulling the whole archive."""
+        import gzip
+        import tarfile
+
+        seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
+        seed_model_with_blob(backup_env, name="Gadget", content=b"solid gadget\n")
+        meta = backup.create_backup()
+
+        with gzip.open(Path(meta.path), "rb") as gz:
+            with tarfile.open(fileobj=gz, mode="r|") as tar:
+                first = next(iter(tar))
+        assert first.name == "manifest.json"

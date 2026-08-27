@@ -477,23 +477,6 @@ def test_print_completed_fires_once_and_is_idempotent(db_session, hub):
     assert deliveries[0].print_job_id is not None
 
 
-def test_cancelled_emits_distinct_event(db_session, hub):
-    set_notifications_enabled(db_session, True)
-    p = build_printer(
-        db_session,
-        name="Ender",
-        moonraker_url="http://x",
-        status=PrinterStatus.PRINTING,
-    )
-    # Channel only wants completions, not cancellations -> nothing enqueued.
-    _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
-
-    stats = {"filename": "y.gcode"}
-    hub._sync_active_job_db(p.id, "cancelled", "y.gcode", 0.4, stats)
-    db_session.expire_all()
-    assert _deliveries(db_session) == []
-
-
 # --------------------------------------------------------------------------- #
 # _client_for, _channel_subscribes, _claim_due_deliveries, _record_result,
 # _parse_retry_after — corrupt-JSON and edge-case branches
@@ -961,3 +944,21 @@ class TestRecordChannelTest:
     def test_record_channel_test_noop_when_channel_missing(self):
         # Must not raise even though the channel id doesn't exist.
         notifications._record_channel_test(999_999_999, True, None)
+
+
+class TestEvent:
+    def test_cancelled_emits_distinct_event(self, db_session, hub):
+        set_notifications_enabled(db_session, True)
+        p = build_printer(
+            db_session,
+            name="Ender",
+            moonraker_url="http://x",
+            status=PrinterStatus.PRINTING,
+        )
+        # Channel only wants completions, not cancellations -> nothing enqueued.
+        _channel(db_session, events=[NotificationEventType.PRINT_COMPLETED])
+
+        stats = {"filename": "y.gcode"}
+        hub._sync_active_job_db(p.id, "cancelled", "y.gcode", 0.4, stats)
+        db_session.expire_all()
+        assert _deliveries(db_session) == []

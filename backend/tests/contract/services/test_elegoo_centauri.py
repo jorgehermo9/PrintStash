@@ -84,53 +84,6 @@ def test_send_print_completes() -> None:
     asyncio.run(_run())
 
 
-def test_pause_then_resume_runs_to_completion() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=1.5)
-    provider, connection = _provider(sim)
-
-    async def _run() -> None:
-        await provider.start(REMOTE)
-        await provider.pause()
-        await _wait_state(provider, "paused")
-        await provider.resume()
-        await _wait_state(provider, "complete")
-        assert ("pause", None) in connection.calls
-        assert ("resume", None) in connection.calls
-
-    asyncio.run(_run())
-
-
-def test_cancel_reports_cancelled() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
-    provider, connection = _provider(sim)
-
-    async def _run() -> None:
-        await provider.start(REMOTE)
-        await _wait_state(provider, "printing")
-        await provider.cancel()
-        await _wait_state(provider, "cancelled")
-        assert ("stop", None) in connection.calls
-
-    asyncio.run(_run())
-
-
-def test_carbon2_invalid_access_code_raises_authentication_error() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
-    provider, _connection = _provider(
-        sim,
-        model="elegoo_centauri_carbon_2",
-        expected_access_code="correct-code",
-        given_access_code="wrong-code",
-    )
-
-    async def _run() -> None:
-        with pytest.raises(ProviderError) as exc_info:
-            await provider.query_status()
-        assert exc_info.value.code == "provider_authentication_failed"
-
-    asyncio.run(_run())
-
-
 def test_carbon2_missing_access_code_rejected_at_build() -> None:
     # This guard lives in ElegooCentauriProvider.build() (Printer-row level),
     # not the client — a Carbon 2 printer row saved without an access code
@@ -147,14 +100,63 @@ def test_carbon2_missing_access_code_rejected_at_build() -> None:
     assert exc_info.value.code == "provider_credentials_missing"
 
 
-def test_network_drop_mid_print_raises_transport_error() -> None:
-    sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
-    provider, _connection = _provider(sim, fail_after_connects=1)
+class TestRaises:
+    def test_carbon2_invalid_access_code_raises_authentication_error(self) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
+        provider, _connection = _provider(
+            sim,
+            model="elegoo_centauri_carbon_2",
+            expected_access_code="correct-code",
+            given_access_code="wrong-code",
+        )
 
-    async def _run() -> None:
-        await provider.start(REMOTE)
-        with pytest.raises(ProviderError) as exc_info:
-            await provider.query_status()
-        assert exc_info.value.code == "provider_transport_error"
+        async def _run() -> None:
+            with pytest.raises(ProviderError) as exc_info:
+                await provider.query_status()
+            assert exc_info.value.code == "provider_authentication_failed"
 
-    asyncio.run(_run())
+        asyncio.run(_run())
+
+    def test_network_drop_mid_print_raises_transport_error(self) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
+        provider, _connection = _provider(sim, fail_after_connects=1)
+
+        async def _run() -> None:
+            await provider.start(REMOTE)
+            with pytest.raises(ProviderError) as exc_info:
+                await provider.query_status()
+            assert exc_info.value.code == "provider_transport_error"
+
+        asyncio.run(_run())
+
+
+class TestResume:
+    def test_pause_then_resume_runs_to_completion(self) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=1.5)
+        provider, connection = _provider(sim)
+
+        async def _run() -> None:
+            await provider.start(REMOTE)
+            await provider.pause()
+            await _wait_state(provider, "paused")
+            await provider.resume()
+            await _wait_state(provider, "complete")
+            assert ("pause", None) in connection.calls
+            assert ("resume", None) in connection.calls
+
+        asyncio.run(_run())
+
+
+class TestCancel:
+    def test_cancel_reports_cancelled(self) -> None:
+        sim = PrintSim(total_mm=1000.0, total_seconds=10.0, print_seconds=5.0)
+        provider, connection = _provider(sim)
+
+        async def _run() -> None:
+            await provider.start(REMOTE)
+            await _wait_state(provider, "printing")
+            await provider.cancel()
+            await _wait_state(provider, "cancelled")
+            assert ("stop", None) in connection.calls
+
+        asyncio.run(_run())

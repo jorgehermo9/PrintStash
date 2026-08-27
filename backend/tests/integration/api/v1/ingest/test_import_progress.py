@@ -21,26 +21,6 @@ from app.services.jobs import JobRegistry, safe_error, safe_item
 from tests.factories import build_user
 
 
-@pytest.mark.parametrize(
-    "stage",
-    [
-        "resolving",
-        "downloading",
-        "inspecting",
-        "extracting",
-        "hashing",
-        "ingesting",
-        "thumbnailing",
-        "completed",
-    ],
-)
-def test_registry_supports_every_import_stage(stage: str) -> None:
-    jobs = JobRegistry()
-    job_id = jobs.create(owner_user_id=7)
-    jobs.update(job_id, stage=stage)  # type: ignore[arg-type]
-    assert jobs.get(job_id).stage == stage  # type: ignore[union-attr]
-
-
 def test_progress_keeps_total_unknown_until_discovery() -> None:
     jobs = JobRegistry()
     job_id = jobs.create(owner_user_id=7)
@@ -231,23 +211,6 @@ def _cube_stl_bytes() -> bytes:
         b"solid cube\nfacet normal 0 0 1\nouter loop\n"
         b"endloop\nendfacet\nendsolid cube\n"
     )
-
-
-def test_pending_registry_prunes_entries_past_ttl() -> None:
-    registry_ = ingest_module._PendingRegistry()
-    stale = ingest_module._PendingModelFiles(
-        page_url="https://x", page_title="x", owner_user_id=1, files=[], created_at=0.0
-    )
-    registry_._items["stale-token"] = stale
-    fresh_token = registry_.add(
-        ingest_module._PendingModelFiles(
-            page_url="https://y", page_title="y", owner_user_id=1, files=[]
-        )
-    )
-    assert registry_.get("stale-token") is None
-    assert registry_.get(fresh_token) is not None
-    assert registry_.pop(fresh_token) is not None
-    assert registry_.get(fresh_token) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -1630,3 +1593,44 @@ class TestSelectCollectionMembers:
         )
         assert response.status_code == 400, response.text
         assert response.json()["detail"] == "no_members_selected"
+
+
+class TestRegistry:
+    @pytest.mark.parametrize(
+        "stage",
+        [
+            "resolving",
+            "downloading",
+            "inspecting",
+            "extracting",
+            "hashing",
+            "ingesting",
+            "thumbnailing",
+            "completed",
+        ],
+    )
+    def test_registry_supports_every_import_stage(self, stage: str) -> None:
+        jobs = JobRegistry()
+        job_id = jobs.create(owner_user_id=7)
+        jobs.update(job_id, stage=stage)  # type: ignore[arg-type]
+        assert jobs.get(job_id).stage == stage  # type: ignore[union-attr]
+
+    def test_pending_registry_prunes_entries_past_ttl(self) -> None:
+        registry_ = ingest_module._PendingRegistry()
+        stale = ingest_module._PendingModelFiles(
+            page_url="https://x",
+            page_title="x",
+            owner_user_id=1,
+            files=[],
+            created_at=0.0,
+        )
+        registry_._items["stale-token"] = stale
+        fresh_token = registry_.add(
+            ingest_module._PendingModelFiles(
+                page_url="https://y", page_title="y", owner_user_id=1, files=[]
+            )
+        )
+        assert registry_.get("stale-token") is None
+        assert registry_.get(fresh_token) is not None
+        assert registry_.pop(fresh_token) is not None
+        assert registry_.get(fresh_token) is None

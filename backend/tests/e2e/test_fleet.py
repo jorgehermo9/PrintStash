@@ -224,105 +224,6 @@ async def test_two_printers_dispatch_and_complete_via_real_api(
 
 
 @pytest.mark.asyncio
-async def test_material_mismatch_override_then_multi_printer_batch_via_real_api(
-    api, superuser_headers, e2e_db
-):
-    printers = [
-        Printer(
-            name=name,
-            moonraker_url=f"http://{name.lower()}.invalid",
-            status=PrinterStatus.READY,
-            group="material-farm",
-        )
-        for name in ("PLA A", "PLA B", "ABS")
-    ]
-    e2e_db.add_all(printers)
-    e2e_db.commit()
-    for printer in printers:
-        e2e_db.refresh(printer)
-    artifact = a_gcode_artifact(e2e_db, "material-batch")
-    e2e_db.add(
-        Metadata(file_id=artifact.id, material_type="PLA", nozzle_diameter_mm=0.4)
-    )
-    e2e_db.add(
-        ArtifactMaterialRequirement(
-            file_id=artifact.id,
-            tool_index=0,
-            material_type="PLA",
-            color_hex="#FF0000",
-        )
-    )
-    e2e_db.commit()
-
-    for printer, material in zip(printers, ("PLA", "PLA", "ABS"), strict=True):
-        response = await api.put(
-            f"/api/v1/printers/{printer.id}/material-state/manual",
-            headers=superuser_headers,
-            json={
-                "tools": [
-                    {"tool_key": "tool0", "label": "Tool 0", "nozzle_diameter_mm": 0.4}
-                ],
-                "slots": [
-                    {
-                        "slot_key": "feed",
-                        "label": "Feed",
-                        "tool_key": "tool0",
-                        "state": "loaded",
-                        "material_type": material,
-                        "color_hex": "#0000FF",
-                    }
-                ],
-            },
-        )
-        assert response.status_code == 200, response.text
-
-    mismatch = await api.post(
-        "/api/v1/fleet/queue",
-        headers=superuser_headers,
-        json={
-            "file_id": artifact.id,
-            "strategy": "manual",
-            "printer_id": printers[2].id,
-        },
-    )
-    assert mismatch.status_code == 409
-    assert mismatch.json()["detail"] == "material_mismatch_confirmation_required"
-
-    override = await api.post(
-        "/api/v1/fleet/queue",
-        headers=superuser_headers,
-        json={
-            "file_id": artifact.id,
-            "strategy": "manual",
-            "printer_id": printers[2].id,
-            "compatibility_policy": "allow_mismatch",
-        },
-    )
-    assert override.status_code == 201, override.text
-    assert override.json()["material_override_at"] is not None
-
-    batch = await api.post(
-        "/api/v1/fleet/batches",
-        headers=superuser_headers,
-        json={
-            "file_id": artifact.id,
-            "quantity": 2,
-            "strategy": "least_busy",
-            "target_group": "material-farm",
-            "priority": "rush",
-        },
-    )
-    assert batch.status_code == 201, batch.text
-    body = batch.json()
-    assert body["quantity"] == 2
-    assert {job["printer_id"] for job in body["jobs"]} == {
-        printers[0].id,
-        printers[1].id,
-    }
-    assert [job["copy_index"] for job in body["jobs"]] == [1, 2]
-
-
-@pytest.mark.asyncio
 async def test_drain_mode_blocks_routing_via_api(api, superuser_headers, e2e_db):
     app_available, _sim = create_app(
         total_mm=500.0, total_seconds=6.0, print_seconds=1.0
@@ -468,3 +369,107 @@ async def test_restart_reconciles_stranded_dispatch_and_blocks_retry(
     )
     assert retry.status_code == 400
     assert retry.json()["detail"] == "queue_job_not_retryable"
+
+
+class TestPrinter:
+    @pytest.mark.asyncio
+    async def test_material_mismatch_override_then_multi_printer_batch_via_real_api(
+        self, api, superuser_headers, e2e_db
+    ):
+        printers = [
+            Printer(
+                name=name,
+                moonraker_url=f"http://{name.lower()}.invalid",
+                status=PrinterStatus.READY,
+                group="material-farm",
+            )
+            for name in ("PLA A", "PLA B", "ABS")
+        ]
+        e2e_db.add_all(printers)
+        e2e_db.commit()
+        for printer in printers:
+            e2e_db.refresh(printer)
+        artifact = a_gcode_artifact(e2e_db, "material-batch")
+        e2e_db.add(
+            Metadata(file_id=artifact.id, material_type="PLA", nozzle_diameter_mm=0.4)
+        )
+        e2e_db.add(
+            ArtifactMaterialRequirement(
+                file_id=artifact.id,
+                tool_index=0,
+                material_type="PLA",
+                color_hex="#FF0000",
+            )
+        )
+        e2e_db.commit()
+
+        for printer, material in zip(printers, ("PLA", "PLA", "ABS"), strict=True):
+            response = await api.put(
+                f"/api/v1/printers/{printer.id}/material-state/manual",
+                headers=superuser_headers,
+                json={
+                    "tools": [
+                        {
+                            "tool_key": "tool0",
+                            "label": "Tool 0",
+                            "nozzle_diameter_mm": 0.4,
+                        }
+                    ],
+                    "slots": [
+                        {
+                            "slot_key": "feed",
+                            "label": "Feed",
+                            "tool_key": "tool0",
+                            "state": "loaded",
+                            "material_type": material,
+                            "color_hex": "#0000FF",
+                        }
+                    ],
+                },
+            )
+            assert response.status_code == 200, response.text
+
+        mismatch = await api.post(
+            "/api/v1/fleet/queue",
+            headers=superuser_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printers[2].id,
+            },
+        )
+        assert mismatch.status_code == 409
+        assert mismatch.json()["detail"] == "material_mismatch_confirmation_required"
+
+        override = await api.post(
+            "/api/v1/fleet/queue",
+            headers=superuser_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printers[2].id,
+                "compatibility_policy": "allow_mismatch",
+            },
+        )
+        assert override.status_code == 201, override.text
+        assert override.json()["material_override_at"] is not None
+
+        batch = await api.post(
+            "/api/v1/fleet/batches",
+            headers=superuser_headers,
+            json={
+                "file_id": artifact.id,
+                "quantity": 2,
+                "strategy": "least_busy",
+                "target_group": "material-farm",
+                "priority": "rush",
+            },
+        )
+        assert batch.status_code == 201, batch.text
+        body = batch.json()
+        assert body["quantity"] == 2
+        assert {job["printer_id"] for job in body["jobs"]} == {
+            printers[0].id,
+            printers[1].id,
+        }
+        assert [job["copy_index"] for job in body["jobs"]] == [1, 2]

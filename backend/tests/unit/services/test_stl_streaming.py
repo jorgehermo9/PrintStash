@@ -419,138 +419,6 @@ endfacet
     assert geometry["triangle_count"] == 2
 
 
-def test_over_cap_mesh_processing_uses_streaming_before_sampling(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "over-cap.stl"
-    _binary_triangle_stl(path)
-    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1)
-    geometry, thumbnail = mesh_processing.analyze_mesh(path, width=96, height=72)
-
-    assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
-    assert thumbnail.complete is True
-    assert geometry["triangle_count"] == 12
-
-
-def test_normal_stl_render_exception_uses_streaming_before_sampling(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from types import SimpleNamespace
-
-    import numpy as np
-
-    path = tmp_path / "normal-render-fails.stl"
-    _binary_triangle_stl(path)
-    monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
-    monkeypatch.setattr(
-        mesh_processing,
-        "_load_mesh",
-        lambda _path: SimpleNamespace(
-            vertices=np.zeros((3, 3)),
-            bounds=np.array([[0.0, 0.0, 0.0], [4.0, 3.0, 0.0]]),
-            faces=np.zeros((12, 3), dtype=np.int64),
-            volume=0.0,
-        ),
-    )
-    monkeypatch.setattr(
-        mesh_processing.mesh_render,
-        "render_mesh_thumbnail",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("renderer crash")),
-    )
-
-    _geometry, thumbnail = mesh_processing.analyze_mesh(path, width=96, height=72)
-
-    assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
-    assert thumbnail.complete is True
-
-
-@pytest.mark.parametrize("case", ["missing", "partial", "oversized", "malformed"])
-def test_decode_rejects_missing_or_incomplete_manifest(
-    tmp_path: Path, case: str
-) -> None:
-    from app.services import stl_streaming
-
-    output = tmp_path / "preview.png"
-    manifest = tmp_path / "result.json"
-    output.write_bytes(_valid_png())
-    if case == "missing":
-        pass
-    elif case == "partial":
-        manifest.write_text(json.dumps(_manifest(status="running")))
-    elif case == "oversized":
-        manifest.write_bytes(b"x" * (stl_streaming._MAX_MANIFEST_BYTES + 1))
-    else:
-        manifest.write_bytes(b"{not-json")
-
-    assert (
-        stl_streaming._decode_result(
-            output,
-            manifest,
-            width=32,
-            height=24,
-            limits=_limits(),
-        )
-        is None
-    )
-
-
-@pytest.mark.parametrize("case", ["invalid", "wrong_size", "manifest_only", "png_only"])
-def test_decode_rejects_invalid_or_unpaired_preview(tmp_path: Path, case: str) -> None:
-    from app.services import stl_streaming
-
-    output = tmp_path / "preview.png"
-    manifest = tmp_path / "result.json"
-    if case != "manifest_only":
-        output.write_bytes(b"not-a-png" if case == "invalid" else _valid_png(1, 1))
-    if case != "png_only":
-        manifest.write_text(json.dumps(_manifest()))
-
-    assert (
-        stl_streaming._decode_result(
-            output,
-            manifest,
-            width=32,
-            height=24,
-            limits=_limits(),
-        )
-        is None
-    )
-
-
-@pytest.mark.parametrize("case", ["nonfinite_bounds", "over_budget_count"])
-def test_decode_rejects_forged_manifest_values(tmp_path: Path, case: str) -> None:
-    from app.services import stl_streaming
-
-    output = tmp_path / "preview.png"
-    manifest = tmp_path / "result.json"
-    output.write_bytes(_valid_png())
-    if case == "nonfinite_bounds":
-        values = _manifest(bounds_min=[float("nan"), 0.0, 0.0])
-    else:
-        values = _manifest(triangle_count=2, parsed_triangles=2)
-    manifest.write_text(json.dumps(values))
-    limits = (
-        _limits()
-        if case == "nonfinite_bounds"
-        else STLStreamingLimits(
-            max_triangles=1,
-            max_source_bytes=1_000_000,
-            max_candidates=1_000_000,
-        )
-    )
-
-    assert (
-        stl_streaming._decode_result(
-            output,
-            manifest,
-            width=32,
-            height=24,
-            limits=limits,
-        )
-        is None
-    )
-
-
 @pytest.mark.parametrize("case", ["timeout", "rss", "crash"])
 def test_worker_failure_is_killed_or_reaped_without_publishing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
@@ -735,33 +603,6 @@ def test_worker_accepts_legitimate_pid_one_parent(
     )
 
     assert observed == [(1, signal.SIGKILL, 0, 0, 0)]
-
-
-def test_worker_rejects_invalid_expected_parent_pid_before_limits(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import ctypes
-    import resource
-
-    from app.services import stl_preview_worker
-
-    calls: list[str] = []
-    monkeypatch.setattr(stl_preview_worker.os, "getppid", lambda: 1)
-    monkeypatch.setattr(
-        resource,
-        "setrlimit",
-        lambda *_args: calls.append("setrlimit"),
-    )
-    monkeypatch.setattr(ctypes, "CDLL", lambda _name: calls.append("CDLL"))
-
-    with pytest.raises(stl_preview_worker._InvalidSTL, match="invalid"):
-        stl_preview_worker._apply_worker_limits(
-            address_space=512 * 1024 * 1024,
-            cpu_seconds=5,
-            expected_parent_pid=0,
-        )
-
-    assert calls == []
 
 
 class TestEffectiveLimits:
@@ -1235,3 +1076,175 @@ class TestReadRssBytes:
         monkeypatch.setattr(stl_streaming, "Path", lambda _p: status)
 
         assert stl_streaming._read_rss_bytes(1) is None
+
+
+class TestMeshProcessing:
+    def test_over_cap_mesh_processing_uses_streaming_before_sampling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "over-cap.stl"
+        _binary_triangle_stl(path)
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1)
+        geometry, thumbnail = mesh_processing.analyze_mesh(path, width=96, height=72)
+
+        assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
+        assert thumbnail.complete is True
+        assert geometry["triangle_count"] == 12
+
+
+class TestLimits:
+    def test_worker_rejects_invalid_expected_parent_pid_before_limits(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ctypes
+        import resource
+
+        from app.services import stl_preview_worker
+
+        calls: list[str] = []
+        monkeypatch.setattr(stl_preview_worker.os, "getppid", lambda: 1)
+        monkeypatch.setattr(
+            resource,
+            "setrlimit",
+            lambda *_args: calls.append("setrlimit"),
+        )
+        monkeypatch.setattr(ctypes, "CDLL", lambda _name: calls.append("CDLL"))
+
+        with pytest.raises(stl_preview_worker._InvalidSTL, match="invalid"):
+            stl_preview_worker._apply_worker_limits(
+                address_space=512 * 1024 * 1024,
+                cpu_seconds=5,
+                expected_parent_pid=0,
+            )
+
+        assert calls == []
+
+
+class TestRender:
+    def test_normal_stl_render_exception_uses_streaming_before_sampling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        import numpy as np
+
+        path = tmp_path / "normal-render-fails.stl"
+        _binary_triangle_stl(path)
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
+        monkeypatch.setattr(
+            mesh_processing,
+            "_load_mesh",
+            lambda _path: SimpleNamespace(
+                vertices=np.zeros((3, 3)),
+                bounds=np.array([[0.0, 0.0, 0.0], [4.0, 3.0, 0.0]]),
+                faces=np.zeros((12, 3), dtype=np.int64),
+                volume=0.0,
+            ),
+        )
+        monkeypatch.setattr(
+            mesh_processing.mesh_render,
+            "render_mesh_thumbnail",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("renderer crash")
+            ),
+        )
+
+        _geometry, thumbnail = mesh_processing.analyze_mesh(path, width=96, height=72)
+
+        assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
+        assert thumbnail.complete is True
+
+
+class TestDecode:
+    @pytest.mark.parametrize(
+        "case", ["invalid", "wrong_size", "manifest_only", "png_only"]
+    )
+    def test_decode_rejects_invalid_or_unpaired_preview(
+        self, tmp_path: Path, case: str
+    ) -> None:
+        from app.services import stl_streaming
+
+        output = tmp_path / "preview.png"
+        manifest = tmp_path / "result.json"
+        if case != "manifest_only":
+            output.write_bytes(b"not-a-png" if case == "invalid" else _valid_png(1, 1))
+        if case != "png_only":
+            manifest.write_text(json.dumps(_manifest()))
+
+        assert (
+            stl_streaming._decode_result(
+                output,
+                manifest,
+                width=32,
+                height=24,
+                limits=_limits(),
+            )
+            is None
+        )
+
+
+class TestManifest:
+    @pytest.mark.parametrize("case", ["missing", "partial", "oversized", "malformed"])
+    def test_decode_rejects_missing_or_incomplete_manifest(
+        self, tmp_path: Path, case: str
+    ) -> None:
+        from app.services import stl_streaming
+
+        output = tmp_path / "preview.png"
+        manifest = tmp_path / "result.json"
+        output.write_bytes(_valid_png())
+        if case == "missing":
+            pass
+        elif case == "partial":
+            manifest.write_text(json.dumps(_manifest(status="running")))
+        elif case == "oversized":
+            manifest.write_bytes(b"x" * (stl_streaming._MAX_MANIFEST_BYTES + 1))
+        else:
+            manifest.write_bytes(b"{not-json")
+
+        assert (
+            stl_streaming._decode_result(
+                output,
+                manifest,
+                width=32,
+                height=24,
+                limits=_limits(),
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize("case", ["nonfinite_bounds", "over_budget_count"])
+    def test_decode_rejects_forged_manifest_values(
+        self, tmp_path: Path, case: str
+    ) -> None:
+        from app.services import stl_streaming
+
+        output = tmp_path / "preview.png"
+        manifest = tmp_path / "result.json"
+        output.write_bytes(_valid_png())
+        if case == "nonfinite_bounds":
+            values = _manifest(bounds_min=[float("nan"), 0.0, 0.0])
+        else:
+            values = _manifest(triangle_count=2, parsed_triangles=2)
+        manifest.write_text(json.dumps(values))
+        limits = (
+            _limits()
+            if case == "nonfinite_bounds"
+            else STLStreamingLimits(
+                max_triangles=1,
+                max_source_bytes=1_000_000,
+                max_candidates=1_000_000,
+            )
+        )
+
+        assert (
+            stl_streaming._decode_result(
+                output,
+                manifest,
+                width=32,
+                height=24,
+                limits=limits,
+            )
+            is None
+        )

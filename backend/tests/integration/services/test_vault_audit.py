@@ -183,167 +183,6 @@ def _patch_exec_injecting_unpersisted_row(
     monkeypatch.setattr(db_session, "exec", patched_exec)
 
 
-def test_ownership_snapshot_skips_file_row_with_no_id(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    model = _make_model(db_session, "no-id-file")
-    _make_file(db_session, model, path="persisted.stl")
-    unpersisted = File(
-        model_id=model.id,
-        path="ghost.stl",
-        original_filename="ghost.stl",
-        file_type=FileType.STL,
-    )
-    assert unpersisted.id is None
-    _patch_exec_injecting_unpersisted_row(monkeypatch, db_session, File, unpersisted)
-
-    result = ownership_snapshot(db_session, discover=False)
-
-    primary_keys = {blob.key for blob in result.primary}
-    derived_keys = {blob.key for blob in result.derived}
-    assert "persisted.stl" in primary_keys
-    assert "ghost.stl" not in primary_keys
-    assert not any(blob.resource_id is None for blob in result.derived)
-    assert derived_keys  # the persisted file still contributed thumbnail/stl-cache keys
-
-
-def test_ownership_snapshot_skips_document_row_with_no_id(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    persisted = Document(
-        name="real-doc", kind=DocumentKind.MARKDOWN, filename="real.md"
-    )
-    db_session.add(persisted)
-    db_session.commit()
-    db_session.refresh(persisted)
-    unpersisted = Document(
-        name="ghost-doc", kind=DocumentKind.MARKDOWN, filename="ghost.md"
-    )
-    assert unpersisted.id is None
-    _patch_exec_injecting_unpersisted_row(
-        monkeypatch, db_session, Document, unpersisted
-    )
-
-    result = ownership_snapshot(db_session, discover=False)
-
-    primary_names = {
-        blob.display_name for blob in result.primary if blob.resource_type == "document"
-    }
-    assert "real.md" in primary_names
-    assert "ghost.md" not in primary_names
-
-
-def test_ownership_snapshot_document_embedded_image_id_must_match_row(
-    db_session: Session,
-) -> None:
-    other = Document(name="other-doc", kind=DocumentKind.MARKDOWN)
-    db_session.add(other)
-    db_session.commit()
-    db_session.refresh(other)
-
-    owner = Document(
-        name="owner-doc",
-        kind=DocumentKind.MARKDOWN,
-        body=f"![pic](/documents/{other.id}/images/stolen.png)",
-    )
-    db_session.add(owner)
-    db_session.commit()
-    db_session.refresh(owner)
-
-    result = ownership_snapshot(db_session, discover=False)
-
-    embedded_keys = {blob.key for blob in result.embedded}
-    stolen_key = get_backend().document_image_key(other.id, "stolen.png")
-    assert stolen_key not in embedded_keys
-
-    owner.body = f"![pic](/documents/{owner.id}/images/mine.png)"
-    db_session.add(owner)
-    db_session.commit()
-
-    result2 = ownership_snapshot(db_session, discover=False)
-    matching = [
-        blob
-        for blob in result2.embedded
-        if blob.resource_type == "document_image" and blob.resource_id == owner.id
-    ]
-    assert len(matching) == 1
-    assert matching[0].key == get_backend().document_image_key(owner.id, "mine.png")
-    assert matching[0].display_name == "mine.png"
-
-
-def test_ownership_snapshot_skips_collection_row_with_no_id(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    build_collection(db_session, name="real-col", slug="real-col", path="real-col")
-    unpersisted = Collection(
-        name="ghost-col",
-        slug="ghost-col",
-        path="ghost-col",
-        readme="![pic](/collections/999999/images/never.png)",
-    )
-    assert unpersisted.id is None
-    _patch_exec_injecting_unpersisted_row(
-        monkeypatch, db_session, Collection, unpersisted
-    )
-
-    result = ownership_snapshot(db_session, discover=False)
-
-    assert not any(blob.resource_type == "collection_image" for blob in result.embedded)
-
-
-def test_ownership_snapshot_collection_embedded_image_id_must_match_row(
-    db_session: Session,
-) -> None:
-    other = build_collection(
-        db_session, name="other-col", slug="other-col", path="other-col"
-    )
-
-    owner = build_collection(
-        db_session,
-        name="owner-col",
-        slug="owner-col",
-        path="owner-col",
-        readme=f"![pic](/collections/{other.id}/images/stolen.png)",
-    )
-
-    result = ownership_snapshot(db_session, discover=False)
-
-    stolen_key = get_backend().collection_image_key(other.id, "stolen.png")
-    assert stolen_key not in {blob.key for blob in result.embedded}
-
-    owner.readme = f"![pic](/collections/{owner.id}/images/mine.png)"
-    db_session.add(owner)
-    db_session.commit()
-
-    result2 = ownership_snapshot(db_session, discover=False)
-    matching = [
-        blob
-        for blob in result2.embedded
-        if blob.resource_type == "collection_image" and blob.resource_id == owner.id
-    ]
-    assert len(matching) == 1
-    assert matching[0].key == get_backend().collection_image_key(owner.id, "mine.png")
-
-
-def test_all_owned_blob_keys_includes_primary_and_external_files(
-    db_session: Session,
-) -> None:
-    model = _make_model(db_session, "owned-keys")
-    internal = _make_file(db_session, model, path="internal.stl")
-    external = _make_file(
-        db_session,
-        model,
-        path="/nas/external.stl",
-        is_external=True,
-        version=2,
-    )
-
-    keys = all_owned_blob_keys(db_session)
-
-    assert internal.path in keys
-    assert external.path in keys
-
-
 # --------------------------------------------------------------------------- #
 # Run lifecycle — moved here from the maintenance router's test file, which is
 # the mirror of app/api/v1/maintenance.py, not of this module.
@@ -1604,3 +1443,175 @@ class TestRepairFinding:
 
         assert result is not None
         assert result.state != VaultAuditFindingState.RESOLVED
+
+
+class TestAllOwnedBlobKeys:
+    def test_all_owned_blob_keys_includes_primary_and_external_files(
+        self,
+        db_session: Session,
+    ) -> None:
+        model = _make_model(db_session, "owned-keys")
+        internal = _make_file(db_session, model, path="internal.stl")
+        external = _make_file(
+            db_session,
+            model,
+            path="/nas/external.stl",
+            is_external=True,
+            version=2,
+        )
+
+        keys = all_owned_blob_keys(db_session)
+
+        assert internal.path in keys
+        assert external.path in keys
+
+
+class TestOwnershipSnapshot:
+    def test_ownership_snapshot_skips_file_row_with_no_id(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        model = _make_model(db_session, "no-id-file")
+        _make_file(db_session, model, path="persisted.stl")
+        unpersisted = File(
+            model_id=model.id,
+            path="ghost.stl",
+            original_filename="ghost.stl",
+            file_type=FileType.STL,
+        )
+        assert unpersisted.id is None
+        _patch_exec_injecting_unpersisted_row(
+            monkeypatch, db_session, File, unpersisted
+        )
+
+        result = ownership_snapshot(db_session, discover=False)
+
+        primary_keys = {blob.key for blob in result.primary}
+        derived_keys = {blob.key for blob in result.derived}
+        assert "persisted.stl" in primary_keys
+        assert "ghost.stl" not in primary_keys
+        assert not any(blob.resource_id is None for blob in result.derived)
+        assert (
+            derived_keys
+        )  # the persisted file still contributed thumbnail/stl-cache keys
+
+    def test_ownership_snapshot_skips_document_row_with_no_id(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        persisted = Document(
+            name="real-doc", kind=DocumentKind.MARKDOWN, filename="real.md"
+        )
+        db_session.add(persisted)
+        db_session.commit()
+        db_session.refresh(persisted)
+        unpersisted = Document(
+            name="ghost-doc", kind=DocumentKind.MARKDOWN, filename="ghost.md"
+        )
+        assert unpersisted.id is None
+        _patch_exec_injecting_unpersisted_row(
+            monkeypatch, db_session, Document, unpersisted
+        )
+
+        result = ownership_snapshot(db_session, discover=False)
+
+        primary_names = {
+            blob.display_name
+            for blob in result.primary
+            if blob.resource_type == "document"
+        }
+        assert "real.md" in primary_names
+        assert "ghost.md" not in primary_names
+
+    def test_ownership_snapshot_document_embedded_image_id_must_match_row(
+        self,
+        db_session: Session,
+    ) -> None:
+        other = Document(name="other-doc", kind=DocumentKind.MARKDOWN)
+        db_session.add(other)
+        db_session.commit()
+        db_session.refresh(other)
+
+        owner = Document(
+            name="owner-doc",
+            kind=DocumentKind.MARKDOWN,
+            body=f"![pic](/documents/{other.id}/images/stolen.png)",
+        )
+        db_session.add(owner)
+        db_session.commit()
+        db_session.refresh(owner)
+
+        result = ownership_snapshot(db_session, discover=False)
+
+        embedded_keys = {blob.key for blob in result.embedded}
+        stolen_key = get_backend().document_image_key(other.id, "stolen.png")
+        assert stolen_key not in embedded_keys
+
+        owner.body = f"![pic](/documents/{owner.id}/images/mine.png)"
+        db_session.add(owner)
+        db_session.commit()
+
+        result2 = ownership_snapshot(db_session, discover=False)
+        matching = [
+            blob
+            for blob in result2.embedded
+            if blob.resource_type == "document_image" and blob.resource_id == owner.id
+        ]
+        assert len(matching) == 1
+        assert matching[0].key == get_backend().document_image_key(owner.id, "mine.png")
+        assert matching[0].display_name == "mine.png"
+
+    def test_ownership_snapshot_skips_collection_row_with_no_id(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        build_collection(db_session, name="real-col", slug="real-col", path="real-col")
+        unpersisted = Collection(
+            name="ghost-col",
+            slug="ghost-col",
+            path="ghost-col",
+            readme="![pic](/collections/999999/images/never.png)",
+        )
+        assert unpersisted.id is None
+        _patch_exec_injecting_unpersisted_row(
+            monkeypatch, db_session, Collection, unpersisted
+        )
+
+        result = ownership_snapshot(db_session, discover=False)
+
+        assert not any(
+            blob.resource_type == "collection_image" for blob in result.embedded
+        )
+
+    def test_ownership_snapshot_collection_embedded_image_id_must_match_row(
+        self,
+        db_session: Session,
+    ) -> None:
+        other = build_collection(
+            db_session, name="other-col", slug="other-col", path="other-col"
+        )
+
+        owner = build_collection(
+            db_session,
+            name="owner-col",
+            slug="owner-col",
+            path="owner-col",
+            readme=f"![pic](/collections/{other.id}/images/stolen.png)",
+        )
+
+        result = ownership_snapshot(db_session, discover=False)
+
+        stolen_key = get_backend().collection_image_key(other.id, "stolen.png")
+        assert stolen_key not in {blob.key for blob in result.embedded}
+
+        owner.readme = f"![pic](/collections/{owner.id}/images/mine.png)"
+        db_session.add(owner)
+        db_session.commit()
+
+        result2 = ownership_snapshot(db_session, discover=False)
+        matching = [
+            blob
+            for blob in result2.embedded
+            if blob.resource_type == "collection_image" and blob.resource_id == owner.id
+        ]
+        assert len(matching) == 1
+        assert matching[0].key == get_backend().collection_image_key(
+            owner.id, "mine.png"
+        )

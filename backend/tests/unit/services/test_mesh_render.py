@@ -229,31 +229,6 @@ def test_small_mesh_renders_in_a_single_chunk() -> None:
     assert Image.open(io.BytesIO(png)).size == (64, 64)
 
 
-def test_huge_mesh_never_allocates_full_face_arrays(monkeypatch) -> None:
-    # Spy on the rasteriser: every chunk it receives must be bounded by the
-    # configured chunk size, proving per-face arrays are built per-chunk and a
-    # full (F, 3, 3) array is never materialised.
-    import trimesh
-
-    mesh = trimesh.creation.icosphere(subdivisions=5, radius=10.0)  # 20480 faces
-    chunk = 1000
-    _set_chunk_size(monkeypatch, chunk)
-
-    seen_max = {"n": 0}
-    real = mesh_render._rasterise_triangles
-
-    def _spy(img, zbuf, tri, vert_nrm, shade, base_color, width, height):
-        seen_max["n"] = max(seen_max["n"], int(tri.shape[0]))
-        return real(img, zbuf, tri, vert_nrm, shade, base_color, width, height)
-
-    monkeypatch.setattr(mesh_render, "_rasterise_triangles", _spy)
-    png = mesh_render.render_mesh_thumbnail(mesh, "big.stl", width=64, height=64)
-
-    assert png is not None
-    assert len(mesh.faces) > chunk  # the mesh really needed more than one chunk
-    assert 0 < seen_max["n"] <= chunk
-
-
 def test_raster_budget_is_cumulative_across_calls() -> None:
     img = np.zeros((16, 16, 3), dtype=np.uint8)
     zbuf = np.full((16, 16), np.inf, dtype=np.float64)
@@ -304,3 +279,29 @@ def test_normal_renderer_keeps_large_face_at_1280() -> None:
     alpha = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))[:, :, 3]
     assert alpha.max() == 255
     assert (alpha > 200).mean() > 0.10
+
+
+class TestFull:
+    def test_huge_mesh_never_allocates_full_face_arrays(self, monkeypatch) -> None:
+        # Spy on the rasteriser: every chunk it receives must be bounded by the
+        # configured chunk size, proving per-face arrays are built per-chunk and a
+        # full (F, 3, 3) array is never materialised.
+        import trimesh
+
+        mesh = trimesh.creation.icosphere(subdivisions=5, radius=10.0)  # 20480 faces
+        chunk = 1000
+        _set_chunk_size(monkeypatch, chunk)
+
+        seen_max = {"n": 0}
+        real = mesh_render._rasterise_triangles
+
+        def _spy(img, zbuf, tri, vert_nrm, shade, base_color, width, height):
+            seen_max["n"] = max(seen_max["n"], int(tri.shape[0]))
+            return real(img, zbuf, tri, vert_nrm, shade, base_color, width, height)
+
+        monkeypatch.setattr(mesh_render, "_rasterise_triangles", _spy)
+        png = mesh_render.render_mesh_thumbnail(mesh, "big.stl", width=64, height=64)
+
+        assert png is not None
+        assert len(mesh.faces) > chunk  # the mesh really needed more than one chunk
+        assert 0 < seen_max["n"] <= chunk

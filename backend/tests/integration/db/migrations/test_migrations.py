@@ -18,123 +18,6 @@ from app.db.session import _is_alembic_managed, init_db
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
 
 
-def test_alembic_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch) -> None:
-    db_path = tmp_path / "vault.sqlite"
-    cfg = Config(str(ALEMBIC_INI))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-
-    command.upgrade(cfg, "head")
-
-    engine = create_engine(f"sqlite:///{db_path}")
-    inspector = inspect(engine)
-    tables = set(inspector.get_table_names())
-
-    assert "alembic_version" in tables
-    assert "models" in tables
-    assert "files" in tables
-    assert "print_jobs" in tables
-    assert "refresh_tokens" in tables
-    assert "printer_profiles" in tables
-    assert "share_links" in tables
-    assert {
-        "model_provenance_sources",
-        "model_provenance_fields",
-        "provenance_captures",
-        "artifact_provenance_links",
-        "inbox_item_results",
-    } <= tables
-    print_job_columns = {
-        col["name"]: col for col in inspector.get_columns("print_jobs")
-    }
-    assert "artifact_capture_error_code" in print_job_columns
-    assert "artifact_capture_error_message" in print_job_columns
-    assert "dedupe_absorbed_at" in print_job_columns
-    assert "dedupe_survivor_id" in print_job_columns
-
-    files_columns = {col["name"]: col for col in inspector.get_columns("files")}
-    assert "revision_label" in files_columns
-    assert "revision_status" in files_columns
-    assert "revision_notes" in files_columns
-    assert "is_recommended" in files_columns
-    assert files_columns["is_recommended"]["nullable"] is False
-    assert files_columns["is_recommended"]["default"] is not None
-    model_columns = {col["name"]: col for col in inspector.get_columns("models")}
-    assert "next_file_version" in model_columns
-    file_indexes = {index["name"]: index for index in inspector.get_indexes("files")}
-    assert bool(file_indexes["uq_files_model_version"]["unique"]) is True
-    assert bool(file_indexes["uq_files_live_recommended_gcode"]["unique"]) is True
-    assert file_indexes["ix_files_model_deleted_type"]["column_names"] == [
-        "model_id",
-        "deleted_at",
-        "file_type",
-    ]
-    model_indexes = {index["name"]: index for index in inspector.get_indexes("models")}
-    assert model_indexes["ix_models_deleted_updated_id"]["column_names"] == [
-        "deleted_at",
-        "updated_at",
-        "id",
-    ]
-    background_job_indexes = {
-        index["name"]: index for index in inspector.get_indexes("background_jobs")
-    }
-    assert background_job_indexes["ix_background_jobs_visible_state_owner_updated"][
-        "column_names"
-    ] == ["visible", "state", "owner_user_id", "updated_at"]
-    printer_indexes = {
-        index["name"]: index for index in inspector.get_indexes("printers")
-    }
-    assert bool(printer_indexes["uq_printers_live_default"]["unique"]) is True
-
-    share_columns = {col["name"]: col for col in inspector.get_columns("share_links")}
-    assert "model_id" in share_columns
-    assert "token_hash" in share_columns
-    assert "expires_at" in share_columns
-    assert "allow_download" in share_columns
-    assert "selected_file_ids_json" in share_columns
-
-    user_columns = {col["name"]: col for col in inspector.get_columns("users")}
-    assert "oidc_issuer" in user_columns
-    assert "oidc_subject" in user_columns
-    assert user_columns["oidc_managed"]["nullable"] is False
-    config_columns = {
-        col["name"]: col for col in inspector.get_columns("system_config")
-    }
-    assert "oidc_enabled" in config_columns
-    assert "oidc_client_secret" in config_columns
-    assert "oidc_admin_groups" in config_columns
-
-    inbox_columns = {col["name"]: col for col in inspector.get_columns("inbox_items")}
-    assert "completion" in inbox_columns
-    inbox_fks = {
-        fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
-        for fk in inspector.get_foreign_keys("inbox_items")
-    }
-    assert inbox_fks["background_job_id"] == "SET NULL"
-    provenance_source_indexes = {
-        index["name"]: index
-        for index in inspector.get_indexes("model_provenance_sources")
-    }
-    assert provenance_source_indexes["ix_provenance_source_provider_item"][
-        "column_names"
-    ] == [
-        "provider",
-        "source_item_id",
-    ]
-    provenance_link_columns = {
-        col["name"]: col for col in inspector.get_columns("artifact_provenance_links")
-    }
-    assert "import_key" in provenance_link_columns
-    provenance_link_fks = {
-        fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
-        for fk in inspector.get_foreign_keys("artifact_provenance_links")
-    }
-    assert provenance_link_fks == {
-        "file_id": "CASCADE",
-        "provenance_source_id": "CASCADE",
-        "capture_id": "SET NULL",
-    }
-
-
 def test_bambu_identity_migration_absorbs_duplicate_pair_without_delete(
     tmp_path: Path,
 ) -> None:
@@ -676,42 +559,6 @@ def test_runner_orphan_rescue_preserves_existing_data(tmp_path: Path) -> None:
     assert "keepme" in names  # rescue never dropped or rebuilt the data
 
 
-def test_has_application_tables_ignores_alembic_only(tmp_path: Path) -> None:
-    url = _url(tmp_path)
-    engine = create_engine(url)
-    try:
-        assert migrate_mod._has_application_tables(engine) is False
-    finally:
-        engine.dispose()
-
-
-def test_init_db_builds_schema_on_unmanaged_db(tmp_path: Path) -> None:
-    url = _url(tmp_path, "init.sqlite")
-    engine = create_engine(url)
-    try:
-        assert "users" not in set(inspect(engine).get_table_names())
-        init_db(engine)
-        assert "users" in set(inspect(engine).get_table_names())
-        assert _is_alembic_managed(engine) is False  # create_all leaves it un-stamped
-    finally:
-        engine.dispose()
-
-
-def test_init_db_is_strict_noop_on_alembic_managed_db(tmp_path: Path) -> None:
-    url = _url(tmp_path, "managed.sqlite")
-    migrate_mod.run_migrations(url)
-
-    engine = create_engine(url)
-    try:
-        assert _is_alembic_managed(engine) is True
-        before = set(inspect(engine).get_table_names())
-        init_db(engine)  # must NOT call create_all
-        assert set(inspect(engine).get_table_names()) == before
-        assert migrate_mod._current_revision(engine) == _head_revision()
-    finally:
-        engine.dispose()
-
-
 # --------------------------------------------------------------------------- #
 # State dispatch: a fresh DB must NOT replay the historical migration chain
 # (its baseline is SQLite-only and fails on Postgres) — it bootstraps via
@@ -736,15 +583,6 @@ class _Spy:
             migrate_mod, "_create_all", lambda u: self.create_all.append(u)
         )
         return url
-
-
-def test_fresh_db_bootstraps_via_create_all_not_baseline(tmp_path, monkeypatch) -> None:
-    spy = _Spy()
-    url = spy.install(monkeypatch, tmp_path)  # empty DB → fresh
-    migrate_mod.run_migrations(url)
-    assert spy.create_all == [url]  # schema built from models
-    assert len(spy.stamp) == 1  # stamped head
-    assert spy.upgrade == []  # baseline chain NOT replayed (Postgres-safe)
 
 
 def test_orphan_db_stamps_then_upgrades(tmp_path, monkeypatch) -> None:
@@ -807,61 +645,6 @@ def test_single_head_and_revisions_all_resolve(tmp_path: Path) -> None:
     # Walking every revision resolves each down_revision; a deleted/renamed file
     # raises here — i.e. the "Can't locate revision X" startup crash, in CI.
     assert len(list(script.walk_revisions())) > 1
-
-
-def test_upgrade_from_pre_0_8_0_release_preserves_data(tmp_path: Path) -> None:
-    url = _url(tmp_path, "old.sqlite")
-    cfg = Config(str(ALEMBIC_INI))
-    cfg.set_main_option("sqlalchemy.url", url)
-
-    # Stand up an old (~0.7.2) schema and seed representative rows.
-    command.upgrade(cfg, _PRE_0_8_0)
-    engine = create_engine(url)
-    with engine.connect() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO collections (name, slug, path, created_at) "
-                "VALUES ('Functional','functional','functional','2026-01-01')"
-            )
-        )
-        conn.execute(
-            text(
-                "INSERT INTO models (name, slug, hash, collection_id, created_at, updated_at) "
-                "VALUES ('Bracket','bracket',:h,1,'2026-01-01','2026-01-01')"
-            ),
-            {"h": "a" * 64},
-        )
-        conn.commit()
-    engine.dispose()
-
-    # The upgrade an existing user actually runs.
-    command.upgrade(cfg, "head")
-
-    engine = create_engine(url)
-    try:
-        inspector = inspect(engine)
-        assert "documents" in inspector.get_table_names()  # new 0.8.0 table
-        assert "printer_permissions" in inspector.get_table_names()
-        assert "readme" in {c["name"] for c in inspector.get_columns("collections")}
-        printer_columns = {c["name"] for c in inspector.get_columns("printers")}
-        assert {
-            "provider_variant",
-            "prusalink_url",
-            "prusalink_auth_mode",
-            "prusalink_username",
-            "prusalink_password",
-            "prusalink_api_key",
-            "elegoo_centauri_host",
-            "elegoo_centauri_access_code",
-            "elegoo_centauri_mainboard_id",
-        } <= printer_columns
-        with engine.connect() as conn:
-            # Existing data survived the ALTER TABLE / CREATE TABLE migrations.
-            assert conn.execute(text("SELECT count(*) FROM collections")).scalar() == 1
-            assert conn.execute(text("SELECT count(*) FROM models")).scalar() == 1
-    finally:
-        engine.dispose()
-    assert _current(url) == _head_revision()
 
 
 # ---------------------------------------------------------------------------
@@ -1058,3 +841,241 @@ def test_backfill_populates_existing_jobs(tmp_path: Path) -> None:
         # 100g @ 20/kg => 2.00.
         assert row.cost == 2.0
     engine.dispose()
+
+
+class TestInitDb:
+    def test_init_db_builds_schema_on_unmanaged_db(self, tmp_path: Path) -> None:
+        url = _url(tmp_path, "init.sqlite")
+        engine = create_engine(url)
+        try:
+            assert "users" not in set(inspect(engine).get_table_names())
+            init_db(engine)
+            assert "users" in set(inspect(engine).get_table_names())
+            assert (
+                _is_alembic_managed(engine) is False
+            )  # create_all leaves it un-stamped
+        finally:
+            engine.dispose()
+
+    def test_init_db_is_strict_noop_on_alembic_managed_db(self, tmp_path: Path) -> None:
+        url = _url(tmp_path, "managed.sqlite")
+        migrate_mod.run_migrations(url)
+
+        engine = create_engine(url)
+        try:
+            assert _is_alembic_managed(engine) is True
+            before = set(inspect(engine).get_table_names())
+            init_db(engine)  # must NOT call create_all
+            assert set(inspect(engine).get_table_names()) == before
+            assert migrate_mod._current_revision(engine) == _head_revision()
+        finally:
+            engine.dispose()
+
+
+class TestUpgrade:
+    def test_alembic_upgrade_creates_expected_schema(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        db_path = tmp_path / "vault.sqlite"
+        cfg = Config(str(ALEMBIC_INI))
+        cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(f"sqlite:///{db_path}")
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+
+        assert "alembic_version" in tables
+        assert "models" in tables
+        assert "files" in tables
+        assert "print_jobs" in tables
+        assert "refresh_tokens" in tables
+        assert "printer_profiles" in tables
+        assert "share_links" in tables
+        assert {
+            "model_provenance_sources",
+            "model_provenance_fields",
+            "provenance_captures",
+            "artifact_provenance_links",
+            "inbox_item_results",
+        } <= tables
+        print_job_columns = {
+            col["name"]: col for col in inspector.get_columns("print_jobs")
+        }
+        assert "artifact_capture_error_code" in print_job_columns
+        assert "artifact_capture_error_message" in print_job_columns
+        assert "dedupe_absorbed_at" in print_job_columns
+        assert "dedupe_survivor_id" in print_job_columns
+
+        files_columns = {col["name"]: col for col in inspector.get_columns("files")}
+        assert "revision_label" in files_columns
+        assert "revision_status" in files_columns
+        assert "revision_notes" in files_columns
+        assert "is_recommended" in files_columns
+        assert files_columns["is_recommended"]["nullable"] is False
+        assert files_columns["is_recommended"]["default"] is not None
+        model_columns = {col["name"]: col for col in inspector.get_columns("models")}
+        assert "next_file_version" in model_columns
+        file_indexes = {
+            index["name"]: index for index in inspector.get_indexes("files")
+        }
+        assert bool(file_indexes["uq_files_model_version"]["unique"]) is True
+        assert bool(file_indexes["uq_files_live_recommended_gcode"]["unique"]) is True
+        assert file_indexes["ix_files_model_deleted_type"]["column_names"] == [
+            "model_id",
+            "deleted_at",
+            "file_type",
+        ]
+        model_indexes = {
+            index["name"]: index for index in inspector.get_indexes("models")
+        }
+        assert model_indexes["ix_models_deleted_updated_id"]["column_names"] == [
+            "deleted_at",
+            "updated_at",
+            "id",
+        ]
+        background_job_indexes = {
+            index["name"]: index for index in inspector.get_indexes("background_jobs")
+        }
+        assert background_job_indexes["ix_background_jobs_visible_state_owner_updated"][
+            "column_names"
+        ] == ["visible", "state", "owner_user_id", "updated_at"]
+        printer_indexes = {
+            index["name"]: index for index in inspector.get_indexes("printers")
+        }
+        assert bool(printer_indexes["uq_printers_live_default"]["unique"]) is True
+
+        share_columns = {
+            col["name"]: col for col in inspector.get_columns("share_links")
+        }
+        assert "model_id" in share_columns
+        assert "token_hash" in share_columns
+        assert "expires_at" in share_columns
+        assert "allow_download" in share_columns
+        assert "selected_file_ids_json" in share_columns
+
+        user_columns = {col["name"]: col for col in inspector.get_columns("users")}
+        assert "oidc_issuer" in user_columns
+        assert "oidc_subject" in user_columns
+        assert user_columns["oidc_managed"]["nullable"] is False
+        config_columns = {
+            col["name"]: col for col in inspector.get_columns("system_config")
+        }
+        assert "oidc_enabled" in config_columns
+        assert "oidc_client_secret" in config_columns
+        assert "oidc_admin_groups" in config_columns
+
+        inbox_columns = {
+            col["name"]: col for col in inspector.get_columns("inbox_items")
+        }
+        assert "completion" in inbox_columns
+        inbox_fks = {
+            fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+            for fk in inspector.get_foreign_keys("inbox_items")
+        }
+        assert inbox_fks["background_job_id"] == "SET NULL"
+        provenance_source_indexes = {
+            index["name"]: index
+            for index in inspector.get_indexes("model_provenance_sources")
+        }
+        assert provenance_source_indexes["ix_provenance_source_provider_item"][
+            "column_names"
+        ] == [
+            "provider",
+            "source_item_id",
+        ]
+        provenance_link_columns = {
+            col["name"]: col
+            for col in inspector.get_columns("artifact_provenance_links")
+        }
+        assert "import_key" in provenance_link_columns
+        provenance_link_fks = {
+            fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+            for fk in inspector.get_foreign_keys("artifact_provenance_links")
+        }
+        assert provenance_link_fks == {
+            "file_id": "CASCADE",
+            "provenance_source_id": "CASCADE",
+            "capture_id": "SET NULL",
+        }
+
+    def test_upgrade_from_pre_0_8_0_release_preserves_data(
+        self, tmp_path: Path
+    ) -> None:
+        url = _url(tmp_path, "old.sqlite")
+        cfg = Config(str(ALEMBIC_INI))
+        cfg.set_main_option("sqlalchemy.url", url)
+
+        # Stand up an old (~0.7.2) schema and seed representative rows.
+        command.upgrade(cfg, _PRE_0_8_0)
+        engine = create_engine(url)
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO collections (name, slug, path, created_at) "
+                    "VALUES ('Functional','functional','functional','2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO models (name, slug, hash, collection_id, created_at, updated_at) "
+                    "VALUES ('Bracket','bracket',:h,1,'2026-01-01','2026-01-01')"
+                ),
+                {"h": "a" * 64},
+            )
+            conn.commit()
+        engine.dispose()
+
+        # The upgrade an existing user actually runs.
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(url)
+        try:
+            inspector = inspect(engine)
+            assert "documents" in inspector.get_table_names()  # new 0.8.0 table
+            assert "printer_permissions" in inspector.get_table_names()
+            assert "readme" in {c["name"] for c in inspector.get_columns("collections")}
+            printer_columns = {c["name"] for c in inspector.get_columns("printers")}
+            assert {
+                "provider_variant",
+                "prusalink_url",
+                "prusalink_auth_mode",
+                "prusalink_username",
+                "prusalink_password",
+                "prusalink_api_key",
+                "elegoo_centauri_host",
+                "elegoo_centauri_access_code",
+                "elegoo_centauri_mainboard_id",
+            } <= printer_columns
+            with engine.connect() as conn:
+                # Existing data survived the ALTER TABLE / CREATE TABLE migrations.
+                assert (
+                    conn.execute(text("SELECT count(*) FROM collections")).scalar() == 1
+                )
+                assert conn.execute(text("SELECT count(*) FROM models")).scalar() == 1
+        finally:
+            engine.dispose()
+        assert _current(url) == _head_revision()
+
+
+class TestCreateAll:
+    def test_fresh_db_bootstraps_via_create_all_not_baseline(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        spy = _Spy()
+        url = spy.install(monkeypatch, tmp_path)  # empty DB → fresh
+        migrate_mod.run_migrations(url)
+        assert spy.create_all == [url]  # schema built from models
+        assert len(spy.stamp) == 1  # stamped head
+        assert spy.upgrade == []  # baseline chain NOT replayed (Postgres-safe)
+
+
+class TestHasApplicationTables:
+    def test_has_application_tables_ignores_alembic_only(self, tmp_path: Path) -> None:
+        url = _url(tmp_path)
+        engine = create_engine(url)
+        try:
+            assert migrate_mod._has_application_tables(engine) is False
+        finally:
+            engine.dispose()

@@ -186,28 +186,6 @@ class _ChunkStream(httpx.AsyncByteStream):
 
 
 @pytest.mark.anyio
-async def test_streaming_response_aborts_before_buffering_the_body_cap() -> None:
-    stream = _ChunkStream([b"1234", b"56", b"this must not be read"])
-
-    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, stream=stream, request=request)
-
-    transport = ProviderTransport(
-        resolver=_target,
-        sender=send,
-        max_attempts=1,
-        max_response_bytes=5,
-    )
-
-    with pytest.raises(ProviderTransportError) as exc:
-        await transport.request("GET", "https://api.example/models/1")
-
-    assert exc.value.code == "provider_response_too_large"
-    assert stream.closed
-    assert stream.yielded == 2
-
-
-@pytest.mark.anyio
 async def test_host_limit_is_process_wide_across_transport_instances() -> None:
     active = 0
     max_active = 0
@@ -404,25 +382,6 @@ async def test_closes_the_stream_when_reading_it_fails() -> None:
     assert stream.closed is True
 
 
-@pytest.mark.anyio
-async def test_returns_a_buffered_response_the_caller_can_read_twice() -> None:
-    """The streamed response is replaced, not handed on, so its connection is freed."""
-    stream = _ChunkStream([b"12", b"34"])
-
-    async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, stream=stream, request=request)
-
-    transport = ProviderTransport(
-        resolver=_target, sender=send, max_attempts=1, max_response_bytes=1000
-    )
-
-    response = await transport.request("GET", "https://api.example/ok")
-
-    assert response.content == b"1234"
-    assert response.content == b"1234"
-    assert stream.closed is True
-
-
 class TestConstructorValidation:
     """The transport's own limits are validated at construction, not at call time."""
 
@@ -539,3 +498,46 @@ async def test_refuses_a_url_with_no_host_against_an_allowlist() -> None:
         await transport.request(
             "GET", "not-a-url", allowed_hosts=frozenset({"api.example"})
         )
+
+
+class TestResponse:
+    @pytest.mark.anyio
+    async def test_streaming_response_aborts_before_buffering_the_body_cap(
+        self,
+    ) -> None:
+        stream = _ChunkStream([b"1234", b"56", b"this must not be read"])
+
+        async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=stream, request=request)
+
+        transport = ProviderTransport(
+            resolver=_target,
+            sender=send,
+            max_attempts=1,
+            max_response_bytes=5,
+        )
+
+        with pytest.raises(ProviderTransportError) as exc:
+            await transport.request("GET", "https://api.example/models/1")
+
+        assert exc.value.code == "provider_response_too_large"
+        assert stream.closed
+        assert stream.yielded == 2
+
+    @pytest.mark.anyio
+    async def test_returns_a_buffered_response_the_caller_can_read_twice(self) -> None:
+        """The streamed response is replaced, not handed on, so its connection is freed."""
+        stream = _ChunkStream([b"12", b"34"])
+
+        async def send(target: PinnedTarget, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=stream, request=request)
+
+        transport = ProviderTransport(
+            resolver=_target, sender=send, max_attempts=1, max_response_bytes=1000
+        )
+
+        response = await transport.request("GET", "https://api.example/ok")
+
+        assert response.content == b"1234"
+        assert response.content == b"1234"
+        assert stream.closed is True

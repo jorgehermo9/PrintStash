@@ -264,88 +264,6 @@ def test_capture_cover_service_temp_is_cleaned_when_processing_fails(
     )
 
 
-def test_capture_slot_cleanup_enqueues_before_post_commit_delete(
-    db_session: Session,
-) -> None:
-    """Slot bytes remain until the committed outbox processor consumes receipt."""
-    from app.db.models import StorageDeleteIntent
-    from app.services.storage_deletion import process_storage_delete_intents
-
-    owner = build_user(db_session, "slot-outbox-owner", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    assert slot.storage_key is not None
-    backend = inbox.get_backend()
-    assert backend.exists(slot.storage_key)
-
-    assert inbox._cleanup_capture_slots(db_session, row)
-    assert backend.exists(slot.storage_key)
-    assert db_session.exec(select(StorageDeleteIntent)).one().key == slot.storage_key
-    db_session.commit()
-    assert backend.exists(slot.storage_key)
-
-    assert process_storage_delete_intents().completed == 1
-    assert not backend.exists(slot.storage_key)
-
-
-def test_expired_uploaded_capture_slot_fails_inbox_after_durable_cleanup(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-expiry-owner", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    lease = db_session.exec(
-        select(StagingLease).where(StagingLease.capture_upload_slot_id == slot.id)
-    ).one()
-    lease.expires_at = utcnow() - timedelta(seconds=1)
-    db_session.commit()
-
-    assert inbox.prune_expired_browser_leases() == 1
-    db_session.expire_all()
-    expired_item = db_session.get(InboxItem, row.id)
-    assert expired_item is not None
-    assert expired_item.state == InboxItemState.FAILED
-    assert expired_item.error_code == "staging_expired"
-
-
-def test_capture_slot_cleanup_rollback_preserves_receipt_lease_and_bytes(
-    db_session: Session,
-) -> None:
-    from app.db.models import StorageDeleteIntent
-
-    owner = build_user(db_session, "slot-rollback-owner", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    assert slot.storage_key is not None
-    slot_id = slot.id
-    slot_key = slot.storage_key
-    assert inbox._cleanup_capture_slots(db_session, row)
-    db_session.rollback()
-    db_session.expire_all()
-
-    assert db_session.get(CaptureUploadSlot, slot_id) is not None
-    assert db_session.exec(
-        select(StagingLease).where(StagingLease.capture_upload_slot_id == slot_id)
-    ).one()
-    assert inbox.get_backend().exists(slot_key)
-    assert db_session.exec(select(StorageDeleteIntent)).all() == []
-
-
 def test_delete_intent_processor_retries_backend_failure_and_blocks_mismatch(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -664,71 +582,6 @@ def test_capture_cover_attaches_before_raw_slot_receipt_is_released(
     assert inbox._cleanup_capture_slots(db_session, row)
     db_session.commit()
     assert db_session.get(type(cover_slot), cover_slot.id) is None
-
-
-@pytest.mark.parametrize("created", [True, False])
-def test_finished_capture_rolls_back_cover_write_when_commit_fails(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch, created: bool
-) -> None:
-    owner = build_user(db_session, f"cover-commit-failure-{created}", superuser=True)
-    row = InboxItem(
-        owner_user_id=owner.id,
-        source_kind="browser",
-        source_url="https://makerworld.com/en/models/1234-widget",
-        source_hostname="makerworld.com",
-        state=InboxItemState.IMPORTING,
-    )
-    db_session.add(row)
-    db_session.commit()
-    receipt = CreationReceipt(
-        key=f"covers/{created}.webp",
-        size=1,
-        token="receipt",
-        backend="fake",
-        namespace="test",
-    )
-    write = SourceCoverWrite(
-        cover=ModelSourceCover(provenance_source_id=1, storage_key=receipt.key),
-        created=created,
-        creation_receipt=receipt if created else None,
-        replacement_receipt=None if created else receipt,
-        replaced_bytes=None if created else b"old",
-    )
-
-    class _Factory:
-        def scoped_session(self) -> object:
-            class _Scope:
-                def __enter__(self) -> Session:
-                    return db_session
-
-                def __exit__(self, *args: object) -> None:
-                    return None
-
-            return _Scope()
-
-    job = type("Job", (), {"state": "completed", "model_id": 1, "result": None})()
-    monkeypatch.setattr(inbox.registry, "get", lambda _job_id: job)
-    monkeypatch.setattr(inbox, "_record_v2_results", lambda *_args: (True, 1, 0))
-    monkeypatch.setattr(inbox, "_attach_capture_cover", lambda *_args: write)
-    monkeypatch.setattr(inbox, "_cleanup_capture_slots", lambda *_args: True)
-    rollback = pytest.MonkeyPatch()
-    rollback.setattr(
-        db_session,
-        "commit",
-        lambda: (_ for _ in ()).throw(RuntimeError("commit failed")),
-    )
-    seam_calls: list[SourceCoverWrite] = []
-    monkeypatch.setattr(
-        inbox.source_covers,
-        "rollback_after_commit_failure",
-        lambda _session, _backend, result: seam_calls.append(result),
-    )
-
-    with pytest.raises(RuntimeError, match="commit failed"):
-        inbox._finish_import(row.id, "cover-commit-failure-job", _Factory())
-
-    assert seam_calls == [write]
-    rollback.undo()
 
 
 def _make_item(db_session: Session, owner: User, **overrides) -> InboxItem:
@@ -1057,3 +910,165 @@ class TestDismiss:
             inbox.dismiss(db_session, row)
         assert backend.read_bytes(slot.storage_key) == b"foreign-bytes"
         assert db_session.get(CaptureUploadSlot, slot.id) is not None
+
+
+class TestInbox:
+    def test_expired_uploaded_capture_slot_fails_inbox_after_durable_cleanup(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-expiry-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        lease = db_session.exec(
+            select(StagingLease).where(StagingLease.capture_upload_slot_id == slot.id)
+        ).one()
+        lease.expires_at = utcnow() - timedelta(seconds=1)
+        db_session.commit()
+
+        assert inbox.prune_expired_browser_leases() == 1
+        db_session.expire_all()
+        expired_item = db_session.get(InboxItem, row.id)
+        assert expired_item is not None
+        assert expired_item.state == InboxItemState.FAILED
+        assert expired_item.error_code == "staging_expired"
+
+
+class TestCommit:
+    def test_capture_slot_cleanup_enqueues_before_post_commit_delete(
+        self,
+        db_session: Session,
+    ) -> None:
+        """Slot bytes remain until the committed outbox processor consumes receipt."""
+        from app.db.models import StorageDeleteIntent
+        from app.services.storage_deletion import process_storage_delete_intents
+
+        owner = build_user(db_session, "slot-outbox-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        assert slot.storage_key is not None
+        backend = inbox.get_backend()
+        assert backend.exists(slot.storage_key)
+
+        assert inbox._cleanup_capture_slots(db_session, row)
+        assert backend.exists(slot.storage_key)
+        assert (
+            db_session.exec(select(StorageDeleteIntent)).one().key == slot.storage_key
+        )
+        db_session.commit()
+        assert backend.exists(slot.storage_key)
+
+        assert process_storage_delete_intents().completed == 1
+        assert not backend.exists(slot.storage_key)
+
+    @pytest.mark.parametrize("created", [True, False])
+    def test_finished_capture_rolls_back_cover_write_when_commit_fails(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, created: bool
+    ) -> None:
+        owner = build_user(
+            db_session, f"cover-commit-failure-{created}", superuser=True
+        )
+        row = InboxItem(
+            owner_user_id=owner.id,
+            source_kind="browser",
+            source_url="https://makerworld.com/en/models/1234-widget",
+            source_hostname="makerworld.com",
+            state=InboxItemState.IMPORTING,
+        )
+        db_session.add(row)
+        db_session.commit()
+        receipt = CreationReceipt(
+            key=f"covers/{created}.webp",
+            size=1,
+            token="receipt",
+            backend="fake",
+            namespace="test",
+        )
+        write = SourceCoverWrite(
+            cover=ModelSourceCover(provenance_source_id=1, storage_key=receipt.key),
+            created=created,
+            creation_receipt=receipt if created else None,
+            replacement_receipt=None if created else receipt,
+            replaced_bytes=None if created else b"old",
+        )
+
+        class _Factory:
+            def scoped_session(self) -> object:
+                class _Scope:
+                    def __enter__(self) -> Session:
+                        return db_session
+
+                    def __exit__(self, *args: object) -> None:
+                        return None
+
+                return _Scope()
+
+        job = type("Job", (), {"state": "completed", "model_id": 1, "result": None})()
+        monkeypatch.setattr(inbox.registry, "get", lambda _job_id: job)
+        monkeypatch.setattr(inbox, "_record_v2_results", lambda *_args: (True, 1, 0))
+        monkeypatch.setattr(inbox, "_attach_capture_cover", lambda *_args: write)
+        monkeypatch.setattr(inbox, "_cleanup_capture_slots", lambda *_args: True)
+        rollback = pytest.MonkeyPatch()
+        rollback.setattr(
+            db_session,
+            "commit",
+            lambda: (_ for _ in ()).throw(RuntimeError("commit failed")),
+        )
+        seam_calls: list[SourceCoverWrite] = []
+        monkeypatch.setattr(
+            inbox.source_covers,
+            "rollback_after_commit_failure",
+            lambda _session, _backend, result: seam_calls.append(result),
+        )
+
+        with pytest.raises(RuntimeError, match="commit failed"):
+            inbox._finish_import(row.id, "cover-commit-failure-job", _Factory())
+
+        assert seam_calls == [write]
+        rollback.undo()
+
+
+class TestRollback:
+    def test_capture_slot_cleanup_rollback_preserves_receipt_lease_and_bytes(
+        self,
+        db_session: Session,
+    ) -> None:
+        from app.db.models import StorageDeleteIntent
+
+        owner = build_user(db_session, "slot-rollback-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        assert slot.storage_key is not None
+        slot_id = slot.id
+        slot_key = slot.storage_key
+        assert inbox._cleanup_capture_slots(db_session, row)
+        db_session.rollback()
+        db_session.expire_all()
+
+        assert db_session.get(CaptureUploadSlot, slot_id) is not None
+        assert db_session.exec(
+            select(StagingLease).where(StagingLease.capture_upload_slot_id == slot_id)
+        ).one()
+        assert inbox.get_backend().exists(slot_key)
+        assert db_session.exec(select(StorageDeleteIntent)).all() == []

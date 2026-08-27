@@ -8,37 +8,6 @@ from fastapi.testclient import TestClient
 from app.core.config import _overlay
 
 
-def test_unhandled_errors_return_stable_json(app: FastAPI) -> None:
-    if not any(
-        getattr(route, "path", None) == "/__test__/boom" for route in app.routes
-    ):
-
-        @app.get("/__test__/boom")
-        def boom() -> None:
-            raise RuntimeError("secret traceback details")
-
-    client = TestClient(app, raise_server_exceptions=False)
-
-    response = client.get("/__test__/boom")
-
-    assert response.status_code == 500
-    assert response.json() == {"detail": "internal_server_error"}
-    assert "secret traceback details" not in response.text
-
-
-def test_malformed_json_returns_stable_validation_contract(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/auth/login",
-        content=b'{"username":',
-        headers={"Content-Type": "application/json"},
-    )
-
-    assert response.status_code == 422
-    body = response.json()
-    assert body["detail"] == "request_validation_failed"
-    assert isinstance(body["errors"], list)
-
-
 def test_openapi_describes_the_actual_http_bearer_contract(
     client: TestClient,
 ) -> None:
@@ -117,3 +86,36 @@ def test_write_payloads_reject_unknown_fields(
 
     assert response.status_code == 422
     assert response.json()["detail"] == "request_validation_failed"
+
+
+class TestJson:
+    def test_unhandled_errors_return_stable_json(self, app: FastAPI) -> None:
+        if not any(
+            getattr(route, "path", None) == "/__test__/boom" for route in app.routes
+        ):
+
+            @app.get("/__test__/boom")
+            def boom() -> None:
+                raise RuntimeError("secret traceback details")
+
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/__test__/boom")
+
+        assert response.status_code == 500
+        assert response.json() == {"detail": "internal_server_error"}
+        assert "secret traceback details" not in response.text
+
+    def test_malformed_json_returns_stable_validation_contract(
+        self, client: TestClient
+    ) -> None:
+        response = client.post(
+            "/api/v1/auth/login",
+            content=b'{"username":',
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["detail"] == "request_validation_failed"
+        assert isinstance(body["errors"], list)

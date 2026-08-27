@@ -420,92 +420,6 @@ def test_dispatch_sql_does_not_block_the_event_loop(monkeypatch) -> None:
     asyncio.run(_run())
 
 
-def test_fleet_summary_counts_queue_drain_and_maintenance(
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="Summary",
-        moonraker_url="http://summary",
-        status=PrinterStatus.READY,
-        drain_mode=True,
-    )
-    now = utcnow()
-    client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=auth_headers,
-        json={
-            "starts_at": (now - timedelta(minutes=1)).isoformat(),
-            "ends_at": (now + timedelta(minutes=10)).isoformat(),
-        },
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "manual", "printer_id": printer.id},
-    )
-    build_print_job(
-        db_session,
-        artifact,
-        printer_id=printer.id,
-        remote_filename="absorbed.gcode",
-        state=PrintJobState.PRINTING,
-        source="external",
-        dedupe_absorbed_at=utcnow(),
-        dedupe_survivor_id=1,
-    )
-    from app.services.fleet import _active_counts, build_routing_snapshot
-
-    assert build_routing_snapshot(db_session).active_counts == {printer.id: 1}
-    assert _active_counts(db_session) == {printer.id: 1}
-
-    summary = client.get("/api/v1/fleet/summary", headers=auth_headers)
-
-    assert summary.status_code == 200
-    payload = summary.json()
-    assert {
-        key: payload[key]
-        for key in (
-            "total_printers",
-            "queued_jobs",
-            "active_jobs",
-            "draining_printers",
-            "maintenance_printers",
-            "attention_jobs",
-        )
-    } == {
-        "total_printers": 1,
-        "queued_jobs": 1,
-        "active_jobs": 0,
-        "draining_printers": 1,
-        "maintenance_printers": 1,
-        "attention_jobs": 1,
-    }
-    assert payload["printers"] == [
-        {
-            "printer_id": printer.id,
-            "name": "Summary",
-            "status": "ready",
-            "progress": None,
-            "group": None,
-            "loaded_slots": [],
-            "nozzle_diameter_mm": None,
-            "current_job_id": None,
-            "current_job_name": None,
-            "current_priority": None,
-            "next_job_id": payload["printers"][0]["next_job_id"],
-            "next_job_name": payload["printers"][0]["next_job_name"],
-            "next_priority": "normal",
-            "drain_mode": True,
-            "maintenance": True,
-            "pending_operator_release": False,
-        }
-    ]
-
-
 def test_absorbed_jobs_are_excluded_from_routing_counts(db_session: Session) -> None:
     printer = build_printer(
         db_session,
@@ -657,32 +571,6 @@ def test_ambiguous_restart_cannot_be_retried_automatically(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "queue_job_not_retryable"
-
-
-def test_fleet_enqueue_notifies_task_queue(
-    app: FastAPI,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    db_session: Session,
-) -> None:
-    build_printer(
-        db_session, name="Wake", moonraker_url="http://wake", status=PrinterStatus.READY
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    enqueue = AsyncMock()
-    app.state.task_queue.enqueue = enqueue
-
-    response = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "least_busy"},
-    )
-
-    assert response.status_code == 201
-    enqueue.assert_awaited_once()
-    envelope = enqueue.await_args.args[0]
-    assert envelope.kind == "fleet_dispatch"
-    assert envelope.job_id == str(response.json()["id"])
 
 
 def test_dispatched_job_reuses_same_row_through_completion(
@@ -884,88 +772,6 @@ def test_enqueue_400_for_non_gcode_file(
     assert resp.json()["detail"] == "file_not_gcode"
 
 
-def test_patch_routing_404_for_missing_printer(
-    client: TestClient, auth_headers: dict[str, str]
-) -> None:
-    resp = client.patch(
-        "/api/v1/fleet/printers/99999/routing",
-        headers=auth_headers,
-        json={"is_default": True},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_delete_maintenance_window_404_for_missing_window(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="WindowDeleteMissing",
-        moonraker_url="http://window-delete-missing",
-        status=PrinterStatus.READY,
-    )
-
-    resp = client.delete(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/99999",
-        headers=auth_headers,
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "maintenance_window_not_found"
-
-
-def test_delete_maintenance_log_404_for_missing_log(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="LogDeleteMissing",
-        moonraker_url="http://log-delete-missing",
-        status=PrinterStatus.READY,
-    )
-
-    resp = client.delete(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-log/99999",
-        headers=auth_headers,
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "maintenance_log_not_found"
-
-
-def test_enqueue_manual_strategy_unknown_printer_404(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-    resp = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "manual", "printer_id": 99999},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_enqueue_default_strategy_without_default_printer_is_blocked(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    build_printer(
-        db_session,
-        name="NoDefault",
-        moonraker_url="http://no-default",
-        status=PrinterStatus.READY,
-    )
-    artifact = a_gcode_artifact(db_session, "Queue cube")
-
-    resp = client.post(
-        "/api/v1/fleet/queue",
-        headers=auth_headers,
-        json={"file_id": artifact.id, "strategy": "default"},
-    )
-    assert resp.status_code == 201
-    assert resp.json()["printer_id"] is None
-    assert resp.json()["blocked_reason"] == "default_printer_missing"
-
-
 def test_enqueue_rejects_binary_gcode(
     client: TestClient, auth_headers: dict[str, str], db_session: Session
 ) -> None:
@@ -990,34 +796,6 @@ def test_enqueue_rejects_binary_gcode(
     )
     assert resp.status_code == 400
     assert resp.json()["detail"] == "binary_gcode_not_printable"
-
-
-def test_patch_routing_clears_drain_reason_when_disabling_drain(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="DrainClear",
-        moonraker_url="http://drain-clear",
-        status=PrinterStatus.READY,
-    )
-
-    on = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/routing",
-        headers=auth_headers,
-        json={"drain_mode": True, "drain_reason": "Filament swap"},
-    )
-    assert on.status_code == 200
-    assert on.json()["drain_reason"] == "Filament swap"
-
-    off = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/routing",
-        headers=auth_headers,
-        json={"drain_mode": False},
-    )
-    assert off.status_code == 200
-    assert off.json()["drain_mode"] is False
-    assert off.json()["drain_reason"] is None
 
 
 def test_list_maintenance_windows_returns_created_window(
@@ -1070,81 +848,6 @@ def _grant_printer(
     user = db_session.exec(select(User).where(User.username == username)).one()
     db_session.add(PrinterPermission(user_id=user.id, printer_id=printer.id, role=role))
     db_session.commit()
-
-
-def test_patch_routing_maps_fleet_error_to_404(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="RoutingRace",
-        moonraker_url="http://routing-race",
-        status=PrinterStatus.READY,
-    )
-
-    def _raise(*_args, **_kwargs):
-        raise fleet.FleetError("printer_not_found")
-
-    monkeypatch.setattr(fleet, "update_routing", _raise)
-
-    resp = client.patch(
-        f"/api/v1/fleet/printers/{printer.id}/routing",
-        headers=auth_headers,
-        json={"is_default": True},
-    )
-
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-
-def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
-    client: TestClient, auth_headers: dict[str, str], db_session: Session, monkeypatch
-) -> None:
-    printer = build_printer(
-        db_session,
-        name="MaintenanceRace",
-        moonraker_url="http://maintenance-race",
-        status=PrinterStatus.READY,
-    )
-    now = utcnow()
-
-    def _raise(*_args, **_kwargs):
-        raise fleet.FleetError("printer_not_found")
-
-    monkeypatch.setattr(fleet, "list_maintenance_windows", _raise)
-    resp = client.get(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows", headers=auth_headers
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-    monkeypatch.setattr(fleet, "create_maintenance_window", _raise)
-    resp = client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
-        headers=auth_headers,
-        json={
-            "starts_at": now.isoformat(),
-            "ends_at": (now + timedelta(minutes=5)).isoformat(),
-        },
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-    monkeypatch.setattr(fleet, "list_maintenance_log", _raise)
-    resp = client.get(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-log", headers=auth_headers
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
-
-    monkeypatch.setattr(fleet, "create_maintenance_log", _raise)
-    resp = client.post(
-        f"/api/v1/fleet/printers/{printer.id}/maintenance-log",
-        headers=auth_headers,
-        json={"category": "nozzle", "note": "test"},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "printer_not_found"
 
 
 def _fleet_printer(session: Session, name: str) -> Printer:
@@ -1909,6 +1612,319 @@ class TestPatchMaintenanceLog:
             f"/api/v1/fleet/printers/{printer.id}/maintenance-log/99999",
             headers=auth_headers,
             json={"note": "Nope"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "maintenance_log_not_found"
+
+
+class TestPrinter:
+    def test_patch_routing_404_for_missing_printer(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ) -> None:
+        resp = client.patch(
+            "/api/v1/fleet/printers/99999/routing",
+            headers=auth_headers,
+            json={"is_default": True},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+    def test_enqueue_manual_strategy_unknown_printer_404(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        resp = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "manual", "printer_id": 99999},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+    def test_enqueue_default_strategy_without_default_printer_is_blocked(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        build_printer(
+            db_session,
+            name="NoDefault",
+            moonraker_url="http://no-default",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+
+        resp = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "default"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["printer_id"] is None
+        assert resp.json()["blocked_reason"] == "default_printer_missing"
+
+
+class TestFleet:
+    def test_fleet_summary_counts_queue_drain_and_maintenance(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="Summary",
+            moonraker_url="http://summary",
+            status=PrinterStatus.READY,
+            drain_mode=True,
+        )
+        now = utcnow()
+        client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+            json={
+                "starts_at": (now - timedelta(minutes=1)).isoformat(),
+                "ends_at": (now + timedelta(minutes=10)).isoformat(),
+            },
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={
+                "file_id": artifact.id,
+                "strategy": "manual",
+                "printer_id": printer.id,
+            },
+        )
+        build_print_job(
+            db_session,
+            artifact,
+            printer_id=printer.id,
+            remote_filename="absorbed.gcode",
+            state=PrintJobState.PRINTING,
+            source="external",
+            dedupe_absorbed_at=utcnow(),
+            dedupe_survivor_id=1,
+        )
+        from app.services.fleet import _active_counts, build_routing_snapshot
+
+        assert build_routing_snapshot(db_session).active_counts == {printer.id: 1}
+        assert _active_counts(db_session) == {printer.id: 1}
+
+        summary = client.get("/api/v1/fleet/summary", headers=auth_headers)
+
+        assert summary.status_code == 200
+        payload = summary.json()
+        assert {
+            key: payload[key]
+            for key in (
+                "total_printers",
+                "queued_jobs",
+                "active_jobs",
+                "draining_printers",
+                "maintenance_printers",
+                "attention_jobs",
+            )
+        } == {
+            "total_printers": 1,
+            "queued_jobs": 1,
+            "active_jobs": 0,
+            "draining_printers": 1,
+            "maintenance_printers": 1,
+            "attention_jobs": 1,
+        }
+        assert payload["printers"] == [
+            {
+                "printer_id": printer.id,
+                "name": "Summary",
+                "status": "ready",
+                "progress": None,
+                "group": None,
+                "loaded_slots": [],
+                "nozzle_diameter_mm": None,
+                "current_job_id": None,
+                "current_job_name": None,
+                "current_priority": None,
+                "next_job_id": payload["printers"][0]["next_job_id"],
+                "next_job_name": payload["printers"][0]["next_job_name"],
+                "next_priority": "normal",
+                "drain_mode": True,
+                "maintenance": True,
+                "pending_operator_release": False,
+            }
+        ]
+
+    def test_fleet_enqueue_notifies_task_queue(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+    ) -> None:
+        build_printer(
+            db_session,
+            name="Wake",
+            moonraker_url="http://wake",
+            status=PrinterStatus.READY,
+        )
+        artifact = a_gcode_artifact(db_session, "Queue cube")
+        enqueue = AsyncMock()
+        app.state.task_queue.enqueue = enqueue
+
+        response = client.post(
+            "/api/v1/fleet/queue",
+            headers=auth_headers,
+            json={"file_id": artifact.id, "strategy": "least_busy"},
+        )
+
+        assert response.status_code == 201
+        enqueue.assert_awaited_once()
+        envelope = enqueue.await_args.args[0]
+        assert envelope.kind == "fleet_dispatch"
+        assert envelope.job_id == str(response.json()["id"])
+
+    def test_patch_routing_maps_fleet_error_to_404(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        monkeypatch,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="RoutingRace",
+            moonraker_url="http://routing-race",
+            status=PrinterStatus.READY,
+        )
+
+        def _raise(*_args, **_kwargs):
+            raise fleet.FleetError("printer_not_found")
+
+        monkeypatch.setattr(fleet, "update_routing", _raise)
+
+        resp = client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/routing",
+            headers=auth_headers,
+            json={"is_default": True},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+    def test_maintenance_window_and_log_routes_map_fleet_error_to_404(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        monkeypatch,
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="MaintenanceRace",
+            moonraker_url="http://maintenance-race",
+            status=PrinterStatus.READY,
+        )
+        now = utcnow()
+
+        def _raise(*_args, **_kwargs):
+            raise fleet.FleetError("printer_not_found")
+
+        monkeypatch.setattr(fleet, "list_maintenance_windows", _raise)
+        resp = client.get(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+        monkeypatch.setattr(fleet, "create_maintenance_window", _raise)
+        resp = client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows",
+            headers=auth_headers,
+            json={
+                "starts_at": now.isoformat(),
+                "ends_at": (now + timedelta(minutes=5)).isoformat(),
+            },
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+        monkeypatch.setattr(fleet, "list_maintenance_log", _raise)
+        resp = client.get(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-log", headers=auth_headers
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+        monkeypatch.setattr(fleet, "create_maintenance_log", _raise)
+        resp = client.post(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-log",
+            headers=auth_headers,
+            json={"category": "nozzle", "note": "test"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "printer_not_found"
+
+
+class TestPatch:
+    def test_patch_routing_clears_drain_reason_when_disabling_drain(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="DrainClear",
+            moonraker_url="http://drain-clear",
+            status=PrinterStatus.READY,
+        )
+
+        on = client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/routing",
+            headers=auth_headers,
+            json={"drain_mode": True, "drain_reason": "Filament swap"},
+        )
+        assert on.status_code == 200
+        assert on.json()["drain_reason"] == "Filament swap"
+
+        off = client.patch(
+            f"/api/v1/fleet/printers/{printer.id}/routing",
+            headers=auth_headers,
+            json={"drain_mode": False},
+        )
+        assert off.status_code == 200
+        assert off.json()["drain_mode"] is False
+        assert off.json()["drain_reason"] is None
+
+
+class TestDelete:
+    def test_delete_maintenance_window_404_for_missing_window(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="WindowDeleteMissing",
+            moonraker_url="http://window-delete-missing",
+            status=PrinterStatus.READY,
+        )
+
+        resp = client.delete(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-windows/99999",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "maintenance_window_not_found"
+
+    def test_delete_maintenance_log_404_for_missing_log(
+        self, client: TestClient, auth_headers: dict[str, str], db_session: Session
+    ) -> None:
+        printer = build_printer(
+            db_session,
+            name="LogDeleteMissing",
+            moonraker_url="http://log-delete-missing",
+            status=PrinterStatus.READY,
+        )
+
+        resp = client.delete(
+            f"/api/v1/fleet/printers/{printer.id}/maintenance-log/99999",
+            headers=auth_headers,
         )
         assert resp.status_code == 404
         assert resp.json()["detail"] == "maintenance_log_not_found"

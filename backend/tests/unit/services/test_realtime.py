@@ -38,20 +38,6 @@ def test_slow_subscriber_does_not_delay_others():
     asyncio.run(_run())
 
 
-def test_slow_subscriber_is_dropped_after_timeout():
-    async def _run():
-        bus = InProcessBus()
-        slow = FakeSocket(delay=10.0)
-        await bus.subscribe("printer:1", slow)
-
-        async with asyncio.timeout(3.0):
-            await bus.publish("printer:1", {"hello": "world"})
-
-        assert slow not in bus._subscribers["printer:1"]
-
-    asyncio.run(_run())
-
-
 def test_dead_subscriber_is_dropped():
     async def _run():
         bus = InProcessBus()
@@ -73,5 +59,20 @@ class TestPublish:
         async def _run():
             bus = InProcessBus()
             await bus.publish("printer:999", {"x": 1})  # must not raise
+
+        asyncio.run(_run())
+
+
+class TestTimeout:
+    def test_slow_subscriber_is_dropped_after_timeout(self):
+        async def _run():
+            bus = InProcessBus()
+            slow = FakeSocket(delay=10.0)
+            await bus.subscribe("printer:1", slow)
+
+            async with asyncio.timeout(3.0):
+                await bus.publish("printer:1", {"hello": "world"})
+
+            assert slow not in bus._subscribers["printer:1"]
 
         asyncio.run(_run())

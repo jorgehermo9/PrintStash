@@ -161,24 +161,6 @@ def test_ingest_real_3mf_extracts_geometry(tmp_path: Path, db_session: Session) 
 # --------------------------------------------------------------------------- #
 # G-code ingestion — real slicer output
 # --------------------------------------------------------------------------- #
-@_requires(CUBE_GCODE)
-def test_ingest_real_gcode_parses_slicer_metadata(
-    tmp_path: Path, db_session: Session
-) -> None:
-    use_local_storage(tmp_path)
-    model, f = _ingest_gcode(
-        db_session, CUBE_GCODE, model_name="Calibration Cube GCode"
-    )
-
-    assert f.file_type == FileType.GCODE
-    # The very first g-code on a model always claims the recommended marker.
-    assert f.is_recommended is True
-
-    md = _metadata_for(db_session, f.id)
-    assert md.printer_model == "Creality Ender-3 V3 SE"
-    assert md.layer_height_mm == pytest.approx(0.2)
-    assert md.nozzle_diameter_mm == pytest.approx(0.4)
-    assert md.filament_weight_g == pytest.approx(4.61, abs=0.05)
 
 
 @_requires(SPATULA_GCODE)
@@ -200,72 +182,11 @@ def test_ingest_real_prusa_gcode_extracts_embedded_thumbnail(
 # --------------------------------------------------------------------------- #
 # Dedup — identical real bytes collapse to one model
 # --------------------------------------------------------------------------- #
-@_requires(CUBE_STL)
-def test_reingesting_identical_real_file_dedups_to_one_model(
-    tmp_path: Path, db_session: Session
-) -> None:
-    use_local_storage(tmp_path)
-    model_a, file_v1 = _ingest_mesh(
-        db_session, CUBE_STL, FileType.STL, model_name="Cube"
-    )
-    model_b, file_v2 = _ingest_mesh(
-        db_session, CUBE_STL, FileType.STL, model_name="Cube Again"
-    )
-
-    # Same content hash → same model; the re-upload is a new version, not a clone.
-    assert model_a.id == model_b.id
-    assert file_v1.sha256 == file_v2.sha256
-    assert file_v1.version == 1
-    assert file_v2.version == 2
-
-    models = db_session.exec(select(Model).where(Model.hash == file_v1.sha256)).all()
-    assert len(models) == 1
-    files = db_session.exec(
-        select(File).where(File.model_id == model_a.id, live(File))
-    ).all()
-    assert len(files) == 2
 
 
 # --------------------------------------------------------------------------- #
 # Revisions — real benchy g-code variants
 # --------------------------------------------------------------------------- #
-@_requires(BENCHY_GCODE_A)
-@_requires(BENCHY_GCODE_B)
-def test_real_gcode_revisions_version_and_keep_first_recommended(
-    tmp_path: Path, db_session: Session
-) -> None:
-    use_local_storage(tmp_path)
-    model, first = _ingest_gcode(db_session, BENCHY_GCODE_A, model_name="3DBenchy")
-    assert first.is_recommended is True
-
-    second = add_gcode_revision_to_model(
-        session=db_session,
-        model=model,
-        staged_path=_stage_copy(BENCHY_GCODE_B),
-        original_filename=BENCHY_GCODE_B.name,
-        revision_label="1h13m variant",
-        revision_status=None,
-        revision_notes=None,
-        is_recommended=False,
-    )
-
-    assert first.sha256 != second.sha256  # genuinely different slices
-    assert second.version == 2
-    assert second.revision_label == "1h13m variant"
-
-    db_session.expire_all()
-    gcode_files = db_session.exec(
-        select(File).where(
-            File.model_id == model.id,
-            File.file_type == FileType.GCODE,
-            live(File),
-        )
-    ).all()
-    assert len(gcode_files) == 2
-    # Exactly one recommended revision, and adding a new one did not steal it.
-    recommended = [g for g in gcode_files if g.is_recommended]
-    assert len(recommended) == 1
-    assert recommended[0].id == first.id
 
 
 @_requires(BENCHY_GCODE_A)
@@ -293,3 +214,93 @@ def test_marking_new_real_revision_recommended_clears_previous(
     # The new revision took the marker; the old one was cleared. Still exactly one.
     assert refreshed_second.is_recommended is True
     assert refreshed_first.is_recommended is False
+
+
+class TestMetadata:
+    @_requires(CUBE_GCODE)
+    def test_ingest_real_gcode_parses_slicer_metadata(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        model, f = _ingest_gcode(
+            db_session, CUBE_GCODE, model_name="Calibration Cube GCode"
+        )
+
+        assert f.file_type == FileType.GCODE
+        # The very first g-code on a model always claims the recommended marker.
+        assert f.is_recommended is True
+
+        md = _metadata_for(db_session, f.id)
+        assert md.printer_model == "Creality Ender-3 V3 SE"
+        assert md.layer_height_mm == pytest.approx(0.2)
+        assert md.nozzle_diameter_mm == pytest.approx(0.4)
+        assert md.filament_weight_g == pytest.approx(4.61, abs=0.05)
+
+
+class TestModel:
+    @_requires(CUBE_STL)
+    def test_reingesting_identical_real_file_dedups_to_one_model(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        model_a, file_v1 = _ingest_mesh(
+            db_session, CUBE_STL, FileType.STL, model_name="Cube"
+        )
+        model_b, file_v2 = _ingest_mesh(
+            db_session, CUBE_STL, FileType.STL, model_name="Cube Again"
+        )
+
+        # Same content hash → same model; the re-upload is a new version, not a clone.
+        assert model_a.id == model_b.id
+        assert file_v1.sha256 == file_v2.sha256
+        assert file_v1.version == 1
+        assert file_v2.version == 2
+
+        models = db_session.exec(
+            select(Model).where(Model.hash == file_v1.sha256)
+        ).all()
+        assert len(models) == 1
+        files = db_session.exec(
+            select(File).where(File.model_id == model_a.id, live(File))
+        ).all()
+        assert len(files) == 2
+
+
+class TestFirst:
+    @_requires(BENCHY_GCODE_A)
+    @_requires(BENCHY_GCODE_B)
+    def test_real_gcode_revisions_version_and_keep_first_recommended(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        model, first = _ingest_gcode(db_session, BENCHY_GCODE_A, model_name="3DBenchy")
+        assert first.is_recommended is True
+
+        second = add_gcode_revision_to_model(
+            session=db_session,
+            model=model,
+            staged_path=_stage_copy(BENCHY_GCODE_B),
+            original_filename=BENCHY_GCODE_B.name,
+            revision_label="1h13m variant",
+            revision_status=None,
+            revision_notes=None,
+            is_recommended=False,
+        )
+
+        assert first.sha256 != second.sha256  # genuinely different slices
+        assert second.version == 2
+        assert second.revision_label == "1h13m variant"
+
+        db_session.expire_all()
+        gcode_files = db_session.exec(
+            select(File).where(
+                File.model_id == model.id,
+                File.file_type == FileType.GCODE,
+                live(File),
+            )
+        ).all()
+        assert len(gcode_files) == 2
+        # Exactly one recommended revision, and adding a new one did not steal it.
+        recommended = [g for g in gcode_files if g.is_recommended]
+        assert len(recommended) == 1
+        assert recommended[0].id == first.id

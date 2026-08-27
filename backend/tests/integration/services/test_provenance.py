@@ -143,47 +143,6 @@ def test_capture_is_idempotent_and_override_empty_wins(db_session: Session) -> N
     )
 
 
-def test_user_override_creates_field_when_capture_omits_allowlisted_field(
-    db_session: Session,
-) -> None:
-    model = _model(db_session)
-    actor = User(username="provenance-override-owner", hashed_password="not-used")
-    db_session.add(actor)
-    db_session.flush()
-    captured = provenance.upsert_capture(
-        db_session, model_id=model.id, manifest=_capture_without_title()
-    )
-
-    row = provenance.set_user_override(
-        db_session,
-        provenance_source_id=captured.source.id,
-        field_name="title",
-        value="Local title",
-        actor_id=actor.id,
-    )
-    db_session.commit()
-
-    assert row.id is not None
-    assert row.captured_value_json == '""'
-    assert row.captured_origin == "inferred"
-    assert row.captured_at is None
-    assert row.user_override_set is True
-    assert row.user_updated_by == actor.id
-    assert row.user_updated_at is not None
-    assert provenance.effective_value(row) == "Local title"
-    assert json.loads(row.user_value_json or "null") == "Local title"
-    assert (
-        len(
-            db_session.exec(
-                select(ProvenanceCapture).where(
-                    ProvenanceCapture.provenance_source_id == captured.source.id
-                )
-            ).all()
-        )
-        == 1
-    )
-
-
 def test_stable_source_id_promotes_and_merges_legacy_url_source(
     db_session: Session,
 ) -> None:
@@ -322,62 +281,6 @@ def test_source_merge_enqueues_exact_obsolete_cover_receipt_when_target_has_cove
     assert not backend.exists(obsolete_key)
 
 
-def test_source_merge_cover_delete_proof_failure_rolls_back_the_whole_merge(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    model = _model(db_session)
-    stable = provenance.upsert_capture(
-        db_session, model_id=model.id, manifest=_capture(title="Stable")
-    )
-    legacy = provenance.upsert_capture(
-        db_session, model_id=model.id, manifest=_legacy_capture(title="Legacy")
-    )
-    db_session.commit()
-    assert stable.source.id is not None and legacy.source.id is not None
-
-    backend = get_backend()
-    target_key = backend.source_cover_key(stable.source.id)
-    obsolete_key = backend.source_cover_key(legacy.source.id)
-    target_receipt = backend.create_bytes(b"stable-cover", target_key)
-    obsolete_receipt = backend.create_bytes(b"legacy-cover", obsolete_key)
-    target_cover = ModelSourceCover(
-        provenance_source_id=stable.source.id,
-        storage_key=target_key,
-        size_bytes=target_receipt.size,
-    )
-    obsolete_cover = ModelSourceCover(
-        provenance_source_id=legacy.source.id,
-        storage_key=obsolete_key,
-        size_bytes=obsolete_receipt.size,
-    )
-    db_session.add_all([target_cover, obsolete_cover])
-    record_creation(db_session, target_receipt, object_kind="model_source_cover")
-    record_creation(db_session, obsolete_receipt, object_kind="model_source_cover")
-    db_session.commit()
-
-    unverified = MagicMock(spec=StorageBackend)
-    unverified.creation_matches.return_value = False
-    monkeypatch.setattr(provenance, "get_backend", lambda: unverified)
-
-    with pytest.raises(UnsafeStorageDeleteError, match="storage_ownership_unverified"):
-        provenance.upsert_capture(
-            db_session, model_id=model.id, manifest=_capture(title="Stable update")
-        )
-    db_session.rollback()
-
-    sources = db_session.exec(
-        select(ModelProvenanceSource).where(ModelProvenanceSource.model_id == model.id)
-    ).all()
-    assert {source.id for source in sources} == {stable.source.id, legacy.source.id}
-    assert {
-        cover.provenance_source_id
-        for cover in db_session.exec(select(ModelSourceCover))
-    } == {stable.source.id, legacy.source.id}
-    assert db_session.exec(select(StorageDeleteIntent)).all() == []
-    assert backend.exists(target_key)
-    assert backend.exists(obsolete_key)
-
-
 def test_portable_attach_keeps_existing_capture_and_local_override(
     db_session: Session,
 ) -> None:
@@ -511,93 +414,6 @@ def test_preflight_does_not_disclose_a_link_to_an_unrelated_actor(
     assert result.link is result.model_id is result.file_id is None
 
 
-def test_live_reuse_trash_restore_and_hard_delete_follow_provenance_lifecycle(
-    db_session: Session,
-) -> None:
-    """Provenance follows its Model's lifecycle but never owns Artifact bytes."""
-    model = _model(db_session)
-    assert model.id is not None
-    actor = User(
-        username="provenance-admin",
-        hashed_password="not-used",
-        is_superuser=True,
-    )
-    artifact = build_file(
-        db_session,
-        model,
-        path="external/provenance-part.stl",
-        filename="part.stl",
-        file_type=FileType.STL,
-        size_bytes=1,
-        sha256="d" * 64,
-        external=True,
-    )
-    db_session.add_all([actor, artifact])
-    db_session.commit()
-    db_session.refresh(actor)
-    db_session.refresh(artifact)
-    assert actor.id is not None and artifact.id is not None
-
-    context = provenance.ProvenanceContext(
-        manifest=_capture(),
-        source_file_id="42:file-a",
-        source_filename="part.stl",
-        blob_sha256="d" * 64,
-        actor_id=actor.id,
-    )
-    link = provenance.attach_ingested_artifact(db_session, artifact, context)
-    db_session.commit()
-    source_id = link.provenance_source_id
-    capture_id = link.capture_id
-
-    assert (
-        provenance.preflight_existing_artifact(db_session, context).status == "reusable"
-    )
-
-    trash.soft_delete_model(db_session, model)
-    trashed = provenance.preflight_existing_artifact(db_session, context)
-    assert trashed.status == "trashed"
-    assert trashed.link is trashed.file_id is None
-    assert trashed.model_id == model.id
-
-    trash.restore_model(db_session, model)
-    reused = provenance.preflight_existing_artifact(db_session, context)
-    assert reused.status == "reusable"
-    assert reused.link is not None and reused.link.id == link.id
-    assert reused.model_id == model.id and reused.file_id == artifact.id
-    assert db_session.get(ModelProvenanceSource, source_id) is not None
-
-    # A capture is history, not an Artifact owner: deleting one keeps its link
-    # but clears the optional snapshot reference according to the FK contract.
-    # The shared SQLite teardown temporarily disables FK enforcement while
-    # wiping tables; restore production-equivalent enforcement for this
-    # database-level lifecycle contract.
-    db_session.commit()
-    db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
-    capture = db_session.get(ProvenanceCapture, capture_id)
-    assert capture is not None
-    db_session.delete(capture)
-    db_session.commit()
-    db_session.expire_all()
-    assert db_session.get(ProvenanceCapture, capture_id) is None
-    persisted_link = db_session.get(ArtifactProvenanceLink, link.id)
-    assert persisted_link is not None and persisted_link.capture_id is None
-
-    trash.hard_delete_model(db_session, model)
-    db_session.commit()
-
-    assert db_session.get(Model, model.id) is None
-    assert db_session.get(File, artifact.id) is None
-    assert db_session.get(ModelProvenanceSource, source_id) is None
-    assert db_session.exec(select(ModelProvenanceField)).all() == []
-    assert db_session.exec(select(ProvenanceCapture)).all() == []
-    assert db_session.exec(select(ArtifactProvenanceLink)).all() == []
-    assert {
-        intent.resource_kind
-        for intent in db_session.exec(select(StorageDeleteIntent)).all()
-    } <= {"file_thumbnail", "file_thumbnail_legacy"}
-
-
 class TestImportKey:
     def test_import_key_is_stable_and_distinguishes_blob_bytes(self) -> None:
         capture = _capture()
@@ -697,3 +513,197 @@ class TestClearUserOverride:
             ).all()
             == []
         )
+
+
+class TestUser:
+    def test_user_override_creates_field_when_capture_omits_allowlisted_field(
+        self,
+        db_session: Session,
+    ) -> None:
+        model = _model(db_session)
+        actor = User(username="provenance-override-owner", hashed_password="not-used")
+        db_session.add(actor)
+        db_session.flush()
+        captured = provenance.upsert_capture(
+            db_session, model_id=model.id, manifest=_capture_without_title()
+        )
+
+        row = provenance.set_user_override(
+            db_session,
+            provenance_source_id=captured.source.id,
+            field_name="title",
+            value="Local title",
+            actor_id=actor.id,
+        )
+        db_session.commit()
+
+        assert row.id is not None
+        assert row.captured_value_json == '""'
+        assert row.captured_origin == "inferred"
+        assert row.captured_at is None
+        assert row.user_override_set is True
+        assert row.user_updated_by == actor.id
+        assert row.user_updated_at is not None
+        assert provenance.effective_value(row) == "Local title"
+        assert json.loads(row.user_value_json or "null") == "Local title"
+        assert (
+            len(
+                db_session.exec(
+                    select(ProvenanceCapture).where(
+                        ProvenanceCapture.provenance_source_id == captured.source.id
+                    )
+                ).all()
+            )
+            == 1
+        )
+
+
+class TestProvenance:
+    def test_live_reuse_trash_restore_and_hard_delete_follow_provenance_lifecycle(
+        self,
+        db_session: Session,
+    ) -> None:
+        """Provenance follows its Model's lifecycle but never owns Artifact bytes."""
+        model = _model(db_session)
+        assert model.id is not None
+        actor = User(
+            username="provenance-admin",
+            hashed_password="not-used",
+            is_superuser=True,
+        )
+        artifact = build_file(
+            db_session,
+            model,
+            path="external/provenance-part.stl",
+            filename="part.stl",
+            file_type=FileType.STL,
+            size_bytes=1,
+            sha256="d" * 64,
+            external=True,
+        )
+        db_session.add_all([actor, artifact])
+        db_session.commit()
+        db_session.refresh(actor)
+        db_session.refresh(artifact)
+        assert actor.id is not None and artifact.id is not None
+
+        context = provenance.ProvenanceContext(
+            manifest=_capture(),
+            source_file_id="42:file-a",
+            source_filename="part.stl",
+            blob_sha256="d" * 64,
+            actor_id=actor.id,
+        )
+        link = provenance.attach_ingested_artifact(db_session, artifact, context)
+        db_session.commit()
+        source_id = link.provenance_source_id
+        capture_id = link.capture_id
+
+        assert (
+            provenance.preflight_existing_artifact(db_session, context).status
+            == "reusable"
+        )
+
+        trash.soft_delete_model(db_session, model)
+        trashed = provenance.preflight_existing_artifact(db_session, context)
+        assert trashed.status == "trashed"
+        assert trashed.link is trashed.file_id is None
+        assert trashed.model_id == model.id
+
+        trash.restore_model(db_session, model)
+        reused = provenance.preflight_existing_artifact(db_session, context)
+        assert reused.status == "reusable"
+        assert reused.link is not None and reused.link.id == link.id
+        assert reused.model_id == model.id and reused.file_id == artifact.id
+        assert db_session.get(ModelProvenanceSource, source_id) is not None
+
+        # A capture is history, not an Artifact owner: deleting one keeps its link
+        # but clears the optional snapshot reference according to the FK contract.
+        # The shared SQLite teardown temporarily disables FK enforcement while
+        # wiping tables; restore production-equivalent enforcement for this
+        # database-level lifecycle contract.
+        db_session.commit()
+        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
+        capture = db_session.get(ProvenanceCapture, capture_id)
+        assert capture is not None
+        db_session.delete(capture)
+        db_session.commit()
+        db_session.expire_all()
+        assert db_session.get(ProvenanceCapture, capture_id) is None
+        persisted_link = db_session.get(ArtifactProvenanceLink, link.id)
+        assert persisted_link is not None and persisted_link.capture_id is None
+
+        trash.hard_delete_model(db_session, model)
+        db_session.commit()
+
+        assert db_session.get(Model, model.id) is None
+        assert db_session.get(File, artifact.id) is None
+        assert db_session.get(ModelProvenanceSource, source_id) is None
+        assert db_session.exec(select(ModelProvenanceField)).all() == []
+        assert db_session.exec(select(ProvenanceCapture)).all() == []
+        assert db_session.exec(select(ArtifactProvenanceLink)).all() == []
+        assert {
+            intent.resource_kind
+            for intent in db_session.exec(select(StorageDeleteIntent)).all()
+        } <= {"file_thumbnail", "file_thumbnail_legacy"}
+
+
+class TestDelete:
+    def test_source_merge_cover_delete_proof_failure_rolls_back_the_whole_merge(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        model = _model(db_session)
+        stable = provenance.upsert_capture(
+            db_session, model_id=model.id, manifest=_capture(title="Stable")
+        )
+        legacy = provenance.upsert_capture(
+            db_session, model_id=model.id, manifest=_legacy_capture(title="Legacy")
+        )
+        db_session.commit()
+        assert stable.source.id is not None and legacy.source.id is not None
+
+        backend = get_backend()
+        target_key = backend.source_cover_key(stable.source.id)
+        obsolete_key = backend.source_cover_key(legacy.source.id)
+        target_receipt = backend.create_bytes(b"stable-cover", target_key)
+        obsolete_receipt = backend.create_bytes(b"legacy-cover", obsolete_key)
+        target_cover = ModelSourceCover(
+            provenance_source_id=stable.source.id,
+            storage_key=target_key,
+            size_bytes=target_receipt.size,
+        )
+        obsolete_cover = ModelSourceCover(
+            provenance_source_id=legacy.source.id,
+            storage_key=obsolete_key,
+            size_bytes=obsolete_receipt.size,
+        )
+        db_session.add_all([target_cover, obsolete_cover])
+        record_creation(db_session, target_receipt, object_kind="model_source_cover")
+        record_creation(db_session, obsolete_receipt, object_kind="model_source_cover")
+        db_session.commit()
+
+        unverified = MagicMock(spec=StorageBackend)
+        unverified.creation_matches.return_value = False
+        monkeypatch.setattr(provenance, "get_backend", lambda: unverified)
+
+        with pytest.raises(
+            UnsafeStorageDeleteError, match="storage_ownership_unverified"
+        ):
+            provenance.upsert_capture(
+                db_session, model_id=model.id, manifest=_capture(title="Stable update")
+            )
+        db_session.rollback()
+
+        sources = db_session.exec(
+            select(ModelProvenanceSource).where(
+                ModelProvenanceSource.model_id == model.id
+            )
+        ).all()
+        assert {source.id for source in sources} == {stable.source.id, legacy.source.id}
+        assert {
+            cover.provenance_source_id
+            for cover in db_session.exec(select(ModelSourceCover))
+        } == {stable.source.id, legacy.source.id}
+        assert db_session.exec(select(StorageDeleteIntent)).all() == []
+        assert backend.exists(target_key)
+        assert backend.exists(obsolete_key)

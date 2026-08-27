@@ -235,17 +235,18 @@ def test_sync_matches_filename_then_marks_missing(db_session: Session):
     assert rows[0].missing_since is not None
 
 
-def test_sync_keeps_unmatched_external_file(db_session: Session):
-    printer = build_printer(
-        db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
-    )
+class TestFile:
+    def test_sync_keeps_unmatched_external_file(self, db_session: Session):
+        printer = build_printer(
+            db_session, name="Ender", moonraker_url="http://10.0.0.1:7125"
+        )
 
-    sync_printer_files(
-        db_session,
-        printer_id=printer.id,
-        remote_files=[{"path": "external.gcode", "size": 789}],
-    )
+        sync_printer_files(
+            db_session,
+            printer_id=printer.id,
+            remote_files=[{"path": "external.gcode", "size": 789}],
+        )
 
-    row = db_session.exec(select(PrinterFile)).one()
-    assert row.file_id is None
-    assert row.matched_by == "external"
+        row = db_session.exec(select(PrinterFile)).one()
+        assert row.file_id is None
+        assert row.matched_by == "external"

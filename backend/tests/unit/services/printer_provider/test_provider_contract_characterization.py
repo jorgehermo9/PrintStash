@@ -270,93 +270,6 @@ async def test_centauri_status_contract_uses_canonical_snapshot_shape() -> None:
     connection.close.assert_awaited_once_with()
 
 
-@pytest.mark.parametrize(
-    ("provider", "supported", "support_level", "requires_ready_before_send"),
-    [
-        (PrinterProvider.MOONRAKER, frozenset(Capability), "stable", False),
-        (
-            PrinterProvider.BAMBU_LAN,
-            frozenset(
-                {
-                    Capability.START,
-                    Capability.PAUSE,
-                    Capability.RESUME,
-                    Capability.CANCEL,
-                    Capability.LIVE_STATUS,
-                    Capability.UPLOAD,
-                    Capability.MATERIAL_STATE,
-                }
-            ),
-            "beta",
-            True,
-        ),
-        (
-            PrinterProvider.PRUSALINK,
-            frozenset(
-                {
-                    Capability.START,
-                    Capability.PAUSE,
-                    Capability.RESUME,
-                    Capability.CANCEL,
-                    Capability.LIVE_STATUS,
-                    Capability.UPLOAD,
-                    Capability.LIST_FILES,
-                    Capability.DELETE_FILE,
-                    Capability.SERVER_INFO,
-                }
-            ),
-            "beta",
-            False,
-        ),
-        (
-            PrinterProvider.OCTOPRINT,
-            frozenset(
-                {
-                    Capability.START,
-                    Capability.PAUSE,
-                    Capability.RESUME,
-                    Capability.CANCEL,
-                    Capability.LIVE_STATUS,
-                    Capability.UPLOAD,
-                    Capability.LIST_FILES,
-                    Capability.DELETE_FILE,
-                    Capability.SERVER_INFO,
-                }
-            ),
-            "beta",
-            False,
-        ),
-        (
-            PrinterProvider.ELEGOO_CENTAURI,
-            frozenset(
-                {
-                    Capability.START,
-                    Capability.PAUSE,
-                    Capability.RESUME,
-                    Capability.CANCEL,
-                    Capability.LIVE_STATUS,
-                    Capability.SERVER_INFO,
-                    Capability.UPLOAD,
-                }
-            ),
-            "beta",
-            False,
-        ),
-    ],
-)
-def test_provider_capability_contract_is_characterized(
-    provider: PrinterProvider,
-    supported: frozenset[Capability],
-    support_level: str,
-    requires_ready_before_send: bool,
-) -> None:
-    capabilities = capabilities_for_provider(provider)
-
-    assert capabilities.supported == supported
-    assert capabilities.support_level == support_level
-    assert capabilities.requires_ready_before_send is requires_ready_before_send
-
-
 def test_artifact_capture_is_an_optional_bambu_only_extension() -> None:
     providers = {
         PrinterProvider.MOONRAKER: MoonrakerProvider("http://printer.invalid"),
@@ -412,17 +325,110 @@ def test_bambu_project_request_exposes_current_capture_hint_shape() -> None:
     }
 
 
-@pytest.mark.asyncio
-async def test_bambu_download_artifact_extension_delegates_with_byte_limit(
-    tmp_path: Path,
-) -> None:
-    provider = BambuLanProvider("192.0.2.10", "TEST-SERIAL", "test-code")
-    destination = tmp_path / "benchy.3mf"
+class TestCapability:
+    @pytest.mark.parametrize(
+        ("provider", "supported", "support_level", "requires_ready_before_send"),
+        [
+            (PrinterProvider.MOONRAKER, frozenset(Capability), "stable", False),
+            (
+                PrinterProvider.BAMBU_LAN,
+                frozenset(
+                    {
+                        Capability.START,
+                        Capability.PAUSE,
+                        Capability.RESUME,
+                        Capability.CANCEL,
+                        Capability.LIVE_STATUS,
+                        Capability.UPLOAD,
+                        Capability.MATERIAL_STATE,
+                    }
+                ),
+                "beta",
+                True,
+            ),
+            (
+                PrinterProvider.PRUSALINK,
+                frozenset(
+                    {
+                        Capability.START,
+                        Capability.PAUSE,
+                        Capability.RESUME,
+                        Capability.CANCEL,
+                        Capability.LIVE_STATUS,
+                        Capability.UPLOAD,
+                        Capability.LIST_FILES,
+                        Capability.DELETE_FILE,
+                        Capability.SERVER_INFO,
+                    }
+                ),
+                "beta",
+                False,
+            ),
+            (
+                PrinterProvider.OCTOPRINT,
+                frozenset(
+                    {
+                        Capability.START,
+                        Capability.PAUSE,
+                        Capability.RESUME,
+                        Capability.CANCEL,
+                        Capability.LIVE_STATUS,
+                        Capability.UPLOAD,
+                        Capability.LIST_FILES,
+                        Capability.DELETE_FILE,
+                        Capability.SERVER_INFO,
+                    }
+                ),
+                "beta",
+                False,
+            ),
+            (
+                PrinterProvider.ELEGOO_CENTAURI,
+                frozenset(
+                    {
+                        Capability.START,
+                        Capability.PAUSE,
+                        Capability.RESUME,
+                        Capability.CANCEL,
+                        Capability.LIVE_STATUS,
+                        Capability.SERVER_INFO,
+                        Capability.UPLOAD,
+                    }
+                ),
+                "beta",
+                False,
+            ),
+        ],
+    )
+    def test_provider_capability_contract_is_characterized(
+        self,
+        provider: PrinterProvider,
+        supported: frozenset[Capability],
+        support_level: str,
+        requires_ready_before_send: bool,
+    ) -> None:
+        capabilities = capabilities_for_provider(provider)
 
-    with patch.object(provider, "_download_via_ftps") as download:
-        result = await provider.download_artifact(
+        assert capabilities.supported == supported
+        assert capabilities.support_level == support_level
+        assert capabilities.requires_ready_before_send is requires_ready_before_send
+
+
+class TestDownloadArtifact:
+    @pytest.mark.asyncio
+    async def test_bambu_download_artifact_extension_delegates_with_byte_limit(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        provider = BambuLanProvider("192.0.2.10", "TEST-SERIAL", "test-code")
+        destination = tmp_path / "benchy.3mf"
+
+        with patch.object(provider, "_download_via_ftps") as download:
+            result = await provider.download_artifact(
+                "/cache/benchy.3mf", destination, max_bytes=4096
+            )
+
+        assert result is None
+        download.assert_called_once_with(
             "/cache/benchy.3mf", destination, max_bytes=4096
         )
-
-    assert result is None
-    download.assert_called_once_with("/cache/benchy.3mf", destination, max_bytes=4096)

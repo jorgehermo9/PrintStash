@@ -53,20 +53,6 @@ class _FakeRemoteBackend(LocalStorageBackend):
         return LocalStorageBackend().create_stream(src, str(self._resolve(key)))
 
 
-def test_live_and_trashed_scopes(db_session: Session) -> None:
-    m = build_model(db_session, name="ScopeTest", slug="scope-test", hash="f" * 64)
-
-    assert m in db_session.exec(select(Model).where(live(Model))).all()
-    assert m not in db_session.exec(select(Model).where(trashed(Model))).all()
-
-    soft_delete_model(db_session, m)
-    assert m not in db_session.exec(select(Model).where(live(Model))).all()
-    assert m in db_session.exec(select(Model).where(trashed(Model))).all()
-
-    restore_model(db_session, m)
-    assert m in db_session.exec(select(Model).where(live(Model))).all()
-
-
 # ---------------------------------------------------------------------------
 # S3 exists(): only a genuine miss is False
 # ---------------------------------------------------------------------------
@@ -576,3 +562,18 @@ class TestInitBackend:
         assert storage_backend.init_backend() is backend
         assert events == ["validated"]
         assert storage_backend.get_backend() is backend
+
+
+class TestTrashed:
+    def test_live_and_trashed_scopes(self, db_session: Session) -> None:
+        m = build_model(db_session, name="ScopeTest", slug="scope-test", hash="f" * 64)
+
+        assert m in db_session.exec(select(Model).where(live(Model))).all()
+        assert m not in db_session.exec(select(Model).where(trashed(Model))).all()
+
+        soft_delete_model(db_session, m)
+        assert m not in db_session.exec(select(Model).where(live(Model))).all()
+        assert m in db_session.exec(select(Model).where(trashed(Model))).all()
+
+        restore_model(db_session, m)
+        assert m in db_session.exec(select(Model).where(live(Model))).all()

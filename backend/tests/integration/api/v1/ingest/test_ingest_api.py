@@ -254,38 +254,6 @@ def test_ingest_publishes_terminal_only_after_fresh_durability_check(
     assert status["committed_at"] is not None
 
 
-def test_exception_after_commit_is_a_durable_partial_result(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    use_local_storage(tmp_path)
-
-    def inject(stage: str, _job_id: str) -> None:
-        if stage == "after_commit":
-            raise RuntimeError("injected_after_commit")
-
-    monkeypatch.setattr(ingestion_service, "_fault_injection_checkpoint", inject)
-    response = client.post(
-        "/api/v1/ingest/model",
-        headers=auth_headers,
-        files={"file": ("post-commit.stl", _cube_stl(), "application/sla")},
-        data={"model_name": "Post Commit Cube"},
-    )
-    assert response.status_code == 202
-    job_id = response.json()["job_id"]
-    status = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers).json()
-
-    assert status["state"] == "completed"
-    assert status["completion"] == "partial"
-    assert status["thumbnail_reason"] == "post_commit_exception"
-    assert status["retryable"] is True
-    assert db_session.get(Model, status["model_id"]) is not None
-    assert db_session.get(File, status["file_id"]) is not None
-
-
 def test_issue_67_over_cap_stl_persists_authenticated_webp_fallback(
     tmp_path: Path,
     client: TestClient,
@@ -358,107 +326,6 @@ def test_issue_67_upload_survives_pruning_completed_inbox_job(
     )
 
     assert response.status_code == 202, response.text
-
-
-def test_reuploading_deleted_model_restores_it(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-
-    first = completed_job(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("cube.stl", _cube_stl(), "application/sla")},
-            data={"model_name": "Cube"},
-        ),
-    )
-    model_id = first["model_id"]
-
-    delete = client.delete(f"/api/v1/models/{model_id}", headers=auth_headers)
-    assert delete.status_code == 204
-    assert (
-        client.get(f"/api/v1/models/{model_id}", headers=auth_headers).status_code
-        == 404
-    )
-
-    second = completed_job(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("cube.stl", _cube_stl(), "application/sla")},
-            data={"model_name": "Cube"},
-        ),
-    )
-
-    assert second["model_id"] == model_id
-    model = db_session.get(Model, model_id)
-    assert model is not None
-    assert model.deleted_at is None
-    detail = client.get(f"/api/v1/models/{model_id}", headers=auth_headers)
-    assert detail.status_code == 200, detail.text
-    assert len(detail.json()["files"]) == 2
-
-
-def test_trash_can_restore_and_purge_model(
-    tmp_path: Path,
-    client: TestClient,
-    db_session: Session,
-    auth_headers: dict[str, str],
-) -> None:
-    use_local_storage(tmp_path)
-
-    payload = completed_job(
-        client,
-        client.post(
-            "/api/v1/ingest/model",
-            headers=auth_headers,
-            files={"file": ("cube.stl", _cube_stl(), "application/sla")},
-            data={"model_name": "Cube"},
-        ),
-    )
-    model_id = payload["model_id"]
-    file_row = db_session.get(File, payload["file_id"])
-    assert file_row is not None
-    blob_path = file_row.path
-    thumb_path = get_backend().thumbnail_key(file_row.id)
-
-    delete = client.delete(f"/api/v1/models/{model_id}", headers=auth_headers)
-    assert delete.status_code == 204
-
-    trash = client.get("/api/v1/models/trash", headers=auth_headers)
-    assert trash.status_code == 200, trash.text
-    assert trash.json()[0]["id"] == model_id
-    assert trash.json()[0]["file_count"] == 1
-    assert trash.json()[0]["expires_at"] is not None
-
-    restored = client.post(f"/api/v1/models/{model_id}/restore", headers=auth_headers)
-    assert restored.status_code == 200, restored.text
-    assert restored.json()["id"] == model_id
-    assert client.get("/api/v1/models/trash", headers=auth_headers).json() == []
-
-    delete = client.delete(f"/api/v1/models/{model_id}", headers=auth_headers)
-    assert delete.status_code == 204
-    purged = client.delete(f"/api/v1/models/{model_id}/purge", headers=auth_headers)
-    assert purged.status_code == 200, purged.text
-    assert purged.json() == {
-        "purged_model_ids": [model_id],
-        "purged_count": 1,
-        "storage_completed": 2,
-        "storage_pending": 0,
-        "storage_blocked": 0,
-        "resources_blocked": 0,
-    }
-    db_session.expire_all()
-    assert db_session.get(Model, model_id) is None
-    assert db_session.get(File, payload["file_id"]) is None
-    assert not get_backend().exists(blob_path)
-    assert not get_backend().exists(thumb_path)
 
 
 def test_purge_expired_trash_uses_retention_setting(
@@ -680,31 +547,6 @@ def test_ingest_refuses_an_upload_when_staging_is_full(
     # 507, not 500: the request was fine, the disk was not.
     assert response.status_code == 507, response.text
     assert response.json()["detail"] == "staging_capacity_exceeded"
-
-
-def test_ingest_removes_the_staged_file_when_staging_is_full(
-    tmp_path: Path,
-    client: TestClient,
-    auth_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    use_local_storage(tmp_path)
-    monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
-
-    client.post(
-        "/api/v1/ingest/orca",
-        headers=auth_headers,
-        files={"file": ("part.gcode", b"G28\n", "text/plain")},
-    )
-
-    # The bytes were written before the capacity check; leaving them would make
-    # the next request's check even more likely to fail.
-    from app.core.config import settings
-
-    staged = (
-        list(settings.incoming_dir.iterdir()) if settings.incoming_dir.exists() else []
-    )
-    assert staged == []
 
 
 def test_ingest_fails_the_job_when_the_staging_lease_cannot_be_taken(
@@ -1032,3 +874,173 @@ class TestGetJob:
         )
         assert response.status_code == 404, response.text
         assert response.json()["detail"] == "job_not_found"
+
+
+class TestFile:
+    def test_ingest_removes_the_staged_file_when_staging_is_full(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        use_local_storage(tmp_path)
+        monkeypatch.setitem(_overlay, "staging_min_free_gb", 1_000_000)
+
+        client.post(
+            "/api/v1/ingest/orca",
+            headers=auth_headers,
+            files={"file": ("part.gcode", b"G28\n", "text/plain")},
+        )
+
+        # The bytes were written before the capacity check; leaving them would make
+        # the next request's check even more likely to fail.
+        from app.core.config import settings
+
+        staged = (
+            list(settings.incoming_dir.iterdir())
+            if settings.incoming_dir.exists()
+            else []
+        )
+        assert staged == []
+
+
+class TestModel:
+    def test_reuploading_deleted_model_restores_it(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+
+        first = completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("cube.stl", _cube_stl(), "application/sla")},
+                data={"model_name": "Cube"},
+            ),
+        )
+        model_id = first["model_id"]
+
+        delete = client.delete(f"/api/v1/models/{model_id}", headers=auth_headers)
+        assert delete.status_code == 204
+        assert (
+            client.get(f"/api/v1/models/{model_id}", headers=auth_headers).status_code
+            == 404
+        )
+
+        second = completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("cube.stl", _cube_stl(), "application/sla")},
+                data={"model_name": "Cube"},
+            ),
+        )
+
+        assert second["model_id"] == model_id
+        model = db_session.get(Model, model_id)
+        assert model is not None
+        assert model.deleted_at is None
+        detail = client.get(f"/api/v1/models/{model_id}", headers=auth_headers)
+        assert detail.status_code == 200, detail.text
+        assert len(detail.json()["files"]) == 2
+
+    def test_trash_can_restore_and_purge_model(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+    ) -> None:
+        use_local_storage(tmp_path)
+
+        payload = completed_job(
+            client,
+            client.post(
+                "/api/v1/ingest/model",
+                headers=auth_headers,
+                files={"file": ("cube.stl", _cube_stl(), "application/sla")},
+                data={"model_name": "Cube"},
+            ),
+        )
+        model_id = payload["model_id"]
+        file_row = db_session.get(File, payload["file_id"])
+        assert file_row is not None
+        blob_path = file_row.path
+        thumb_path = get_backend().thumbnail_key(file_row.id)
+
+        delete = client.delete(f"/api/v1/models/{model_id}", headers=auth_headers)
+        assert delete.status_code == 204
+
+        trash = client.get("/api/v1/models/trash", headers=auth_headers)
+        assert trash.status_code == 200, trash.text
+        assert trash.json()[0]["id"] == model_id
+        assert trash.json()[0]["file_count"] == 1
+        assert trash.json()[0]["expires_at"] is not None
+
+        restored = client.post(
+            f"/api/v1/models/{model_id}/restore", headers=auth_headers
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["id"] == model_id
+        assert client.get("/api/v1/models/trash", headers=auth_headers).json() == []
+
+        delete = client.delete(f"/api/v1/models/{model_id}", headers=auth_headers)
+        assert delete.status_code == 204
+        purged = client.delete(f"/api/v1/models/{model_id}/purge", headers=auth_headers)
+        assert purged.status_code == 200, purged.text
+        assert purged.json() == {
+            "purged_model_ids": [model_id],
+            "purged_count": 1,
+            "storage_completed": 2,
+            "storage_pending": 0,
+            "storage_blocked": 0,
+            "resources_blocked": 0,
+        }
+        db_session.expire_all()
+        assert db_session.get(Model, model_id) is None
+        assert db_session.get(File, payload["file_id"]) is None
+        assert not get_backend().exists(blob_path)
+        assert not get_backend().exists(thumb_path)
+
+
+class TestCommit:
+    def test_exception_after_commit_is_a_durable_partial_result(
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
+        auth_headers: dict[str, str],
+        monkeypatch,
+    ) -> None:
+        use_local_storage(tmp_path)
+
+        def inject(stage: str, _job_id: str) -> None:
+            if stage == "after_commit":
+                raise RuntimeError("injected_after_commit")
+
+        monkeypatch.setattr(ingestion_service, "_fault_injection_checkpoint", inject)
+        response = client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={"file": ("post-commit.stl", _cube_stl(), "application/sla")},
+            data={"model_name": "Post Commit Cube"},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["job_id"]
+        status = client.get(
+            f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers
+        ).json()
+
+        assert status["state"] == "completed"
+        assert status["completion"] == "partial"
+        assert status["thumbnail_reason"] == "post_commit_exception"
+        assert status["retryable"] is True
+        assert db_session.get(Model, status["model_id"]) is not None
+        assert db_session.get(File, status["file_id"]) is not None

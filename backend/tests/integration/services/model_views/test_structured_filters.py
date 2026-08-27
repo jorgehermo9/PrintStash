@@ -127,36 +127,6 @@ def test_uploaded_after_and_before_bound_the_window(db_session: Session) -> None
     assert [row.id for row in before] == [early.id]
 
 
-def test_slicer_name_and_printer_model_filters(db_session: Session) -> None:
-    user = build_user(db_session, "slicer-admin", superuser=True)
-    orca = build_model(db_session, "Orca")
-    prusa = build_model(db_session, "Prusa")
-    build_file(
-        db_session,
-        orca,
-        filename="orca.gcode",
-        file_type=FileType.GCODE,
-        metadata={"slicer_name": "OrcaSlicer", "printer_model": "Voron 2.4"},
-    )
-    build_file(
-        db_session,
-        prusa,
-        filename="prusa.gcode",
-        file_type=FileType.GCODE,
-        metadata={"slicer_name": "PrusaSlicer", "printer_model": "MK4"},
-    )
-
-    by_slicer = model_views.list_items(
-        db_session, user, filters=ModelFilters(slicer_name=["orcaslicer"])
-    )
-    assert [row.id for row in by_slicer] == [orca.id]
-
-    by_printer = model_views.list_items(
-        db_session, user, filters=ModelFilters(printer_model=["mk4"])
-    )
-    assert [row.id for row in by_printer] == [prusa.id]
-
-
 def test_printed_true_and_false_filters(db_session: Session) -> None:
     user = build_user(db_session, "printed-admin", superuser=True)
     printed = build_model(db_session, "Printed")
@@ -223,86 +193,6 @@ def test_print_outcome_filter(db_session: Session) -> None:
 # --------------------------------------------------------------------------- #
 # _filtered_stmt — direct/indirect collection scoping, tags, printer presence
 # --------------------------------------------------------------------------- #
-
-
-def test_direct_filter_with_collection_restricts_to_exact_path(
-    db_session: Session,
-) -> None:
-    user = build_user(db_session, "direct-admin", superuser=True)
-    parent = Collection(name="Parent", slug="parent", path="parent")
-    child = build_collection(
-        db_session, name="Child", slug="child", path="parent/child"
-    )
-    db_session.add(parent)
-    db_session.commit()
-    db_session.refresh(parent)
-    db_session.refresh(child)
-    direct_model = Model(
-        name="Direct", slug="direct", hash="b" * 64, collection_id=parent.id
-    )
-    build_model(
-        db_session, name="Nested", slug="nested", hash="c" * 64, collection_id=child.id
-    )
-    db_session.add(direct_model)
-    db_session.commit()
-    db_session.refresh(direct_model)
-
-    rows = model_views.list_items(
-        db_session, user, filters=ModelFilters(collection="parent", direct=True)
-    )
-    assert [row.id for row in rows] == [direct_model.id]
-
-
-def test_direct_filter_without_collection_matches_uncategorised_only(
-    db_session: Session,
-) -> None:
-    user = build_user(db_session, "direct-admin2", superuser=True)
-    col = build_collection(db_session, name="Cat", slug="cat", path="cat")
-    categorised = Model(
-        name="Categorised", slug="categorised", hash="d" * 64, collection_id=col.id
-    )
-    uncategorised = build_model(
-        db_session, name="Uncategorised", slug="uncategorised", hash="e" * 64
-    )
-    db_session.add(categorised)
-    db_session.commit()
-    db_session.refresh(uncategorised)
-
-    rows = model_views.list_items(db_session, user, filters=ModelFilters(direct=True))
-    ids = {row.id for row in rows}
-    assert uncategorised.id in ids
-    assert categorised.id not in ids
-
-
-def test_indirect_collection_filter_includes_descendants(db_session: Session) -> None:
-    user = build_user(db_session, "indirect-admin", superuser=True)
-    parent = Collection(name="Parent2", slug="parent2", path="parent2")
-    child = build_collection(
-        db_session, name="Child2", slug="child2", path="parent2/child2"
-    )
-    db_session.add(parent)
-    db_session.commit()
-    db_session.refresh(parent)
-    db_session.refresh(child)
-    direct_model = Model(
-        name="Direct2", slug="direct2", hash="f" * 64, collection_id=parent.id
-    )
-    nested_model = build_model(
-        db_session,
-        name="Nested2",
-        slug="nested2",
-        hash="1" * 64,
-        collection_id=child.id,
-    )
-    db_session.add(direct_model)
-    db_session.commit()
-
-    rows = model_views.list_items(
-        db_session, user, filters=ModelFilters(collection="parent2")
-    )
-    ids = {row.id for row in rows}
-    assert direct_model.id in ids
-    assert nested_model.id in ids
 
 
 def test_tag_filter_matches_by_slug(db_session: Session) -> None:
@@ -448,3 +338,123 @@ class TestPrintStatistics:
     ) -> None:
         result = model_views.print_statistics(db_session, "not-a-real-period")
         assert result.period == "30d"
+
+
+class TestCollection:
+    def test_direct_filter_with_collection_restricts_to_exact_path(
+        self,
+        db_session: Session,
+    ) -> None:
+        user = build_user(db_session, "direct-admin", superuser=True)
+        parent = Collection(name="Parent", slug="parent", path="parent")
+        child = build_collection(
+            db_session, name="Child", slug="child", path="parent/child"
+        )
+        db_session.add(parent)
+        db_session.commit()
+        db_session.refresh(parent)
+        db_session.refresh(child)
+        direct_model = Model(
+            name="Direct", slug="direct", hash="b" * 64, collection_id=parent.id
+        )
+        build_model(
+            db_session,
+            name="Nested",
+            slug="nested",
+            hash="c" * 64,
+            collection_id=child.id,
+        )
+        db_session.add(direct_model)
+        db_session.commit()
+        db_session.refresh(direct_model)
+
+        rows = model_views.list_items(
+            db_session, user, filters=ModelFilters(collection="parent", direct=True)
+        )
+        assert [row.id for row in rows] == [direct_model.id]
+
+    def test_direct_filter_without_collection_matches_uncategorised_only(
+        self,
+        db_session: Session,
+    ) -> None:
+        user = build_user(db_session, "direct-admin2", superuser=True)
+        col = build_collection(db_session, name="Cat", slug="cat", path="cat")
+        categorised = Model(
+            name="Categorised", slug="categorised", hash="d" * 64, collection_id=col.id
+        )
+        uncategorised = build_model(
+            db_session, name="Uncategorised", slug="uncategorised", hash="e" * 64
+        )
+        db_session.add(categorised)
+        db_session.commit()
+        db_session.refresh(uncategorised)
+
+        rows = model_views.list_items(
+            db_session, user, filters=ModelFilters(direct=True)
+        )
+        ids = {row.id for row in rows}
+        assert uncategorised.id in ids
+        assert categorised.id not in ids
+
+    def test_indirect_collection_filter_includes_descendants(
+        self, db_session: Session
+    ) -> None:
+        user = build_user(db_session, "indirect-admin", superuser=True)
+        parent = Collection(name="Parent2", slug="parent2", path="parent2")
+        child = build_collection(
+            db_session, name="Child2", slug="child2", path="parent2/child2"
+        )
+        db_session.add(parent)
+        db_session.commit()
+        db_session.refresh(parent)
+        db_session.refresh(child)
+        direct_model = Model(
+            name="Direct2", slug="direct2", hash="f" * 64, collection_id=parent.id
+        )
+        nested_model = build_model(
+            db_session,
+            name="Nested2",
+            slug="nested2",
+            hash="1" * 64,
+            collection_id=child.id,
+        )
+        db_session.add(direct_model)
+        db_session.commit()
+
+        rows = model_views.list_items(
+            db_session, user, filters=ModelFilters(collection="parent2")
+        )
+        ids = {row.id for row in rows}
+        assert direct_model.id in ids
+        assert nested_model.id in ids
+
+
+class TestModel:
+    def test_slicer_name_and_printer_model_filters(self, db_session: Session) -> None:
+        user = build_user(db_session, "slicer-admin", superuser=True)
+        orca = build_model(db_session, "Orca")
+        prusa = build_model(db_session, "Prusa")
+        build_file(
+            db_session,
+            orca,
+            filename="orca.gcode",
+            file_type=FileType.GCODE,
+            metadata={"slicer_name": "OrcaSlicer", "printer_model": "Voron 2.4"},
+        )
+        build_file(
+            db_session,
+            prusa,
+            filename="prusa.gcode",
+            file_type=FileType.GCODE,
+            metadata={"slicer_name": "PrusaSlicer", "printer_model": "MK4"},
+        )
+
+        by_slicer = model_views.list_items(
+            db_session, user, filters=ModelFilters(slicer_name=["orcaslicer"])
+        )
+        assert [row.id for row in by_slicer] == [orca.id]
+
+        by_printer = model_views.list_items(
+            db_session, user, filters=ModelFilters(printer_model=["mk4"])
+        )
+        assert [row.id for row in by_printer] == [prusa.id]

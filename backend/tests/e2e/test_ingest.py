@@ -196,41 +196,6 @@ def _embedded_3mf() -> tuple[bytes, tuple[int, int, int]]:
 
 
 @pytest.mark.asyncio
-async def test_gcode_upload_parses_metadata_and_dedups(api, tmp_path, e2e_db):
-    headers = await _setup_and_login(api, tmp_path)
-
-    job = await _await_job(
-        api, headers, (await _upload(api, headers, model_name="Benchy"))["job_id"]
-    )
-    assert job["state"] == "completed", job
-
-    # The model now exists and is listable.
-    listing = await api.get("/api/v1/models", headers=headers)
-    assert listing.status_code == 200, listing.text
-    models = listing.json()
-    assert any(m["name"] == "Benchy" for m in models), models
-
-    # Parsed slicer metadata is attached to the persisted file.
-    from sqlmodel import select
-
-    from app.db.models import Metadata
-
-    meta = e2e_db.exec(select(Metadata)).first()
-    assert meta is not None, "expected extracted metadata row"
-    # The OrcaSlicer benchy fixture carries a real layer height + slicer name.
-    assert (meta.slicer_name or "").lower().startswith("orca") or meta.layer_height_mm
-
-    # Re-uploading identical bytes dedups by content hash (no second model).
-    dup = await _await_job(
-        api, headers, (await _upload(api, headers, model_name="Benchy Copy"))["job_id"]
-    )
-    assert dup["state"] in ("duplicate", "completed"), dup
-    listing2 = (await api.get("/api/v1/models", headers=headers)).json()
-    benchies = [m for m in listing2 if m["name"] in ("Benchy", "Benchy Copy")]
-    assert len(benchies) == 1, f"dedup failed, got {benchies}"
-
-
-@pytest.mark.asyncio
 async def test_over_cap_mesh_upload_has_a_visible_thumbnail(
     api, tmp_path, e2e_db, monkeypatch
 ):
@@ -311,3 +276,43 @@ async def test_3mf_upload_persists_embedded_preview(api, tmp_path, e2e_db, monke
     with Image.open(io.BytesIO(thumbnail.content)) as image:
         pixels = np.asarray(image.convert("RGB"))
     assert np.all(pixels == color)
+
+
+class TestMetadata:
+    @pytest.mark.asyncio
+    async def test_gcode_upload_parses_metadata_and_dedups(self, api, tmp_path, e2e_db):
+        headers = await _setup_and_login(api, tmp_path)
+
+        job = await _await_job(
+            api, headers, (await _upload(api, headers, model_name="Benchy"))["job_id"]
+        )
+        assert job["state"] == "completed", job
+
+        # The model now exists and is listable.
+        listing = await api.get("/api/v1/models", headers=headers)
+        assert listing.status_code == 200, listing.text
+        models = listing.json()
+        assert any(m["name"] == "Benchy" for m in models), models
+
+        # Parsed slicer metadata is attached to the persisted file.
+        from sqlmodel import select
+
+        from app.db.models import Metadata
+
+        meta = e2e_db.exec(select(Metadata)).first()
+        assert meta is not None, "expected extracted metadata row"
+        # The OrcaSlicer benchy fixture carries a real layer height + slicer name.
+        assert (meta.slicer_name or "").lower().startswith(
+            "orca"
+        ) or meta.layer_height_mm
+
+        # Re-uploading identical bytes dedups by content hash (no second model).
+        dup = await _await_job(
+            api,
+            headers,
+            (await _upload(api, headers, model_name="Benchy Copy"))["job_id"],
+        )
+        assert dup["state"] in ("duplicate", "completed"), dup
+        listing2 = (await api.get("/api/v1/models", headers=headers)).json()
+        benchies = [m for m in listing2 if m["name"] in ("Benchy", "Benchy Copy")]
+        assert len(benchies) == 1, f"dedup failed, got {benchies}"

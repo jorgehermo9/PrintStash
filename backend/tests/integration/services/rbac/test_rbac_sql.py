@@ -139,23 +139,6 @@ def test_highest_grant_wins_across_overlapping_scopes(db_session: Session) -> No
     assert admin_ids == _oracle(db_session, user, CollectionRole.ADMIN)
 
 
-def test_trashed_collection_is_excluded(db_session: Session) -> None:
-    from app.core.time import utcnow
-
-    tree = _seed_tree(db_session)
-    user = build_user(db_session, "dave")
-    _grant(db_session, user, tree["Parts"].id, CollectionRole.VIEW)
-
-    brackets = tree["Parts/Brackets"]
-    brackets.deleted_at = utcnow()
-    db_session.add(brackets)
-    db_session.commit()
-
-    got = rbac.accessible_collection_ids(db_session, user)
-    assert brackets.id not in got
-    assert got == _oracle(db_session, user)
-
-
 def test_like_metacharacters_in_path_do_not_widen_the_grant(
     db_session: Session,
 ) -> None:
@@ -206,5 +189,24 @@ def test_sql_matches_python_on_a_wide_tree(db_session: Session) -> None:
     assert len(got) == 62, "60 bulk children + Brackets + Small"
 
 
-def test_role_order_is_total() -> None:
-    assert set(ROLE_ORDER) == set(CollectionRole)
+class TestCollection:
+    def test_trashed_collection_is_excluded(self, db_session: Session) -> None:
+        from app.core.time import utcnow
+
+        tree = _seed_tree(db_session)
+        user = build_user(db_session, "dave")
+        _grant(db_session, user, tree["Parts"].id, CollectionRole.VIEW)
+
+        brackets = tree["Parts/Brackets"]
+        brackets.deleted_at = utcnow()
+        db_session.add(brackets)
+        db_session.commit()
+
+        got = rbac.accessible_collection_ids(db_session, user)
+        assert brackets.id not in got
+        assert got == _oracle(db_session, user)
+
+
+class TestRoleOrder:
+    def test_role_order_is_total(self) -> None:
+        assert set(ROLE_ORDER) == set(CollectionRole)

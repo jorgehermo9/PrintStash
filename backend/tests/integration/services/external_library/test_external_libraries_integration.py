@@ -213,32 +213,6 @@ def _external_files(session: Session, *, live_only: bool = True) -> list[File]:
 # --------------------------------------------------------------------------- #
 # Safety invariant: the user's NAS bytes are never destroyed
 # --------------------------------------------------------------------------- #
-def test_hard_delete_model_never_destroys_nas_bytes(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """Trash retention purge (hard delete) removes DB rows + vault thumbnails but
-    must leave the original file on the NAS completely untouched."""
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    nas = tmp_path / "nas"
-    path = _drop_gcode(nas, "precious.gcode", marker="keep-me")
-    original_bytes = path.read_bytes()
-    lib = build_external_library(db_session, nas, name="nas")
-    external_library.scan_library(lib.id)
-
-    f = _external_files(db_session)[0]
-    model = db_session.get(Model, f.model_id)
-
-    trash.soft_delete_model(db_session, model)
-    trash.hard_delete_model(db_session, model)
-    db_session.commit()
-
-    # DB rows are gone...
-    assert db_session.get(File, f.id) is None
-    assert db_session.get(Model, model.id) is None
-    # ...but the NAS file and its exact bytes survive.
-    assert path.exists()
-    assert path.read_bytes() == original_bytes
 
 
 def test_gc_never_deletes_external_blobs(tmp_path: Path, db_session: Session) -> None:
@@ -256,44 +230,6 @@ def test_gc_never_deletes_external_blobs(tmp_path: Path, db_session: Session) ->
     assert path.read_bytes() == _gcode_bytes("gc")
     # The index row is still live (the file was never trashed).
     assert len(_external_files(db_session)) == 1
-
-
-def test_write_back_never_overwrites_existing_nas_file(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """A web upload routed into the NAS must not clobber a same-named file the
-    user already has there — it lands under a collision-safe name instead."""
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    nas = tmp_path / "nas"
-    nas.mkdir(parents=True)
-    precious = nas / "part.gcode"
-    precious.write_bytes(b"; HAND-PLACED USER FILE - do not touch\n")
-    lib = build_external_library(
-        db_session,
-        nas,
-        name="nas",
-        collection_mode=ExternalLibraryCollectionMode.MIRROR,
-    )
-
-    staged = _stage("part.gcode", _gcode_bytes("upload"))
-    ingest_orca_gcode(
-        job_id="job-collision",
-        staged_path=staged,
-        original_filename="part.gcode",
-        model_name="Part",
-        collection=None,
-        tags=None,
-        source_hash=None,
-        target_library_id=lib.id,
-    )
-
-    # Original bytes untouched.
-    assert precious.read_bytes() == b"; HAND-PLACED USER FILE - do not touch\n"
-    # New upload written beside it under a non-clobbering name.
-    f = _external_files(db_session, live_only=False)[0]
-    assert Path(f.path).name == "part-2.gcode"
-    assert Path(f.path).exists()
 
 
 def test_write_back_rejects_collection_symlink_escape(
@@ -457,32 +393,6 @@ def test_single_collection_mode_ignores_folder_structure(
         assert model.collection_rel.path == "nas-dump"
 
 
-def test_file_moved_within_nas_is_reconciled(
-    tmp_path: Path, db_session: Session
-) -> None:
-    """Moving a file to another subfolder reads as remove(old) + add(new): the
-    index follows the file to its new path without leaving a stale live row."""
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    nas = tmp_path / "nas"
-    old_path = _drop_gcode(nas / "incoming", "widget.gcode", marker="move")
-    lib = build_external_library(db_session, nas, name="nas")
-    external_library.scan_library(lib.id)
-    assert len(_external_files(db_session)) == 1
-
-    new_dir = nas / "sorted"
-    new_dir.mkdir(parents=True)
-    shutil.move(str(old_path), str(new_dir / "widget.gcode"))
-
-    summary = external_library.scan_library(lib.id)
-
-    assert summary["added"] == 1
-    assert summary["removed"] == 1
-    live_files = _external_files(db_session)
-    assert len(live_files) == 1
-    assert live_files[0].path == str(new_dir / "widget.gcode")
-
-
 def test_mtime_touch_without_content_change_is_skipped(
     tmp_path: Path, db_session: Session
 ) -> None:
@@ -508,39 +418,6 @@ def test_mtime_touch_without_content_change_is_skipped(
     after = db_session.get(File, before.id)
     assert after.sha256 == old_sha  # content unchanged
     assert after.source_mtime == pytest.approx(future)  # signature refreshed
-
-
-def test_per_file_error_is_isolated_and_scan_continues(
-    tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """One unparseable/locked file must not abort the whole NAS sync: it is
-    recorded in ``errors`` while the rest of the folder still indexes."""
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    nas = tmp_path / "nas"
-    _drop_gcode(nas, "good-1.gcode", marker="g1")
-    _drop_gcode(nas, "bad.gcode", marker="g2")
-    _drop_gcode(nas, "good-2.gcode", marker="g3")
-    lib = build_external_library(db_session, nas, name="nas")
-
-    real_index = external_library._index_external_file
-
-    def flaky(session, library, source_path, size, mtime):  # type: ignore[no-untyped-def]
-        if source_path.name == "bad.gcode":
-            raise RuntimeError("simulated parse failure")
-        return real_index(session, library, source_path, size, mtime)
-
-    monkeypatch.setattr(external_library, "_index_external_file", flaky)
-
-    summary = external_library.scan_library(lib.id)
-
-    assert summary["added"] == 2
-    assert summary["aborted"] is False
-    assert len(summary["errors"]) == 1
-    assert "bad.gcode" in summary["errors"][0]
-    db_session.refresh(lib)
-    # A completed-with-failures scan is PARTIAL, not a misleading green OK.
-    assert lib.last_scan_status == ExternalLibraryScanStatus.PARTIAL
 
 
 def test_clean_scan_reports_ok(tmp_path: Path, db_session: Session) -> None:
@@ -788,3 +665,128 @@ def test_scan_real_world_folder(tmp_path: Path, db_session: Session) -> None:
     assert second["added"] == 0
     assert second["removed"] == 0
     assert second["updated"] == 0
+
+
+class TestFile:
+    def test_write_back_never_overwrites_existing_nas_file(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        """A web upload routed into the NAS must not clobber a same-named file the
+        user already has there — it lands under a collision-safe name instead."""
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        nas.mkdir(parents=True)
+        precious = nas / "part.gcode"
+        precious.write_bytes(b"; HAND-PLACED USER FILE - do not touch\n")
+        lib = build_external_library(
+            db_session,
+            nas,
+            name="nas",
+            collection_mode=ExternalLibraryCollectionMode.MIRROR,
+        )
+
+        staged = _stage("part.gcode", _gcode_bytes("upload"))
+        ingest_orca_gcode(
+            job_id="job-collision",
+            staged_path=staged,
+            original_filename="part.gcode",
+            model_name="Part",
+            collection=None,
+            tags=None,
+            source_hash=None,
+            target_library_id=lib.id,
+        )
+
+        # Original bytes untouched.
+        assert precious.read_bytes() == b"; HAND-PLACED USER FILE - do not touch\n"
+        # New upload written beside it under a non-clobbering name.
+        f = _external_files(db_session, live_only=False)[0]
+        assert Path(f.path).name == "part-2.gcode"
+        assert Path(f.path).exists()
+
+    def test_file_moved_within_nas_is_reconciled(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        """Moving a file to another subfolder reads as remove(old) + add(new): the
+        index follows the file to its new path without leaving a stale live row."""
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        old_path = _drop_gcode(nas / "incoming", "widget.gcode", marker="move")
+        lib = build_external_library(db_session, nas, name="nas")
+        external_library.scan_library(lib.id)
+        assert len(_external_files(db_session)) == 1
+
+        new_dir = nas / "sorted"
+        new_dir.mkdir(parents=True)
+        shutil.move(str(old_path), str(new_dir / "widget.gcode"))
+
+        summary = external_library.scan_library(lib.id)
+
+        assert summary["added"] == 1
+        assert summary["removed"] == 1
+        live_files = _external_files(db_session)
+        assert len(live_files) == 1
+        assert live_files[0].path == str(new_dir / "widget.gcode")
+
+    def test_per_file_error_is_isolated_and_scan_continues(
+        self, tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One unparseable/locked file must not abort the whole NAS sync: it is
+        recorded in ``errors`` while the rest of the folder still indexes."""
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        _drop_gcode(nas, "good-1.gcode", marker="g1")
+        _drop_gcode(nas, "bad.gcode", marker="g2")
+        _drop_gcode(nas, "good-2.gcode", marker="g3")
+        lib = build_external_library(db_session, nas, name="nas")
+
+        real_index = external_library._index_external_file
+
+        def flaky(session, library, source_path, size, mtime):  # type: ignore[no-untyped-def]
+            if source_path.name == "bad.gcode":
+                raise RuntimeError("simulated parse failure")
+            return real_index(session, library, source_path, size, mtime)
+
+        monkeypatch.setattr(external_library, "_index_external_file", flaky)
+
+        summary = external_library.scan_library(lib.id)
+
+        assert summary["added"] == 2
+        assert summary["aborted"] is False
+        assert len(summary["errors"]) == 1
+        assert "bad.gcode" in summary["errors"][0]
+        db_session.refresh(lib)
+        # A completed-with-failures scan is PARTIAL, not a misleading green OK.
+        assert lib.last_scan_status == ExternalLibraryScanStatus.PARTIAL
+
+
+class TestHardDeleteModel:
+    def test_hard_delete_model_never_destroys_nas_bytes(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        """Trash retention purge (hard delete) removes DB rows + vault thumbnails but
+        must leave the original file on the NAS completely untouched."""
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        path = _drop_gcode(nas, "precious.gcode", marker="keep-me")
+        original_bytes = path.read_bytes()
+        lib = build_external_library(db_session, nas, name="nas")
+        external_library.scan_library(lib.id)
+
+        f = _external_files(db_session)[0]
+        model = db_session.get(Model, f.model_id)
+
+        trash.soft_delete_model(db_session, model)
+        trash.hard_delete_model(db_session, model)
+        db_session.commit()
+
+        # DB rows are gone...
+        assert db_session.get(File, f.id) is None
+        assert db_session.get(Model, model.id) is None
+        # ...but the NAS file and its exact bytes survive.
+        assert path.exists()
+        assert path.read_bytes() == original_bytes

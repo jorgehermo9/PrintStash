@@ -134,75 +134,6 @@ def test_changed_content_reindexes_same_row(
     assert after[0].sha256 != old_sha
 
 
-def test_reindex_metadata_failure_does_not_confirm_new_signature(
-    tmp_path: Path,
-    db_session: Session,
-    monkeypatch,
-) -> None:
-    use_local_storage(tmp_path)
-    nas = tmp_path / "nas"
-    path = _drop_gcode(nas, "atomic.gcode")
-    lib = build_external_library(db_session, nas, name="nas")
-    external_library.scan_library(lib.id)
-    file_row = db_session.exec(
-        select(File).where(File.original_filename == "atomic.gcode")
-    ).one()
-    old_hash = file_row.sha256
-    old_size = file_row.size_bytes
-    with path.open("ab") as handle:
-        handle.write(b"\n; changed for atomicity test\n")
-    stat = path.stat()
-
-    real_add = db_session.add
-
-    def fail_metadata_add(instance, *args, **kwargs):
-        if isinstance(instance, Metadata):
-            raise RuntimeError("metadata_write_failed")
-        return real_add(instance, *args, **kwargs)
-
-    monkeypatch.setattr(db_session, "add", fail_metadata_add)
-    with pytest.raises(RuntimeError, match="metadata_write_failed"):
-        external_library._reindex_changed(
-            db_session, file_row, path, stat.st_size, stat.st_mtime
-        )
-    db_session.rollback()
-    db_session.refresh(file_row)
-
-    assert file_row.sha256 == old_hash
-    assert file_row.size_bytes == old_size
-
-
-def test_removed_file_is_trashed_and_model_soft_deleted(
-    tmp_path: Path, db_session: Session
-) -> None:
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    nas = tmp_path / "nas"
-    path = _drop_gcode(nas, "gone.gcode")
-    # A distinct-content file so the folder stays non-empty (not an "unmount")
-    # and dedup keeps it under a *different* model than gone.gcode.
-    stays = _drop_gcode(nas, "stays.gcode")
-    with stays.open("ab") as fh:
-        fh.write(b"\n; distinct content\nG1 X5 Y5\n")
-    lib = build_external_library(db_session, nas, name="nas")
-    external_library.scan_library(lib.id)
-
-    f = db_session.exec(
-        select(File).where(File.original_filename == "gone.gcode")
-    ).first()
-    model_id = f.model_id
-    path.unlink()
-
-    summary = external_library.scan_library(lib.id)
-
-    assert summary["removed"] == 1
-    db_session.expire_all()
-    f2 = db_session.get(File, f.id)
-    assert f2.deleted_at is not None  # soft-deleted, not hard-deleted
-    model = db_session.get(Model, model_id)
-    assert model.deleted_at is not None
-
-
 def test_unmounted_root_aborts_without_deleting(
     tmp_path: Path, db_session: Session
 ) -> None:
@@ -251,47 +182,6 @@ def test_empty_root_with_indexed_files_aborts(
     assert len(live_files) == 1
 
 
-def test_write_back_lands_in_nas_folder(tmp_path: Path, db_session: Session) -> None:
-    use_local_storage(tmp_path)
-    _enable_feature(db_session)
-    nas = tmp_path / "nas"
-    nas.mkdir(parents=True)
-    lib = build_external_library(
-        db_session,
-        nas,
-        name="nas",
-        collection_mode=ExternalLibraryCollectionMode.MIRROR,
-    )
-
-    # Stage an upload and route it into the library (write-back).
-    staged = Path(_overlay["staging_dir"]) / "_incoming" / f"{uuid.uuid4().hex}.gcode"
-    shutil.copy(FIXTURE_GCODE, staged)
-    ingest_orca_gcode(
-        job_id="job-wb",
-        staged_path=staged,
-        original_filename="written.gcode",
-        model_name="Written Model",
-        collection="cool/widgets",
-        tags=None,
-        source_hash=None,
-        target_library_id=lib.id,
-    )
-
-    f = db_session.exec(select(File).where(File.is_external == True)).first()  # noqa: E712
-    assert f is not None
-    assert f.external_library_id == lib.id
-    # Physically written under the library root, mirrored into the collection path.
-    assert f.path.startswith(str(nas))
-    assert Path(f.path).exists()
-    assert "cool/widgets" in f.path.replace("\\", "/")
-    assert not staged.exists()  # staged upload was moved, not left behind
-
-    # A subsequent scan recognises the written file as unchanged.
-    summary = external_library.scan_library(lib.id)
-    assert summary["added"] == 0
-    assert summary["skipped"] == 1
-
-
 def test_watch_mode_persisted_as_enum_name(tmp_path: Path, db_session: Session) -> None:
     """Guard the storage contract: SQLAlchemy persists the enum *name* ("AUTO"),
     so the migration's server_default must match — storing the lowercase value
@@ -338,22 +228,6 @@ def test_feature_disabled_keeps_uploads_in_vault(
     assert f is not None
     assert f.is_external is False
     assert f.path.startswith(str(_overlay["data_dir"]))
-
-
-def test_to_read_handles_corrupt_scan_summary_json(
-    tmp_path: Path, db_session: Session
-) -> None:
-    nas = tmp_path / "nas"
-    nas.mkdir()
-    lib = build_external_library(db_session, nas, name="nas")
-    lib.last_scan_summary = "{not valid json"
-    db_session.add(lib)
-    db_session.commit()
-
-    from app.api.v1.external_libraries import _to_read
-
-    read = _to_read(lib)
-    assert read.last_scan_summary is None
 
 
 class TestDetectFsKind:
@@ -413,3 +287,138 @@ class TestIsDue:
         assert external_library.is_due("", None, now) is False
         # Invalid cron → never due (defensive).
         assert external_library.is_due("nope", None, now) is False
+
+
+class TestMetadata:
+    def test_reindex_metadata_failure_does_not_confirm_new_signature(
+        self,
+        tmp_path: Path,
+        db_session: Session,
+        monkeypatch,
+    ) -> None:
+        use_local_storage(tmp_path)
+        nas = tmp_path / "nas"
+        path = _drop_gcode(nas, "atomic.gcode")
+        lib = build_external_library(db_session, nas, name="nas")
+        external_library.scan_library(lib.id)
+        file_row = db_session.exec(
+            select(File).where(File.original_filename == "atomic.gcode")
+        ).one()
+        old_hash = file_row.sha256
+        old_size = file_row.size_bytes
+        with path.open("ab") as handle:
+            handle.write(b"\n; changed for atomicity test\n")
+        stat = path.stat()
+
+        real_add = db_session.add
+
+        def fail_metadata_add(instance, *args, **kwargs):
+            if isinstance(instance, Metadata):
+                raise RuntimeError("metadata_write_failed")
+            return real_add(instance, *args, **kwargs)
+
+        monkeypatch.setattr(db_session, "add", fail_metadata_add)
+        with pytest.raises(RuntimeError, match="metadata_write_failed"):
+            external_library._reindex_changed(
+                db_session, file_row, path, stat.st_size, stat.st_mtime
+            )
+        db_session.rollback()
+        db_session.refresh(file_row)
+
+        assert file_row.sha256 == old_hash
+        assert file_row.size_bytes == old_size
+
+
+class TestModel:
+    def test_removed_file_is_trashed_and_model_soft_deleted(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        path = _drop_gcode(nas, "gone.gcode")
+        # A distinct-content file so the folder stays non-empty (not an "unmount")
+        # and dedup keeps it under a *different* model than gone.gcode.
+        stays = _drop_gcode(nas, "stays.gcode")
+        with stays.open("ab") as fh:
+            fh.write(b"\n; distinct content\nG1 X5 Y5\n")
+        lib = build_external_library(db_session, nas, name="nas")
+        external_library.scan_library(lib.id)
+
+        f = db_session.exec(
+            select(File).where(File.original_filename == "gone.gcode")
+        ).first()
+        model_id = f.model_id
+        path.unlink()
+
+        summary = external_library.scan_library(lib.id)
+
+        assert summary["removed"] == 1
+        db_session.expire_all()
+        f2 = db_session.get(File, f.id)
+        assert f2.deleted_at is not None  # soft-deleted, not hard-deleted
+        model = db_session.get(Model, model_id)
+        assert model.deleted_at is not None
+
+
+class TestToRead:
+    def test_to_read_handles_corrupt_scan_summary_json(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        nas = tmp_path / "nas"
+        nas.mkdir()
+        lib = build_external_library(db_session, nas, name="nas")
+        lib.last_scan_summary = "{not valid json"
+        db_session.add(lib)
+        db_session.commit()
+
+        from app.api.v1.external_libraries import _to_read
+
+        read = _to_read(lib)
+        assert read.last_scan_summary is None
+
+
+class TestWrite:
+    def test_write_back_lands_in_nas_folder(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        nas.mkdir(parents=True)
+        lib = build_external_library(
+            db_session,
+            nas,
+            name="nas",
+            collection_mode=ExternalLibraryCollectionMode.MIRROR,
+        )
+
+        # Stage an upload and route it into the library (write-back).
+        staged = (
+            Path(_overlay["staging_dir"]) / "_incoming" / f"{uuid.uuid4().hex}.gcode"
+        )
+        shutil.copy(FIXTURE_GCODE, staged)
+        ingest_orca_gcode(
+            job_id="job-wb",
+            staged_path=staged,
+            original_filename="written.gcode",
+            model_name="Written Model",
+            collection="cool/widgets",
+            tags=None,
+            source_hash=None,
+            target_library_id=lib.id,
+        )
+
+        f = db_session.exec(select(File).where(File.is_external == True)).first()  # noqa: E712
+        assert f is not None
+        assert f.external_library_id == lib.id
+        # Physically written under the library root, mirrored into the collection path.
+        assert f.path.startswith(str(nas))
+        assert Path(f.path).exists()
+        assert "cool/widgets" in f.path.replace("\\", "/")
+        assert not staged.exists()  # staged upload was moved, not left behind
+
+        # A subsequent scan recognises the written file as unchanged.
+        summary = external_library.scan_library(lib.id)
+        assert summary["added"] == 0
+        assert summary["skipped"] == 1

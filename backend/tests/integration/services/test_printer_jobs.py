@@ -79,39 +79,6 @@ def _seeded_upload_job(db_session: Session) -> tuple[Printer, PrintJob]:
     return printer, job
 
 
-def test_dispatch_rechecks_printer_grant_after_enqueue(db_session: Session) -> None:
-    printer = Printer(
-        name="Revoked", moonraker_url="http://revoked", status=PrinterStatus.READY
-    )
-    user = User(username="revoked-user", hashed_password="unused", is_active=True)
-    db_session.add_all([printer, user])
-    db_session.commit()
-    db_session.refresh(printer)
-    db_session.refresh(user)
-    artifact = a_gcode_artifact(db_session, "revoked-cube")
-    permission = PrinterPermission(
-        printer_id=printer.id, user_id=user.id, role=PrinterRole.PRINT
-    )
-    db_session.add(permission)
-    db_session.commit()
-    job = build_print_job(
-        db_session,
-        artifact,
-        printer_id=printer.id,
-        remote_filename="revoked.gcode",
-        state=PrintJobState.QUEUED,
-        routing_strategy=RoutingStrategy.MANUAL,
-        requested_by=user.id,
-    )
-    db_session.delete(permission)
-    db_session.commit()
-
-    assert asyncio.run(printer_jobs.dispatch_next(_unused_provider_builder)) is None
-    db_session.refresh(job)
-    assert job.state == PrintJobState.QUEUED
-    assert job.blocked_reason == "printer_access_revoked"
-
-
 # ---------------------------------------------------------------------------
 # run_fleet_scheduler tick loop
 # ---------------------------------------------------------------------------
@@ -396,3 +363,39 @@ class TestRunFleetScheduler:
 
         asyncio.run(_run())
         assert printer_jobs.scheduler_status.running is False
+
+
+class TestPrinter:
+    def test_dispatch_rechecks_printer_grant_after_enqueue(
+        self, db_session: Session
+    ) -> None:
+        printer = Printer(
+            name="Revoked", moonraker_url="http://revoked", status=PrinterStatus.READY
+        )
+        user = User(username="revoked-user", hashed_password="unused", is_active=True)
+        db_session.add_all([printer, user])
+        db_session.commit()
+        db_session.refresh(printer)
+        db_session.refresh(user)
+        artifact = a_gcode_artifact(db_session, "revoked-cube")
+        permission = PrinterPermission(
+            printer_id=printer.id, user_id=user.id, role=PrinterRole.PRINT
+        )
+        db_session.add(permission)
+        db_session.commit()
+        job = build_print_job(
+            db_session,
+            artifact,
+            printer_id=printer.id,
+            remote_filename="revoked.gcode",
+            state=PrintJobState.QUEUED,
+            routing_strategy=RoutingStrategy.MANUAL,
+            requested_by=user.id,
+        )
+        db_session.delete(permission)
+        db_session.commit()
+
+        assert asyncio.run(printer_jobs.dispatch_next(_unused_provider_builder)) is None
+        db_session.refresh(job)
+        assert job.state == PrintJobState.QUEUED
+        assert job.blocked_reason == "printer_access_revoked"
