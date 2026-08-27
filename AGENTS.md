@@ -8,6 +8,23 @@ Workflow reference (release procedure, roadmap position, plan pointers):
 `.agents/skills/printstash/SKILL.md` — read it before release or roadmap
 work; that detail lives there, not here, so this file stays small.
 
+## Skills
+
+`.agents/skills/` is the source of truth for every assistant; `.claude/skills`
+is a symlink to it, and this file is what `CLAUDE.md` points at. Two skills are
+not optional:
+
+- **`printstash`** — invoke at the start of any task. It carries release
+  procedure, roadmap position, and plan pointers, and routes to the one
+  reference the task needs.
+- **`create-tests`** — invoke before touching any test (writing, editing,
+  deleting, auditing) and before planning the tests for a code change. Rule 4
+  below makes tests mandatory for every production change, so in practice this
+  fires on nearly every task. Its coverage matrix is the definition of done, and
+  its `references/fixtures.md` governs the arrange step: rows come from
+  `tests/factories/`, and a production entity change is incomplete until its
+  builder matches.
+
 ## Bounded coordination
 
 For every task that authorizes code changes, use the repository-scoped
@@ -53,6 +70,8 @@ the coordinator does not take over code implementation.
 - Backend: fast loop `cd backend && ./scripts/test.sh fast -q` · full gate `./scripts/test.sh full -q` · lint `uv run ruff check app/ tests/` · run `uv run uvicorn app.main:app --reload` · migrate `uv run alembic upgrade head`
 - Frontend: `cd frontend && pnpm dev|test|lint|format|typecheck` — oxlint + oxfmt + TypeScript 7 (no ESLint, no prettier)
 - Full stack: `docker compose -f docker-compose.light.yml up` (prebuilt image — src edits need vite dev server).
+- Local dev gotcha: `:3000` serves the **prebuilt** image, not HMR. Run the vite
+  dev server on a spare port to see `frontend/src` edits at all.
 
 ## Testing
 **The directory a test lives in is its tier**, and `backend/tests/` mirrors `app/`:

@@ -311,21 +311,6 @@ def a_member_who_can_see_one_collection(db_session: Session) -> Any:
 
 
 @pytest.fixture
-def local_storage(tmp_path):
-    """Point every storage directory at a throwaway tree for this test."""
-    from app.core.config import _overlay
-
-    _overlay["data_dir"] = tmp_path / "files"
-    _overlay["thumb_dir"] = tmp_path / "thumbs"
-    _overlay["staging_dir"] = tmp_path / "staging"
-    (tmp_path / "thumbs").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "staging" / "_incoming").mkdir(parents=True, exist_ok=True)
-    yield tmp_path
-    for key in ("data_dir", "thumb_dir", "staging_dir"):
-        _overlay.pop(key, None)
-
-
-@pytest.fixture
 def backup_env(tmp_path, monkeypatch: pytest.MonkeyPatch):
     """A file-based vault the backup service can read and rewrite as files.
 
@@ -369,7 +354,6 @@ __all__ = [
     "grant_printer_role",
     "grant_role",
     "headers_for",
-    "local_storage",
     "make_artifact_link",
     "make_audit_finding",
     "make_audit_run",

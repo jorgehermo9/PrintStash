@@ -20,6 +20,12 @@ false pass, not a failure.
 call site where the reader can see it, and the builder stays readable for the
 next person.
 
+`content` is the other half: byte builders for the *file content* a test uploads
+or parses (`content.png()`, `content.gcode()`, `content.zip_bytes()`), which touch
+no database. Prefer a real slicer file from `tests/fixtures/` when one will do;
+reach for a builder when the test needs content shaped a particular way — over a
+size limit, deliberately malformed, a PNG that lies about its dimensions.
+
 Layout mirrors the domain, not the tables: `identity` (who is asking),
 `library` (models and artifacts), `printers` (the fleet), `provenance` (where a
 model came from), `capture` (the inbox pipeline), `ops` (everything operational).
@@ -31,7 +37,14 @@ Full guidance: `.agents/skills/create-tests/references/fixtures.md`.
 
 from __future__ import annotations
 
-from tests.factories._support import nth, reset_counters, save, unique_hash
+from tests.factories import content
+from tests.factories._support import (
+    nth,
+    reject_aliases,
+    reset_counters,
+    save,
+    unique_hash,
+)
 from tests.factories.capture import (
     build_capture_slot,
     build_inbox_item,
@@ -112,10 +125,12 @@ __all__ = [
     "build_tag",
     "build_user",
     "capture_source",
+    "content",
     "grant_collection_role",
     "grant_printer_role",
     "manifest_for_source",
     "nth",
+    "reject_aliases",
     "reset_counters",
     "save",
     "tag_model",

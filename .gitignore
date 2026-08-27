@@ -57,20 +57,16 @@ docs/*-internal.md
 **/*-plan.md
 **/*-plans.md
 
-# AI assistant tooling (kept local, not published) — except the shared project
-# skills, which live in .agents/skills/{printstash,create-tests}/. That is the
-# source of truth for every assistant; .claude/skills is a tracked symlink to it,
-# so a fresh clone works for Claude Code without a second copy to keep in sync.
+# AI assistant tooling. `.agents/` is the source of truth and is tracked in full:
+# it holds the shared skills every assistant reads. The per-tool entry points are
+# tracked symlinks into it — `.claude/skills` -> `.agents/skills` and
+# `CLAUDE.md` -> `AGENTS.md` — so a fresh clone works for each tool with no
+# second copy to keep in sync. Everything else here stays local.
 .codex/
 .mcp.json
 .claude/*
 !.claude/skills
 .opencode/
-.agents/*
-!.agents/skills/
-.agents/skills/*
-!.agents/skills/printstash/
-!.agents/skills/create-tests/
 skills-lock.json
 docs/agents/
 frontend/test-results/

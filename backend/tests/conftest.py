@@ -330,6 +330,31 @@ def _isolate_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
 
+@pytest.fixture
+def local_storage(tmp_path: Path) -> Iterator[Path]:
+    """Point every storage directory at a throwaway tree for this test.
+
+    Nine separate `_configure_storage` helpers used to do this, and they differed
+    in ways that mattered: some created `thumbs/` and `_incoming/`, some did not,
+    and none of them removed their overlay keys. A leaked `data_dir` is an
+    order-dependent failure in an unrelated test, so the teardown here is the
+    load-bearing part.
+
+    Available in every tier because contract and e2e tests need it too.
+    """
+    from app.core.config import _overlay
+
+    _overlay["data_dir"] = tmp_path / "files"
+    _overlay["thumb_dir"] = tmp_path / "thumbs"
+    _overlay["staging_dir"] = tmp_path / "staging"
+    (tmp_path / "files").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "thumbs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "staging" / "_incoming").mkdir(parents=True, exist_ok=True)
+    yield tmp_path
+    for key in ("data_dir", "thumb_dir", "staging_dir"):
+        _overlay.pop(key, None)
+
+
 @pytest.fixture(autouse=True)
 def _reset_factory_counters() -> None:
     """Rewind the `tests.factories` sequence counters between tests.
