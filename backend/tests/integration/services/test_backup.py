@@ -397,9 +397,7 @@ def test_download_backup_archive_endpoint(client: TestClient, backup_env: Backup
 
 
 def test_restore_recovers_database_rows(backup_env: BackupEnv):
-    _, key = _seed_model_with_blob(
-        backup_env, name="Widget", content=b"solid widget\n"
-    )
+    _, key = _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
     meta = backup.create_backup()
 
     # Disaster: wipe every model row.
@@ -434,9 +432,7 @@ def test_restore_recovers_database_rows(backup_env: BackupEnv):
 
 
 def test_restore_replaces_live_wal_state_without_replay(backup_env: BackupEnv):
-    _, key = _seed_model_with_blob(
-        backup_env, name="Widget", content=b"solid widget\n"
-    )
+    _, key = _seed_model_with_blob(backup_env, name="Widget", content=b"solid widget\n")
     meta = backup.create_backup()
 
     # Keep a WAL connection open with a committed post-backup change. A raw
@@ -1200,9 +1196,10 @@ def test_restore_skips_directory_entries_under_files_prefix(
             entries.append((member, data))
 
     updated_archive = io.BytesIO()
-    with gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz, tarfile.open(
-        fileobj=gz, mode="w:"
-    ) as tar:
+    with (
+        gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz,
+        tarfile.open(fileobj=gz, mode="w:") as tar,
+    ):
         for member, data in entries:
             if data is not None:
                 tar.addfile(member, io.BytesIO(data))
@@ -1392,9 +1389,10 @@ def test_restore_skips_unreadable_files_member(backup_env: BackupEnv):
             entries.append((member, data))
 
     updated_archive = io.BytesIO()
-    with gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz, tarfile.open(
-        fileobj=gz, mode="w:"
-    ) as tar:
+    with (
+        gzip.GzipFile(fileobj=updated_archive, mode="wb") as gz,
+        tarfile.open(fileobj=gz, mode="w:") as tar,
+    ):
         for member, data in entries:
             if data is not None:
                 tar.addfile(member, io.BytesIO(data))

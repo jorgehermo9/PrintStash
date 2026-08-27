@@ -59,13 +59,17 @@ def _artifact(
     return row
 
 
-def test_structured_filters_require_metadata_on_same_artifact(db_session: Session) -> None:
+def test_structured_filters_require_metadata_on_same_artifact(
+    db_session: Session,
+) -> None:
     user = User(username="filter-admin", hashed_password="x", is_superuser=True)
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
     split = _model(db_session, "Split", "c")
-    _artifact(db_session, split, filename="split.stl", file_type=FileType.STL, material="PLA")
+    _artifact(
+        db_session, split, filename="split.stl", file_type=FileType.STL, material="PLA"
+    )
     _artifact(
         db_session,
         split,
@@ -102,7 +106,9 @@ def test_facets_count_distinct_models(db_session: Session) -> None:
     db_session.commit()
     db_session.refresh(user)
     model = _model(db_session, "Facet", "e")
-    _artifact(db_session, model, filename="one.stl", file_type=FileType.STL, material="PLA")
+    _artifact(
+        db_session, model, filename="one.stl", file_type=FileType.STL, material="PLA"
+    )
     _artifact(
         db_session,
         model,
@@ -164,7 +170,9 @@ def test_uploaded_after_and_before_bound_the_window(db_session: Session) -> None
     user = _admin(db_session, "uploaded-admin")
     early = _model(db_session, "Early", "3")
     late = _model(db_session, "Late", "4")
-    early_file = _artifact(db_session, early, filename="early.stl", file_type=FileType.STL)
+    early_file = _artifact(
+        db_session, early, filename="early.stl", file_type=FileType.STL
+    )
     late_file = _artifact(db_session, late, filename="late.stl", file_type=FileType.STL)
     early_file.uploaded_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
     late_file.uploaded_at = datetime(2030, 1, 1, tzinfo=timezone.utc)
@@ -191,8 +199,12 @@ def test_slicer_name_and_printer_model_filters(db_session: Session) -> None:
     user = _admin(db_session, "slicer-admin")
     orca = _model(db_session, "Orca", "5")
     prusa = _model(db_session, "Prusa", "6")
-    orca_file = _artifact(db_session, orca, filename="orca.gcode", file_type=FileType.GCODE)
-    prusa_file = _artifact(db_session, prusa, filename="prusa.gcode", file_type=FileType.GCODE)
+    orca_file = _artifact(
+        db_session, orca, filename="orca.gcode", file_type=FileType.GCODE
+    )
+    prusa_file = _artifact(
+        db_session, prusa, filename="prusa.gcode", file_type=FileType.GCODE
+    )
     orca_meta = db_session.exec(
         __import__("sqlmodel").select(Metadata).where(Metadata.file_id == orca_file.id)
     ).first()
@@ -222,7 +234,9 @@ def test_printed_true_and_false_filters(db_session: Session) -> None:
     user = _admin(db_session, "printed-admin")
     printed = _model(db_session, "Printed", "7")
     unprinted = _model(db_session, "Unprinted", "8")
-    printed_file = _artifact(db_session, printed, filename="p.gcode", file_type=FileType.GCODE)
+    printed_file = _artifact(
+        db_session, printed, filename="p.gcode", file_type=FileType.GCODE
+    )
     db_session.add(
         PrintJob(
             model_id=printed.id,
@@ -233,10 +247,14 @@ def test_printed_true_and_false_filters(db_session: Session) -> None:
     )
     db_session.commit()
 
-    was_printed = model_views.list_items(db_session, user, filters=ModelFilters(printed=True))
+    was_printed = model_views.list_items(
+        db_session, user, filters=ModelFilters(printed=True)
+    )
     assert [row.id for row in was_printed] == [printed.id]
 
-    never_printed = model_views.list_items(db_session, user, filters=ModelFilters(printed=False))
+    never_printed = model_views.list_items(
+        db_session, user, filters=ModelFilters(printed=False)
+    )
     assert unprinted.id in [row.id for row in never_printed]
     assert printed.id not in [row.id for row in never_printed]
 
@@ -245,8 +263,12 @@ def test_print_outcome_filter(db_session: Session) -> None:
     user = _admin(db_session, "outcome-admin")
     failed = _model(db_session, "FailedModel", "9")
     completed = _model(db_session, "CompletedModel", "a")
-    failed_file = _artifact(db_session, failed, filename="f.gcode", file_type=FileType.GCODE)
-    completed_file = _artifact(db_session, completed, filename="c.gcode", file_type=FileType.GCODE)
+    failed_file = _artifact(
+        db_session, failed, filename="f.gcode", file_type=FileType.GCODE
+    )
+    completed_file = _artifact(
+        db_session, completed, filename="c.gcode", file_type=FileType.GCODE
+    )
     db_session.add(
         PrintJob(
             model_id=failed.id,
@@ -276,7 +298,9 @@ def test_print_outcome_filter(db_session: Session) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_direct_filter_with_collection_restricts_to_exact_path(db_session: Session) -> None:
+def test_direct_filter_with_collection_restricts_to_exact_path(
+    db_session: Session,
+) -> None:
     user = _admin(db_session, "direct-admin")
     parent = Collection(name="Parent", slug="parent", path="parent")
     child = Collection(name="Child", slug="child", path="parent/child")
@@ -285,8 +309,12 @@ def test_direct_filter_with_collection_restricts_to_exact_path(db_session: Sessi
     db_session.commit()
     db_session.refresh(parent)
     db_session.refresh(child)
-    direct_model = Model(name="Direct", slug="direct", hash="b" * 64, collection_id=parent.id)
-    nested_model = Model(name="Nested", slug="nested", hash="c" * 64, collection_id=child.id)
+    direct_model = Model(
+        name="Direct", slug="direct", hash="b" * 64, collection_id=parent.id
+    )
+    nested_model = Model(
+        name="Nested", slug="nested", hash="c" * 64, collection_id=child.id
+    )
     db_session.add(direct_model)
     db_session.add(nested_model)
     db_session.commit()
@@ -298,13 +326,17 @@ def test_direct_filter_with_collection_restricts_to_exact_path(db_session: Sessi
     assert [row.id for row in rows] == [direct_model.id]
 
 
-def test_direct_filter_without_collection_matches_uncategorised_only(db_session: Session) -> None:
+def test_direct_filter_without_collection_matches_uncategorised_only(
+    db_session: Session,
+) -> None:
     user = _admin(db_session, "direct-admin2")
     col = Collection(name="Cat", slug="cat", path="cat")
     db_session.add(col)
     db_session.commit()
     db_session.refresh(col)
-    categorised = Model(name="Categorised", slug="categorised", hash="d" * 64, collection_id=col.id)
+    categorised = Model(
+        name="Categorised", slug="categorised", hash="d" * 64, collection_id=col.id
+    )
     uncategorised = Model(name="Uncategorised", slug="uncategorised", hash="e" * 64)
     db_session.add(categorised)
     db_session.add(uncategorised)
@@ -326,13 +358,19 @@ def test_indirect_collection_filter_includes_descendants(db_session: Session) ->
     db_session.commit()
     db_session.refresh(parent)
     db_session.refresh(child)
-    direct_model = Model(name="Direct2", slug="direct2", hash="f" * 64, collection_id=parent.id)
-    nested_model = Model(name="Nested2", slug="nested2", hash="1" * 64, collection_id=child.id)
+    direct_model = Model(
+        name="Direct2", slug="direct2", hash="f" * 64, collection_id=parent.id
+    )
+    nested_model = Model(
+        name="Nested2", slug="nested2", hash="1" * 64, collection_id=child.id
+    )
     db_session.add(direct_model)
     db_session.add(nested_model)
     db_session.commit()
 
-    rows = model_views.list_items(db_session, user, filters=ModelFilters(collection="parent2"))
+    rows = model_views.list_items(
+        db_session, user, filters=ModelFilters(collection="parent2")
+    )
     ids = {row.id for row in rows}
     assert direct_model.id in ids
     assert nested_model.id in ids
@@ -351,23 +389,33 @@ def test_tag_filter_matches_by_slug(db_session: Session) -> None:
     db_session.add(ModelTagLink(model_id=tagged.id, tag_id=tag.id))
     db_session.commit()
 
-    rows = model_views.list_items(db_session, user, filters=ModelFilters(tag=["functional"]))
+    rows = model_views.list_items(
+        db_session, user, filters=ModelFilters(tag=["functional"])
+    )
     ids = {row.id for row in rows}
     assert tagged.id in ids
     assert untagged.id not in ids
 
 
-def test_printer_presence_any_matches_models_present_on_a_printer(db_session: Session) -> None:
+def test_printer_presence_any_matches_models_present_on_a_printer(
+    db_session: Session,
+) -> None:
     user = _admin(db_session, "presence-admin")
     present = _model(db_session, "Present", "4")
     absent = _model(db_session, "Absent", "5")
-    present_file = _artifact(db_session, present, filename="present.gcode", file_type=FileType.GCODE)
+    present_file = _artifact(
+        db_session, present, filename="present.gcode", file_type=FileType.GCODE
+    )
     printer = Printer(name="Fleet1", moonraker_url="http://10.0.0.1:7125")
     db_session.add(printer)
     db_session.commit()
     db_session.refresh(printer)
     db_session.add(
-        PrinterFile(printer_id=printer.id, file_id=present_file.id, remote_filename="present.gcode")
+        PrinterFile(
+            printer_id=printer.id,
+            file_id=present_file.id,
+            remote_filename="present.gcode",
+        )
     )
     db_session.commit()
 
@@ -384,16 +432,28 @@ def test_printer_presence_any_matches_models_present_on_a_printer(db_session: Se
 # --------------------------------------------------------------------------- #
 
 
-def test_list_items_picks_newest_version_mesh_file_for_preview(db_session: Session) -> None:
+def test_list_items_picks_newest_version_mesh_file_for_preview(
+    db_session: Session,
+) -> None:
     user = _admin(db_session, "mesh-admin")
     model = _model(db_session, "MeshPreview", "6")
     v1 = File(
-        model_id=model.id, path="v1.stl", original_filename="v1.stl", file_type=FileType.STL,
-        version=1, size_bytes=1, sha256="1" * 64,
+        model_id=model.id,
+        path="v1.stl",
+        original_filename="v1.stl",
+        file_type=FileType.STL,
+        version=1,
+        size_bytes=1,
+        sha256="1" * 64,
     )
     v2 = File(
-        model_id=model.id, path="v2.stl", original_filename="v2.stl", file_type=FileType.STL,
-        version=2, size_bytes=1, sha256="2" * 64,
+        model_id=model.id,
+        path="v2.stl",
+        original_filename="v2.stl",
+        file_type=FileType.STL,
+        version=2,
+        size_bytes=1,
+        sha256="2" * 64,
     )
     db_session.add(v1)
     db_session.add(v2)
@@ -421,7 +481,9 @@ def test_export_payload_with_no_accessible_models_is_empty(db_session: Session) 
     from sqlmodel import select
 
     live_models = db_session.exec(
-        select(Model).where(Model.deleted_at.is_(None), Model.hash != SENTINEL_MODEL_HASH)
+        select(Model).where(
+            Model.deleted_at.is_(None), Model.hash != SENTINEL_MODEL_HASH
+        )
     ).all()
     for m in live_models:
         m.deleted_at = datetime.now(timezone.utc)
@@ -440,7 +502,9 @@ def test_export_payload_includes_collection_and_tag_names(db_session: Session) -
     db_session.add(col)
     db_session.commit()
     db_session.refresh(col)
-    model = Model(name="Exportable", slug="exportable", hash="7" * 64, collection_id=col.id)
+    model = Model(
+        name="Exportable", slug="exportable", hash="7" * 64, collection_id=col.id
+    )
     db_session.add(model)
     db_session.commit()
     db_session.refresh(model)

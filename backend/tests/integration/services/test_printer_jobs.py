@@ -193,9 +193,7 @@ def test_dispatch_claimed_raises_when_printer_missing(db_session: Session) -> No
     db_session.commit()
 
     with pytest.raises(RuntimeError, match="queue_dependency_missing"):
-        asyncio.run(
-            printer_jobs._dispatch_claimed(job.id, _unused_provider_builder)
-        )  # noqa: SLF001
+        asyncio.run(printer_jobs._dispatch_claimed(job.id, _unused_provider_builder))  # noqa: SLF001
 
 
 def test_dispatch_claimed_raises_when_job_has_no_printer(db_session: Session) -> None:
@@ -212,9 +210,7 @@ def test_dispatch_claimed_raises_when_job_has_no_printer(db_session: Session) ->
     db_session.refresh(job)
 
     with pytest.raises(RuntimeError, match="queue_job_not_found"):
-        asyncio.run(
-            printer_jobs._dispatch_claimed(job.id, _unused_provider_builder)
-        )  # noqa: SLF001
+        asyncio.run(printer_jobs._dispatch_claimed(job.id, _unused_provider_builder))  # noqa: SLF001
 
 
 def _seeded_upload_job(db_session: Session) -> tuple[Printer, PrintJob]:
@@ -284,9 +280,7 @@ def test_dispatch_claimed_raises_when_provider_cannot_upload_or_start(
     )  # no START/UPLOAD
 
     with pytest.raises(ProviderError, match="operation_not_supported_for_provider"):
-        asyncio.run(
-            printer_jobs._dispatch_claimed(job.id, _provider_builder(provider))
-        )  # noqa: SLF001
+        asyncio.run(printer_jobs._dispatch_claimed(job.id, _provider_builder(provider)))  # noqa: SLF001
 
 
 def test_dispatch_claimed_raises_printer_not_ready_when_requires_ready_before_send(
@@ -305,9 +299,7 @@ def test_dispatch_claimed_raises_printer_not_ready_when_requires_ready_before_se
     }
 
     with pytest.raises(ProviderError, match="printer_not_ready"):
-        asyncio.run(
-            printer_jobs._dispatch_claimed(job.id, _provider_builder(provider))
-        )  # noqa: SLF001
+        asyncio.run(printer_jobs._dispatch_claimed(job.id, _provider_builder(provider)))  # noqa: SLF001
 
 
 def test_dispatch_claimed_proceeds_when_ready_before_send_reports_idle(
@@ -336,9 +328,7 @@ def test_dispatch_claimed_proceeds_when_ready_before_send_reports_idle(
     with (
         patch("app.services.printer_jobs.get_backend", return_value=_Backend()),
     ):
-        asyncio.run(
-            printer_jobs._dispatch_claimed(job.id, _provider_builder(provider))
-        )  # noqa: SLF001
+        asyncio.run(printer_jobs._dispatch_claimed(job.id, _provider_builder(provider)))  # noqa: SLF001
 
     provider.upload.assert_awaited_once()
     provider.start.assert_awaited_once()

@@ -156,7 +156,9 @@ def test_vault_stats_counts_are_consolidated_into_one_query(
         lambda: {"backend": "local", "ok": True},
     )
 
-    count = _count_queries(db_session, lambda: model_views.vault_stats(db_session, user))
+    count = _count_queries(
+        db_session, lambda: model_views.vault_stats(db_session, user)
+    )
 
     assert count == 1
 

@@ -88,9 +88,7 @@ def test_prune_expired_unlinks_exact_file(db_session: Session, tmp_path: Path) -
 
 def test_fc15_upgrade_and_downgrade_preserve_job_lease_data(tmp_path: Path) -> None:
     config = Config(str(ALEMBIC_INI))
-    config.set_main_option(
-        "script_location", str(ALEMBIC_DIR)
-    )
+    config.set_main_option("script_location", str(ALEMBIC_DIR))
     url = f"sqlite:///{tmp_path / 'staging-lease.sqlite'}"
     config.set_main_option("sqlalchemy.url", url)
     command.upgrade(config, "fb14d5e8a7c3")

@@ -122,7 +122,10 @@ class TestValidatePublicUrl:
 
 class TestCollectionForArchive:
     def test_nests_under_parent(self) -> None:
-        assert imp._collection_for_archive("Functional", "Brackets.zip") == "Functional/Brackets"
+        assert (
+            imp._collection_for_archive("Functional", "Brackets.zip")
+            == "Functional/Brackets"
+        )
 
     def test_no_parent_uses_archive_stem(self) -> None:
         assert imp._collection_for_archive(None, "MyPack.zip") == "MyPack"
@@ -157,12 +160,20 @@ class TestMoonrakerWsUrl:
 def _profiles() -> list[FilamentProfile]:
     return [
         FilamentProfile(
-            name="Hatchbox PLA", material_type="PLA", material_brand="Hatchbox", cost_per_kg=20.0
+            name="Hatchbox PLA",
+            material_type="PLA",
+            material_brand="Hatchbox",
+            cost_per_kg=20.0,
         ),
         FilamentProfile(
-            name="Generic PETG", material_type="PETG", material_brand=None, cost_per_kg=25.0
+            name="Generic PETG",
+            material_type="PETG",
+            material_brand=None,
+            cost_per_kg=25.0,
         ),
-        FilamentProfile(name="No Cost PLA", material_type="PLA", material_brand="NoCost"),
+        FilamentProfile(
+            name="No Cost PLA", material_type="PLA", material_brand="NoCost"
+        ),
     ]
 
 
@@ -222,13 +233,21 @@ class TestCsvCell:
             "counts": {"models": 1, "files": 1},
             "models": [
                 {
-                    "id": 1, "name": "Vase", "slug": "vase", "source_url": None,
-                    "collection": None, "tags": [],
+                    "id": 1,
+                    "name": "Vase",
+                    "slug": "vase",
+                    "source_url": None,
+                    "collection": None,
+                    "tags": [],
                     "files": [
                         {
-                            "id": 10, "file_type": "gcode", "version": 1,
-                            "original_filename": "v.gcode", "size_bytes": 0,
-                            "sha256": "abc", "is_recommended": True,
+                            "id": 10,
+                            "file_type": "gcode",
+                            "version": 1,
+                            "original_filename": "v.gcode",
+                            "size_bytes": 0,
+                            "sha256": "abc",
+                            "is_recommended": True,
                             "uploaded_at": "2024-01-01",
                             "metadata": {
                                 "infill_percent": 0,
@@ -254,15 +273,25 @@ class TestCsvCell:
 # --------------------------------------------------------------------------- #
 class TestThumbUrl:
     def test_prefers_thumbnail_file_id(self) -> None:
-        model = Model(name="x", slug="x", hash="a" * 64, thumbnail_file_id=7, thumbnail_path="99.png")
+        model = Model(
+            name="x",
+            slug="x",
+            hash="a" * 64,
+            thumbnail_file_id=7,
+            thumbnail_path="99.png",
+        )
         assert mv.thumb_url(model) == "/api/v1/files/7/thumbnail"
 
     def test_falls_back_to_legacy_digit_stem_path(self) -> None:
-        model = Model(name="x", slug="x", hash="a" * 64, thumbnail_path="uploads/42.png")
+        model = Model(
+            name="x", slug="x", hash="a" * 64, thumbnail_path="uploads/42.png"
+        )
         assert mv.thumb_url(model) == "/api/v1/files/42/thumbnail"
 
     def test_non_digit_legacy_stem_returns_none(self) -> None:
-        model = Model(name="x", slug="x", hash="a" * 64, thumbnail_path="uploads/legacy.png")
+        model = Model(
+            name="x", slug="x", hash="a" * 64, thumbnail_path="uploads/legacy.png"
+        )
         assert mv.thumb_url(model) is None
 
     def test_no_thumbnail_at_all_returns_none(self) -> None:
@@ -281,27 +310,45 @@ class TestFilamentProfileUsage:
         db_session.commit()
         db_session.refresh(model)
         f1 = File(
-            model_id=model.id, path="a.gcode", original_filename="a.gcode",
-            file_type=FileType.GCODE, size_bytes=1, sha256="1" * 64,
+            model_id=model.id,
+            path="a.gcode",
+            original_filename="a.gcode",
+            file_type=FileType.GCODE,
+            size_bytes=1,
+            sha256="1" * 64,
         )
         f2 = File(
-            model_id=model.id, path="b.gcode", original_filename="b.gcode",
-            file_type=FileType.GCODE, size_bytes=1, sha256="2" * 64, version=2,
+            model_id=model.id,
+            path="b.gcode",
+            original_filename="b.gcode",
+            file_type=FileType.GCODE,
+            size_bytes=1,
+            sha256="2" * 64,
+            version=2,
         )
         db_session.add(f1)
         db_session.add(f2)
         db_session.commit()
         db_session.refresh(f1)
         db_session.refresh(f2)
-        db_session.add(Metadata(file_id=f1.id, material_type="PLA", material_brand="Hatchbox"))
-        db_session.add(Metadata(file_id=f2.id, material_type="PLA", material_brand="Hatchbox"))
+        db_session.add(
+            Metadata(file_id=f1.id, material_type="PLA", material_brand="Hatchbox")
+        )
+        db_session.add(
+            Metadata(file_id=f2.id, material_type="PLA", material_brand="Hatchbox")
+        )
         db_session.commit()
 
         usage = mv.filament_profile_usage(db_session)
 
-        hatchbox = next(p for p in db_session.exec(
-            __import__("sqlmodel").select(FilamentProfile).where(FilamentProfile.name == "Hatchbox PLA")
-        ).all())
+        hatchbox = next(
+            p
+            for p in db_session.exec(
+                __import__("sqlmodel")
+                .select(FilamentProfile)
+                .where(FilamentProfile.name == "Hatchbox PLA")
+            ).all()
+        )
         assert usage[hatchbox.id] == 2
 
 
@@ -318,8 +365,12 @@ class TestPrinterProfileUsage:
         db_session.commit()
         db_session.refresh(model)
         f1 = File(
-            model_id=model.id, path="a.gcode", original_filename="a.gcode",
-            file_type=FileType.GCODE, size_bytes=1, sha256="3" * 64,
+            model_id=model.id,
+            path="a.gcode",
+            original_filename="a.gcode",
+            file_type=FileType.GCODE,
+            size_bytes=1,
+            sha256="3" * 64,
         )
         db_session.add(f1)
         db_session.commit()
@@ -337,8 +388,12 @@ class TestPrinterProfileUsage:
         db_session.commit()
         db_session.refresh(model)
         f1 = File(
-            model_id=model.id, path="a.gcode", original_filename="a.gcode",
-            file_type=FileType.GCODE, size_bytes=1, sha256="4" * 64,
+            model_id=model.id,
+            path="a.gcode",
+            original_filename="a.gcode",
+            file_type=FileType.GCODE,
+            size_bytes=1,
+            sha256="4" * 64,
         )
         db_session.add(f1)
         db_session.commit()
@@ -357,7 +412,12 @@ class TestMetadataReadLoadsProfiles:
     def test_loads_profiles_itself_when_not_provided(self, db_session: Session) -> None:
         db_session.add_all(_profiles())
         db_session.commit()
-        md = Metadata(file_id=1, material_type="PLA", material_brand="Hatchbox", filament_weight_g=100.0)
+        md = Metadata(
+            file_id=1,
+            material_type="PLA",
+            material_brand="Hatchbox",
+            filament_weight_g=100.0,
+        )
 
         result = mv.metadata_read(db_session, md)
 
@@ -417,7 +477,9 @@ class TestCollectionPathForMirror:
 
     def test_nested_dirs_become_collection_path(self) -> None:
         lib = self._lib("/nas/lib")
-        out = _collection_path_for(None, lib, Path("/nas/lib/Functional/Brackets/x.stl"))
+        out = _collection_path_for(
+            None, lib, Path("/nas/lib/Functional/Brackets/x.stl")
+        )
         assert out == "Functional/Brackets"
 
     def test_root_level_file_has_no_collection(self) -> None:

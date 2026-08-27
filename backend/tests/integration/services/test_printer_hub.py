@@ -175,7 +175,9 @@ def test_material_slot_enrichment_resolves_inventory_and_degrades_cleanly(
             raise SpoolmanError("missing")
 
         with (
-            patch.object(hub, "_spoolman_config", return_value=("http://spoolman", None)),
+            patch.object(
+                hub, "_spoolman_config", return_value=("http://spoolman", None)
+            ),
             patch(
                 "app.services.printer_hub.SpoolmanClient.get_spool",
                 new=AsyncMock(side_effect=get_spool),
@@ -293,9 +295,7 @@ def test_external_capture_failure_paths_are_persistent(
         SimpleNamespace(bambu_external_capture_max_mb=1),
     ):
         asyncio.run(
-            hub._capture_external_artifact(
-                1, job.id, "/cache/external.gcode", client
-            )
+            hub._capture_external_artifact(1, job.id, "/cache/external.gcode", client)
         )
     db_session.expire_all()
     failed = db_session.get(PrintJob, job.id)
@@ -341,7 +341,9 @@ def test_external_capture_success_and_cancellation_paths(hub: PrinterHub) -> Non
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        asyncio.run(hub._capture_external_artifact(1, 2, "/cache/external.gcode", client))
+        asyncio.run(
+            hub._capture_external_artifact(1, 2, "/cache/external.gcode", client)
+        )
 
 
 class TestPrinterHubLifecycle:
@@ -870,9 +872,7 @@ class TestPrinterHubSyncActiveJob:
         )
 
         with get_session_factory().session() as session:
-            rows = session.exec(
-                select(PrintJob).where(PrintJob.printer_id == 1)
-            ).all()
+            rows = session.exec(select(PrintJob).where(PrintJob.printer_id == 1)).all()
             assert len(rows) == 1
             assert rows[0].external_project_id == "project-transition"
             assert rows[0].external_task_id == "task-transition"
@@ -908,9 +908,7 @@ class TestPrinterHubSyncActiveJob:
 
         with get_session_factory().session() as session:
             rows = session.exec(
-                select(PrintJob)
-                .where(PrintJob.printer_id == 1)
-                .order_by(PrintJob.id)
+                select(PrintJob).where(PrintJob.printer_id == 1).order_by(PrintJob.id)
             ).all()
             assert len(rows) == 2
             assert rows[0].external_project_id == "same-id"
@@ -950,9 +948,7 @@ class TestPrinterHubSyncActiveJob:
 
         with get_session_factory().session() as session:
             rows = session.exec(
-                select(PrintJob)
-                .where(PrintJob.printer_id == 1)
-                .order_by(PrintJob.id)
+                select(PrintJob).where(PrintJob.printer_id == 1).order_by(PrintJob.id)
             ).all()
             assert len(rows) == 2
             assert rows[0].external_task_id == "task-stable"
@@ -1033,6 +1029,7 @@ class TestPrinterHubSyncActiveJob:
                 "external_task_id": "task-concurrent",
             },
         ]
+
         def reconcile(report):
             # ContextVars do not cross raw ThreadPoolExecutor workers; mirror
             # the app's asyncio.to_thread propagation explicitly in this unit.
@@ -1046,9 +1043,7 @@ class TestPrinterHubSyncActiveJob:
         assert results == [None, None]
 
         with get_session_factory().session() as session:
-            rows = session.exec(
-                select(PrintJob).where(PrintJob.printer_id == 1)
-            ).all()
+            rows = session.exec(select(PrintJob).where(PrintJob.printer_id == 1)).all()
             assert len(rows) == 1
             assert rows[0].external_project_id == "project-concurrent"
             assert rows[0].external_task_id == "task-concurrent"

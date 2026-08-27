@@ -41,7 +41,10 @@ from tests.integration.api.v1.test_fleet import _gcode
 
 
 def test_material_and_fleet_schema_validation_edges() -> None:
-    assert MaterialSlotWrite(slot_key="feed", label="Feed", color_hex=" ").color_hex is None
+    assert (
+        MaterialSlotWrite(slot_key="feed", label="Feed", color_hex=" ").color_hex
+        is None
+    )
     assert (
         MaterialSlotWrite(slot_key="feed", label="Feed", color_hex="a1b2c3").color_hex
         == "#A1B2C3"
@@ -134,7 +137,9 @@ def test_manual_material_state_drives_compatibility_and_confirmation(
     assert result.verdict == "mismatch"
     assert result.reasons == ("material_type_mismatch",)
     mismatch_snapshot = fleet.build_routing_snapshot(db_session, {int(artifact.id)})
-    with pytest.raises(fleet.FleetError, match="material_mismatch_confirmation_required"):
+    with pytest.raises(
+        fleet.FleetError, match="material_mismatch_confirmation_required"
+    ):
         fleet.create_batch(
             db_session,
             BatchCreate(
@@ -157,13 +162,16 @@ def test_manual_material_state_drives_compatibility_and_confirmation(
     db_session.add(printer)
     db_session.commit()
     mismatch_snapshot = fleet.build_routing_snapshot(db_session, {int(artifact.id)})
-    assert fleet.choose_printer(
-        db_session,
-        RoutingStrategy.DEFAULT,
-        None,
-        snapshot=mismatch_snapshot,
-        file_id=int(artifact.id),
-    )[1] == "no_material_compatible_printer"
+    assert (
+        fleet.choose_printer(
+            db_session,
+            RoutingStrategy.DEFAULT,
+            None,
+            snapshot=mismatch_snapshot,
+            file_id=int(artifact.id),
+        )[1]
+        == "no_material_compatible_printer"
+    )
     try:
         fleet.enqueue_job(
             db_session,
@@ -207,9 +215,7 @@ def test_manual_material_state_drives_compatibility_and_confirmation(
     assert nozzle_result.verdict == "mismatch"
     assert nozzle_result.reasons == ("nozzle_diameter_mismatch",)
     nozzle_snapshot = fleet.build_routing_snapshot(db_session, {int(artifact.id)})
-    assert fleet._compatibility_rank(
-        printer, int(artifact.id), nozzle_snapshot
-    ) == 2
+    assert fleet._compatibility_rank(printer, int(artifact.id), nozzle_snapshot) == 2
 
 
 def test_batch_creation_is_atomic_and_spreads_least_busy_copies(
@@ -511,20 +517,14 @@ def test_manual_material_state_validation_and_provider_precedence(
         (
             ManualMaterialStateUpdate(
                 slots=[
-                    MaterialSlotWrite(
-                        slot_key="feed", label="Feed", tool_key="missing"
-                    )
+                    MaterialSlotWrite(slot_key="feed", label="Feed", tool_key="missing")
                 ]
             ),
             "material_slot_tool_unknown",
         ),
         (
             ManualMaterialStateUpdate(
-                slots=[
-                    MaterialSlotWrite(
-                        slot_key="feed", label="Feed", state="loaded"
-                    )
-                ]
+                slots=[MaterialSlotWrite(slot_key="feed", label="Feed", state="loaded")]
             ),
             "loaded_material_type_required",
         ),
@@ -931,9 +931,11 @@ def test_tracking_spool_is_resolved_only_when_unambiguous(
     assert fleet._unambiguous_tracking_spool(
         Printer(name="Unsaved"), int(artifact.id), snapshot
     ) == (None, None, None)
-    assert fleet._unambiguous_tracking_spool(
-        printer, int(artifact.id), snapshot
-    ) == (7, "Spool 7", 70)
+    assert fleet._unambiguous_tracking_spool(printer, int(artifact.id), snapshot) == (
+        7,
+        "Spool 7",
+        70,
+    )
 
     duplicate = db_session.exec(
         select(PrinterMaterialSlot).where(
@@ -945,7 +947,9 @@ def test_tracking_spool_is_resolved_only_when_unambiguous(
     db_session.add(duplicate)
     db_session.commit()
     snapshot = fleet.build_routing_snapshot(db_session, {int(artifact.id)})
-    assert fleet._unambiguous_tracking_spool(
-        printer, int(artifact.id), snapshot
-    ) == (None, None, None)
+    assert fleet._unambiguous_tracking_spool(printer, int(artifact.id), snapshot) == (
+        None,
+        None,
+        None,
+    )
     assert fleet.list_queue(db_session) == []

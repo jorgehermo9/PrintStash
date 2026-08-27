@@ -419,5 +419,3 @@ def test_to_read_handles_corrupt_scan_summary_json(
 
     read = _to_read(lib)
     assert read.last_scan_summary is None
-
-

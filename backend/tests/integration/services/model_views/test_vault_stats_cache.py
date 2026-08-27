@@ -51,7 +51,12 @@ class _CountingBackend:
 
     def usage(self, prefix: str = "") -> dict:
         self.calls += 1
-        return {"backend": "local", "ok": True, "total_size_bytes": 1, "object_count": 1}
+        return {
+            "backend": "local",
+            "ok": True,
+            "total_size_bytes": 1,
+            "object_count": 1,
+        }
 
 
 def test_storage_usage_is_computed_once_per_window(
@@ -94,7 +99,12 @@ def test_failures_are_not_cached(
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("s3 down")
-            return {"backend": "s3", "ok": True, "total_size_bytes": 5, "object_count": 2}
+            return {
+                "backend": "s3",
+                "ok": True,
+                "total_size_bytes": 5,
+                "object_count": 2,
+            }
 
     monkeypatch.setattr(model_views, "get_backend", lambda: _FlakyBackend())
 

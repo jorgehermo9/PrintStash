@@ -126,7 +126,7 @@ def test_sql_matches_python_on_nested_grants(
 
 
 def test_grant_does_not_leak_to_prefix_sibling(db_session: Session) -> None:
-    """"Parts" must not grant "Parts Extra" — they only share a string prefix."""
+    """ "Parts" must not grant "Parts Extra" — they only share a string prefix."""
     tree = _seed_tree(db_session)
     user = _user(db_session, "bob")
     _grant(db_session, user, tree["Parts"].id, CollectionRole.VIEW)

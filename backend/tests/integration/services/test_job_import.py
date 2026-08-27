@@ -44,7 +44,9 @@ def _seed_printer(db_session: Session) -> Printer:
     return p
 
 
-def _run_import(session: Session, *, model_id: int, printer_id: int, history: list[dict]):
+def _run_import(
+    session: Session, *, model_id: int, printer_id: int, history: list[dict]
+):
     with patch(
         "app.services.job_import.MoonrakerClient.get_print_history",
         new=AsyncMock(return_value=history),
@@ -108,9 +110,7 @@ def test_import_maps_moonraker_status_to_job_state(db_session: Session):
         {"filename": "Benchy.gcode", "status": "completed"},
     ]
     _run_import(db_session, model_id=f.model_id, printer_id=p.id, history=history)
-    job = db_session.exec(
-        select(PrintJob).where(PrintJob.model_id == f.model_id)
-    ).one()
+    job = db_session.exec(select(PrintJob).where(PrintJob.model_id == f.model_id)).one()
     assert job.state == PrintJobState.COMPLETED
 
     f2 = _seed_model_and_file(db_session, filename="Other.gcode")
