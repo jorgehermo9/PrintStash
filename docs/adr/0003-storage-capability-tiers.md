@@ -408,6 +408,131 @@ scheme is a piece of library trivia.**
 form, and the same tier badge — so the catalogue is uniform rather than "the two
 real ones plus the OpenDAL ones".
 
+#### Why the transport seam exists
+
+The seam is not ceremony: **the provider→transport mapping is many-to-one, and
+the knowledge on each side is different in kind.**
+
+```
+Nextcloud ─┐
+ownCloud  ─┤
+Seafile   ─┼──> OPENDAL(scheme="webdav")
+Synology  ─┤
+WebDAV    ─┘
+
+Synology/TrueNAS ─┬──> OPENDAL(scheme="sftp")
+SFTP             ─┘
+
+Cloudflare R2 ─┐
+Backblaze B2  ─┤
+Wasabi        ─┼──> NATIVE_S3        (endpoint/region presets only)
+MinIO         ─┤
+S3            ─┘
+```
+
+Without the seam, that fan-in has to live somewhere worse. Two candidates, both
+rejected:
+
+**Put the product knowledge in the adapter.** `OpenDALStorageBackend` grows a
+branch per product — it would have to know that Nextcloud serves WebDAV under
+`/remote.php/dav/files/{username}`. The adapter's job is to speak a scheme; the
+moment it knows about products, every new provider edits the most
+safety-critical new file in the change.
+
+**Let each provider build its own backend** (`ProviderConfig.build_backend()`).
+Then every WebDAV-family provider re-implements operator construction, root
+validation, and the capability probe, and the five of them will drift. It also
+makes provider tests impossible to keep in `unit/`: asserting on a returned
+`TransportSpec` is pure logic, while asserting on a constructed backend needs a
+socket or a filesystem, which by our own tier policy pushes those tests to
+`integration/`.
+
+With the seam, each side holds exactly what it should:
+
+| | Knows | Does not know |
+|---|---|---|
+| `ProviderConfig` | that Nextcloud hides WebDAV under `/remote.php/dav/files/{user}` | that OpenDAL exists |
+| `TransportSpec` | scheme, root, options | which product produced it |
+| `OpenDALStorageBackend` | how to speak a scheme and probe capabilities | that Nextcloud exists |
+
+Three further payoffs fall out of it:
+
+1. **Root validation happens once**, on `TransportSpec`, rather than being
+   re-asserted by every provider — and given what an empty root does to
+   `services/storage_deletion` (see "Root is mandatory"), once is what we want.
+2. **A provider can change transport without touching its configuration.** If a
+   native Nextcloud client ever replaced WebDAV, only `NextcloudConfig.transport()`
+   changes — env vars, the generated form, and stored `SystemConfig` rows are all
+   untouched. That is the "ours to change without touching a single `.env` file"
+   promise at the top of this decision, and the seam is the only reason it is
+   true.
+3. **`NATIVE_S3` providers cost nothing.** R2, B2, Wasabi, and MinIO become
+   first-class named providers that preset an endpoint and region over the S3
+   adapter we already have — the Nextcloud trick applied to a backend we already
+   ship, with no new transport, no new adapter, and no OpenDAL. This lands in the
+   catalogue phase, before any OpenDAL code exists.
+
+The cost is honest and small: for `local` and `s3` the `TransportSpec` carries
+little beyond its `kind`. A uniform dataclass with two thin cases is better than
+a catalogue with two special cases in it.
+
+Dispatch stays a single readable function:
+
+```python
+def create_backend(provider: StorageProvider, config: ProviderConfig) -> StorageBackend:
+    spec = config.transport()
+    match spec.kind:
+        case TransportKind.NATIVE_LOCAL:
+            return LocalStorageBackend()
+        case TransportKind.NATIVE_S3:
+            return S3StorageBackend(spec)
+        case TransportKind.OPENDAL:
+            return OpenDALStorageBackend(spec)
+```
+
+#### The catalogue we intend to ship
+
+Grouped by transport, because that is what determines cost and tier. "Native
+knowledge" is what the provider encodes so the operator does not have to.
+
+| Provider | Transport | Native knowledge it encodes | Expected tier |
+|---|---|---|---|
+| Local filesystem | `NATIVE_LOCAL` | — | Verified *(probed; a mounted share may be lower)* |
+| S3-compatible | `NATIVE_S3` | — | Verified / Guarded by bucket versioning |
+| Cloudflare R2 | `NATIVE_S3` | endpoint `https://{account_id}.r2.cloudflarestorage.com`, `region=auto` | as S3 |
+| Backblaze B2 | `NATIVE_S3` | S3 endpoint per region | as S3 |
+| Wasabi | `NATIVE_S3` | regional endpoint | as S3 |
+| MinIO / Garage / SeaweedFS | `NATIVE_S3` | path-style addressing, self-hosted defaults | as S3 |
+| **Nextcloud** | `webdav` | `/remote.php/dav/files/{username}`, app-password guidance | Unguarded |
+| ownCloud | `webdav` | `/remote.php/dav/files/{username}` | Unguarded |
+| Seafile | `webdav` | `/seafdav` | Unguarded |
+| Synology DSM (WebDAV) | `webdav` | WebDAV Server package, ports 5005/5006 | Unguarded |
+| Hetzner Storage Box | `webdav` / `sftp` | documented host and path layout | Unguarded |
+| Generic WebDAV | `webdav` | — (typed escape valve *within* the family) | Unguarded |
+| NAS over SFTP | `sftp` | host/port/user/key-or-password/path | Unguarded |
+| Azure Blob Storage | `azblob` | container + account naming | Guarded |
+| Google Cloud Storage | `gcs` | bucket + service-account JSON | Guarded |
+
+The `NATIVE_S3` rows are the cheapest value in this ADR: four named products,
+zero new code paths, and they remove the single most common S3 setup mistake —
+a hand-typed endpoint.
+
+Deliberately **out of the first cut**: Dropbox, Google Drive, and OneDrive. Not
+because the transport is missing, but because each needs an OAuth authorization
+flow with token storage and refresh, which is a larger change than this whole
+ADR and unrelated to storage semantics. They stay candidates once a general
+OAuth credential story exists.
+
+Two open design questions the catalogue phase must settle:
+
+- **SFTP key material.** A path to a key file inside the container, or an inline
+  key in an `EncryptedText` column? A file path is simpler and matches how
+  operators already mount secrets; an inline key is configurable from the UI.
+- **Vendor rows that encode nothing.** Synology-over-SFTP is generic SFTP with a
+  different label. A vendor entry earns its place only when it removes real
+  knowledge from the operator, as Nextcloud does; otherwise it is a docs
+  paragraph pointing at the generic provider, not a catalogue row.
+
 #### The registry
 
 ```python
