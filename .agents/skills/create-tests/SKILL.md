@@ -1,6 +1,6 @@
 ---
 name: create-tests
-description: Use when touching any test — creating a test file, adding a case to an existing file, editing or deleting a test, auditing whether a module is covered, or choosing which tier (unit / integration / contract / e2e / Playwright) a scenario belongs to. Carries the mandatory coverage matrix, the tier policy, the mirrored test layout, file anatomy and parametrization rules, and the per-runtime conventions for pytest, vitest, and Playwright in this repo. Not for merely running tests — AGENTS.md has the commands.
+description: Use when touching any test — creating a test file, adding a case to an existing file, editing or deleting a test, auditing whether a module is covered, or choosing which tier (unit / integration / contract / e2e / Playwright) a scenario belongs to. Carries the mandatory coverage matrix, the tier policy, the mirrored test layout, file anatomy and parametrization rules, the fixture/factory system every arrange step uses, and the per-runtime conventions for pytest, vitest, and Playwright in this repo. Also applies when a production entity changes, since its factory changes with it. Not for merely running tests — AGENTS.md has the commands.
 ---
 
 # Create Tests
@@ -16,6 +16,21 @@ Read this file in full, then the one reference for the runtime you're writing in
 | `backend/tests/**` (pytest) or `backend/packages/printstash-core/tests/**` | [references/backend.md](references/backend.md) |
 | `frontend/src/**/__tests__/**` or `frontend/packages/*/src/__tests__/**` (vitest) | [references/frontend.md](references/frontend.md) |
 | `frontend/tests/e2e-real/**` or `frontend/tests/e2e/**` (Playwright) | [references/playwright.md](references/playwright.md) |
+
+Plus [references/fixtures.md](references/fixtures.md) whenever you write an
+**arrange step**, add or change a **builder**, or change a **production entity** —
+an entity change is incomplete until its factory matches, in the same PR.
+
+**The arrange step is not freestyle.** Every row a backend test needs comes from
+a `make_*` fixture backed by `tests/factories/`. Assembling a row inline, or
+adding a module-level `_build_thing()` helper beside your tests, is the single
+most common way this suite has gone wrong: the same helper reappeared 347 times,
+`_user` thirteen of them, disagreeing about whether its default was a superuser.
+Worse, a hand-built row that encodes state wrongly (`deleted_at` unset, a
+provider's credentials missing, a manifest that matches no source) **inserts
+cleanly and is then invisible to the code under test** — the test passes while
+asserting against a path it never reached. `references/fixtures.md` has the rules;
+`tests/factories/__init__.py` has the inventory.
 
 ## How much to test
 
@@ -300,9 +315,13 @@ Every test file, in every runtime, has the same anatomy, top to bottom:
    matters when it goes red. Not a restatement of the filename.
 2. **Imports**, then **module constants** — absolute instants, round numbers,
    fake credentials that are obviously fake.
-3. **Local fixtures / `_make_*` builders** — only what two or more tests
-   share. Single-use setup stays inline in its test. Anything three files
-   share moves to the nearest `conftest.py` / shared helper.
+3. **Local fixtures** — only environment setup this file alone needs, and only
+   what two or more of its tests share. Rows come from the `make_*` fixtures, so
+   a module-local row builder should not exist at all; single-use setup stays
+   inline in its test, where the reader can see it next to the assertion.
+   Anything three files share moves to the nearest `conftest.py`, and anything
+   that builds a database row belongs in `tests/factories/` instead — see
+   [references/fixtures.md](references/fixtures.md).
 4. **One group per production unit, in the production module's order** —
    `class Test<Function|Endpoint|Method>` in pytest, `describe("<unit>")` in
    vitest. Never an ad-hoc group (`TestMisc`, `describe("extra cases")`); a
@@ -426,10 +445,16 @@ channel.
 
 - **Round numbers** (100, 50, 25) for calculations; **absolute instants**
   (`"2026-01-01T00:00:00Z"`) instead of `now() ± offset`.
-- **Build rows through the models** (`Model(...)`, `Printer(...)`,
-  `User(...)`) with module-local `_make_*` helpers; the repo has no factory
-  library and doesn't need one. Helpers create-or-fail — never
-  create-or-reuse, which hides collisions.
+- **Build rows through the `make_*` fixtures**, never by constructing
+  `Model(...)` / `Printer(...)` / `User(...)` inline and never through a
+  module-local helper. `tests/factories/` is the one place that knows how library
+  state is encoded, and its keywords (`trashed=`, `provider=`, `recommended=`,
+  `scanning=`, `uploaded=`) exist because the raw columns silently mislead: a
+  wrongly-encoded row inserts cleanly and is then invisible to the code under
+  test. Builders create-or-fail and generate their own unique columns — never
+  create-or-reuse, which hides collisions, and never a hard-coded slug or sha,
+  which collides on the second row. Full rules and the maintenance contract:
+  [references/fixtures.md](references/fixtures.md).
 - **Real slicer files** live in `backend/tests/fixtures/` (Orca, Prusa, Cura,
   Bambu Studio, real MK4/Ender-3 outputs). Reach for one before hand-writing
   G-code; hand-write only when the header under test must be minimal.

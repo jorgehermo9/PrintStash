@@ -42,6 +42,21 @@ Format: .agents/skills/create-tests/SKILL.md -->
 - [ ] No `skip`/`xfail`/`.skip` without an issue URL, and no commented-out tests
 - [ ] Every new endpoint has a 401 row and, if it is role-gated, a 403 row
 
+### Fixtures and factories
+
+<!-- `tests/factories/` is the only place that knows how library state is
+encoded. A hand-built row that encodes it wrongly inserts cleanly and is then
+invisible to the code under test — the test passes against nothing.
+Rules: .agents/skills/create-tests/references/fixtures.md -->
+
+- [ ] Rows come from the `make_*` fixtures — nothing assembled inline, no new
+      module-local `_make_*` helper, no hard-coded value in a unique column
+- [ ] Intent keywords used instead of their columns (`trashed=`, `provider=`,
+      `recommended=`, `scanning=`, `uploaded=`)
+- [ ] **Entity changed?** Its builder, protocol and `make_*` fixture updated in
+      this PR, and any new promise has a row in `tests/repo/test_factories.py`
+- [ ] Any new scenario has three callers and says why its shape is a unit
+
 ## Notes
 
 Mention any schema, API, storage, or printer-provider behaviour changes.

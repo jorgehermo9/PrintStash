@@ -145,7 +145,9 @@ def storage(request, tmp_path): ...
 | --- | --- | --- |
 | `db_session` | a `Session` on the shared in-memory SQLite engine (production pragmas, `foreign_keys=ON`) | every in-process service/query test |
 | `client` | `TestClient(app)` with hub, provider registry, `LocalTaskQueue` attached | every router test |
-| `auth_headers` | bearer header for a fresh superuser with `admin` scope | admin happy paths; `_user_headers(db_session, name, is_superuser=False, scope="write")` for RBAC rows |
+| `auth_headers` | bearer header for a fresh superuser with `admin` scope | admin happy paths only — it proves nothing about the 403 half of a contract |
+| `user_headers` | headers for a fresh **non**-superuser, at the scope you name | every RBAC and scope row; two identities means two calls |
+| `make_user` + `headers_for` | the user row *and* its headers | when the test also grants that user a role |
 | `app`, `hub` | the FastAPI app / a `PrinterHub` on `InProcessBus` | direct hub/service driving |
 | `threaded_hub_db` | swaps in the shared-cache engine so real `asyncio.to_thread` writes can race the test's reads | tests that run the *real* polling loop |
 | `tmp_path` (autouse chdir) | cwd is a throwaway dir | anything writing relative paths |
@@ -156,6 +158,25 @@ override, `_overlay.clear()`, storage-root wipe, truncate all tables, rebind
 refresh rate limiters. **Adding a module-level singleton to `app/`? Add its
 reset to `_patch_engine` in the same PR** — otherwise it leaks under
 `pytest-randomly` and shows up as an order-dependent failure far from its cause.
+
+## Building rows: the `make_*` fixtures
+
+`tests/integration/conftest.py` exposes a session-bound builder for every table a
+test needs — `make_model`, `make_file`, `make_printer`, `make_collection`,
+`make_inbox_item`, `make_external_library`, and the rest — plus promoted
+scenarios (`a_model_with_gcode`, `a_printer_with_a_queue`). They are the arrange
+step: **never construct a row inline, and never add a module-local `_make_*`
+helper.** `uv run pytest --fixtures -q tests/integration` lists them;
+`tests/factories/__init__.py` is the inventory.
+
+Their keywords name *state*, not columns — `trashed=`, `provider=`,
+`recommended=`, `scanning=`, `uploaded=` — because each encoding is one a
+hand-built row gets wrong in a way that **inserts cleanly and is then invisible
+to the code under test**, so the test passes against a path it never reached.
+
+Changing a production entity means changing its builder, protocol and fixture in
+the same PR. Rules, the maintenance table and the PR checklist:
+[fixtures.md](fixtures.md).
 
 `tests/unit/conftest.py` and `tests/integration/conftest.py` install a
 **socket guard**: any real network connection raises. A test that needs a
