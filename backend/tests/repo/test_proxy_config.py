@@ -1,4 +1,23 @@
-"""Regression tests for production reverse-proxy upload contracts."""
+"""The deployment files agreeing with each other about limits and exposure.
+
+Nothing in this repo imports an nginx config or a compose file, so nothing else
+notices when one drifts from the settings it is supposed to mirror. The failures
+that follow are all of the same kind: the software is correct, the deployment is
+not, and the symptom appears only on a real installation.
+
+The upload limit is the clearest chain. A user's upload has to pass the backend's
+own `body_limit`, nginx's `client_max_body_size`, and whatever the compose file
+put in the frontend's environment — and the smallest of the three wins. If they
+disagree, uploads fail at a size no setting in the UI explains, with a 413 from a
+proxy the user does not know exists.
+
+The rest are exposure. A default `docker compose up` must not publish the API
+port or a database port on the host: a self-hoster who assumed the frontend was
+the only door would have put PrintStash's database on their LAN. And both runtime
+images must drop to an unprivileged user, because a container that runs as root
+turns any RCE into host access. These are one-line mistakes to make in a
+Dockerfile and invisible until somebody scans the host.
+"""
 
 from __future__ import annotations
 
@@ -13,98 +32,100 @@ def _root() -> Path:
     return REPO_ROOT
 
 
-def test_frontend_nginx_uses_runtime_upload_limit_template() -> None:
-    conf = (_root() / "frontend" / "nginx.conf").read_text()
+class TestFrontendNginxConf:
+    def test_frontend_nginx_uses_runtime_upload_limit_template(self) -> None:
+        conf = (_root() / "frontend" / "nginx.conf").read_text()
 
-    assert "client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};" in conf
+        assert "client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};" in conf
 
+    def test_frontend_nginx_compresses_static_text_but_not_api_responses(self) -> None:
+        conf = (_root() / "frontend" / "nginx.conf").read_text()
 
-def test_frontend_nginx_compresses_static_text_but_not_api_responses() -> None:
-    conf = (_root() / "frontend" / "nginx.conf").read_text()
+        assert "gzip on;" in conf
+        assert "gzip_vary on;" in conf
+        assert "application/javascript" in conf
+        assert "text/css" in conf
+        assert "font/woff2" not in conf
+        api_location = conf.split("location /api/v1/ {", 1)[1].split("}", 1)[0]
+        assert "gzip off;" in api_location
 
-    assert "gzip on;" in conf
-    assert "gzip_vary on;" in conf
-    assert "application/javascript" in conf
-    assert "text/css" in conf
-    assert "font/woff2" not in conf
-    api_location = conf.split("location /api/v1/ {", 1)[1].split("}", 1)[0]
-    assert "gzip off;" in api_location
+    def test_frontend_sets_browser_security_headers(self) -> None:
+        conf = (_root() / "frontend" / "security-headers.conf").read_text()
 
-
-def test_frontend_image_defaults_to_backend_upload_limit() -> None:
-    dockerfile = (_root() / "frontend" / "Dockerfile").read_text()
-
-    assert "COPY nginx.conf /etc/nginx/templates/default.conf.template" in dockerfile
-    assert "ENV NGINX_CLIENT_MAX_BODY_SIZE=512m" in dockerfile
-
-
-def test_compose_wires_frontend_proxy_limit_from_upload_setting() -> None:
-    root = REPO_ROOT
-    compose = (root / "docker-compose.yml").read_text()
-
-    assert "NGINX_CLIENT_MAX_BODY_SIZE: ${VAULT_MAX_UPLOAD_MB:-512}m" in compose
-    assert "VAULT_MAX_UPLOAD_MB: ${VAULT_MAX_UPLOAD_MB:-512}" in compose
+        assert "Content-Security-Policy" in conf
+        assert "frame-ancestors 'none'" in conf
+        assert 'X-Content-Type-Options "nosniff"' in conf
+        assert 'Referrer-Policy "strict-origin-when-cross-origin"' in conf
+        assert "Permissions-Policy" in conf
 
 
-def test_default_deployments_do_not_publish_api_port() -> None:
-    root = _root()
-    for name in ("docker-compose.yml", "docker-compose.light.yml"):
-        config = yaml.safe_load((root / name).read_text())
-        api = config["services"]["api"]
-        assert "ports" not in api
-        assert api["expose"] == ["8000"]
+class TestFrontendDockerfile:
+    def test_frontend_image_defaults_to_backend_upload_limit(self) -> None:
+        dockerfile = (_root() / "frontend" / "Dockerfile").read_text()
+
+        assert (
+            "COPY nginx.conf /etc/nginx/templates/default.conf.template" in dockerfile
+        )
+        assert "ENV NGINX_CLIENT_MAX_BODY_SIZE=512m" in dockerfile
 
 
-def test_optional_stateful_services_do_not_publish_host_ports() -> None:
-    root = _root()
-    default_config = yaml.safe_load((root / "docker-compose.yml").read_text())
-    for service_name in ("postgres", "seaweedfs"):
-        assert "ports" not in default_config["services"][service_name]
+class TestComposeFiles:
+    def test_compose_wires_frontend_proxy_limit_from_upload_setting(self) -> None:
+        root = REPO_ROOT
+        compose = (root / "docker-compose.yml").read_text()
 
-    migration_config = yaml.safe_load(
-        (root / "docker-compose.migrate-minio.yml").read_text()
-    )
-    assert "ports" not in migration_config["services"]["minio"]
+        assert "NGINX_CLIENT_MAX_BODY_SIZE: ${VAULT_MAX_UPLOAD_MB:-512}m" in compose
+        assert "VAULT_MAX_UPLOAD_MB: ${VAULT_MAX_UPLOAD_MB:-512}" in compose
 
+    def test_default_deployments_do_not_publish_api_port(self) -> None:
+        root = _root()
+        for name in ("docker-compose.yml", "docker-compose.light.yml"):
+            config = yaml.safe_load((root / name).read_text())
+            api = config["services"]["api"]
+            assert "ports" not in api
+            assert api["expose"] == ["8000"]
 
-def test_frontend_sets_browser_security_headers() -> None:
-    conf = (_root() / "frontend" / "security-headers.conf").read_text()
+    def test_optional_stateful_services_do_not_publish_host_ports(self) -> None:
+        root = _root()
+        default_config = yaml.safe_load((root / "docker-compose.yml").read_text())
+        for service_name in ("postgres", "seaweedfs"):
+            assert "ports" not in default_config["services"][service_name]
 
-    assert "Content-Security-Policy" in conf
-    assert "frame-ancestors 'none'" in conf
-    assert 'X-Content-Type-Options "nosniff"' in conf
-    assert 'Referrer-Policy "strict-origin-when-cross-origin"' in conf
-    assert "Permissions-Policy" in conf
-
-
-def test_runtime_images_use_unprivileged_users() -> None:
-    root = _root()
-    backend = (root / "backend" / "Dockerfile").read_text()
-    frontend = (root / "frontend" / "Dockerfile").read_text()
-
-    assert "gosu printstash" in (root / "backend" / "docker-entrypoint.sh").read_text()
-    assert "useradd" in backend
-    assert "nginxinc/nginx-unprivileged:alpine" in frontend
+        migration_config = yaml.safe_load(
+            (root / "docker-compose.migrate-minio.yml").read_text()
+        )
+        assert "ports" not in migration_config["services"]["minio"]
 
 
-def test_backend_uv_toolchain_image_is_immutable() -> None:
-    dockerfile = (_root() / "backend" / "Dockerfile").read_text()
+class TestBackendDockerfile:
+    def test_backend_uv_toolchain_image_is_immutable(self) -> None:
+        dockerfile = (_root() / "backend" / "Dockerfile").read_text()
 
-    assert "ghcr.io/astral-sh/uv:latest" not in dockerfile
-    assert (
-        "ghcr.io/astral-sh/uv:0.12.1@"
-        "sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded"
-        in dockerfile
-    )
+        assert "ghcr.io/astral-sh/uv:latest" not in dockerfile
+        assert (
+            "ghcr.io/astral-sh/uv:0.12.1@"
+            "sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded"
+            in dockerfile
+        )
 
+    def test_backend_runtime_uv_fallback_uses_user_writable_cache(self) -> None:
+        dockerfile = (_root() / "backend" / "Dockerfile").read_text()
+        entrypoint = (_root() / "backend" / "docker-entrypoint.sh").read_text()
 
-def test_backend_runtime_uv_fallback_uses_user_writable_cache() -> None:
-    dockerfile = (_root() / "backend" / "Dockerfile").read_text()
-    entrypoint = (_root() / "backend" / "docker-entrypoint.sh").read_text()
+        runtime_cache = "ENV UV_CACHE_DIR=/tmp/printstash-uv-cache"
+        assert runtime_cache in dockerfile
+        assert "UV_NO_SYNC=1" in dockerfile
+        assert dockerfile.index(runtime_cache) > dockerfile.index("useradd")
+        assert 'CMD ["/app/.venv/bin/uvicorn"' in dockerfile
+        assert "/app/.venv/bin/python -m app.db.migrate" in entrypoint
 
-    runtime_cache = "ENV UV_CACHE_DIR=/tmp/printstash-uv-cache"
-    assert runtime_cache in dockerfile
-    assert "UV_NO_SYNC=1" in dockerfile
-    assert dockerfile.index(runtime_cache) > dockerfile.index("useradd")
-    assert 'CMD ["/app/.venv/bin/uvicorn"' in dockerfile
-    assert "/app/.venv/bin/python -m app.db.migrate" in entrypoint
+    def test_runtime_images_use_unprivileged_users(self) -> None:
+        root = _root()
+        backend = (root / "backend" / "Dockerfile").read_text()
+        frontend = (root / "frontend" / "Dockerfile").read_text()
+
+        assert (
+            "gosu printstash" in (root / "backend" / "docker-entrypoint.sh").read_text()
+        )
+        assert "useradd" in backend
+        assert "nginxinc/nginx-unprivileged:alpine" in frontend

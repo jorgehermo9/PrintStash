@@ -305,7 +305,7 @@ def test_the_duplicate_builder_list_has_no_stale_entries() -> None:
 # single invariant that happens to need the word. Both are worth reducing, and
 # neither is worth a mechanical split — that produces duplicated setup and
 # assertions in the wrong test. So the count is capped and may only fall.
-MAX_CONJUNCTION_NAMES = 323
+MAX_CONJUNCTION_NAMES = 308
 
 
 def test_no_new_test_names_join_two_behaviours() -> None:

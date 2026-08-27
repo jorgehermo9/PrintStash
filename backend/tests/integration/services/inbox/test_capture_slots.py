@@ -110,478 +110,617 @@ def _slot_payload(data: bytes = b"slot-owned") -> CaptureUploadSlotsCreate:
     )
 
 
-def test_capture_slots_are_owner_scoped_idempotent_and_finalize_gated(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-owner", superuser=True)
-    other = build_user(db_session, "slot-other")
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = slots[0]
-    with pytest.raises(HTTPException, match="not_found"):
-        inbox.require_capture_slot(db_session, other, slot.id)
-    with pytest.raises(HTTPException, match="incomplete"):
-        inbox.finalize_capture_upload(db_session, owner, row.id)
-    first = inbox.upload_capture_slot(
-        db_session,
-        slot,
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    replay = inbox.upload_capture_slot(
-        db_session,
-        first,
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    assert replay.id == first.id
-    with pytest.raises(ValueError, match="sha256"):
-        inbox.upload_capture_slot(
-            db_session,
-            replay,
-            stream=BytesIO(b"different!"),
-            media_type="application/octet-stream",
+class TestUploadCaptureSlot:
+    def test_capture_slots_are_owner_scoped_idempotent_and_finalize_gated(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-owner", superuser=True)
+        other = build_user(db_session, "slot-other")
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
         )
-    finalized = inbox.finalize_capture_upload(db_session, owner, row.id)
-    assert finalized.state == InboxItemState.REVIEW
-    with pytest.raises(ValueError, match="not_uploadable"):
-        inbox.upload_capture_slot(
+        slot = slots[0]
+        with pytest.raises(HTTPException, match="not_found"):
+            inbox.require_capture_slot(db_session, other, slot.id)
+        with pytest.raises(HTTPException, match="incomplete"):
+            inbox.finalize_capture_upload(db_session, owner, row.id)
+        first = inbox.upload_capture_slot(
             db_session,
-            replay,
+            slot,
             stream=BytesIO(b"slot-owned"),
             media_type="application/octet-stream",
         )
+        replay = inbox.upload_capture_slot(
+            db_session,
+            first,
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        assert replay.id == first.id
+        with pytest.raises(ValueError, match="sha256"):
+            inbox.upload_capture_slot(
+                db_session,
+                replay,
+                stream=BytesIO(b"different!"),
+                media_type="application/octet-stream",
+            )
+        finalized = inbox.finalize_capture_upload(db_session, owner, row.id)
+        assert finalized.state == InboxItemState.REVIEW
+        with pytest.raises(ValueError, match="not_uploadable"):
+            inbox.upload_capture_slot(
+                db_session,
+                replay,
+                stream=BytesIO(b"slot-owned"),
+                media_type="application/octet-stream",
+            )
 
-
-@pytest.mark.anyio
-async def test_capture_slot_upload_cleans_temp_file_after_stream_disconnect(
-    db_session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
-    incoming_dir = inbox.settings.incoming_dir
-    incoming_dir.mkdir(parents=True)
-    owner = build_user(db_session, "slot-disconnect", superuser=True)
-    payload = _slot_payload(data=b"disconnect-me")
-    _, slots = inbox.create_capture_upload_slots(db_session, owner, payload)
-    slot = slots[0]
-    state = iter(
-        [
-            {
-                "type": "http.request",
-                "body": b"disconnect",
-                "more_body": True,
-            },
-            {"type": "http.disconnect"},
-        ]
-    )
-
-    async def receive() -> dict[str, object]:
-        return cast(dict[str, object], next(state))
-
-    request = Request(
-        {
-            "type": "http",
-            "http_version": "1.1",
-            "method": "PUT",
-            "scheme": "http",
-            "path": f"/api/v1/inbox/capture-upload-slots/{slot.id}",
-            "raw_path": b"/api/v1/inbox/capture-upload-slots",
-            "query_string": b"",
-            "headers": [
-                (b"content-length", str(len(b"disconnect-me")).encode()),
-                (b"content-type", b"application/octet-stream"),
-            ],
-            "server": ("testserver", 80),
-            "client": ("testclient", 123),
-        },
-        receive,
-    )
-
-    with pytest.raises(ClientDisconnect):
-        await inbox_api.put_capture_upload_slot(
-            slot.id, request, current_user=owner, session=db_session
+    @pytest.mark.anyio
+    async def test_capture_slot_upload_cleans_temp_file_after_stream_disconnect(
+        self, db_session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
+        incoming_dir = inbox.settings.incoming_dir
+        incoming_dir.mkdir(parents=True)
+        owner = build_user(db_session, "slot-disconnect", superuser=True)
+        payload = _slot_payload(data=b"disconnect-me")
+        _, slots = inbox.create_capture_upload_slots(db_session, owner, payload)
+        slot = slots[0]
+        state = iter(
+            [
+                {
+                    "type": "http.request",
+                    "body": b"disconnect",
+                    "more_body": True,
+                },
+                {"type": "http.disconnect"},
+            ]
         )
 
-    assert list(incoming_dir.iterdir()) == []
+        async def receive() -> dict[str, object]:
+            return cast(dict[str, object], next(state))
 
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "PUT",
+                "scheme": "http",
+                "path": f"/api/v1/inbox/capture-upload-slots/{slot.id}",
+                "raw_path": b"/api/v1/inbox/capture-upload-slots",
+                "query_string": b"",
+                "headers": [
+                    (b"content-length", str(len(b"disconnect-me")).encode()),
+                    (b"content-type", b"application/octet-stream"),
+                ],
+                "server": ("testserver", 80),
+                "client": ("testclient", 123),
+            },
+            receive,
+        )
 
-@pytest.mark.parametrize("failure", ["invalid_image", "postprocess"])
-def test_capture_cover_service_temp_is_cleaned_when_processing_fails(
-    db_session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    """Service staging is distinct from the API request temp and is always cleaned."""
-    from PIL import Image
+        with pytest.raises(ClientDisconnect):
+            await inbox_api.put_capture_upload_slot(
+                slot.id, request, current_user=owner, session=db_session
+            )
 
-    monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
-    incoming_dir = inbox.settings.incoming_dir
-    incoming_dir.mkdir(parents=True)
-    if failure == "invalid_image":
-        cover_bytes = b"not-an-image"
-    else:
+        assert list(incoming_dir.iterdir()) == []
+
+    def test_capture_source_mismatch_rejects_before_slot_write(
+        self, db_session: Session
+    ) -> None:
+        owner = build_user(db_session, "slot-source", superuser=True)
+        raw = _slot_payload().model_dump(mode="json")
+        # Two different pages on the same provider: the request says it is uploading
+        # for model 1234 while the captured source declares model 9999, so the bytes
+        # would be attributed to a model the user never captured.
+        #
+        # `source_item_id` has to be absent for this guard to be the one that fires.
+        # When an item id is present the canonical URL is bound to it, and a
+        # mismatched page is rejected a step earlier by the canonicalizer — a
+        # stronger check on a narrower input. This is the residual case: no item id,
+        # so both URLs canonicalize cleanly and only comparing them catches it.
+        raw["capture_source"]["source_item_id"] = None
+        raw["capture_source"]["canonical_url"] = (
+            "https://makerworld.com/en/models/9999-other"
+        )
+        with pytest.raises(
+            inbox.importer.ImportError_, match="capture_source_url_mismatch"
+        ):
+            inbox.create_capture_upload_slots(
+                db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+            )
+        assert db_session.exec(select(InboxItem)).all() == []
+
+    def test_capture_source_from_another_provider_rejects_before_slot_write(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-source-provider", superuser=True)
+        raw = _slot_payload().model_dump(mode="json")
+        raw["capture_source"]["canonical_url"] = "https://printables.com/model/1"
+
+        # A URL that does not belong to the declared provider at all is refused when
+        # the source is parsed: provider and URL are bound, so there is no canonical
+        # form of a Printables URL under `makerworld`.
+        with pytest.raises(inbox.importer.ImportError_, match="capture_source_invalid"):
+            inbox.create_capture_upload_slots(
+                db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+            )
+        assert db_session.exec(select(InboxItem)).all() == []
+
+    def test_capture_source_page_of_another_item_rejects_before_slot_write(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-source-item", superuser=True)
+        raw = _slot_payload().model_dump(mode="json")
+        raw["capture_source"]["canonical_url"] = (
+            "https://makerworld.com/en/models/9999-other"
+        )
+
+        # Item id 1234 with model 9999's page: the canonical URL is bound to the
+        # item, so this never reaches the URL comparison.
+        with pytest.raises(inbox.importer.ImportError_, match="capture_source_invalid"):
+            inbox.create_capture_upload_slots(
+                db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+            )
+        assert db_session.exec(select(InboxItem)).all() == []
+
+    def test_capture_slot_replay_survives_fresh_session_and_reassigns_two_leases(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-restart", superuser=True)
+        payload = _slot_payload()
+        raw = payload.model_dump(mode="json")
+        raw["files"].append(
+            {
+                "id": "second.stl",
+                "filename": "second.stl",
+                "media_type": "application/octet-stream",
+                "size_bytes": 3,
+                "sha256": hashlib.sha256(b"two").hexdigest(),
+            }
+        )
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+        )
+        inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        inbox.upload_capture_slot(
+            db_session,
+            slots[1],
+            stream=BytesIO(b"two"),
+            media_type="application/octet-stream",
+        )
+        db_session.expire_all()  # simulates a new request/session identity map
+        replay_slot = db_session.get(type(slots[0]), slots[0].id)
+        assert replay_slot is not None
+        assert (
+            inbox.upload_capture_slot(
+                db_session,
+                replay_slot,
+                stream=BytesIO(b"slot-owned"),
+                media_type="application/octet-stream",
+            ).id
+            == slots[0].id
+        )
+        first = BackgroundJob(id="slot-job-one", owner_user_id=owner.id)
+        second = BackgroundJob(id="slot-job-two", owner_user_id=owner.id)
+        db_session.add(first)
+        db_session.add(second)
+        db_session.flush()
+        inbox.staging_leases.transfer_capture_slots_to_job(
+            db_session, inbox_item_id=row.id, job_id=first.id
+        )
+        inbox.staging_leases.transfer_capture_slots_to_job(
+            db_session, inbox_item_id=row.id, job_id=second.id
+        )
+        leases = db_session.exec(
+            select(StagingLease).where(StagingLease.background_job_id == second.id)
+        ).all()
+        assert len(leases) == 2
+        assert {lease.capture_upload_slot_origin_id for lease in leases} == {
+            slot.id for slot in slots
+        }
+
+    def test_capture_slot_restart_reconciles_published_object_without_receipt(
+        self,
+        db_session: Session,
+    ) -> None:
+        owner = build_user(db_session, "slot-crash-restart", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = slots[0]
+        backend = inbox.get_backend()
+        assert slot.storage_key is not None
+
+        # Simulate create-only success followed by process death before slot and
+        # lease receipt persistence.
+        backend.create_bytes(b"slot-owned", slot.storage_key)
+        db_session.expire_all()
+        recovered_slot = db_session.get(CaptureUploadSlot, slot.id)
+        assert recovered_slot is not None
+        assert recovered_slot.receipt_json is None
+        assert inbox.staging_leases.reconcile_capture_slot(
+            db_session, backend, recovered_slot
+        )
+        db_session.commit()
+
+        assert recovered_slot.state == CaptureUploadSlotState.UPLOADED
+        assert recovered_slot.receipt_json is not None
+        inbox.dismiss(db_session, row)
+        assert backend.exists(slot.storage_key)
+        process_storage_delete_intents()
+        assert not backend.exists(slot.storage_key)
+
+    def test_capture_cover_attaches_before_raw_slot_receipt_is_released(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from PIL import Image
+
+        owner = build_user(db_session, "slot-cover", superuser=True)
         image = io.BytesIO()
         Image.new("RGB", (8, 8), "navy").save(image, format="PNG")
         cover_bytes = image.getvalue()
-
-        def fail_postprocess(*_args: object, **_kwargs: object) -> object:
-            raise RuntimeError("injected cover postprocess failure")
-
-        monkeypatch.setattr(inbox, "process_source_cover_upload", fail_postprocess)
-
-    raw = _slot_payload().model_dump(mode="json")
-    raw["cover"] = {
-        "id": "cover",
-        "filename": "cover.png",
-        "media_type": "image/png",
-        "size_bytes": len(cover_bytes),
-        "sha256": hashlib.sha256(cover_bytes).hexdigest(),
-    }
-    owner = build_user(db_session, f"cover-service-{failure}", superuser=True)
-    _, slots = inbox.create_capture_upload_slots(
-        db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
-    )
-    cover_slot = next(slot for slot in slots if slot.role == "cover")
-
-    expected_error = ValueError if failure == "invalid_image" else RuntimeError
-    with pytest.raises(expected_error):
-        inbox.upload_capture_slot(
-            db_session,
-            cover_slot,
-            stream=BytesIO(cover_bytes),
-            media_type="image/png",
-        )
-
-    assert list(incoming_dir.iterdir()) == []
-    db_session.expire_all()
-    fresh_slot = db_session.get(CaptureUploadSlot, cover_slot.id)
-    assert fresh_slot is not None
-    assert fresh_slot.state == CaptureUploadSlotState.PENDING
-    assert (
-        db_session.exec(
-            select(StagingLease).where(
-                StagingLease.capture_upload_slot_id == cover_slot.id
-            )
-        ).one()
-        is not None
-    )
-
-
-def test_delete_intent_processor_retries_backend_failure_and_blocks_mismatch(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.db.models import StorageDeleteIntent
-    from app.services import storage_deletion
-
-    owner = build_user(db_session, "slot-retry-owner", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    assert slot.storage_key is not None
-    assert inbox._cleanup_capture_slots(db_session, row)
-    db_session.commit()
-    backend = inbox.get_backend()
-    monkeypatch.setattr(
-        backend,
-        "rollback_create",
-        lambda _receipt: (_ for _ in ()).throw(OSError("offline")),
-    )
-    result = storage_deletion.process_storage_delete_intents()
-    assert result.pending == 1
-    intent = db_session.exec(select(StorageDeleteIntent)).one()
-    assert intent.status == "retry"
-    assert backend.exists(slot.storage_key)
-
-    # A receiver must fail closed when deletion cannot prove this is our object.
-    monkeypatch.setattr(backend, "rollback_create", lambda _receipt: False)
-    intent.next_attempt_at = utcnow() - timedelta(seconds=1)
-    db_session.commit()
-    result = storage_deletion.process_storage_delete_intents()
-    assert result.blocked == 1
-    db_session.expire_all()
-    blocked_intent = db_session.get(StorageDeleteIntent, intent.id)
-    assert blocked_intent is not None
-    assert blocked_intent.status == "blocked"
-    assert backend.exists(slot.storage_key)
-
-
-def test_capture_source_mismatch_rejects_before_slot_write(db_session: Session) -> None:
-    owner = build_user(db_session, "slot-source", superuser=True)
-    raw = _slot_payload().model_dump(mode="json")
-    # Two different pages on the same provider: the request says it is uploading
-    # for model 1234 while the captured source declares model 9999, so the bytes
-    # would be attributed to a model the user never captured.
-    #
-    # `source_item_id` has to be absent for this guard to be the one that fires.
-    # When an item id is present the canonical URL is bound to it, and a
-    # mismatched page is rejected a step earlier by the canonicalizer — a
-    # stronger check on a narrower input. This is the residual case: no item id,
-    # so both URLs canonicalize cleanly and only comparing them catches it.
-    raw["capture_source"]["source_item_id"] = None
-    raw["capture_source"]["canonical_url"] = (
-        "https://makerworld.com/en/models/9999-other"
-    )
-    with pytest.raises(
-        inbox.importer.ImportError_, match="capture_source_url_mismatch"
-    ):
-        inbox.create_capture_upload_slots(
-            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
-        )
-    assert db_session.exec(select(InboxItem)).all() == []
-
-
-def test_capture_source_from_another_provider_rejects_before_slot_write(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-source-provider", superuser=True)
-    raw = _slot_payload().model_dump(mode="json")
-    raw["capture_source"]["canonical_url"] = "https://printables.com/model/1"
-
-    # A URL that does not belong to the declared provider at all is refused when
-    # the source is parsed: provider and URL are bound, so there is no canonical
-    # form of a Printables URL under `makerworld`.
-    with pytest.raises(inbox.importer.ImportError_, match="capture_source_invalid"):
-        inbox.create_capture_upload_slots(
-            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
-        )
-    assert db_session.exec(select(InboxItem)).all() == []
-
-
-def test_capture_source_page_of_another_item_rejects_before_slot_write(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-source-item", superuser=True)
-    raw = _slot_payload().model_dump(mode="json")
-    raw["capture_source"]["canonical_url"] = (
-        "https://makerworld.com/en/models/9999-other"
-    )
-
-    # Item id 1234 with model 9999's page: the canonical URL is bound to the
-    # item, so this never reaches the URL comparison.
-    with pytest.raises(inbox.importer.ImportError_, match="capture_source_invalid"):
-        inbox.create_capture_upload_slots(
-            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
-        )
-    assert db_session.exec(select(InboxItem)).all() == []
-
-
-def test_capture_slot_replay_survives_fresh_session_and_reassigns_two_leases(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-restart", superuser=True)
-    payload = _slot_payload()
-    raw = payload.model_dump(mode="json")
-    raw["files"].append(
-        {
-            "id": "second.stl",
-            "filename": "second.stl",
-            "media_type": "application/octet-stream",
-            "size_bytes": 3,
-            "sha256": hashlib.sha256(b"two").hexdigest(),
+        raw = _slot_payload().model_dump(mode="json")
+        raw["cover"] = {
+            "id": "cover",
+            "filename": "cover.png",
+            "media_type": "image/png",
+            "size_bytes": len(cover_bytes),
+            "sha256": hashlib.sha256(cover_bytes).hexdigest(),
         }
-    )
-    row, slots = inbox.create_capture_upload_slots(
-        db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
-    )
-    inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    inbox.upload_capture_slot(
-        db_session,
-        slots[1],
-        stream=BytesIO(b"two"),
-        media_type="application/octet-stream",
-    )
-    db_session.expire_all()  # simulates a new request/session identity map
-    replay_slot = db_session.get(type(slots[0]), slots[0].id)
-    assert replay_slot is not None
-    assert (
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+        )
+        file_slot, cover_slot = slots
         inbox.upload_capture_slot(
             db_session,
-            replay_slot,
+            file_slot,
             stream=BytesIO(b"slot-owned"),
             media_type="application/octet-stream",
-        ).id
-        == slots[0].id
-    )
-    first = BackgroundJob(id="slot-job-one", owner_user_id=owner.id)
-    second = BackgroundJob(id="slot-job-two", owner_user_id=owner.id)
-    db_session.add(first)
-    db_session.add(second)
-    db_session.flush()
-    inbox.staging_leases.transfer_capture_slots_to_job(
-        db_session, inbox_item_id=row.id, job_id=first.id
-    )
-    inbox.staging_leases.transfer_capture_slots_to_job(
-        db_session, inbox_item_id=row.id, job_id=second.id
-    )
-    leases = db_session.exec(
-        select(StagingLease).where(StagingLease.background_job_id == second.id)
-    ).all()
-    assert len(leases) == 2
-    assert {lease.capture_upload_slot_origin_id for lease in leases} == {
-        slot.id for slot in slots
-    }
+        )
+        inbox.upload_capture_slot(
+            db_session, cover_slot, stream=BytesIO(cover_bytes), media_type="image/png"
+        )
+        model = build_model(
+            db_session,
+            name="Cover import",
+            slug=f"cover-import-{uuid.uuid4().hex}",
+            hash=uuid.uuid4().hex * 2,
+        )
+        source = ModelProvenanceSource(
+            model_id=model.id,
+            provider="makerworld",
+            # All three of provider, item id and canonical URL have to match the
+            # captured manifest: the cover is attached to *exactly one* provenance
+            # source, and an attach that matched zero or two would silently skip
+            # publication instead of raising.
+            source_item_id="1234",
+            canonical_url="https://makerworld.com/en/models/1234-widget",
+            identity_key=uuid.uuid4().hex * 2,
+        )
+        db_session.add(source)
+        row.resulting_model_id = model.id
+        db_session.add(row)
+        db_session.commit()
+        monkeypatch.setattr(
+            inbox.source_covers,
+            "put",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("cover publish failed")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="cover publish failed"):
+            inbox._attach_capture_cover(db_session, row)
+        assert db_session.get(type(cover_slot), cover_slot.id) is not None
+        attached: list[int] = []
+        monkeypatch.setattr(
+            inbox.source_covers,
+            "put",
+            lambda _s, _b, **kwargs: attached.append(kwargs["provenance_source_id"]),
+        )
+        assert inbox._attach_capture_cover(db_session, row)
+        assert attached == [source.id]
+        assert inbox._cleanup_capture_slots(db_session, row)
+        db_session.commit()
+        assert db_session.get(type(cover_slot), cover_slot.id) is None
 
+    @pytest.mark.parametrize("failure", ["invalid_image", "postprocess"])
+    def test_capture_cover_service_temp_is_cleaned_when_processing_fails(
+        self,
+        db_session: Session,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+        failure: str,
+    ) -> None:
+        """Service staging is distinct from the API request temp and is always cleaned."""
+        from PIL import Image
 
-def test_capture_slot_restart_reconciles_published_object_without_receipt(
-    db_session: Session,
-) -> None:
-    owner = build_user(db_session, "slot-crash-restart", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(db_session, owner, _slot_payload())
-    slot = slots[0]
-    backend = inbox.get_backend()
-    assert slot.storage_key is not None
+        monkeypatch.setitem(_overlay, "staging_dir", tmp_path)
+        incoming_dir = inbox.settings.incoming_dir
+        incoming_dir.mkdir(parents=True)
+        if failure == "invalid_image":
+            cover_bytes = b"not-an-image"
+        else:
+            image = io.BytesIO()
+            Image.new("RGB", (8, 8), "navy").save(image, format="PNG")
+            cover_bytes = image.getvalue()
 
-    # Simulate create-only success followed by process death before slot and
-    # lease receipt persistence.
-    backend.create_bytes(b"slot-owned", slot.storage_key)
-    db_session.expire_all()
-    recovered_slot = db_session.get(CaptureUploadSlot, slot.id)
-    assert recovered_slot is not None
-    assert recovered_slot.receipt_json is None
-    assert inbox.staging_leases.reconcile_capture_slot(
-        db_session, backend, recovered_slot
-    )
-    db_session.commit()
+            def fail_postprocess(*_args: object, **_kwargs: object) -> object:
+                raise RuntimeError("injected cover postprocess failure")
 
-    assert recovered_slot.state == CaptureUploadSlotState.UPLOADED
-    assert recovered_slot.receipt_json is not None
-    inbox.dismiss(db_session, row)
-    assert backend.exists(slot.storage_key)
-    process_storage_delete_intents()
-    assert not backend.exists(slot.storage_key)
+            monkeypatch.setattr(inbox, "process_source_cover_upload", fail_postprocess)
 
-
-def test_capture_slot_cleanup_later_failure_preserves_all_slot_ownership(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Cleanup is all-or-nothing when a later durable intent cannot be made."""
-    raw = _slot_payload().model_dump(mode="json")
-    raw["files"].append(
-        {
-            "id": "second.stl",
-            "filename": "second.stl",
-            "media_type": "application/octet-stream",
-            "size_bytes": 3,
-            "sha256": hashlib.sha256(b"two").hexdigest(),
+        raw = _slot_payload().model_dump(mode="json")
+        raw["cover"] = {
+            "id": "cover",
+            "filename": "cover.png",
+            "media_type": "image/png",
+            "size_bytes": len(cover_bytes),
+            "sha256": hashlib.sha256(cover_bytes).hexdigest(),
         }
-    )
-    owner = build_user(db_session, "slot-cleanup-atomic", superuser=True)
-    row, slots = inbox.create_capture_upload_slots(
-        db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
-    )
-    inbox.upload_capture_slot(
-        db_session,
-        slots[0],
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    inbox.upload_capture_slot(
-        db_session,
-        slots[1],
-        stream=BytesIO(b"two"),
-        media_type="application/octet-stream",
-    )
-    original_enqueue = inbox.enqueue_creation_receipt
-    calls = 0
+        owner = build_user(db_session, f"cover-service-{failure}", superuser=True)
+        _, slots = inbox.create_capture_upload_slots(
+            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+        )
+        cover_slot = next(slot for slot in slots if slot.role == "cover")
 
-    def fail_second(*args: object, **kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("intent store unavailable")
-        return original_enqueue(*args, **kwargs)
+        expected_error = ValueError if failure == "invalid_image" else RuntimeError
+        with pytest.raises(expected_error):
+            inbox.upload_capture_slot(
+                db_session,
+                cover_slot,
+                stream=BytesIO(cover_bytes),
+                media_type="image/png",
+            )
 
-    monkeypatch.setattr(inbox, "enqueue_creation_receipt", fail_second)
-
-    assert not inbox._cleanup_capture_slots(db_session, row)
-    db_session.commit()
-    db_session.expire_all()
-
-    assert {slot.id for slot in db_session.exec(select(CaptureUploadSlot)).all()} >= {
-        slot.id for slot in slots
-    }
-    assert len(db_session.exec(select(StagingLease)).all()) == 2
-    assert db_session.exec(select(StorageDeleteIntent)).all() == []
+        assert list(incoming_dir.iterdir()) == []
+        db_session.expire_all()
+        fresh_slot = db_session.get(CaptureUploadSlot, cover_slot.id)
+        assert fresh_slot is not None
+        assert fresh_slot.state == CaptureUploadSlotState.PENDING
+        assert (
+            db_session.exec(
+                select(StagingLease).where(
+                    StagingLease.capture_upload_slot_id == cover_slot.id
+                )
+            ).one()
+            is not None
+        )
 
 
-def test_capture_cover_attaches_before_raw_slot_receipt_is_released(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from PIL import Image
+class TestCleanupCaptureSlots:
+    def test_capture_slot_cleanup_later_failure_preserves_all_slot_ownership(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cleanup is all-or-nothing when a later durable intent cannot be made."""
+        raw = _slot_payload().model_dump(mode="json")
+        raw["files"].append(
+            {
+                "id": "second.stl",
+                "filename": "second.stl",
+                "media_type": "application/octet-stream",
+                "size_bytes": 3,
+                "sha256": hashlib.sha256(b"two").hexdigest(),
+            }
+        )
+        owner = build_user(db_session, "slot-cleanup-atomic", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
+        )
+        inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        inbox.upload_capture_slot(
+            db_session,
+            slots[1],
+            stream=BytesIO(b"two"),
+            media_type="application/octet-stream",
+        )
+        original_enqueue = inbox.enqueue_creation_receipt
+        calls = 0
 
-    owner = build_user(db_session, "slot-cover", superuser=True)
-    image = io.BytesIO()
-    Image.new("RGB", (8, 8), "navy").save(image, format="PNG")
-    cover_bytes = image.getvalue()
-    raw = _slot_payload().model_dump(mode="json")
-    raw["cover"] = {
-        "id": "cover",
-        "filename": "cover.png",
-        "media_type": "image/png",
-        "size_bytes": len(cover_bytes),
-        "sha256": hashlib.sha256(cover_bytes).hexdigest(),
-    }
-    row, slots = inbox.create_capture_upload_slots(
-        db_session, owner, CaptureUploadSlotsCreate.model_validate(raw)
-    )
-    file_slot, cover_slot = slots
-    inbox.upload_capture_slot(
-        db_session,
-        file_slot,
-        stream=BytesIO(b"slot-owned"),
-        media_type="application/octet-stream",
-    )
-    inbox.upload_capture_slot(
-        db_session, cover_slot, stream=BytesIO(cover_bytes), media_type="image/png"
-    )
-    model = build_model(
-        db_session,
-        name="Cover import",
-        slug=f"cover-import-{uuid.uuid4().hex}",
-        hash=uuid.uuid4().hex * 2,
-    )
-    source = ModelProvenanceSource(
-        model_id=model.id,
-        provider="makerworld",
-        # All three of provider, item id and canonical URL have to match the
-        # captured manifest: the cover is attached to *exactly one* provenance
-        # source, and an attach that matched zero or two would silently skip
-        # publication instead of raising.
-        source_item_id="1234",
-        canonical_url="https://makerworld.com/en/models/1234-widget",
-        identity_key=uuid.uuid4().hex * 2,
-    )
-    db_session.add(source)
-    row.resulting_model_id = model.id
-    db_session.add(row)
-    db_session.commit()
-    monkeypatch.setattr(
-        inbox.source_covers,
-        "put",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            RuntimeError("cover publish failed")
-        ),
-    )
-    with pytest.raises(RuntimeError, match="cover publish failed"):
-        inbox._attach_capture_cover(db_session, row)
-    assert db_session.get(type(cover_slot), cover_slot.id) is not None
-    attached: list[int] = []
-    monkeypatch.setattr(
-        inbox.source_covers,
-        "put",
-        lambda _s, _b, **kwargs: attached.append(kwargs["provenance_source_id"]),
-    )
-    assert inbox._attach_capture_cover(db_session, row)
-    assert attached == [source.id]
-    assert inbox._cleanup_capture_slots(db_session, row)
-    db_session.commit()
-    assert db_session.get(type(cover_slot), cover_slot.id) is None
+        def fail_second(*args: object, **kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("intent store unavailable")
+            return original_enqueue(*args, **kwargs)
+
+        monkeypatch.setattr(inbox, "enqueue_creation_receipt", fail_second)
+
+        assert not inbox._cleanup_capture_slots(db_session, row)
+        db_session.commit()
+        db_session.expire_all()
+
+        assert {
+            slot.id for slot in db_session.exec(select(CaptureUploadSlot)).all()
+        } >= {slot.id for slot in slots}
+        assert len(db_session.exec(select(StagingLease)).all()) == 2
+        assert db_session.exec(select(StorageDeleteIntent)).all() == []
+
+    def test_delete_intent_processor_retries_backend_failure_and_blocks_mismatch(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.db.models import StorageDeleteIntent
+        from app.services import storage_deletion
+
+        owner = build_user(db_session, "slot-retry-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        assert slot.storage_key is not None
+        assert inbox._cleanup_capture_slots(db_session, row)
+        db_session.commit()
+        backend = inbox.get_backend()
+        monkeypatch.setattr(
+            backend,
+            "rollback_create",
+            lambda _receipt: (_ for _ in ()).throw(OSError("offline")),
+        )
+        result = storage_deletion.process_storage_delete_intents()
+        assert result.pending == 1
+        intent = db_session.exec(select(StorageDeleteIntent)).one()
+        assert intent.status == "retry"
+        assert backend.exists(slot.storage_key)
+
+        # A receiver must fail closed when deletion cannot prove this is our object.
+        monkeypatch.setattr(backend, "rollback_create", lambda _receipt: False)
+        intent.next_attempt_at = utcnow() - timedelta(seconds=1)
+        db_session.commit()
+        result = storage_deletion.process_storage_delete_intents()
+        assert result.blocked == 1
+        db_session.expire_all()
+        blocked_intent = db_session.get(StorageDeleteIntent, intent.id)
+        assert blocked_intent is not None
+        assert blocked_intent.status == "blocked"
+        assert backend.exists(slot.storage_key)
+
+    def test_capture_slot_cleanup_enqueues_before_post_commit_delete(
+        self,
+        db_session: Session,
+    ) -> None:
+        """Slot bytes remain until the committed outbox processor consumes receipt."""
+        from app.db.models import StorageDeleteIntent
+        from app.services.storage_deletion import process_storage_delete_intents
+
+        owner = build_user(db_session, "slot-outbox-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        assert slot.storage_key is not None
+        backend = inbox.get_backend()
+        assert backend.exists(slot.storage_key)
+
+        assert inbox._cleanup_capture_slots(db_session, row)
+        assert backend.exists(slot.storage_key)
+        assert (
+            db_session.exec(select(StorageDeleteIntent)).one().key == slot.storage_key
+        )
+        db_session.commit()
+        assert backend.exists(slot.storage_key)
+
+        assert process_storage_delete_intents().completed == 1
+        assert not backend.exists(slot.storage_key)
+
+    @pytest.mark.parametrize("created", [True, False])
+    def test_finished_capture_rolls_back_cover_write_when_commit_fails(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, created: bool
+    ) -> None:
+        owner = build_user(
+            db_session, f"cover-commit-failure-{created}", superuser=True
+        )
+        row = InboxItem(
+            owner_user_id=owner.id,
+            source_kind="browser",
+            source_url="https://makerworld.com/en/models/1234-widget",
+            source_hostname="makerworld.com",
+            state=InboxItemState.IMPORTING,
+        )
+        db_session.add(row)
+        db_session.commit()
+        receipt = CreationReceipt(
+            key=f"covers/{created}.webp",
+            size=1,
+            token="receipt",
+            backend="fake",
+            namespace="test",
+        )
+        write = SourceCoverWrite(
+            cover=ModelSourceCover(provenance_source_id=1, storage_key=receipt.key),
+            created=created,
+            creation_receipt=receipt if created else None,
+            replacement_receipt=None if created else receipt,
+            replaced_bytes=None if created else b"old",
+        )
+
+        class _Factory:
+            def scoped_session(self) -> object:
+                class _Scope:
+                    def __enter__(self) -> Session:
+                        return db_session
+
+                    def __exit__(self, *args: object) -> None:
+                        return None
+
+                return _Scope()
+
+        job = type("Job", (), {"state": "completed", "model_id": 1, "result": None})()
+        monkeypatch.setattr(inbox.registry, "get", lambda _job_id: job)
+        monkeypatch.setattr(inbox, "_record_v2_results", lambda *_args: (True, 1, 0))
+        monkeypatch.setattr(inbox, "_attach_capture_cover", lambda *_args: write)
+        monkeypatch.setattr(inbox, "_cleanup_capture_slots", lambda *_args: True)
+        rollback = pytest.MonkeyPatch()
+        rollback.setattr(
+            db_session,
+            "commit",
+            lambda: (_ for _ in ()).throw(RuntimeError("commit failed")),
+        )
+        seam_calls: list[SourceCoverWrite] = []
+        monkeypatch.setattr(
+            inbox.source_covers,
+            "rollback_after_commit_failure",
+            lambda _session, _backend, result: seam_calls.append(result),
+        )
+
+        with pytest.raises(RuntimeError, match="commit failed"):
+            inbox._finish_import(row.id, "cover-commit-failure-job", _Factory())
+
+        assert seam_calls == [write]
+        rollback.undo()
+
+    def test_capture_slot_cleanup_rollback_preserves_receipt_lease_and_bytes(
+        self,
+        db_session: Session,
+    ) -> None:
+        from app.db.models import StorageDeleteIntent
+
+        owner = build_user(db_session, "slot-rollback-owner", superuser=True)
+        row, slots = inbox.create_capture_upload_slots(
+            db_session, owner, _slot_payload()
+        )
+        slot = inbox.upload_capture_slot(
+            db_session,
+            slots[0],
+            stream=BytesIO(b"slot-owned"),
+            media_type="application/octet-stream",
+        )
+        assert slot.storage_key is not None
+        slot_id = slot.id
+        slot_key = slot.storage_key
+        assert inbox._cleanup_capture_slots(db_session, row)
+        db_session.rollback()
+        db_session.expire_all()
+
+        assert db_session.get(CaptureUploadSlot, slot_id) is not None
+        assert db_session.exec(
+            select(StagingLease).where(StagingLease.capture_upload_slot_id == slot_id)
+        ).one()
+        assert inbox.get_backend().exists(slot_key)
+        assert db_session.exec(select(StorageDeleteIntent)).all() == []
 
 
 def _make_item(db_session: Session, owner: User, **overrides) -> InboxItem:
@@ -607,76 +746,50 @@ class _BackgroundTaskRecorder:
         self.tasks.append((function, args, kwargs))
 
 
-@pytest.mark.parametrize("requested", [["missing"], ["ok", "missing"]])
-def test_import_route_rejects_invalid_v2_selection_before_scheduling(
-    db_session: Session, requested: list[str]
-) -> None:
-    owner = build_user(
-        db_session, f"import-selection-route-{len(requested)}", superuser=True
-    )
-    row = _make_item(
-        db_session,
-        owner,
-        source_url="https://makerworld.com/en/models/1234-widget",
-        source_hostname="makerworld.com",
-        state=InboxItemState.REVIEW,
-        manifest_json=json.dumps(
-            {
-                "schema_version": 2,
-                "kind": "model_files",
-                "source": _capture_source(),
-                "files": [
-                    {"id": "ok", "name": "ok.stl", "file_type": "stl", "size": 1}
-                ],
-                "selected_ids": ["ok"],
-            }
-        ),
-    )
-    assert row.id is not None
-    background = _BackgroundTaskRecorder()
-    jobs_before = db_session.exec(select(BackgroundJob)).all()
-
-    with pytest.raises(HTTPException) as exc_info:
-        inbox_api.import_item(
-            row.id,
-            InboxImportRequest(selected_ids=requested),
-            cast(BackgroundTasks, background),
-            current_user=owner,
-            session=db_session,
-            session_factory=get_session_factory(),
-        )
-
-    assert exc_info.value.status_code == 422
-    assert exc_info.value.detail == "file_selection_invalid"
-    assert background.tasks == []
-    assert db_session.exec(select(BackgroundJob)).all() == jobs_before
-
-
-class TestResolve:
-    def test_retry_item_schedules_resolve_when_returned_to_captured(
-        self, client: TestClient, db_session: Session, monkeypatch
+class TestImportItem:
+    @pytest.mark.parametrize("requested", [["missing"], ["ok", "missing"]])
+    def test_import_route_rejects_invalid_v2_selection_before_scheduling(
+        self, db_session: Session, requested: list[str]
     ) -> None:
-        headers = _headers(db_session, "retry-success", admin=True)
-        owner = build_user(db_session, "retry-success-owner", superuser=True)
+        owner = build_user(
+            db_session, f"import-selection-route-{len(requested)}", superuser=True
+        )
         row = _make_item(
             db_session,
             owner,
-            state=InboxItemState.FAILED,
-            retryable=True,
-            manifest_json="",
+            source_url="https://makerworld.com/en/models/1234-widget",
+            source_hostname="makerworld.com",
+            state=InboxItemState.REVIEW,
+            manifest_json=json.dumps(
+                {
+                    "schema_version": 2,
+                    "kind": "model_files",
+                    "source": _capture_source(),
+                    "files": [
+                        {"id": "ok", "name": "ok.stl", "file_type": "stl", "size": 1}
+                    ],
+                    "selected_ids": ["ok"],
+                }
+            ),
         )
-        calls: list[int] = []
+        assert row.id is not None
+        background = _BackgroundTaskRecorder()
+        jobs_before = db_session.exec(select(BackgroundJob)).all()
 
-        async def fake_resolve(item_id: int) -> None:
-            calls.append(item_id)
+        with pytest.raises(HTTPException) as exc_info:
+            inbox_api.import_item(
+                row.id,
+                InboxImportRequest(selected_ids=requested),
+                cast(BackgroundTasks, background),
+                current_user=owner,
+                session=db_session,
+                session_factory=get_session_factory(),
+            )
 
-        monkeypatch.setattr(inbox, "resolve", fake_resolve)
-
-        response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
-
-        assert response.status_code == 200
-        assert response.json()["state"] == "captured"
-        assert calls == [row.id]
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail == "file_selection_invalid"
+        assert background.tasks == []
+        assert db_session.exec(select(BackgroundJob)).all() == jobs_before
 
 
 class TestRetry:
@@ -800,6 +913,31 @@ class TestRetry:
         assert background.tasks == []
         assert db_session.exec(select(BackgroundJob)).all() == jobs_before
 
+    def test_retry_item_schedules_resolve_when_returned_to_captured(
+        self, client: TestClient, db_session: Session, monkeypatch
+    ) -> None:
+        headers = _headers(db_session, "retry-success", admin=True)
+        owner = build_user(db_session, "retry-success-owner", superuser=True)
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.FAILED,
+            retryable=True,
+            manifest_json="",
+        )
+        calls: list[int] = []
+
+        async def fake_resolve(item_id: int) -> None:
+            calls.append(item_id)
+
+        monkeypatch.setattr(inbox, "resolve", fake_resolve)
+
+        response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["state"] == "captured"
+        assert calls == [row.id]
+
 
 class TestDismiss:
     def test_capture_slot_lease_uses_slot_owner_for_dismiss(
@@ -912,7 +1050,7 @@ class TestDismiss:
         assert db_session.get(CaptureUploadSlot, slot.id) is not None
 
 
-class TestInbox:
+class TestPruneExpiredBrowserLeases:
     def test_expired_uploaded_capture_slot_fails_inbox_after_durable_cleanup(
         self,
         db_session: Session,
@@ -939,136 +1077,3 @@ class TestInbox:
         assert expired_item is not None
         assert expired_item.state == InboxItemState.FAILED
         assert expired_item.error_code == "staging_expired"
-
-
-class TestCommit:
-    def test_capture_slot_cleanup_enqueues_before_post_commit_delete(
-        self,
-        db_session: Session,
-    ) -> None:
-        """Slot bytes remain until the committed outbox processor consumes receipt."""
-        from app.db.models import StorageDeleteIntent
-        from app.services.storage_deletion import process_storage_delete_intents
-
-        owner = build_user(db_session, "slot-outbox-owner", superuser=True)
-        row, slots = inbox.create_capture_upload_slots(
-            db_session, owner, _slot_payload()
-        )
-        slot = inbox.upload_capture_slot(
-            db_session,
-            slots[0],
-            stream=BytesIO(b"slot-owned"),
-            media_type="application/octet-stream",
-        )
-        assert slot.storage_key is not None
-        backend = inbox.get_backend()
-        assert backend.exists(slot.storage_key)
-
-        assert inbox._cleanup_capture_slots(db_session, row)
-        assert backend.exists(slot.storage_key)
-        assert (
-            db_session.exec(select(StorageDeleteIntent)).one().key == slot.storage_key
-        )
-        db_session.commit()
-        assert backend.exists(slot.storage_key)
-
-        assert process_storage_delete_intents().completed == 1
-        assert not backend.exists(slot.storage_key)
-
-    @pytest.mark.parametrize("created", [True, False])
-    def test_finished_capture_rolls_back_cover_write_when_commit_fails(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, created: bool
-    ) -> None:
-        owner = build_user(
-            db_session, f"cover-commit-failure-{created}", superuser=True
-        )
-        row = InboxItem(
-            owner_user_id=owner.id,
-            source_kind="browser",
-            source_url="https://makerworld.com/en/models/1234-widget",
-            source_hostname="makerworld.com",
-            state=InboxItemState.IMPORTING,
-        )
-        db_session.add(row)
-        db_session.commit()
-        receipt = CreationReceipt(
-            key=f"covers/{created}.webp",
-            size=1,
-            token="receipt",
-            backend="fake",
-            namespace="test",
-        )
-        write = SourceCoverWrite(
-            cover=ModelSourceCover(provenance_source_id=1, storage_key=receipt.key),
-            created=created,
-            creation_receipt=receipt if created else None,
-            replacement_receipt=None if created else receipt,
-            replaced_bytes=None if created else b"old",
-        )
-
-        class _Factory:
-            def scoped_session(self) -> object:
-                class _Scope:
-                    def __enter__(self) -> Session:
-                        return db_session
-
-                    def __exit__(self, *args: object) -> None:
-                        return None
-
-                return _Scope()
-
-        job = type("Job", (), {"state": "completed", "model_id": 1, "result": None})()
-        monkeypatch.setattr(inbox.registry, "get", lambda _job_id: job)
-        monkeypatch.setattr(inbox, "_record_v2_results", lambda *_args: (True, 1, 0))
-        monkeypatch.setattr(inbox, "_attach_capture_cover", lambda *_args: write)
-        monkeypatch.setattr(inbox, "_cleanup_capture_slots", lambda *_args: True)
-        rollback = pytest.MonkeyPatch()
-        rollback.setattr(
-            db_session,
-            "commit",
-            lambda: (_ for _ in ()).throw(RuntimeError("commit failed")),
-        )
-        seam_calls: list[SourceCoverWrite] = []
-        monkeypatch.setattr(
-            inbox.source_covers,
-            "rollback_after_commit_failure",
-            lambda _session, _backend, result: seam_calls.append(result),
-        )
-
-        with pytest.raises(RuntimeError, match="commit failed"):
-            inbox._finish_import(row.id, "cover-commit-failure-job", _Factory())
-
-        assert seam_calls == [write]
-        rollback.undo()
-
-
-class TestRollback:
-    def test_capture_slot_cleanup_rollback_preserves_receipt_lease_and_bytes(
-        self,
-        db_session: Session,
-    ) -> None:
-        from app.db.models import StorageDeleteIntent
-
-        owner = build_user(db_session, "slot-rollback-owner", superuser=True)
-        row, slots = inbox.create_capture_upload_slots(
-            db_session, owner, _slot_payload()
-        )
-        slot = inbox.upload_capture_slot(
-            db_session,
-            slots[0],
-            stream=BytesIO(b"slot-owned"),
-            media_type="application/octet-stream",
-        )
-        assert slot.storage_key is not None
-        slot_id = slot.id
-        slot_key = slot.storage_key
-        assert inbox._cleanup_capture_slots(db_session, row)
-        db_session.rollback()
-        db_session.expire_all()
-
-        assert db_session.get(CaptureUploadSlot, slot_id) is not None
-        assert db_session.exec(
-            select(StagingLease).where(StagingLease.capture_upload_slot_id == slot_id)
-        ).one()
-        assert inbox.get_backend().exists(slot_key)
-        assert db_session.exec(select(StorageDeleteIntent)).all() == []
