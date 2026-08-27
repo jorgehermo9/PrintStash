@@ -71,7 +71,7 @@ jobs:
         run: |
           uv pip install --python .venv/bin/python pytest-cov
           .venv/bin/pytest tests -q \
-            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=91
+            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=94
 
       - name: Lint autonomous package
         run: .venv/bin/ruff check src tests
