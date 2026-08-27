@@ -1,5 +1,5 @@
 import { test, expect } from "./helpers";
-import { modelCard, uploadGcodeModel, uploadModel } from "./util";
+import { createCollectionViaVault, modelCard, uploadGcodeModel, uploadModel } from "./util";
 
 test("search filters the library; list/grid toggle keeps the model visible", async ({ page }) => {
   const name = `e2e-vault-${Date.now()}`;
@@ -20,17 +20,34 @@ test("search filters the library; list/grid toggle keeps the model visible", asy
 });
 
 test("vault toolbar remains reachable on a narrow viewport", async ({ page }) => {
+  const collection = `e2e-mobile-${Date.now()}-long-title-readable`;
+  await createCollectionViaVault(page, collection);
   await page.setViewportSize({ width: 482, height: 844 });
-  await page.goto("/");
+  await page.goto(`/?c=${encodeURIComponent(collection)}`);
 
-  await expect(page.getByRole("heading", { name: /All Models/ })).toBeVisible();
+  const heading = page.getByRole("heading", { name: collection, exact: true });
+  await expect(heading).toBeVisible();
   await expect(page.getByRole("button", { name: "Filters", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Upload", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Favorites", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Saved views/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Select", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sort models", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Display", exact: true })).toBeVisible();
+  const more = page.getByRole("main").getByRole("button", { name: "More", exact: true });
+  await expect(more).toBeVisible();
+  if (process.env.PRINTSTASH_CAPTURE_UI) {
+    await page.screenshot({ path: "/tmp/printstash-collection-482.png", fullPage: true });
+  }
+  await more.click();
+  const menu = page.getByRole("menu").last();
+  await expect(menu.getByRole("menuitemcheckbox", { name: "Favorites" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: /Saved views/ })).toBeVisible();
+  await expect(menu.getByRole("menuitemcheckbox", { name: "Select" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Display" })).toBeVisible();
+  await menu.getByRole("menuitem", { name: "Display" }).click();
+  await page.getByRole("menuitem", { name: "List View" }).click();
+  await expect(more).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ps-vault-view"))).toBe("list");
+  expect(await heading.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

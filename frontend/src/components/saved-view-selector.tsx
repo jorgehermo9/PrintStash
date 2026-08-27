@@ -54,6 +54,9 @@ export function SavedViewSelector({
   onDuplicate,
   onDelete,
   triggerClassName,
+  triggerRole,
+  triggerSize = "xs",
+  triggerVariant = "outline",
 }: {
   views: SavedViewRead[];
   activeId: number | null;
@@ -65,6 +68,9 @@ export function SavedViewSelector({
   onDuplicate: (view: SavedViewRead) => Promise<void>;
   onDelete: (view: SavedViewRead) => Promise<void>;
   triggerClassName?: string;
+  triggerRole?: "menuitem";
+  triggerSize?: "xs" | "sm";
+  triggerVariant?: "outline" | "ghost";
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -121,9 +127,10 @@ export function SavedViewSelector({
           trigger={
             <Button
               type="button"
-              variant="outline"
-              size="xs"
+              size={triggerSize}
+              variant={triggerVariant}
               data-menu-trigger
+              role={triggerRole}
               aria-haspopup="dialog"
               aria-expanded={open}
               onClick={() => setMenuOpen(!open)}

@@ -47,7 +47,11 @@ export function DropdownMenu({
   useEffect(() => {
     if (!open || role === "dialog") return;
     const raf = requestAnimationFrame(() => {
-      wrapperRef.current?.querySelector<HTMLElement>('[role="menuitem"], [role="option"]')?.focus();
+      wrapperRef.current
+        ?.querySelector<HTMLElement>(
+          '[role="menuitem"], [role="menuitemcheckbox"], [role="option"]',
+        )
+        ?.focus();
     });
     return () => cancelAnimationFrame(raf);
   }, [open, role]);
@@ -59,13 +63,23 @@ export function DropdownMenu({
       wrapperRef.current?.querySelector<HTMLElement>("[data-menu-trigger]")?.focus();
       return;
     }
-    if (role === "dialog") return;
+    if (role === "dialog" && e.target instanceof Node) {
+      const dialog = wrapperRef.current?.querySelector('[role="dialog"]');
+      if (!dialog?.contains(e.target)) return;
+      // Nested pickers own their text navigation and must not move the parent
+      // menu's roving focus while a user types or navigates within them.
+      e.stopPropagation();
+      return;
+    }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
     const items = Array.from(
-      wrapperRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"], [role="option"]') ?? [],
+      wrapperRef.current?.querySelectorAll<HTMLElement>(
+        '[role="menuitem"], [role="menuitemcheckbox"], [role="option"]',
+      ) ?? [],
     );
     if (items.length === 0) return;
     e.preventDefault();
+    e.stopPropagation();
     const current = items.findIndex((item) => item === document.activeElement);
     const next =
       e.key === "Home"

@@ -452,38 +452,163 @@ test("mobile vault skips the desktop outliner request", async ({ page }) => {
   expect(outlinerRequests).toEqual([]);
 });
 
-test("mobile vault toolbar keeps every action reachable without overflow", async ({ page }) => {
-  await page.setViewportSize({ width: 360, height: 844 });
+async function gotoMobileVault(page: Page, width = 360): Promise<void> {
+  await page.setViewportSize({ width, height: 844 });
   await page.goto("/");
+}
+
+function mobileMore(page: Page): Locator {
+  return page.getByRole("main").getByRole("button", { name: "More", exact: true });
+}
+
+async function openMobileMore(page: Page): Promise<Locator> {
+  await mobileMore(page).click();
+  const menu = page.getByRole("menu").last();
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+test("mobile vault keeps the title and count readable with Upload as primary", async ({ page }) => {
+  await gotoMobileVault(page);
 
   await expect(page.getByRole("heading", { name: "All Models" })).toBeVisible();
+  await expect(page.getByText(/^\d+ models? total$/)).toBeVisible();
+  const uploads = page.getByRole("button", { name: "Upload", exact: true });
+  await expect(uploads).toBeVisible();
+  expect(
+    await uploads.evaluateAll(
+      (elements) =>
+        elements.filter((element) => {
+          const box = element.getBoundingClientRect();
+          return box.width > 0 && box.height > 0;
+        }).length,
+    ),
+  ).toBe(1);
+});
+
+test("mobile vault keeps Filters, sort, and More in one equal-height row", async ({ page }) => {
+  await gotoMobileVault(page);
+
   const filters = page.getByRole("button", { name: "Filters", exact: true });
-  const upload = page.getByRole("button", { name: "Upload", exact: true });
-  const favorites = page.getByRole("button", { name: "Favorites", exact: true });
-  const savedViews = page.getByRole("button", { name: /^Saved views/ });
-  const select = page.getByRole("button", { name: "Select", exact: true });
   const sort = page.getByRole("button", { name: "Sort models", exact: true });
-  const display = page.getByRole("button", { name: "Display", exact: true });
+  const more = mobileMore(page);
 
   await expect(filters).toBeVisible();
-  await expect(upload).toBeVisible();
-  await expect(favorites).toBeVisible();
-  await expect(savedViews).toBeVisible();
-  await expect(select).toBeVisible();
   await expect(sort).toBeVisible();
-  await expect(display).toBeVisible();
+  await expect(more).toBeVisible();
   await expectTouchTarget(filters);
-  await expectTouchTarget(upload);
-  await expectTouchTarget(favorites);
-  await expectTouchTarget(savedViews);
-  await expectTouchTarget(select);
   await expectTouchTarget(sort);
-  await expectTouchTarget(display);
+  await expectTouchTarget(more);
+  const boxes = await Promise.all([filters.boundingBox(), sort.boundingBox(), more.boundingBox()]);
+  expect(boxes.every((box) => box !== null)).toBe(true);
+  expect(new Set(boxes.map((box) => Math.round(box?.height ?? 0))).size).toBe(1);
+  expect(new Set(boxes.map((box) => Math.round(box?.y ?? 0))).size).toBe(1);
+  expect(boxes[0]?.x).toBeLessThan(boxes[1]?.x ?? 0);
+  expect(boxes[1]?.x).toBeLessThan(boxes[2]?.x ?? 0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+  if (process.env.PRINTSTASH_CAPTURE_UI) {
+    await page.screenshot({ path: "/tmp/printstash-all-models-360.png", fullPage: true });
+  }
 });
 
+test("mobile More exposes secondary actions with valid checked states", async ({ page }) => {
+  await gotoMobileVault(page);
+
+  const menu = await openMobileMore(page);
+  const favoritesItem = menu.getByRole("menuitemcheckbox", { name: "Favorites" });
+  const savedViewsItem = menu.getByRole("menuitem", { name: /Saved views/ });
+  const selectItem = menu.getByRole("menuitemcheckbox", { name: "Select" });
+  const displayItem = menu.getByRole("menuitem", { name: "Display" });
+  await expect(favoritesItem).toBeVisible();
+  await expect(savedViewsItem).toBeVisible();
+  await expect(selectItem).toBeVisible();
+  await expect(displayItem).toBeVisible();
+  await expect(favoritesItem).toHaveAttribute("aria-checked", "false");
+  await expect(selectItem).toHaveAttribute("aria-checked", "false");
+  if (process.env.PRINTSTASH_CAPTURE_UI) {
+    await page.screenshot({ path: "/tmp/printstash-all-models-360-more.png", fullPage: true });
+  }
+
+  await favoritesItem.click();
+  await expect(page).toHaveURL(/[?&]favorites=true/);
+  await openMobileMore(page);
+  await expect(page.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+
+  await page.getByRole("menuitemcheckbox", { name: "Select" }).click();
+  await openMobileMore(page);
+  await expect(page.getByRole("menuitemcheckbox", { name: "Done" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+
+  await page.getByRole("menuitem", { name: "Display" }).click();
+  await expect(page.getByRole("menuitem", { name: "List View" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "List View" }).click();
+  await expect(page.getByText("Thumb", { exact: true })).toBeVisible();
+});
+
+test("mobile Saved Views owns picker keys, restores focus, and applies a view", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/saved-views", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          id: 7,
+          name: "Ready to print",
+          filters: {
+            collection: null,
+            direct: true,
+            tag: [],
+            q: "skadis",
+            printer_id: null,
+            printer_presence: null,
+            favorites: false,
+          },
+          created_at: "2026-06-04T00:24:22.000000",
+          updated_at: "2026-06-04T00:24:22.000000",
+        },
+      ]),
+    });
+  });
+  await gotoMobileVault(page);
+
+  const menu = await openMobileMore(page);
+  const savedViewsItem = menu.getByRole("menuitem", { name: /Ready to print/ });
+  await savedViewsItem.click();
+  const dialog = page.getByRole("dialog");
+  const search = page.getByRole("textbox", { name: "Find a saved view" });
+  await expect(dialog).toBeVisible();
+  await expect(search).toBeFocused();
+  await search.press("ArrowDown");
+  await expect(search).toBeFocused();
+  await search.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(savedViewsItem).toBeFocused();
+
+  await savedViewsItem.click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Ready to print", exact: true }).click();
+  await expect(page).toHaveURL(/[?&]q=skadis/);
+  await expect(dialog).toBeHidden();
+});
+
+test("mobile vault keeps Filters and sort directly reachable", async ({ page }) => {
+  await gotoMobileVault(page);
+
+  await expect(page.getByRole("button", { name: "Filters", exact: true })).toBeVisible();
+  const sort = page.getByRole("button", { name: "Sort models", exact: true });
+  await expect(sort).toBeVisible();
+  await sort.click();
+  await page.getByRole("menuitem", { name: "Best success rate" }).click();
+  await expect(sort).toContainText("Best success rate");
+});
 test("settings sections are deep-linkable and preserve navigation state", async ({ page }) => {
   await page.goto("/settings?section=trash");
   await expect(page.getByRole("heading", { name: "Trash retention" })).toBeVisible();
