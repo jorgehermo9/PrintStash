@@ -27,17 +27,16 @@ from app.db.models import (
     StorageDeleteIntent,
     VaultAuditFinding,
     VaultAuditFindingState,
-    VaultAuditMode,
-    VaultAuditRun,
-    VaultAuditRunState,
     VaultAuditSeverity,
 )
 from app.services.trash import _cleanup_orphan_blobs, gc_soft_deleted
 from tests.factories import (
+    build_audit_run,
     build_collection,
     build_file,
     build_model,
     build_stored_file,
+    build_user,
     store_owned_bytes,
 )
 
@@ -63,12 +62,7 @@ def _binary_document(session: Session, storage, name: str = "manual.pdf") -> Doc
 
 
 def _open_namespace_escape(session: Session) -> None:
-    run = VaultAuditRun(
-        mode=VaultAuditMode.QUICK, state=VaultAuditRunState.COMPLETED, requested_by=1
-    )
-    session.add(run)
-    session.commit()
-    session.refresh(run)
+    run = build_audit_run(session, build_user(session, "gc-auditor"))
     session.add(
         VaultAuditFinding(
             run_id=run.id,

@@ -32,7 +32,7 @@ from app.db.scopes import live
 from app.services import external_library, runtime_config
 from app.services.jobs import registry
 from tests._env import use_local_storage
-from tests.factories import build_external_library
+from tests.factories import build_collection, build_external_library
 from tests.paths import FIXTURES_DIR
 
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
@@ -223,6 +223,12 @@ class TestUpdateLibrary:
         second_root = tmp_path / "second"
         second_root.mkdir()
         lib = build_external_library(db_session, first_root, name="nas")
+        # A real collection. `target_collection_id` is a foreign key, so an id that
+        # merely happens to be free is refused here exactly as it is on a fresh
+        # install. The endpoint does not validate it itself, which is why the
+        # literal 42 this used to pass was a 500 on one supported schema and a
+        # dangling reference on the other.
+        target = build_collection(db_session, name="Target")
 
         resp = client.patch(
             f"/api/v1/libraries/{lib.id}",
@@ -233,7 +239,7 @@ class TestUpdateLibrary:
                 "scan_schedule": "0 0 * * *",
                 "watch_mode": "events",
                 "collection_mode": "single",
-                "target_collection_id": 42,
+                "target_collection_id": target.id,
             },
         )
         assert resp.status_code == 200, resp.text
@@ -243,7 +249,7 @@ class TestUpdateLibrary:
         assert body["scan_schedule"] == "0 0 * * *"
         assert body["watch_mode"] == "events"
         assert body["collection_mode"] == "single"
-        assert body["target_collection_id"] == 42
+        assert body["target_collection_id"] == target.id
 
     def test_update_library_rejects_invalid_schedule(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
@@ -272,6 +278,55 @@ class TestUpdateLibrary:
         )
         assert resp.status_code == 404
         assert resp.json()["detail"] == "library_not_found"
+
+
+class TestTargetCollection:
+    """`target_collection_id` names a real collection, on both write paths.
+
+    It is a foreign key, so an unknown id was a 500 on a fresh installation and a
+    dangling reference on one upgraded from an older release — the two supported
+    schemas disagree about it (see
+    `tests/integration/db/migrations/test_models_versus_chain.py`). Neither is an
+    answer to a bad request.
+    """
+
+    def test_create_refuses_a_collection_that_does_not_exist(
+        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+    ) -> None:
+        _enable_feature(db_session)
+        root = tmp_path / "nas"
+        root.mkdir()
+
+        resp = client.post(
+            "/api/v1/libraries",
+            headers=auth_headers,
+            json={
+                "name": "nas",
+                "root_path": str(root),
+                "collection_mode": "single",
+                "target_collection_id": 4242,
+            },
+        )
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "collection_not_found"
+
+    def test_update_refuses_a_collection_that_does_not_exist(
+        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+    ) -> None:
+        _enable_feature(db_session)
+        root = tmp_path / "nas"
+        root.mkdir()
+        lib = build_external_library(db_session, root, name="nas")
+
+        resp = client.patch(
+            f"/api/v1/libraries/{lib.id}",
+            headers=auth_headers,
+            json={"target_collection_id": 4242},
+        )
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "collection_not_found"
 
 
 class TestDeleteLibrary:

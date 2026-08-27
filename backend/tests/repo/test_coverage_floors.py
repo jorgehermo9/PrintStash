@@ -55,7 +55,12 @@ MODULE_FLOOR = 90.0
 #
 # Deleting an entry is the goal. See the module docstring for the ratchet.
 PINNED_BELOW_FLOOR = {
-    "app/services/source_covers.py": 68.5,
+    # 68.0 rather than 68.5: enforcing foreign keys turned on `ON DELETE CASCADE`,
+    # which had never fired while enforcement was off. The database now removes a
+    # cover row that this module used to remove itself, so that path stops
+    # executing. Worth a look — some of it may now be unreachable rather than
+    # merely uncovered.
+    "app/services/source_covers.py": 68.0,
     "app/services/staging_leases.py": 76.0,
     "app/services/inbox.py": 81.0,
     "app/services/provenance.py": 81.5,
@@ -175,10 +180,13 @@ class TestModuleFloor:
     def test_every_pinned_module_holds_its_pin(self) -> None:
         measured = _measured()
 
+        # Rounded to the report's own precision before comparing. A pin sitting
+        # exactly on the measured figure otherwise fails on the float below it —
+        # `81.4999…` renders as `81.50` and reads as a regression against `81.5`.
         fallen = {
             path: (measured[path], pin)
             for path, pin in PINNED_BELOW_FLOOR.items()
-            if path in measured and measured[path] < pin
+            if path in measured and round(measured[path], 2) < pin
         }
         assert not fallen, (
             "these modules fell below what they were already pinned at: "

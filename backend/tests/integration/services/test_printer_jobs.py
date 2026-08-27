@@ -173,9 +173,25 @@ class TestTransferArtifact:
 
 
 class TestDispatchClaimed:
-    def test_dispatch_claimed_raises_when_printer_missing(
-        self, db_session: Session
+    def test_dispatch_claimed_raises_when_the_printer_row_cannot_be_loaded(
+        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """The `queue_dependency_missing` guard, which a correct schema makes
+        unreachable.
+
+        This used to hard-delete the printer out from under a queued job. That is
+        refused now — `print_jobs.printer_id` is a RESTRICT foreign key and the suite
+        enforces foreign keys, as production does — and refusing it is right: the
+        state is not reachable through any code path. The guard still earns its
+        keep, because an installation upgraded from an older release is missing
+        several of those constraints (see
+        `tests/integration/db/migrations/test_models_versus_chain.py`), so on that
+        schema the row really can vanish.
+
+        Making the lookup return `None` is therefore the honest way to reach it:
+        the behaviour under test is how dispatch reacts to a dependency it cannot
+        load, not the database's ability to lose one.
+        """
         printer = build_printer(
             db_session,
             name="Vanishing",
@@ -190,9 +206,14 @@ class TestDispatchClaimed:
             remote_filename="x.gcode",
             state=PrintJobState.UPLOADING,
         )
+        real_get = Session.get
 
-        db_session.delete(printer)
-        db_session.commit()
+        def get(self, entity, ident, *args, **kwargs):
+            if entity is Printer:
+                return None
+            return real_get(self, entity, ident, *args, **kwargs)
+
+        monkeypatch.setattr(Session, "get", get)
 
         with pytest.raises(RuntimeError, match="queue_dependency_missing"):
             asyncio.run(

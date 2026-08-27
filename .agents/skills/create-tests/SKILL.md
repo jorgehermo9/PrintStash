@@ -251,6 +251,95 @@ reaches rather than a claim about what is tested. The corollary matters more:
 **adding a Playwright test moves no coverage number**, so on a UI feature the
 matrix is the only evidence, and coverage is not even a cross-check.
 
+## Never make the test environment easier than production
+
+A test that passes because the harness is more permissive than the real system is
+worse than no test: it reports safety it has not checked. This is not a
+hypothetical failure mode here — it happened, at the largest possible scale.
+
+`PRAGMA foreign_keys` was **off for the entire suite**. The between-test wipe issued
+`PRAGMA foreign_keys=OFF` and `=ON` inside a transaction, and SQLite silently ignores
+that pragma while one is open, so the `OFF` did nothing the author intended and the
+`ON` restored nothing. From the first test of every session onward, the suite could
+not fail on a foreign-key violation, and nothing asserted otherwise. What that hid:
+
+- `DELETE /api/v1/libraries/{id}` returned **500 on a real installation** and passed
+  in CI. `purge_library_index` trashed the indexed files and left
+  `files.external_library_id` pointing at the library it then deleted.
+- `hard_delete_file` cleaned up three of the five tables with a NOT NULL foreign key
+  to `files`, so purging a file that belonged to a print batch or carried a material
+  requirement failed.
+- `PATCH /api/v1/libraries/{id}` accepted a `target_collection_id` that does not
+  exist.
+- Tests passed *for the wrong reason*: `test_enqueue_respects_printer_scope` asserted
+  `0` then `1` for the **same** printer id, which only worked because neither id was
+  a real row.
+
+So the rule, and it is about design rather than diligence:
+
+**When a test fails because production is strict, fix the code or fix the fixture —
+never loosen the environment.** Reach for the factories (`tests/factories/`) so the
+rows a test references actually exist; that is what they are for. A hardcoded
+`owner_user_id=7` is not a shortcut, it is a row that cannot exist.
+
+**A deliberate difference is a named, asserted difference.** Where the harness
+genuinely cannot match production — `journal_mode` is `memory` because an in-memory
+database cannot use WAL — say so where it is configured, and pin the rest.
+`backend/tests/repo/test_db_parity.py` asserts every pragma that *can* match does,
+and asserts the *behaviour* too (a dangling foreign key is refused), because a
+pragma reading `1` on one connection proves nothing about the connection the test
+runs on.
+
+**Suspending a constraint for teardown is fine; suspending it for a test body is
+not.** The wipe still turns foreign keys off — that is the ordinary shape of a bulk
+flush, and the `files` <-> `models` cycle means no delete order exists to get right
+instead. What matters is that enforcement is live for every test body.
+
+The general shape recurs beyond the database: **a test that configures process-wide
+state has to put it back.** The engine, session factory, storage backend and rate
+limiters all have autouse fixtures in `tests/conftest.py` for exactly this reason.
+`SQLModel.metadata` was the one nobody had noticed was in that category, and it cost
+a two-in-five flake that looked like it had no cause — see
+`tests/integration/postgres/conftest.py`.
+
+### New external infrastructure ships with its test infrastructure
+
+Not optional, and not "mock it for now". When a change makes the product talk to a
+new external system — another storage provider, a queue, Redis, a search index, a
+metrics sink, a third-party API — the same change adds the way that system is tested
+for real:
+
+1. **A real instance, started by the suite.** Add it to
+   `backend/tests/containers.py`, next to PostgreSQL and SeaweedFS: image pinned by
+   digest, its own readiness check, started lazily on the first test that needs it
+   and stopped once at session end. Never a `docker run` in a README or a CI-only
+   `services:` block — those are a second definition that drifts, which is exactly
+   what `tests/repo/test_service_images.py` exists to prevent.
+2. **A resource marker and a tier directory**, so the subset is selectable and the
+   lanes stay meaningful (`postgres`, `s3`, and so on — see the tier table).
+3. **Contract tests against the real thing**, in `tests/contract/`, for the
+   behaviours the wire protocol actually decides: conditional writes, version ids,
+   auth failures, partial reads, whatever the provider's own semantics are. A fake
+   you wrote cannot disagree with your assumptions; a real service can, and that
+   disagreement is the entire value.
+4. **Fixtures and factories** for its rows and its credentials, so the arrange step
+   of the tenth test is as cheap as the first.
+5. **No Docker is an error, not a skip.** A run that selected those tests and could
+   not start the service did not verify what it was asked to verify — see
+   `require_docker` in `tests/containers.py`.
+
+The reason this is a hard requirement rather than a preference: a mocked integration
+tests your belief about the provider, and the interesting failures are precisely
+where that belief is wrong. SeaweedFS is in this suite because its S3 gateway
+changed its conditional-write and version-id behaviour between releases, and
+`contract/services/test_storage_backend.py` is what would notice. A mock would have
+kept passing.
+
+A seam that must stay swappable (`StorageBackend`, `SessionFactory`, `RealtimeBus`,
+`TaskQueue`) still gets its local default tested everywhere — that is what keeps the
+fast lane fast. The container is for the provider-specific half, not a replacement
+for the seam.
+
 ## Tier Policy
 
 **"Write tests. Not too many. Mostly integration."** The highest

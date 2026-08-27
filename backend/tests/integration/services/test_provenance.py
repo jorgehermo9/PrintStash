@@ -380,7 +380,6 @@ class TestUpsertCapture:
         # wiping tables; restore production-equivalent enforcement for this
         # database-level lifecycle contract.
         db_session.commit()
-        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
         capture = db_session.get(ProvenanceCapture, capture_id)
         assert capture is not None
         db_session.delete(capture)

@@ -189,26 +189,39 @@ def _all_table_names() -> list[str]:
     """
     import app.db.models  # noqa: F401 — registers every table on SQLModel.metadata
 
-    # Not ``sorted_tables``: FK enforcement is off for the wipe so order is irrelevant,
-    # and sorting warns about the deliberate files<->models cycle on every call.
+    # Insertion order, not `sorted_tables`: the `files` <-> `models` cycle makes a
+    # topological sort impossible, and SQLAlchemy responds by warning and giving up
+    # on the ordering as a whole rather than only on those two. So there is no
+    # dependency order to delete in, which is why `_truncate_all` suspends
+    # enforcement for the wipe instead of trying to order around it.
     return list(SQLModel.metadata.tables)
 
 
 def _truncate_all(engine: Engine = _test_engine) -> None:
-    """Truncate all tables between tests.
+    """Wipe every table between tests, leaving foreign keys enforced afterwards.
 
-    FK enforcement is off for the wipe: this is a teardown, not a delete path, and no
-    single order satisfies every constraint. Leaving it on made the DELETEs fail
-    silently and leak rows into the next test.
+    Constraints are suspended for the wipe and restored immediately after, which is
+    the ordinary shape of a bulk teardown — the same thing `TRUNCATE ... CASCADE`
+    does on PostgreSQL and Django's `flush` does everywhere. There is no dependency
+    order to delete in instead: the `files` <-> `models` cycle makes a topological
+    sort impossible, and one does not exist to be gotten right.
+
+    What matters is that enforcement is live for every *test body*, and for a long
+    time it was not. This helper used to issue both pragmas inside `engine.begin()`,
+    and SQLite ignores `PRAGMA foreign_keys` while a transaction is open: the `OFF`
+    did nothing the author intended and the `ON` restored nothing. Enforcement was
+    off from the first test of the session onward, so the suite could not fail on a
+    foreign-key violation at all — and `DELETE /api/v1/libraries/{id}`, which returns
+    500 on a real installation, passed here. `AUTOCOMMIT` is what makes the pragmas
+    take effect; `tests/repo/test_db_parity.py` is what stops this regressing again.
     """
-    with engine.begin() as conn:
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        for table in _all_table_names():
-            try:
+        try:
+            for table in _all_table_names():
                 conn.exec_driver_sql(f"DELETE FROM {table}")
-            except Exception:
-                pass
-        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+        finally:
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
     # Re-create sentinel rows.
     _ensure_test_sentinels(engine)
 

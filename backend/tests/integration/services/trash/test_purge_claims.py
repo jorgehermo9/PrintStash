@@ -32,7 +32,9 @@ from app.db.models import (
 from app.services import trash
 from app.services.storage_ownership import UnsafeStorageDeleteError
 from tests.factories import (
+    build_audit_run,
     build_model,
+    build_user,
     detached_model,
 )
 
@@ -143,12 +145,7 @@ class TestDestructiveMaintenanceGuard:
     def test_blocks_a_purge_while_a_namespace_escape_is_open(
         self, db_session: Session
     ) -> None:
-        from app.db.models import VaultAuditRun
-
-        run = VaultAuditRun(mode="quick", state="completed", requested_by=1)
-        db_session.add(run)
-        db_session.commit()
-        db_session.refresh(run)
+        run = build_audit_run(db_session, build_user(db_session, "purge-auditor"))
         db_session.add(
             VaultAuditFinding(
                 run_id=run.id,
@@ -169,12 +166,7 @@ class TestDestructiveMaintenanceGuard:
     def test_allows_a_purge_once_the_finding_is_resolved(
         self, db_session: Session
     ) -> None:
-        from app.db.models import VaultAuditRun
-
-        run = VaultAuditRun(mode="quick", state="completed", requested_by=1)
-        db_session.add(run)
-        db_session.commit()
-        db_session.refresh(run)
+        run = build_audit_run(db_session, build_user(db_session, "purge-auditor"))
         db_session.add(
             VaultAuditFinding(
                 run_id=run.id,
@@ -190,12 +182,7 @@ class TestDestructiveMaintenanceGuard:
         trash._require_destructive_maintenance_safe(db_session)
 
     def test_ignores_an_open_finding_of_another_kind(self, db_session: Session) -> None:
-        from app.db.models import VaultAuditRun
-
-        run = VaultAuditRun(mode="quick", state="completed", requested_by=1)
-        db_session.add(run)
-        db_session.commit()
-        db_session.refresh(run)
+        run = build_audit_run(db_session, build_user(db_session, "purge-auditor"))
         db_session.add(
             VaultAuditFinding(
                 run_id=run.id,

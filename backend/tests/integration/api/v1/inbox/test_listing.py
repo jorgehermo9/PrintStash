@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.db.models import InboxItemResult, InboxItemResultState, InboxItemState
+from tests.factories import build_file, build_model
 
 
 class TestListItems:
@@ -88,6 +89,10 @@ class TestGetItem:
     ) -> None:
         owner = make_user("get-results")
         row = make_item(owner)
+        # Real rows: `inbox_item_results.model_id` and `.file_id` are foreign keys,
+        # so the ids an import records have to be the ones it actually produced.
+        imported = build_model(db_session, name="Imported", slug="imported")
+        imported_file = build_file(db_session, imported, filename="bracket.stl")
         db_session.add(
             InboxItemResult(
                 inbox_item_id=row.id,
@@ -95,8 +100,8 @@ class TestGetItem:
                 result_key="self",
                 original_filename="bracket.stl",
                 state=InboxItemResultState.IMPORTED,
-                model_id=42,
-                file_id=99,
+                model_id=imported.id,
+                file_id=imported_file.id,
                 retryable=False,
             )
         )

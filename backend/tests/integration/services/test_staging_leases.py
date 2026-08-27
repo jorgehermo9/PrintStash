@@ -112,7 +112,6 @@ class TestCascade:
         )
         lease_id = lease.id
         db_session.commit()
-        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
         db_session.exec(delete(InboxItem).where(InboxItem.id == inbox.id))
         db_session.commit()
         assert db_session.get(StagingLease, lease_id) is None

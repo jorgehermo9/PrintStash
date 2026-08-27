@@ -9,11 +9,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from app.db.models import (
     MaterialSlotState,
     MaterialSource,
+    Printer,
     PrinterMaterialSlot,
     PrinterProvider,
     PrinterStatus,
@@ -71,6 +72,18 @@ def _capture_limit_mb(limit: int):
         SimpleNamespace(bambu_external_capture_max_mb=limit),
     ):
         yield
+
+
+@pytest.fixture
+def printer(db_session: Session) -> Printer:
+    """The printer whose snapshots these tests feed to the hub.
+
+    `print_jobs.printer_id` is a foreign key, so a job for a printer id that does
+    not exist is refused here exactly as it is in production. These tests are about
+    what the hub writes when a snapshot arrives, not about the printer, but the row
+    has to be real.
+    """
+    return build_printer(db_session, name="hub-printer")
 
 
 class TestPrinterHubLifecycle:
@@ -255,26 +268,28 @@ class TestPrinterHubMarkStatus:
         assert p.status == PrinterStatus.READY
         assert p.last_error is None
 
-    def test_mark_status_handles_missing_printer(self, hub):
+    def test_mark_status_handles_missing_printer(self, printer: Printer, hub):
+        # A printer id that deliberately does not exist: this asserts the worker
+        # tolerates its row having been deleted, so a real one tests the opposite.
         asyncio.run(hub._mark_status(99999, PrinterStatus.OFFLINE, error="gone"))
 
 
 class TestPrinterHubHandleStatus:
-    def test_handle_status_merges_snapshot(self, hub):
+    def test_handle_status_merges_snapshot(self, printer: Printer, hub):
         status = {
             "print_stats": {"state": "printing", "filename": "test.gcode"},
             "virtual_sdcard": {"progress": 0.25, "file_size": 1234},
         }
 
         async def _run():
-            await hub._handle_status(1, status)
+            await hub._handle_status(printer.id, status)
 
         asyncio.run(_run())
         snap = hub.snapshots.get(1, {})
         assert snap["print_stats"]["state"] == "printing"
         assert snap["virtual_sdcard"]["progress"] == 0.25
 
-    def test_handle_status_updates_existing(self, hub):
+    def test_handle_status_updates_existing(self, printer: Printer, hub):
         hub.snapshots[1] = {
             "print_stats": {"state": "printing", "filename": "old.gcode"},
             "virtual_sdcard": {"progress": 0.10},
@@ -282,21 +297,21 @@ class TestPrinterHubHandleStatus:
         status = {"virtual_sdcard": {"progress": 0.50}}
 
         async def _run():
-            await hub._handle_status(1, status)
+            await hub._handle_status(printer.id, status)
 
         asyncio.run(_run())
         snap = hub.snapshots[1]
         assert snap["print_stats"]["state"] == "printing"
         assert snap["virtual_sdcard"]["progress"] == 0.50
 
-    def test_handle_status_skips_non_dict_fields(self, hub):
+    def test_handle_status_skips_non_dict_fields(self, printer: Printer, hub):
         status = {
             "print_stats": "not a dict",
             "virtual_sdcard": {"progress": 0.99},
         }
 
         async def _run():
-            await hub._handle_status(1, status)
+            await hub._handle_status(printer.id, status)
 
         asyncio.run(_run())
         snap = hub.snapshots.get(1, {})
@@ -415,7 +430,9 @@ class TestStateMapping:
 
 
 class TestPrinterHubSyncActiveJob:
-    def test_sync_circuit_breaker_bounds_repeated_failures(self, hub, monkeypatch):
+    def test_sync_circuit_breaker_bounds_repeated_failures(
+        self, printer: Printer, hub, monkeypatch
+    ):
         calls = 0
 
         async def failing_sync(*_args, **_kwargs):
@@ -427,7 +444,9 @@ class TestPrinterHubSyncActiveJob:
 
         async def _run():
             for _ in range(4):
-                await hub._sync_active_job(1, "printing", "cube.gcode", 0.5, {})
+                await hub._sync_active_job(
+                    printer.id, "printing", "cube.gcode", 0.5, {}
+                )
 
         asyncio.run(_run())
         failures, retry_after = hub._job_sync_breakers[1]
@@ -435,7 +454,7 @@ class TestPrinterHubSyncActiveJob:
         assert failures == 3
         assert retry_after > 0
 
-    def test_sync_progress_is_coalesced(self, hub, monkeypatch):
+    def test_sync_progress_is_coalesced(self, printer: Printer, hub, monkeypatch):
         calls = 0
 
         async def successful_sync(*_args, **_kwargs):
@@ -447,8 +466,8 @@ class TestPrinterHubSyncActiveJob:
         )
 
         async def _run():
-            await hub._sync_active_job(1, "printing", "cube.gcode", 0.5, {})
-            await hub._sync_active_job(1, "printing", "cube.gcode", 0.9, {})
+            await hub._sync_active_job(printer.id, "printing", "cube.gcode", 0.5, {})
+            await hub._sync_active_job(printer.id, "printing", "cube.gcode", 0.9, {})
 
         asyncio.run(_run())
         assert calls == 1
@@ -553,13 +572,13 @@ class TestPrinterHubSyncActiveJob:
         assert job.state == PrintJobState.COMPLETED
         assert job.finished_at is not None
 
-    def test_sync_no_filename_returns_early(self, hub):
+    def test_sync_no_filename_returns_early(self, printer: Printer, hub):
         async def _sync():
-            await hub._sync_active_job(1, "printing", None, 0.0, {})
+            await hub._sync_active_job(printer.id, "printing", None, 0.0, {})
 
         asyncio.run(_sync())
 
-    def test_sync_no_matching_row(self, hub):
+    def test_sync_no_matching_row(self, printer: Printer, hub):
         """With printing state and no matching row, an external job is auto-created."""
         from sqlmodel import select
 
@@ -567,7 +586,7 @@ class TestPrinterHubSyncActiveJob:
 
         async def _sync():
             await hub._sync_active_job(
-                1, "printing", "ext-test.gcode", 0.5, {"state": "printing"}
+                printer.id, "printing", "ext-test.gcode", 0.5, {"state": "printing"}
             )
 
         asyncio.run(_sync())
@@ -586,7 +605,9 @@ class TestPrinterHubSyncActiveJob:
             assert job.state == PrintJobState.PRINTING
             assert job.artifact_evidence == "metadata_only"
 
-    def test_external_bambu_job_preserves_reported_identity(self, hub):
+    def test_external_bambu_job_preserves_reported_identity(
+        self, printer: Printer, hub
+    ):
         from sqlmodel import select
 
         from app.db.session import get_session_factory
@@ -606,7 +627,9 @@ class TestPrinterHubSyncActiveJob:
             "external_nozzle_diameter": 0.4,
         }
 
-        asyncio.run(hub._sync_active_job(1, "printing", "plate_1.gcode", 0.1, stats))
+        asyncio.run(
+            hub._sync_active_job(printer.id, "printing", "plate_1.gcode", 0.1, stats)
+        )
 
         with get_session_factory().session() as session:
             job = session.exec(
@@ -621,13 +644,15 @@ class TestPrinterHubSyncActiveJob:
             assert job.external_total_layers == 120
             assert job.external_nozzle_diameter == pytest.approx(0.4)
 
-    def test_bambu_project_only_then_task_only_reuses_one_job(self, hub):
+    def test_bambu_project_only_then_task_only_reuses_one_job(
+        self, printer: Printer, hub
+    ):
         from sqlmodel import select
 
         from app.db.session import get_session_factory
 
         hub._sync_active_job_db(
-            1,
+            printer.id,
             "printing",
             "plate_1.gcode",
             0.1,
@@ -638,7 +663,7 @@ class TestPrinterHubSyncActiveJob:
             },
         )
         hub._sync_active_job_db(
-            1,
+            printer.id,
             "printing",
             "plate_1.gcode",
             0.2,
@@ -656,13 +681,15 @@ class TestPrinterHubSyncActiveJob:
             assert rows[0].external_task_id == "task-transition"
             assert rows[0].provider_job_id == "task-transition"
 
-    def test_bambu_cross_field_identity_equality_does_not_merge(self, hub):
+    def test_bambu_cross_field_identity_equality_does_not_merge(
+        self, printer: Printer, hub
+    ):
         from sqlmodel import select
 
         from app.db.session import get_session_factory
 
         hub._sync_active_job_db(
-            1,
+            printer.id,
             "printing",
             "same-file.gcode",
             0.1,
@@ -673,7 +700,7 @@ class TestPrinterHubSyncActiveJob:
             },
         )
         hub._sync_active_job_db(
-            1,
+            printer.id,
             "printing",
             "same-file.gcode",
             0.2,
@@ -694,13 +721,15 @@ class TestPrinterHubSyncActiveJob:
             assert rows[1].external_task_id == "same-id"
             assert rows[1].external_project_id is None
 
-    def test_bambu_conflicting_typed_identity_does_not_merge(self, hub):
+    def test_bambu_conflicting_typed_identity_does_not_merge(
+        self, printer: Printer, hub
+    ):
         from sqlmodel import select
 
         from app.db.session import get_session_factory
 
         hub._sync_active_job_db(
-            1,
+            printer.id,
             "printing",
             "conflict.gcode",
             0.1,
@@ -712,7 +741,7 @@ class TestPrinterHubSyncActiveJob:
             },
         )
         hub._sync_active_job_db(
-            1,
+            printer.id,
             "printing",
             "conflict.gcode",
             0.2,
@@ -735,7 +764,7 @@ class TestPrinterHubSyncActiveJob:
             assert rows[1].external_project_id == "project-new"
 
     def test_identityless_bambu_report_does_not_merge_typed_external_job(
-        self, hub, db_session
+        self, printer: Printer, hub, db_session
     ):
         printer = build_printer(
             db_session,
@@ -776,7 +805,9 @@ class TestPrinterHubSyncActiveJob:
             assert rows[0].external_task_id == "task-identity"
             assert rows[1].external_task_id is None
 
-    def test_concurrent_bambu_initial_callbacks_create_one_job(self, threaded_hub_db):
+    def test_concurrent_bambu_initial_callbacks_create_one_job(
+        self, printer: Printer, threaded_hub_db
+    ):
         from app.db.session import get_session_factory, override_session_factory
 
         factory = get_session_factory()
@@ -809,7 +840,7 @@ class TestPrinterHubSyncActiveJob:
             # the app's asyncio.to_thread propagation explicitly in this unit.
             override_session_factory(factory)
             return hub._sync_active_job_db(
-                1, "printing", "concurrent.gcode", 0.1, report
+                printer.id, "printing", "concurrent.gcode", 0.1, report
             )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -822,7 +853,9 @@ class TestPrinterHubSyncActiveJob:
             assert rows[0].external_project_id == "project-concurrent"
             assert rows[0].external_task_id == "task-concurrent"
 
-    def test_external_bambu_gcode_is_archived_when_cache_is_available(self, hub):
+    def test_external_bambu_gcode_is_archived_when_cache_is_available(
+        self, printer: Printer, hub
+    ):
         from sqlmodel import select
 
         from app.db.models import SENTINEL_MODEL_HASH, Model
@@ -836,7 +869,7 @@ class TestPrinterHubSyncActiveJob:
 
         async def _run():
             await hub._handle_status(
-                1,
+                printer.id,
                 {
                     "print_stats": {
                         "state": "printing",
@@ -895,7 +928,7 @@ class TestPrinterHubSyncActiveJob:
         assert db_session.get(File, file_id) is not None
         assert db_session.get(Model, model_id) is not None
 
-    def test_external_reprint_creates_new_job(self, hub):
+    def test_external_reprint_creates_new_job(self, printer: Printer, hub):
         """A second external print of the same file must not revive the first
         (now-finished) job — it should create a fresh history row."""
         from sqlmodel import select
@@ -904,7 +937,7 @@ class TestPrinterHubSyncActiveJob:
         from app.db.session import get_session_factory
 
         def _tick(state, progress, stats):
-            hub._sync_active_job_db(7, state, "repeat.gcode", progress, stats)
+            hub._sync_active_job_db(printer.id, state, "repeat.gcode", progress, stats)
 
         # First external print: start -> complete.
         _tick("printing", 0.5, {"state": "printing"})
@@ -952,7 +985,7 @@ class TestPrinterHubSyncActiveJob:
 
         assert select_calls == 0, "cache hit should skip the PrintJob select"
 
-    def test_repeated_complete_tick_does_not_duplicate(self, hub):
+    def test_repeated_complete_tick_does_not_duplicate(self, printer: Printer, hub):
         """A second 'complete' tick after a print finishes is idempotent — it
         must match the existing finished row, not create a duplicate."""
         from sqlmodel import select
@@ -961,7 +994,7 @@ class TestPrinterHubSyncActiveJob:
         from app.db.session import get_session_factory
 
         def _tick(state, stats):
-            hub._sync_active_job_db(8, state, "once.gcode", 1.0, stats)
+            hub._sync_active_job_db(printer.id, state, "once.gcode", 1.0, stats)
 
         _tick("printing", {"state": "printing"})
         _tick("complete", {"state": "complete", "total_duration": 50})
@@ -973,7 +1006,7 @@ class TestPrinterHubSyncActiveJob:
             ).all()
         assert len(jobs) == 1
 
-    def test_sync_no_matching_row_standby_ignored(self, hub):
+    def test_sync_no_matching_row_standby_ignored(self, printer: Printer, hub):
         """Standby state with no matching row should NOT create a job."""
         from sqlmodel import select
 
@@ -981,7 +1014,7 @@ class TestPrinterHubSyncActiveJob:
 
         async def _sync():
             await hub._sync_active_job(
-                1, "standby", "standby.gcode", 0.0, {"state": "standby"}
+                printer.id, "standby", "standby.gcode", 0.0, {"state": "standby"}
             )
 
         asyncio.run(_sync())
@@ -1002,7 +1035,7 @@ class TestPrinterHubSyncActiveJob:
         ],
     )
     def test_first_terminal_snapshot_never_leaves_a_phantom_active_job(
-        self, hub, terminal_state, expected_state
+        self, printer: Printer, hub, terminal_state, expected_state
     ):
         """The initial row must become terminal in the same transaction."""
         from sqlmodel import select
@@ -1013,7 +1046,7 @@ class TestPrinterHubSyncActiveJob:
 
         asyncio.run(
             hub._sync_active_job(
-                1,
+                printer.id,
                 terminal_state,
                 "stale-terminal.gcode",
                 0.0,
@@ -1053,7 +1086,7 @@ class TestPrinterHubSyncActiveJob:
         assert job.error == "thermal runaway"
 
     def test_material_state_sync_reconciles_the_slot_rows(
-        self, hub: PrinterHub, db_session
+        self, printer: Printer, hub: PrinterHub, db_session
     ) -> None:
         printer = build_printer(
             db_session,
@@ -1154,6 +1187,7 @@ class TestPrinterHubSyncActiveJob:
     def test_slot_enrichment_survives_an_unresolvable_spool(
         self,
         hub: PrinterHub,
+        printer: Printer,
     ) -> None:
         slots = [
             {"slot_key": "tool0", "external_spool_id": 7},
@@ -1185,7 +1219,7 @@ class TestPrinterHubSyncActiveJob:
                     new=AsyncMock(side_effect=get_spool),
                 ),
             ):
-                return await hub._enrich_material_slots(1, slots)
+                return await hub._enrich_material_slots(printer.id, slots)
 
         enriched = asyncio.run(run())
         assert enriched[0] == {
@@ -1201,13 +1235,13 @@ class TestPrinterHubSyncActiveJob:
         assert "material_type" not in enriched[1]
 
         with patch.object(hub, "_spoolman_config", return_value=None):
-            assert asyncio.run(hub._enrich_material_slots(1, slots)) == slots
-        assert asyncio.run(hub._enrich_material_slots(1, [{"slot_key": "manual"}])) == [
-            {"slot_key": "manual"}
-        ]
+            assert asyncio.run(hub._enrich_material_slots(printer.id, slots)) == slots
+        assert asyncio.run(
+            hub._enrich_material_slots(printer.id, [{"slot_key": "manual"}])
+        ) == [{"slot_key": "manual"}]
 
     def test_external_capture_failure_paths_are_persistent(
-        self, hub: PrinterHub, db_session
+        self, printer: Printer, hub: PrinterHub, db_session
     ) -> None:
         artifact = a_gcode_artifact(db_session, "Queue cube")
         job = build_print_job(
@@ -1227,7 +1261,7 @@ class TestPrinterHubSyncActiveJob:
         ):
             asyncio.run(
                 hub._capture_external_artifact(
-                    1, job.id, "/cache/external.gcode", MagicMock()
+                    printer.id, job.id, "/cache/external.gcode", MagicMock()
                 )
             )
         db_session.expire_all()
@@ -1255,7 +1289,7 @@ class TestPrinterHubSyncActiveJob:
         ):
             asyncio.run(
                 hub._capture_external_artifact(
-                    1, job.id, "/cache/external.gcode", client
+                    printer.id, job.id, "/cache/external.gcode", client
                 )
             )
         db_session.expire_all()
@@ -1272,7 +1306,7 @@ class TestPrinterHubSyncActiveJob:
         hub._mark_capture_failed(job.id, "ignored")
 
     def test_external_capture_persists_what_it_downloaded(
-        self, hub: PrinterHub
+        self, printer: Printer, hub: PrinterHub
     ) -> None:
         client = MagicMock()
 
@@ -1287,13 +1321,15 @@ class TestPrinterHubSyncActiveJob:
             patch.object(hub, "_persist_external_artifact") as persist,
         ):
             asyncio.run(
-                hub._capture_external_artifact(1, 2, "/cache/external.gcode", client)
+                hub._capture_external_artifact(
+                    printer.id, 2, "/cache/external.gcode", client
+                )
             )
 
         persist.assert_called_once()
 
     def test_external_capture_lets_cancellation_propagate(
-        self, hub: PrinterHub
+        self, printer: Printer, hub: PrinterHub
     ) -> None:
         # Shutdown has to reach the download. Swallowing `CancelledError` here would
         # leave the hub's worker un-cancellable while a large artifact transfers.
@@ -1302,7 +1338,9 @@ class TestPrinterHubSyncActiveJob:
 
         with _capture_limit_mb(1), pytest.raises(asyncio.CancelledError):
             asyncio.run(
-                hub._capture_external_artifact(1, 2, "/cache/external.gcode", client)
+                hub._capture_external_artifact(
+                    printer.id, 2, "/cache/external.gcode", client
+                )
             )
 
 

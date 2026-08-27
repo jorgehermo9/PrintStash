@@ -32,11 +32,22 @@ from app.db.models import (
     InboxItem,
     InboxItemState,
     StagingLease,
+    User,
 )
 from app.db.session import get_session_factory
 from app.services import jobs as jobs_module
 from app.services.jobs import JobRegistry, reconcile_interrupted_jobs
 from tests.factories import build_user
+
+
+@pytest.fixture
+def owner(db_session: Session) -> User:
+    """The user these background jobs belong to.
+
+    `background_jobs.owner_user_id` is a foreign key, so a job owned by an id that
+    does not exist is refused here as it is in production.
+    """
+    return build_user(db_session, "job-owner")
 
 
 class TestJobRegistry:
@@ -113,15 +124,15 @@ class TestJobRegistry:
         assert restored.result == {"winner": "first"}
         assert restored.progress == 100
 
-    def test_job_status_survives_registry_recreation(self) -> None:
+    def test_job_status_survives_registry_recreation(self, owner: User) -> None:
         first = JobRegistry()
-        job_id = first.create(owner_user_id=7)
+        job_id = first.create(owner_user_id=owner.id)
         first.update(job_id, state="running", label="persisted", progress=25)
 
         restored = JobRegistry().get(job_id)
 
         assert restored is not None
-        assert restored.owner_user_id == 7
+        assert restored.owner_user_id == owner.id
         assert restored.state == "running"
         assert restored.label == "persisted"
         assert restored.progress == 25
@@ -161,12 +172,11 @@ class TestJobRegistry:
         assert registry.get(fresh_id) is not None
 
     def test_finished_job_pruning_keeps_completed_inbox_reference_valid(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+        self, owner: User, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A terminal capture may retain its job link after staging cleanup."""
         monotonic_now = 0.0
         monkeypatch.setattr(jobs_module, "monotonic", lambda: monotonic_now)
-        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
         owner = build_user(db_session, "prune-inbox-owner")
         db_session.refresh(owner)
 
@@ -194,12 +204,11 @@ class TestJobRegistry:
         assert registry.get(fresh_id) is not None
 
     def test_finished_job_pruning_keeps_job_owned_staging_lease_for_retry(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+        self, owner: User, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Cleanup-pending imports retain terminal jobs while staging is owned."""
         monotonic_now = 0.0
         monkeypatch.setattr(jobs_module, "monotonic", lambda: monotonic_now)
-        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
         owner = build_user(db_session, "prune-lease-owner")
         db_session.refresh(owner)
 
@@ -252,9 +261,11 @@ class TestJobRegistry:
 class TestReconcileInterruptedJobs:
     """What a restart does to jobs that were still running when the process died."""
 
-    def test_restart_marks_interrupted_non_replayable_job_retryable(self) -> None:
+    def test_restart_marks_interrupted_non_replayable_job_retryable(
+        self, owner: User
+    ) -> None:
         registry = JobRegistry()
-        job_id = registry.create(owner_user_id=7)
+        job_id = registry.create(owner_user_id=owner.id)
         registry.update(job_id, state="running", label="upload")
 
         assert reconcile_interrupted_jobs() == 1
@@ -265,9 +276,9 @@ class TestReconcileInterruptedJobs:
         assert restored.error == "interrupted_by_restart"
         assert restored.retryable is True
 
-    def test_restart_fails_pending_job_even_when_replay_safe(self) -> None:
+    def test_restart_fails_pending_job_even_when_replay_safe(self, owner: User) -> None:
         registry = JobRegistry()
-        job_id = registry.create(owner_user_id=7)
+        job_id = registry.create(owner_user_id=owner.id)
         with get_session_factory().scoped_session() as session:
             row = session.get(BackgroundJob, job_id)
             assert row is not None

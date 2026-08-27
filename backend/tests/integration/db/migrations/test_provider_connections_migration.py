@@ -60,7 +60,6 @@ class TestUser:
             ]
         )
         db_session.commit()
-        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
         db_session.exec(delete(User).where(User.id == user.id))
         db_session.commit()
         assert not db_session.exec(select(ProviderConnection)).all()

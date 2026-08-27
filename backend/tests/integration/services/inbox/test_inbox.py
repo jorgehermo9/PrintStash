@@ -71,6 +71,17 @@ def _make_item(session: Session, owner: User, **overrides) -> InboxItem:
     return row
 
 
+@pytest.fixture
+def imported_model(db_session: Session) -> Model:
+    """The model a completed import produced.
+
+    `inbox_items.resulting_model_id` is a foreign key, so the id a fake
+    `import_assets` reports has to belong to a real row — an arbitrary integer is
+    refused here exactly as it is in production.
+    """
+    return build_model(db_session, name="imported", slug="imported")
+
+
 class TestBeginImport:
     def test_rolls_back_when_the_staging_transfer_fails(
         self, db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -236,11 +247,12 @@ class TestReconcileInterruptedItems:
 
     def test_reconcile_completes_importing_item_with_finished_job(
         self,
+        imported_model: Model,
         db_session: Session,
     ) -> None:
         owner = _make_user(db_session, "reconcile-importing-ok")
         job_id = registry.create(owner_user_id=owner.id)
-        registry.update(job_id, state="completed", model_id=5)
+        registry.update(job_id, state="completed", model_id=imported_model.id)
         row = _make_item(
             db_session, owner, state=InboxItemState.IMPORTING, background_job_id=job_id
         )
@@ -250,7 +262,7 @@ class TestReconcileInterruptedItems:
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
-            assert fresh.resulting_model_id == 5
+            assert fresh.resulting_model_id == imported_model.id
 
     def test_reconcile_finished_capture_runs_normal_terminalization(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch
@@ -618,11 +630,12 @@ class TestReconcileInterruptedItems:
 
     def test_reconcile_completed_v2_job_without_results_stays_retryable(
         self,
+        imported_model: Model,
         db_session: Session,
     ) -> None:
         owner = _make_user(db_session, "reconcile-v2-no-results")
         job_id = registry.create(owner_user_id=owner.id)
-        registry.update(job_id, state="completed", model_id=55)
+        registry.update(job_id, state="completed", model_id=imported_model.id)
         row = _make_item(
             db_session,
             owner,
@@ -1132,7 +1145,11 @@ class TestRunImport:
 
     @pytest.mark.asyncio
     async def test_records_the_resulting_model_when_a_direct_import_completes(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        imported_model: Model,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         owner = _make_user(db_session, "run-import-direct")
         row = _make_item(
@@ -1151,7 +1168,7 @@ class TestRunImport:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=42)
+            registry.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1160,7 +1177,7 @@ class TestRunImport:
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
-            assert fresh.resulting_model_id == 42
+            assert fresh.resulting_model_id == imported_model.id
             assert fresh.completed_at is not None
 
     @pytest.mark.asyncio
@@ -1187,7 +1204,11 @@ class TestRunImport:
 
     @pytest.mark.asyncio
     async def test_run_import_archive_completes(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        imported_model: Model,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         owner = _make_user(db_session, "run-import-archive-ok")
         _overlay["staging_dir"] = tmp_path / "staging"
@@ -1213,7 +1234,7 @@ class TestRunImport:
         )
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=7)
+            registry.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1222,13 +1243,17 @@ class TestRunImport:
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
-            assert fresh.resulting_model_id == 7
+            assert fresh.resulting_model_id == imported_model.id
             assert fresh.staging_key is None
         assert not staged_archive.exists()
 
     @pytest.mark.asyncio
     async def test_releases_staging_after_importing_a_browser_file_copy(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        imported_model: Model,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         owner = _make_user(db_session, "run-import-browser-file")
         _overlay["staging_dir"] = tmp_path / "staging"
@@ -1253,7 +1278,7 @@ class TestRunImport:
             assert copied.read_bytes() == b"browser-owned-package"
             assert name == "widget.3mf"
             copied.unlink()
-            registry.update(job_id, state="completed", model_id=8)
+            registry.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1262,13 +1287,17 @@ class TestRunImport:
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
-            assert fresh.resulting_model_id == 8
+            assert fresh.resulting_model_id == imported_model.id
             assert fresh.staging_key is None
         assert not staged.exists()
 
     @pytest.mark.asyncio
     async def test_run_import_model_files_completes(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        imported_model: Model,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         owner = _make_user(db_session, "run-import-model-files")
         row = _make_item(
@@ -1309,7 +1338,7 @@ class TestRunImport:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=9)
+            registry.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1318,11 +1347,15 @@ class TestRunImport:
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
-            assert fresh.resulting_model_id == 9
+            assert fresh.resulting_model_id == imported_model.id
 
     @pytest.mark.asyncio
     async def test_run_import_collection_completes(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        imported_model: Model,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         owner = _make_user(db_session, "run-import-collection")
         row = _make_item(
@@ -1348,7 +1381,7 @@ class TestRunImport:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=11)
+            registry.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1357,7 +1390,7 @@ class TestRunImport:
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
-            assert fresh.resulting_model_id == 11
+            assert fresh.resulting_model_id == imported_model.id
 
     @pytest.mark.asyncio
     async def test_run_import_job_not_completed_marks_failed(
@@ -1511,7 +1544,11 @@ class TestRetry:
 
     @pytest.mark.asyncio
     async def test_legacy_browser_file_failure_retry_then_success_returns_lease_to_review(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        imported_model: Model,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         owner = _make_user(db_session, "legacy-browser-retry")
         _overlay["staging_dir"] = tmp_path / "staging"
@@ -1568,7 +1605,7 @@ class TestRetry:
         assert returned.background_job_id is None
 
         def complete_import(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=23)
+            registry.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(inbox.importer, "import_assets", complete_import)
         await inbox.run_import(row.id, [], get_session_factory())
@@ -1577,7 +1614,7 @@ class TestRetry:
             fresh = session.get(InboxItem, row.id)
             assert fresh is not None
             assert fresh.state == InboxItemState.COMPLETED
-            assert fresh.resulting_model_id == 23
+            assert fresh.resulting_model_id == imported_model.id
 
 
 class TestDismiss:

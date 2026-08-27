@@ -269,7 +269,6 @@ class TestPut:
         )
         lease_id = lease.id
         db_session.commit()
-        db_session.connection().exec_driver_sql("PRAGMA foreign_keys=ON")
 
         db_session.delete(cover)
         db_session.commit()
@@ -597,6 +596,12 @@ class TestPut:
             content_type="image/png",
         )
         db_session.commit()
+        # Read these before the delete. The cover row cascades away with its
+        # provenance source, so reaching for `result.cover` afterwards raises
+        # ObjectDeletedError rather than returning the values to compare against —
+        # which is the point of the intent: it is the only thing that outlives the row.
+        cover_key = result.cover.storage_key
+        cover_id = result.cover.id
 
         trash.soft_delete_model(db_session, model)
         trash.hard_delete_model(db_session, model)
@@ -608,8 +613,8 @@ class TestPut:
             )
         ).all()
         assert len(intents) == 1
-        assert intents[0].key == result.cover.storage_key
-        assert intents[0].resource_id == str(result.cover.id)
+        assert intents[0].key == cover_key
+        assert intents[0].resource_id == str(cover_id)
 
 
 class TestReconcilePending:

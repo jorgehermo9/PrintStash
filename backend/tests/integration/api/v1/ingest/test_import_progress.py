@@ -49,10 +49,28 @@ from tests.factories import (
 )
 
 
+@pytest.fixture
+def owner(db_session: Session) -> User:
+    """The user this module's background jobs belong to.
+
+    `background_jobs.owner_user_id` is a foreign key, so a job owned by a user id
+    that does not exist is refused — exactly as it is in production. These tests are
+    about listing, redaction and progress rather than about users, so the owner is a
+    fixture and the tests name it rather than hardcoding an id.
+    """
+    return build_user(db_session, "import-owner")
+
+
+@pytest.fixture
+def other_owner(db_session: Session) -> User:
+    """A second user, for the tests that check one owner cannot see another's jobs."""
+    return build_user(db_session, "import-other-owner")
+
+
 class TestJobUpdate:
-    def test_progress_keeps_total_unknown_until_discovery(self) -> None:
+    def test_progress_keeps_total_unknown_until_discovery(self, owner: User) -> None:
         jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
+        job_id = jobs.create(owner_user_id=owner.id)
         jobs.update(job_id, state="running", stage="resolving", processed=0)
         assert jobs.get(job_id).total is None  # type: ignore[union-attr]
 
@@ -61,9 +79,9 @@ class TestJobUpdate:
         assert status is not None
         assert (status.processed, status.total) == (1, 3)
 
-    def test_reports_a_job_that_partly_succeeded_as_partial(self) -> None:
+    def test_reports_a_job_that_partly_succeeded_as_partial(self, owner: User) -> None:
         jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
+        job_id = jobs.create(owner_user_id=owner.id)
 
         jobs.update(job_id, state="completed", succeeded=2, failed=1, retryable=True)
 
@@ -74,9 +92,9 @@ class TestJobUpdate:
         assert status is not None
         assert status.completion == "partial"
 
-    def test_strips_the_server_path_from_a_failed_item(self) -> None:
+    def test_strips_the_server_path_from_a_failed_item(self, owner: User) -> None:
         jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
+        job_id = jobs.create(owner_user_id=owner.id)
 
         jobs.update(
             job_id,
@@ -99,9 +117,9 @@ class TestJobUpdate:
         assert status.failed_items[0].name == "broken.stl"
         assert "/srv/private" not in status.failed_items[0].reason
 
-    def test_strips_a_credential_from_a_failed_item(self) -> None:
+    def test_strips_a_credential_from_a_failed_item(self, owner: User) -> None:
         jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
+        job_id = jobs.create(owner_user_id=owner.id)
 
         jobs.update(
             job_id,
@@ -120,9 +138,9 @@ class TestJobUpdate:
         assert status is not None
         assert "secret" not in status.failed_items[0].reason
 
-    def test_strips_a_credential_from_the_result_payload(self) -> None:
+    def test_strips_a_credential_from_the_result_payload(self, owner: User) -> None:
         jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
+        job_id = jobs.create(owner_user_id=owner.id)
 
         jobs.update(
             job_id,
@@ -138,9 +156,11 @@ class TestJobUpdate:
         assert "/srv/private" not in str(status.result)
         assert "secret" not in str(status.result)
 
-    def test_complete_failure_is_distinct_from_partial_success(self) -> None:
+    def test_complete_failure_is_distinct_from_partial_success(
+        self, owner: User
+    ) -> None:
         jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
+        job_id = jobs.create(owner_user_id=owner.id)
         jobs.update(job_id, state="failed", error="download_failed", retryable=True)
         status = jobs.get(job_id)
         assert status is not None
@@ -160,25 +180,27 @@ class TestJobUpdate:
             "completed",
         ],
     )
-    def test_registry_supports_every_import_stage(self, stage: str) -> None:
+    def test_registry_supports_every_import_stage(
+        self, owner: User, stage: str
+    ) -> None:
         jobs = JobRegistry()
-        job_id = jobs.create(owner_user_id=7)
+        job_id = jobs.create(owner_user_id=owner.id)
         jobs.update(job_id, stage=stage)  # type: ignore[arg-type]
         assert jobs.get(job_id).stage == stage  # type: ignore[union-attr]
 
-    def test_pending_registry_prunes_entries_past_ttl(self) -> None:
+    def test_pending_registry_prunes_entries_past_ttl(self, owner: User) -> None:
         registry_ = ingest_module._PendingRegistry()
         stale = ingest_module._PendingModelFiles(
             page_url="https://x",
             page_title="x",
-            owner_user_id=1,
+            owner_user_id=owner.id,
             files=[],
             created_at=0.0,
         )
         registry_._items["stale-token"] = stale
         fresh_token = registry_.add(
             ingest_module._PendingModelFiles(
-                page_url="https://y", page_title="y", owner_user_id=1, files=[]
+                page_url="https://y", page_title="y", owner_user_id=owner.id, files=[]
             )
         )
         assert registry_.get("stale-token") is None
@@ -188,12 +210,16 @@ class TestJobUpdate:
 
 
 class TestListForUser:
-    def test_reconnect_listing_respects_owner_permissions(self) -> None:
+    def test_reconnect_listing_respects_owner_permissions(
+        self, owner: User, other_owner: User
+    ) -> None:
         jobs = JobRegistry()
-        own = jobs.create(owner_user_id=7)
-        other = jobs.create(owner_user_id=8)
-        assert [job.job_id for job in jobs.list_for_user(7)] == [own]
-        assert {job.job_id for job in jobs.list_for_user(7, is_superuser=True)} == {
+        own = jobs.create(owner_user_id=owner.id)
+        other = jobs.create(owner_user_id=other_owner.id)
+        assert [job.job_id for job in jobs.list_for_user(owner.id)] == [own]
+        assert {
+            job.job_id for job in jobs.list_for_user(owner.id, is_superuser=True)
+        } == {
             own,
             other,
         }
@@ -201,12 +227,14 @@ class TestListForUser:
 
     def test_reconnect_listing_scopes_before_status_deserialization(
         self,
+        owner: User,
+        other_owner: User,
         db_session: Session,
     ) -> None:
         db_session.add(
             BackgroundJob(
                 id="other-corrupt",
-                owner_user_id=8,
+                owner_user_id=other_owner.id,
                 visible=True,
                 state="completed",
                 status_json="not-json",
@@ -215,7 +243,7 @@ class TestListForUser:
         db_session.add(
             BackgroundJob(
                 id="mine-valid",
-                owner_user_id=7,
+                owner_user_id=owner.id,
                 visible=True,
                 state="running",
                 status_json=json.dumps({"state": "running"}),
@@ -223,19 +251,20 @@ class TestListForUser:
         )
         db_session.commit()
 
-        listed = JobRegistry().list_for_user(7)
+        listed = JobRegistry().list_for_user(owner.id)
 
         assert [job.job_id for job in listed] == ["mine-valid"]
 
     def test_lists_active_jobs_with_a_bounded_terminal_tail(
         self,
+        owner: User,
         db_session: Session,
     ) -> None:
         now = utcnow()
         db_session.add(
             BackgroundJob(
                 id="active",
-                owner_user_id=7,
+                owner_user_id=owner.id,
                 visible=True,
                 state="running",
                 status_json=json.dumps({"state": "running"}),
@@ -246,7 +275,7 @@ class TestListForUser:
             db_session.add(
                 BackgroundJob(
                     id=f"done-{index}",
-                    owner_user_id=7,
+                    owner_user_id=owner.id,
                     visible=True,
                     state="completed",
                     status_json=json.dumps({"state": "completed"}),
@@ -255,7 +284,7 @@ class TestListForUser:
             )
         db_session.commit()
 
-        listed = JobRegistry().list_for_user(7, terminal_limit=2)
+        listed = JobRegistry().list_for_user(owner.id, terminal_limit=2)
 
         assert {job.job_id for job in listed} == {"active", "done-0", "done-1"}
 
@@ -552,12 +581,12 @@ class TestIngestModel:
 class TestHandleCollectionUrl:
     @pytest.mark.asyncio
     async def test_handle_collection_url_review_stages_manifest(
-        self, tmp_path: Path
+        self, owner: User, tmp_path: Path
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://printables.com/collections/9", review=True)
         members = [
             import_resolvers.CollectionMember(
@@ -572,7 +601,7 @@ class TestHandleCollectionUrl:
             await ingest_module._handle_collection_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -584,12 +613,12 @@ class TestHandleCollectionUrl:
 
     @pytest.mark.asyncio
     async def test_handle_collection_url_auto_imports_members(
-        self, tmp_path: Path
+        self, owner: User, tmp_path: Path
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://printables.com/collections/9", review=False)
         members = [
             import_resolvers.CollectionMember(
@@ -623,7 +652,7 @@ class TestHandleCollectionUrl:
             await ingest_module._handle_collection_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -636,12 +665,13 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_collection_resolve_failure_marks_job_failed(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://printables.com/collections/9")
         with (
             patch.object(
@@ -654,7 +684,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -665,12 +695,13 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_download_import_error_marks_job_failed(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/model.stl")
         with (
             patch.object(import_resolvers, "classify_collection", return_value=None),
@@ -689,7 +720,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -700,12 +731,13 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_unexpected_download_error_marks_job_failed(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/model.stl")
         with (
             patch.object(import_resolvers, "classify_collection", return_value=None),
@@ -724,7 +756,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -735,6 +767,7 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_non_file_response_reports_not_a_direct_file(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
@@ -743,7 +776,7 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.html"
         staged.write_bytes(b"<html>not a model</html>")
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://example.com/some-page")
 
         async def fake_download(url: str):
@@ -762,7 +795,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -774,6 +807,7 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_zip_response_stages_archive_manifest(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
@@ -782,7 +816,7 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.zip"
         staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/bundle.zip")
 
         async def fake_download(url: str):
@@ -801,7 +835,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -812,12 +846,13 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_multi_file_page_stages_files_manifest(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://www.printables.com/model/123-x")
         files = [
             import_resolvers.ModelFile(file_id="1", name="a.stl", file_type="stl"),
@@ -835,7 +870,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -848,6 +883,7 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_zip_inspect_import_error_marks_job_failed(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
@@ -856,7 +892,7 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.zip"
         staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/bundle.zip")
 
         async def fake_download(url: str):
@@ -880,7 +916,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -892,6 +928,7 @@ class TestImportFromUrl:
     @pytest.mark.asyncio
     async def test_import_from_url_single_direct_file_imports_successfully(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
@@ -900,7 +937,7 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.stl"
         staged.write_bytes(_cube_stl_bytes())
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/cube.stl")
 
         async def fake_download(url: str):
@@ -919,7 +956,7 @@ class TestImportFromUrl:
             await ingest_module._import_from_url(
                 job_id=job_id,
                 req=req,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -931,12 +968,12 @@ class TestImportFromUrl:
 class TestInspectUploadedArchive:
     @pytest.mark.asyncio
     async def test_inspect_uploaded_archive_reports_import_error(
-        self, tmp_path: Path
+        self, owner: User, tmp_path: Path
     ) -> None:
         use_local_storage(tmp_path)
         staged = tmp_path / "staged.zip"
         staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
 
         with patch.object(
             ingest_module.importer,
@@ -947,7 +984,7 @@ class TestInspectUploadedArchive:
                 job_id=job_id,
                 staged=staged,
                 original_filename="staged.zip",
-                actor_user_id=1,
+                actor_user_id=owner.id,
             )
 
         status = registry.get(job_id)
@@ -959,12 +996,13 @@ class TestInspectUploadedArchive:
     @pytest.mark.asyncio
     async def test_inspect_uploaded_archive_reports_unexpected_error(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
         staged = tmp_path / "staged2.zip"
         staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
 
         with patch.object(
             ingest_module.importer, "inspect_archive", side_effect=RuntimeError("boom")
@@ -973,7 +1011,7 @@ class TestInspectUploadedArchive:
                 job_id=job_id,
                 staged=staged,
                 original_filename="staged2.zip",
-                actor_user_id=1,
+                actor_user_id=owner.id,
             )
 
         status = registry.get(job_id)
@@ -985,10 +1023,10 @@ class TestInspectUploadedArchive:
 class TestRunFileSelectionImport:
     @pytest.mark.asyncio
     async def test_run_file_selection_import_reports_import_error(
-        self, tmp_path: Path
+        self, owner: User, tmp_path: Path
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         with patch.object(
             import_resolvers,
             "resolve_selected_download",
@@ -1000,7 +1038,7 @@ class TestRunFileSelectionImport:
                 files=[],
                 collection=None,
                 tags=None,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -1011,10 +1049,11 @@ class TestRunFileSelectionImport:
     @pytest.mark.asyncio
     async def test_run_file_selection_import_no_files_reports_failure(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         with (
             patch.object(
                 import_resolvers,
@@ -1031,7 +1070,7 @@ class TestRunFileSelectionImport:
                 files=[],
                 collection=None,
                 tags=None,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -1042,10 +1081,11 @@ class TestRunFileSelectionImport:
     @pytest.mark.asyncio
     async def test_run_file_selection_import_reports_unexpected_error(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         with patch.object(
             import_resolvers,
             "resolve_selected_download",
@@ -1057,7 +1097,7 @@ class TestRunFileSelectionImport:
                 files=[],
                 collection=None,
                 tags=None,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)
@@ -1070,10 +1110,11 @@ class TestRunCollectionMemberImport:
     @pytest.mark.asyncio
     async def test_run_collection_member_import_reports_unexpected_error(
         self,
+        owner: User,
         tmp_path: Path,
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=1)
+        job_id = registry.create(owner_user_id=owner.id)
         with patch.object(
             ingest_module, "_stage_members", AsyncMock(side_effect=RuntimeError("boom"))
         ):
@@ -1082,7 +1123,7 @@ class TestRunCollectionMemberImport:
                 members=[],
                 target_collection="Cool",
                 tags=None,
-                actor_user_id=1,
+                actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
         status = registry.get(job_id)

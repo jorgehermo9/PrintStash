@@ -12,6 +12,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlmodel import Session
 
 from app.core.url_safety import PinnedTarget, UnsafeUrlError
 from app.db.models import (
@@ -20,6 +21,7 @@ from app.db.models import (
     NotificationDeliveryStatus,
     NotificationEventType,
     NotificationTarget,
+    Printer,
     PrinterStatus,
 )
 from app.services import notifications
@@ -99,6 +101,17 @@ def _allow_public_urls():
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture
+def printer(db_session: Session) -> Printer:
+    """The printer these notification events are about.
+
+    `notification_deliveries.printer_id` is a foreign key, so a delivery for a
+    printer that does not exist is refused here exactly as it is in production. The
+    printer itself is incidental to what these tests assert, but it has to be real.
+    """
+    return build_printer(db_session, name="notify-printer")
+
+
 class TestNextRetryDelay:
     """The backoff schedule, and the attempt at which a delivery gives up."""
 
@@ -120,7 +133,7 @@ class TestNextRetryDelay:
 class TestEnqueueForEvent:
     """Which channels an event reaches, and which it must not."""
 
-    def test_enqueue_one_per_matching_channel(self, db_session):
+    def test_enqueue_one_per_matching_channel(self, printer: Printer, db_session):
         set_notifications_enabled(db_session, True)
         _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE], name="a")
         _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE], name="b")
@@ -128,66 +141,83 @@ class TestEnqueueForEvent:
             db_session, events=[NotificationEventType.PRINT_COMPLETED], name="other"
         )
         n = notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=7
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
         assert n == 2  # only the two offline-subscribed channels
         assert len(_deliveries(db_session)) == 2
 
-    def test_enqueue_noop_when_master_switch_off(self, db_session):
+    def test_enqueue_noop_when_master_switch_off(self, printer: Printer, db_session):
         _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         n = notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
         assert n == 0
         assert _deliveries(db_session) == []
 
-    def test_enqueue_skips_disabled_channel(self, db_session):
+    def test_enqueue_skips_disabled_channel(self, printer: Printer, db_session):
         set_notifications_enabled(db_session, True)
         _channel(
             db_session, events=[NotificationEventType.PRINTER_OFFLINE], enabled=False
         )
         n = notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
         assert n == 0
 
-    def test_enqueue_respects_printer_scope(self, db_session):
+    def test_enqueue_skips_a_printer_outside_the_channels_scope(
+        self, printer: Printer, db_session
+    ) -> None:
         set_notifications_enabled(db_session, True)
+        in_scope = build_printer(db_session, name="in-scope")
         _channel(
             db_session,
             events=[NotificationEventType.PRINTER_OFFLINE],
-            printer_ids=[5],
+            printer_ids=[in_scope.id],
             name="scoped",
         )
-        assert (
-            notifications.enqueue_for_event(
-                db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=9
-            )
-            == 0
-        )
-        assert (
-            notifications.enqueue_for_event(
-                db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=5
-            )
-            == 1
+
+        enqueued = notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
 
-    def test_enqueue_empty_scope_means_all_printers(self, db_session):
+        assert enqueued == 0
+
+    def test_enqueue_delivers_for_a_printer_inside_the_channels_scope(
+        self, db_session
+    ) -> None:
+        set_notifications_enabled(db_session, True)
+        in_scope = build_printer(db_session, name="in-scope")
+        _channel(
+            db_session,
+            events=[NotificationEventType.PRINTER_OFFLINE],
+            printer_ids=[in_scope.id],
+            name="scoped",
+        )
+
+        enqueued = notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=in_scope.id
+        )
+
+        assert enqueued == 1
+
+    def test_enqueue_empty_scope_means_all_printers(
+        self, printer: Printer, db_session
+    ) -> None:
         set_notifications_enabled(db_session, True)
         _channel(
             db_session,
             events=[NotificationEventType.PRINTER_OFFLINE],
             printer_ids=[],  # empty list == no restriction
         )
-        assert (
-            notifications.enqueue_for_event(
-                db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=123
-            )
-            == 1
+
+        enqueued = notifications.enqueue_for_event(
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
+
+        assert enqueued == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -378,11 +408,13 @@ class TestParseRetryAfter:
 
 class TestSendOne:
     @pytest.mark.asyncio
-    async def test_send_one_records_network_exception(self, db_session):
+    async def test_send_one_records_network_exception(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -407,12 +439,12 @@ class TestDispatchDue:
 
     @pytest.mark.asyncio
     async def test_a_successful_dispatch_records_the_channel_as_healthy(
-        self, db_session
+        self, printer: Printer, db_session
     ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -431,11 +463,11 @@ class TestDispatchDue:
         assert ch.last_delivered_at is not None
 
     @pytest.mark.asyncio
-    async def test_idempotency_key_header_sent(self, db_session):
+    async def test_idempotency_key_header_sent(self, printer: Printer, db_session):
         set_notifications_enabled(db_session, True)
         _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -448,11 +480,13 @@ class TestDispatchDue:
         assert "X-PrintStash-Delivery-Id" in headers
 
     @pytest.mark.asyncio
-    async def test_dispatch_http_error_retries_with_backoff(self, db_session):
+    async def test_dispatch_http_error_retries_with_backoff(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -472,12 +506,12 @@ class TestDispatchDue:
 
     @pytest.mark.asyncio
     async def test_dispatch_honors_retry_after_without_spending_attempt(
-        self, db_session
+        self, printer: Printer, db_session
     ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -493,11 +527,13 @@ class TestDispatchDue:
         assert d.next_retry_at > d.created_at
 
     @pytest.mark.asyncio
-    async def test_dispatch_marks_failed_after_exhausting_retries(self, db_session):
+    async def test_dispatch_marks_failed_after_exhausting_retries(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
         delivery_id = _deliveries(db_session, ch.id)[0].id
@@ -518,7 +554,9 @@ class TestDispatchDue:
         assert delivery.status == NotificationDeliveryStatus.FAILED
 
     @pytest.mark.asyncio
-    async def test_dispatch_render_error_fails_without_network(self, db_session):
+    async def test_dispatch_render_error_fails_without_network(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         # Telegram channel missing chat_id -> RenderError, no HTTP call.
         ch = _channel(
@@ -528,7 +566,7 @@ class TestDispatchDue:
             config={"bot_token": "t"},
         )
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -542,11 +580,11 @@ class TestDispatchDue:
         assert delivery.status == NotificationDeliveryStatus.FAILED
 
     @pytest.mark.asyncio
-    async def test_dispatch_blocks_non_public_url(self, db_session):
+    async def test_dispatch_blocks_non_public_url(self, printer: Printer, db_session):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -569,14 +607,16 @@ class TestDispatchDue:
         assert "not a public host" in (delivery.last_error or "")
 
     @pytest.mark.asyncio
-    async def test_success_resets_consecutive_failures(self, db_session):
+    async def test_success_resets_consecutive_failures(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         ch.consecutive_failures = 3
         db_session.add(ch)
         db_session.commit()
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -589,7 +629,9 @@ class TestDispatchDue:
         assert ch.consecutive_failures == 0
 
     @pytest.mark.asyncio
-    async def test_channel_auto_disabled_after_threshold(self, db_session):
+    async def test_channel_auto_disabled_after_threshold(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         # One short of the threshold; a single terminal failure should trip it.
@@ -598,7 +640,7 @@ class TestDispatchDue:
         db_session.commit()
 
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
         d = _deliveries(db_session, ch.id)[0]
@@ -616,11 +658,11 @@ class TestDispatchDue:
         assert "auto-disabled" in (ch.last_error or "")
 
     @pytest.mark.asyncio
-    async def test_stuck_sending_is_reclaimed(self, db_session):
+    async def test_stuck_sending_is_reclaimed(self, printer: Printer, db_session):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
         d = _deliveries(db_session, ch.id)[0]
@@ -648,11 +690,13 @@ class TestDispatchDue:
 
 class TestRunDispatcherLoop:
     @pytest.mark.asyncio
-    async def test_run_dispatcher_loop_delivers_then_cancels(self, db_session):
+    async def test_run_dispatcher_loop_delivers_then_cancels(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
@@ -869,11 +913,13 @@ class TestUpdateChannel:
 
 
 class TestListRecentDeliveries:
-    def test_list_recent_deliveries_returns_serialized_rows(self, db_session):
+    def test_list_recent_deliveries_returns_serialized_rows(
+        self, printer: Printer, db_session
+    ):
         set_notifications_enabled(db_session, True)
         ch = _channel(db_session, events=[NotificationEventType.PRINTER_OFFLINE])
         notifications.enqueue_for_event(
-            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=1
+            db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
 
