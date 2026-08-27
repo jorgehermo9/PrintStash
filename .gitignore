@@ -17,7 +17,14 @@ backend/_data/
 backend/dev.sqlite*
 *.sqlite
 backend/.coverage
+# Parallel data files (`concurrency`/`parallel` in backend/pyproject.toml) and the
+# reports the coverage lane writes from them.
+backend/.coverage.*
+backend/coverage.json
+backend/.coverage-html/
 backend/packages/printstash-core/.coverage
+backend/packages/printstash-core/coverage.json
+backend/packages/printstash-core/.coverage-html/
 
 # Local-only large sample meshes/gcode for manual mesh/OOM testing (issue #29).
 # Too big to commit; point PRINTSTASH_MESH_CORPUS at them locally instead.
@@ -35,6 +42,7 @@ frontend/tsconfig.tsbuildinfo
 frontend/out/
 frontend/dist/
 frontend/coverage/
+frontend/packages/*/coverage/
 
 # OS / editors
 .DS_Store

@@ -16,7 +16,11 @@ Lanes
              over a real loopback socket. Needs no external services;
              `s3`-marked cases skip themselves without an endpoint.
   e2e        tests/e2e — the whole app over ASGITransport plus the fakes.
-  full       everything, including `slow`. What CI gates on.
+  full       everything, including `slow`, minus the coverage gate.
+  coverage   `full` under branch coverage, then the coverage gate: aggregate
+             ratchet plus a per-module floor (tests/repo/test_coverage_floors.py).
+             Writes term-missing, .coverage-html/index.html and coverage.json.
+             This is the lane CI gates on.
   affected   `--testmon`: only tests whose executed lines changed. Seed it with
              one full run first, and never use it as the only pre-merge gate.
   serial     `full` without xdist. For debugging an ordering or state bug.
@@ -24,6 +28,14 @@ Lanes
 Anything after the lane goes to pytest, so a path or `-k` still works:
   ./scripts/test.sh fast tests/unit/services/test_gcode_parser.py
   ./scripts/test.sh full -k "trash and not slow" -x
+
+Coverage is measured with branches on, so a guard clause whose false path never
+runs counts as half-covered rather than covered. Read the gap three ways:
+
+  ./scripts/test.sh coverage              # the gate, plus term-missing
+  open .coverage-html/index.html          # per-line, per-branch, clickable
+  ./scripts/test.sh coverage tests/integration/services/test_trash.py
+                                          # one module's own contribution
 
 The `postgres`- and `s3`-marked subsets run against a real PostgreSQL and a real
 SeaweedFS, started as containers for the run (see backend/tests/containers.py).
@@ -67,27 +79,43 @@ add_paths() {
 case "$lane" in
   fast)
     add_paths tests/unit tests/integration
-    exec uv run pytest "${parallel[@]}" -m "not slow" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not slow and not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
     ;;
   contract)
     add_paths tests/contract
-    exec uv run pytest "${parallel[@]}" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
     ;;
   e2e)
     add_paths tests/e2e
-    exec uv run pytest "${parallel[@]}" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
     ;;
   full)
     add_paths tests
-    exec uv run pytest "${parallel[@]}" "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
+    ;;
+  coverage)
+    # Two invocations on purpose. The gate reads `coverage.json`, and that file is
+    # only written when the run it measures has finished — so a gate collected into
+    # the measured run could only ever read the *previous* run's numbers, which is
+    # how a coverage check passes on a report that predates the change it was meant
+    # to judge. Hence `not coverage_gate` on the measured pass, and a second, tiny
+    # pass that runs nothing else.
+    add_paths tests
+    uv run pytest "${parallel[@]}" -m "not coverage_gate" \
+      --cov --cov-report=term-missing --cov-report=json --cov-report=html \
+      "${lane_paths[@]}" "${pytest_args[@]}"
+    echo
+    echo "HTML report: $(pwd)/.coverage-html/index.html"
+    echo
+    exec uv run pytest tests/repo/test_coverage_floors.py -q --no-cov -p no:randomly
     ;;
   affected)
     add_paths tests
-    exec uv run pytest "${parallel[@]}" --testmon "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" --testmon "${lane_paths[@]}" "${pytest_args[@]}"
     ;;
   serial)
     add_paths tests
-    exec uv run pytest "${lane_paths[@]}" "${pytest_args[@]}"
+    exec uv run pytest -m "not coverage_gate" "${lane_paths[@]}" "${pytest_args[@]}"
     ;;
   *)
     echo "unknown lane: $lane" >&2

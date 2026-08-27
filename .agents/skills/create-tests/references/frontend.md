@@ -163,11 +163,47 @@ constant, never copy it. A case whose assertion differs is its own `it`.
 - `pnpm lint` (oxlint, `--deny-warnings`) and `pnpm format:check` (oxfmt) run
   on tests too. Run `pnpm format`; don't hand-format.
 
+## Coverage
+
+`pnpm coverage` — measures the app and both workspace packages, then runs
+`scripts/coverage-gate.mjs`. Report at `coverage/index.html` (and
+`packages/*/coverage/index.html`).
+
+Two things to know before reading the number.
+
+**It covers all of `src/`, and the number is low.** The include used to be
+`src/lib/**` — 1,639 of 8,530 statements — and reported 86%. Widened, the app
+reads **36% statements / 31% branches**, and none of that drop is a regression:
+it is the 6,053 statements of `src/components/**` that were never in the picture.
+There was also no coverage step in the CI frontend job at all, so the thresholds
+in `vite.config.ts` were enforced nowhere. Both are fixed; the gap is now visible
+and gated.
+
+**Coverage cannot see Playwright.** Route-level behaviour lives in
+`tests/e2e/` (mock API) and `tests/e2e-real/` (live backend), and none of it
+appears in any coverage report. So `src/pages/**` at ~43% is a record of what
+vitest reaches, not a claim about what is tested — and, more to the point,
+**adding a Playwright test moves no coverage number.** On a UI feature the matrix
+is the only evidence you have.
+
+Floors live in `scripts/coverage-gate.mjs`, not in `vite.config.ts`: vitest
+thresholds can only enforce a lower bound, and every floor here is two-sided —
+exceed it by more than the slack and the run fails, telling you to raise it. There
+is one floor per area (`src/lib/`, `src/components/`, `src/pages/`, `src/`) plus
+one per workspace package, because a single aggregate over 8,530 statements hides
+a whole directory rotting. A file under a directory with no floor also fails the
+gate rather than averaging into a neighbour.
+
+`@printstash/ui` sits at 32% statements / 16% branches. It is small, but
+`DESIGN.md` requires every component to compose those primitives, so one
+uncovered branch in `overlay.ts` is an uncovered branch in every dialog — treat
+it as the highest-yield target in the frontend, not the smallest.
+
 ## Validate
 
 ```bash
 cd frontend
 pnpm lint && pnpm format:check && pnpm typecheck
 pnpm test                      # root + @printstash/ui + @printstash/domain
-pnpm test:coverage             # informative floor in vite.config.ts; don't let it drop
+pnpm coverage                  # two-sided floors in scripts/coverage-gate.mjs
 ```

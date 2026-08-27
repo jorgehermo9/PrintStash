@@ -124,13 +124,32 @@ e2e-real, security, migration-upgrade, docker). The PostgreSQL and SeaweedFS
 contracts have no job of their own any more: the `backend` job's `full` lane runs
 them, because `backend/tests/containers.py` starts both services itself.
 A `schedule` (nightly) + `workflow_dispatch` re-runs the whole gauntlet as a
-comprehensive off-peak / on-demand gate. Backend coverage is gated at
-`--cov-fail-under=95`; frontend vitest thresholds (`vite.config.ts`) are an
-informative floor for now. The `backend` job now starts a real SeaweedFS
-through `backend/tests/containers.py`, so `S3StorageBackend`
+comprehensive off-peak / on-demand gate. The `backend` job now starts a real
+SeaweedFS through `backend/tests/containers.py`, so `S3StorageBackend`
 (`app/services/storage_backend.py`) and the S3 branches of
 `app/services/backup.py` execute under the coverage gate rather than being
 excluded from it.
+
+Coverage is gated in three places, all with **branch coverage on** and all
+two-sided (a floor that is cleared by more than its slack fails the run and has
+to be raised — a floor nobody moves stops being a gate):
+
+| Job | Command | Floors |
+| --- | --- | --- |
+| `backend` | `./scripts/test.sh coverage` | `backend/tests/repo/test_coverage_floors.py` — aggregate, `MODULE_FLOOR = 90`, and a capped pin list for the modules already below it |
+| `printer-core` | `packages/printstash-core/scripts/test.sh coverage` | that package's own `tests/repo/test_coverage_floors.py` — `MODULE_FLOOR = 96`, no pins |
+| `frontend` | `pnpm coverage` | `frontend/scripts/coverage-gate.mjs` — per-area floors for the app and both workspace packages |
+
+None of these is `--cov-fail-under`: that flag can only check the aggregate, and
+at 21,000 statements a 900-line service can fall from 95% to 70% and move the
+total by half a percent. Two things changed the headline numbers when the system
+went in, neither of them a regression — branches now count (95.07% by lines,
+93.35% with branches), and the frontend include widened from `src/lib/**` to all
+of `src/` (86% → 36%), which had also never run in CI at all.
+
+The create-tests skill carries the workflow: how to get a report, how to turn a
+partial branch into a matrix row, and why the report is the audit pass rather
+than the source of the matrix.
 
 ## API changes
 

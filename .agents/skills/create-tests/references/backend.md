@@ -323,13 +323,70 @@ that we expect it.
   in `printstash_core` regenerate via `python -m
   printstash_core.printers.codegen --output ... --check` (CI enforces).
 
-## Coverage gate
+## Coverage
 
-CI runs `./scripts/test.sh full --cov=app --cov-fail-under=95`. A new branch
-without a test lowers the number; add the test. `# pragma: no cover` is
-reserved for the `s3`-marked paths a real SeaweedFS validates — not a tool for
-skipping hard cases. Those paths now run in `full` too, since the container starts
-itself, so the pragma covers less than it used to.
+`./scripts/test.sh coverage` — `full` under branch coverage, then the gate. Two
+pytest invocations, on purpose: the gate reads `coverage.json`, and that file is
+only written once the run it measures has finished, so a gate collected into the
+measured run could only ever judge the *previous* run's numbers. That is how a
+coverage check passes on a report predating the change it was meant to judge.
+The gate carries `pytest.mark.coverage_gate` and every other lane deselects it.
+
+Three outputs, use all three:
+
+- **term-missing** in the terminal — `1234, 1240-1243` are uncovered statements;
+  `146->136` and `142->exit` are partial branches, the arrow naming the jump that
+  never happened.
+- **`.coverage-html/index.html`** — per line and per branch, clickable, and the
+  only readable way into a module with many partials.
+- **`coverage.json`** — what the gate reads. Also the fastest way to answer "which
+  modules are worst?" without scrolling 130 rows of terminal output.
+
+`branch = true` is set in `[tool.coverage.run]`, which is what makes the numbers
+mean anything: under line coverage an `if x:` whose false path never runs counts
+as covered. The same suite reads **95.07% by lines and 93.35% with branches** —
+612 conditions that only ever went one way. `concurrency = ["thread",
+"multiprocessing"]` and `parallel = true` are there because the suite runs under
+xdist and the app uses worker threads; without them coverage loses the lines
+executed off the main thread, which reads as a gap in exactly the code that is
+hardest to test.
+
+### The gate: `tests/repo/test_coverage_floors.py`
+
+Not `--cov-fail-under`, which can only check the aggregate — and at 21,000
+statements the aggregate is blunt enough that a 900-line service can fall from
+95% to 70% and move the total by half a percent. Every module below 90% got
+there that way. The gate is therefore:
+
+- **`TOTAL_FLOOR`** — the aggregate, two-sided. Fall below it and the run fails;
+  clear it by more than `TOTAL_SLACK` and the run also fails, telling you to
+  raise it. A floor nobody is forced to move stops being a gate.
+- **`MODULE_FLOOR = 90`** — every module on its own.
+- **`PINNED_BELOW_FLOOR`** — the debt: modules that were already under the floor,
+  each pinned at what it measures so it cannot slide further. `MAX_PINNED` caps
+  the list, two-sided, so it may only shrink. A module that reaches
+  `MODULE_FLOOR` fails the gate until its entry is deleted and the cap lowered.
+- **`test_covers_the_whole_application_package`** — a module that no test imports
+  appears in no report, and an absent row reads as 100% rather than the 0% it is.
+
+If your change touches a pinned module, clearing its debt is in scope. Adding a
+new pin is not: the answer to a module under the floor is the test.
+
+`# pragma: no cover` is close to retired. It used to hide the `s3` paths, which
+now run in every `full` because the container starts itself — removing seven of
+them uncovered 413 statements that the gate had been counting as tested. Do not
+add one without a sentence in the PR saying what makes the code unreachable from
+a test, and never to skip a hard case.
+
+### printstash-core
+
+Its own lane, because the package installs and tests independently of the
+backend and that independence is the point: `cd packages/printstash-core &&
+./scripts/test.sh coverage`. Same two-pass shape, same gate file, floors set much
+higher — 1,444 tests against 3,346 statements with no database, no sockets and
+nothing to stand in for, so `MODULE_FLOOR` is 96 and there is no debt list. When
+something lands under the floor here, there is no input it cannot be handed
+directly; write the test.
 
 ## Lint and types
 

@@ -78,3 +78,20 @@ specs against the experimental bundled dev server).
 Both suites run per PR and in the nightly full-matrix rerun
 (`.github/workflows/ci.yml`). `retries` are on in CI only; a spec that needs
 the retry to pass is flaky — fix the wait, don't lean on the retry.
+
+## These specs move no coverage number
+
+`pnpm coverage` and `frontend/scripts/coverage-gate.mjs` measure the vitest run
+and nothing else. A Playwright spec — either suite — is invisible to them: the
+browser executes the app in a separate process the v8 provider never instruments.
+
+Two consequences worth holding onto:
+
+- A page at 0% in the coverage report may be exercised by six specs here. Do not
+  read a low number as untested, and do not write a shallow vitest render test to
+  raise it — that adds a test for a number, which is the one reason never to add
+  a test.
+- Nothing cross-checks your matrix on a UI feature. For backend work an uncovered
+  line is a hint that a row is missing; here there is no such hint, so the
+  requirements-derived matrix is the entire safety net. Sweep the categories
+  deliberately.

@@ -89,6 +89,10 @@ markers = [
     "postgres: runs against a real PostgreSQL container (tests/containers.py)",
     "s3: runs against a real SeaweedFS container (tests/containers.py)",
     "slow: large real fixtures or long simulations; excluded from the fast lane",
+    # Reads the report a finished coverage run wrote, so it cannot run inside the run
+    # it judges. Every lane deselects it; `./scripts/test.sh coverage` runs it alone,
+    # after the measured pass. See scripts/test.sh.
+    "coverage_gate: asserts the coverage floors against coverage.json (lane: coverage)",
 ]
 
 [tool.ruff.lint]
@@ -113,6 +117,57 @@ DEP002 = [
     "python-multipart",
     "uvicorn",
 ]
+
+# ---------------------------------------------------------------------------
+# Coverage
+#
+# `branch = true` is the setting that makes the number mean something. Under line
+# coverage an `if x:` whose false path never executes counts as fully covered, so
+# every guard clause in the codebase could be half-tested at 100%. Turning it on
+# moved the measured total from 95% to 93% for the same suite — 614 branches that
+# only ever take one path. That is not a regression; it is the number that was
+# always true.
+#
+# The floors live in `tests/repo/test_coverage_floors.py` rather than in
+# `--cov-fail-under`, because that flag can only check the aggregate and the
+# aggregate is a blunt instrument at 21k statements: a 400-line service can rot
+# from 95% to 70% and move the total by half a percent. That test carries
+# per-module floors and ratchets in both directions.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["app"]
+# The suite runs under xdist and the app uses worker threads. Without these,
+# coverage loses the lines executed off the main thread — which reads as a gap in
+# exactly the code that is hardest to test.
+concurrency = ["thread", "multiprocessing"]
+parallel = true
+sigterm = true
+omit = ["app/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 2
+exclude_also = [
+    # Never executes at runtime by design.
+    "if TYPE_CHECKING:",
+    # An abstract method's body is the contract, not code that runs.
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    # `...` bodies on Protocol members.
+    "^\\s*\\.\\.\\.$",
+    # Exercised by running the module, not by importing it.
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.html]
+directory = ".coverage-html"
+
+[tool.coverage.json]
+# NOT `.coverage.json`: `coverage combine` globs `.coverage.*` for the parallel data
+# files, so a report written there would be picked up as corrupt input on the next run.
+output = "coverage.json"
 
 [tool.uv.sources]
 printstash-core = { workspace = true }

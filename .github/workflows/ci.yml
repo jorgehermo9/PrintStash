@@ -58,20 +58,22 @@ jobs:
             --editable ".[dev,mesh,printers-all,testkit]"
 
       - name: Test autonomous package
-        run: .venv/bin/pytest tests -q
+        run: .venv/bin/pytest tests -q -m "not coverage_gate"
 
-      # The backend gate measures `app/` only, so printstash_core had no floor at
-      # all and had drifted to ~82%. Ratcheted, never lowered: this sits just under
-      # the measured value (2026-08: 87%) so a regression fails and drift does not.
-      - name: Coverage floor for the autonomous package
+      # Branch coverage plus a floor per module, from tests/repo/test_coverage_floors.py.
+      # The gate reads the report the measured pass writes, so it cannot run inside
+      # that pass — hence two invocations rather than `--cov-fail-under`, which can
+      # only check the aggregate.
+      - name: Coverage gate for the autonomous package
         if: matrix.python == '3.11' && matrix.resolution == 'highest'
         # `uv pip install --python .venv/...` rather than `.venv/bin/pip`: the
         # venv is created by `uv venv`, which does not install pip into it, so
         # calling it directly exits 127 and this gate never ran.
         run: |
           uv pip install --python .venv/bin/python pytest-cov
-          .venv/bin/pytest tests -q \
-            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=99
+          .venv/bin/pytest tests -q -m "not coverage_gate" \
+            --cov --cov-report=term-missing --cov-report=json
+          .venv/bin/pytest tests/repo/test_coverage_floors.py -q --no-cov
 
       - name: Lint autonomous package
         run: .venv/bin/ruff check src tests
@@ -140,7 +142,13 @@ jobs:
       # are gone, because running the same tests twice per PR is the duplication
       # the container module exists to remove.
       - name: Test backend
-        run: ./scripts/test.sh full -v --cov=app --cov-report=term-missing --cov-fail-under=95
+        # The `coverage` lane is `full` under branch coverage plus the coverage gate
+        # (tests/repo/test_coverage_floors.py): the aggregate ratcheted in both
+        # directions, and a floor every module has to clear on its own. Branches are
+        # counted, so a guard clause whose false path never runs is half-covered
+        # rather than covered — the same suite reads 95.07% by lines and 93.35% with
+        # branches, and the second number is the one that says something.
+        run: ./scripts/test.sh coverage -v
 
   backend-python313:
     name: Backend compatibility (Python 3.13, advisory)
@@ -330,6 +338,13 @@ jobs:
 
       - name: Unit test frontend
         run: pnpm test
+
+      # There was no coverage step in this job at all, so the thresholds in
+      # vite.config.ts were never enforced anywhere. `pnpm coverage` measures the
+      # app and both workspace packages and then runs scripts/coverage-gate.mjs,
+      # which carries a two-sided floor per area of the tree.
+      - name: Coverage gate for frontend
+        run: pnpm coverage
 
       - name: Build frontend
         run: pnpm build

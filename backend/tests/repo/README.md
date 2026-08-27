@@ -8,6 +8,12 @@ change nobody's feature test would.
 - **`test_forbidden_imports.py`** — the import boundaries. `printstash_core` must not
   import `app`, and the layering below that must hold.
 - **`test_ci_workflows.py`** — the CI config still runs what it claims to.
+- **`test_coverage_floors.py`** — coverage did not rot, anywhere. The aggregate
+  ratcheted in both directions, a floor every module clears on its own, and a capped
+  debt list for the ones that do not yet. Reads `coverage.json`, so it carries the
+  `coverage_gate` marker and only runs in `./scripts/test.sh coverage`, after the
+  measured pass — a gate collected into the run it judges could only ever read the
+  previous run's numbers.
 - **`test_route_dependencies.py`** — every route still carries the auth dependency its
   sibling routes carry.
 - **`test_rate_limiter_isolation.py`** — the suite can still find and reset every

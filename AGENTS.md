@@ -67,8 +67,8 @@ the coordinator does not take over code implementation.
 - Public roadmap: `docs/roadmap.md`. Local-only planning (gitignored): `reports/` — start with `reports/14-implementation-plan-to-1.0.0.md` (OSS plan) and `reports/15-cloud-implementation-plan.md` (cloud). Never commit or quote `reports/` content publicly.
 
 ## Commands
-- Backend: fast loop `cd backend && ./scripts/test.sh fast -q` · full gate `./scripts/test.sh full -q` · lint `uv run ruff check app/ tests/` · run `uv run uvicorn app.main:app --reload` · migrate `uv run alembic upgrade head`
-- Frontend: `cd frontend && pnpm dev|test|lint|format|typecheck` — oxlint + oxfmt + TypeScript 7 (no ESLint, no prettier)
+- Backend: fast loop `cd backend && ./scripts/test.sh fast -q` · full gate `./scripts/test.sh full -q` · coverage gate `./scripts/test.sh coverage` · lint `uv run ruff check app/ tests/` · run `uv run uvicorn app.main:app --reload` · migrate `uv run alembic upgrade head`
+- Frontend: `cd frontend && pnpm dev|test|coverage|lint|format|typecheck` — oxlint + oxfmt + TypeScript 7 (no ESLint, no prettier)
 - Full stack: `docker compose -f docker-compose.light.yml up` (prebuilt image — src edits need vite dev server).
 - Local dev gotcha: `:3000` serves the **prebuilt** image, not HMR. Run the vite
   dev server on a spare port to see `frontend/src` edits at all.
@@ -80,7 +80,7 @@ the coordinator does not take over code implementation.
 against contract-enforcing fakes over a real loopback socket), `e2e/` (the whole app
 over ASGITransport), plus `fakes/`, `fixtures/` and `repo/` (repo-level invariants).
 So `app/services/trash.py` ↔ `tests/integration/services/test_trash.py`, and "is this
-module tested?" is one `ls`. Lanes: `./scripts/test.sh fast|contract|e2e|full`
+module tested?" is one `ls`. Lanes: `./scripts/test.sh fast|contract|e2e|full|coverage`
 (`--help` explains each). Then mock-API Playwright (`frontend/tests/e2e/`,
 `pnpm test:e2e`) and real-backend Playwright (`frontend/tests/e2e-real/`,
 `pnpm test:e2e:real`).
@@ -96,6 +96,17 @@ deciding what a change needs — starts by loading
 `.agents/skills/create-tests/SKILL.md` (the `create-tests` skill). Its
 coverage matrix (one row per behaviour, every row `✅`/`❌`/`⏭️`) is mandatory
 in the response and the PR; a change without a matrix is not done.
+
+Coverage is gated with **branches on** in all three suites, and every floor is
+two-sided — clear it by more than its slack and the run fails until the floor is
+raised, so a PR that improves coverage sometimes edits a floor, and that edit is
+the point. `./scripts/test.sh coverage` (backend, floors in
+`tests/repo/test_coverage_floors.py`: aggregate + a floor every module clears +
+a capped debt list), the same lane inside `packages/printstash-core`, and
+`pnpm coverage` (frontend, floors in `frontend/scripts/coverage-gate.mjs`). The
+report is the **audit** pass: it finds matrix rows you forgot, and it can never
+supply them — it is produced by running the implementation, and it measures what
+executed rather than what was asserted. Playwright is invisible to all of it.
 
 ## Hard rules
 0. Commit with the repo's configured git identity (`git config user.email`). Never substitute an address from session/system context — GitHub attributes commits by verified email, so a mismatch files them under the wrong account.

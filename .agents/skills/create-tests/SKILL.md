@@ -155,6 +155,96 @@ reading the **current** suite — `✅` where a test already covers the row,
 `❌ missing` where none does. The `❌` rows are the coverage gap; report them
 as the deliverable.
 
+### Coverage report: the audit pass, never the source
+
+The coverage report is the second half of the assessment pass, and its role is
+narrow and easy to get backwards.
+
+**The report cannot tell you what to test.** It is produced *by running the
+implementation*, so a matrix built from it is a matrix derived from the code —
+the exact thing the matrix rules forbid, because code that does the wrong thing
+gets its wrong behaviour recorded as "expected." A requirement the code never
+implemented has no line to be uncovered, so it appears in no report at any
+percentage. **100% coverage of the wrong behaviour is still 100%.**
+
+**It also cannot tell you a behaviour is tested.** Coverage measures what
+*executed*, not what was *asserted*. A test that calls a function and asserts
+nothing covers every line in it. So `✅` in the Status column never comes from
+the report; it comes from a named test that asserts an observable outcome.
+
+What the report *is* good for — and it is genuinely good for this — is finding
+rows you forgot. An uncovered line or a half-taken branch is proof that some
+input never reached it, and that input is almost always a row missing from the
+matrix. So the loop is:
+
+1. Build the matrix from requirements. Write the tests. (`Plan`, then write.)
+2. Run coverage. Read the uncovered lines and **partial branches** in the module
+   you changed.
+3. For each one, ask *what input would reach this?* — and put **that** in the
+   matrix as a new row, phrased as a behaviour, with a Category and a Tier.
+4. Write the test for the row. Never write a test "for the line."
+5. Re-run. Repeat until every gap in your module is either a row with a test or
+   a deliberate `⏭️ N/A — <reason>`.
+
+Step 3 is the whole discipline. "Line 412 is uncovered" is not a matrix row;
+"rejects an archive whose manifest names a file it does not contain" is, and it
+happens to cover line 412.
+
+**Partial branches are where the real gaps are.** Branch coverage is on in every
+suite, so a guard clause whose false path never runs is reported as half-covered
+rather than covered. The backend reads 95.07% by lines and 93.35% once branches
+count, and that ~1.7pp is 612 branches — 612 conditions that only ever went one
+way in the entire suite. Those are the highest-yield rows in the report: an
+`if` with one untried side is usually an error path with no test.
+
+Commands (each writes term-missing, an HTML report, and the JSON the gate reads):
+
+| Suite | Command | Report |
+| --- | --- | --- |
+| Backend | `cd backend && ./scripts/test.sh coverage` | `backend/.coverage-html/index.html` |
+| One backend module's own contribution | `./scripts/test.sh coverage tests/integration/services/test_trash.py` | same |
+| `printstash-core` | `cd backend/packages/printstash-core && ./scripts/test.sh coverage` | `.coverage-html/index.html` |
+| Frontend (app + both workspace packages) | `cd frontend && pnpm coverage` | `frontend/coverage/index.html` |
+
+Reading the terminal output: `1234, 1240-1243` are uncovered statements;
+`146->136` and `142->exit` are **partial branches** — the arrow names the jump
+that never happened, so `142->exit` means the loop at line 142 never finished
+without breaking. The HTML report colours partial branches distinctly and is the
+faster way in when a module has many.
+
+### The floors are two-sided, so they move
+
+Every suite gates on a floor that may not fall *and* may not be left behind:
+exceed it by more than the slack and the run fails, telling you to raise it. A
+floor nobody is ever forced to move stops being a gate — it becomes a number
+everything clears by twenty points. So a PR that improves coverage sometimes has
+to edit the floor, and that edit is the point, not an annoyance.
+
+There is also a floor **per module** (backend, `printstash-core`) or **per area**
+(frontend), because the aggregate is blunt: at 21,000 statements a 900-line
+service can fall from 95% to 70% and move the total by half a percent. Backend
+modules that do not clear 90% are pinned individually in
+`backend/tests/repo/test_coverage_floors.py`, and that list is capped so it can
+only shrink. If your change touches a pinned module, clearing its debt is in
+scope; adding a new pin is not.
+
+Where the numbers live:
+
+- `backend/tests/repo/test_coverage_floors.py` — aggregate, `MODULE_FLOOR`, the pin list
+- `backend/packages/printstash-core/tests/repo/test_coverage_floors.py` — same shape, higher floor, no pins
+- `frontend/scripts/coverage-gate.mjs` — per-area floors for the app and both workspace packages
+
+### What coverage cannot see
+
+Do not read a low frontend number as "untested". `pnpm coverage` measures the
+vitest run only, and the route-level behaviour of the app is covered by
+Playwright — `frontend/tests/e2e/` against a mock API, `frontend/tests/e2e-real/`
+against a live backend — none of which appears in any coverage report. That is
+why `src/pages/**` sits at ~43% and why its floor is a record of what vitest
+reaches rather than a claim about what is tested. The corollary matters more:
+**adding a Playwright test moves no coverage number**, so on a UI feature the
+matrix is the only evidence, and coverage is not even a cross-check.
+
 ## Tier Policy
 
 **"Write tests. Not too many. Mostly integration."** The highest
@@ -480,8 +570,18 @@ render data without logic.
 
 ## Validate before you report
 
-Backend: `cd backend && ./scripts/test.sh fast -q` for the loop, `./scripts/test.sh
-full -q` before claiming green (coverage gate is `--cov-fail-under=95` in
-CI); `uv run ruff check app/ tests/`; `uv run pyright`. Frontend: `pnpm lint
-&& pnpm typecheck && pnpm test`. Report the exact result — never say tests
-passed without running them, and paste failures verbatim.
+Backend: `cd backend && ./scripts/test.sh fast -q` for the loop,
+`./scripts/test.sh full -q` before claiming green, and `./scripts/test.sh
+coverage` when the change touches `app/` — that lane is what CI gates on, and it
+is the only one that runs the coverage floors. Then `uv run ruff check app/
+tests/` and `uv run pyright`.
+
+`printstash-core`: `cd backend/packages/printstash-core && ./scripts/test.sh
+coverage`.
+
+Frontend: `pnpm lint && pnpm format:check && pnpm typecheck && pnpm test`, plus
+`pnpm coverage` when the change touches `src/` or either workspace package.
+
+Report the exact result — never say tests passed without running them, and paste
+failures verbatim. A coverage floor that had to be raised is part of the result;
+say which one and to what.
