@@ -31,7 +31,7 @@ from app.db.models import (
     User,
 )
 from app.services.printer_provider import ProviderError
-from tests.integration.api.v1.printers._helpers import user_headers
+from tests.integration.api.v1.printers._helpers import grant_printer, user_headers
 
 
 class TestPrinterFiles:
@@ -582,6 +582,130 @@ class TestPrinterFiles:
         assert resp.status_code == 200
         assert [row["remote_filename"] for row in resp.json()] == ["kept.gcode"]
 
+    def test_hides_a_library_file_the_caller_may_not_see(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A printer's file list may name a revision from a private collection.
+
+        The remote filename is the printer's own and is always shown; what must not
+        leak is the *library* row it matched to — the model's name and the original
+        filename it was uploaded under both name something in a collection the caller
+        has no access to.
+        """
+        from app.db.models import (
+            Collection,
+            File,
+            FileType,
+            Model,
+            Printer,
+            PrinterFile,
+            PrinterRole,
+        )
+
+        private = Collection(name="Private", slug="private-files", path="private-files")
+        db_session.add(private)
+        db_session.commit()
+        db_session.refresh(private)
+        model = Model(
+            name="Secret", slug="secret-model", hash="7" * 64, collection_id=private.id
+        )
+        db_session.add(model)
+        db_session.commit()
+        db_session.refresh(model)
+        artifact = File(
+            model_id=model.id,
+            path="secret.gcode",
+            original_filename="secret.gcode",
+            file_type=FileType.GCODE,
+            version=1,
+            size_bytes=10,
+            sha256="8" * 64,
+        )
+        db_session.add(artifact)
+        db_session.commit()
+        db_session.refresh(artifact)
+        printer = Printer(name="Shared fleet", moonraker_url="http://fleet.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        db_session.add(
+            PrinterFile(
+                printer_id=printer.id,
+                file_id=artifact.id,
+                remote_filename="secret.gcode",
+                matched_by="upload_history",
+            )
+        )
+        db_session.commit()
+        headers = user_headers(db_session, "fleet-operator")
+        grant_printer(db_session, "fleet-operator", printer, PrinterRole.VIEW)
+
+        response = client.get(f"/api/v1/printers/{printer.id}/files", headers=headers)
+
+        assert response.status_code == 200, response.text
+        listed = next(
+            row for row in response.json() if row["remote_filename"] == "secret.gcode"
+        )
+        assert listed["model_id"] is None
+        assert listed["model_name"] is None
+        assert listed["original_filename"] is None
+
+    def test_hides_a_library_file_whose_model_was_trashed(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.core.time import utcnow
+        from app.db.models import (
+            File,
+            FileType,
+            Model,
+            Printer,
+            PrinterFile,
+            PrinterRole,
+        )
+
+        model = Model(name="Trashed host", slug="trashed-host", hash="6" * 64)
+        db_session.add(model)
+        db_session.commit()
+        db_session.refresh(model)
+        artifact = File(
+            model_id=model.id,
+            path="trashed.gcode",
+            original_filename="trashed.gcode",
+            file_type=FileType.GCODE,
+            version=1,
+            size_bytes=10,
+            sha256="5" * 64,
+        )
+        db_session.add(artifact)
+        db_session.commit()
+        db_session.refresh(artifact)
+        printer = Printer(name="Fleet", moonraker_url="http://fleet2.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        db_session.add(
+            PrinterFile(
+                printer_id=printer.id,
+                file_id=artifact.id,
+                remote_filename="trashed.gcode",
+                matched_by="upload_history",
+            )
+        )
+        model.deleted_at = utcnow()
+        db_session.add(model)
+        db_session.commit()
+        headers = user_headers(db_session, "trashed-fleet-operator")
+        grant_printer(db_session, "trashed-fleet-operator", printer, PrinterRole.VIEW)
+
+        response = client.get(f"/api/v1/printers/{printer.id}/files", headers=headers)
+
+        # The bytes are still on the machine, but the library row is in the trash
+        # and must not be surfaced through a side door.
+        listed = next(
+            row for row in response.json() if row["remote_filename"] == "trashed.gcode"
+        )
+        assert listed["model_name"] is None
+
 
 class TestStartPrinterFile:
     def test_start_with_explicit_file_id_creates_vault_job(
@@ -718,3 +842,27 @@ class TestStartPrinterFile:
         assert resp.status_code == 502
         assert resp.json()["detail"] == "provider_error"
         assert "secret stack" not in resp.text
+
+    def test_refuses_to_start_when_the_provider_cannot_start_a_print(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        from dataclasses import replace
+
+        from app.db.models import Printer
+        from app.services.printer_provider import MoonrakerProvider
+
+        printer = Printer(name="No start", moonraker_url="http://nostart.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        no_start = replace(MoonrakerProvider.capabilities, supported=frozenset())
+
+        with patch.object(MoonrakerProvider, "capabilities", no_start):
+            response = client.post(
+                f"/api/v1/printers/{printer.id}/start",
+                headers=auth_headers,
+                json={"remote_filename": "part.gcode"},
+            )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "operation_not_supported_for_provider"

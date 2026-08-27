@@ -114,3 +114,24 @@ class TestPrinterConfig:
             resp = client.get(f"/api/v1/printers/{p.id}/config", headers=auth_headers)
         assert resp.status_code == 502
         assert resp.json()["detail"] == "printer_offline"
+
+    def test_reports_a_printer_that_was_deleted(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        from app.core.time import utcnow
+        from app.db.models import Printer
+
+        printer = Printer(name="Gone", moonraker_url="http://gone.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        printer.deleted_at = utcnow()
+        db_session.add(printer)
+        db_session.commit()
+
+        response = client.get(
+            f"/api/v1/printers/{printer.id}/config", headers=auth_headers
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "printer_not_found"

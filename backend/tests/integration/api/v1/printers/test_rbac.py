@@ -228,3 +228,141 @@ class TestPrinterRbac:
         assert response.status_code == 200
         assert response.json()["name"] == "Renamed"
         assert response.json()["notes"] == "Still delegated"
+
+
+class TestPrinterPermissions:
+    """The endpoints that grant, change, and revoke a role on one printer."""
+
+    def test_lists_who_has_a_role_on_the_printer(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        printer = Printer(name="Shared", moonraker_url="http://shared.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        user_headers(db_session, "listed-operator")
+        user = db_session.exec(
+            select(User).where(User.username == "listed-operator")
+        ).one()
+        client.put(
+            f"/api/v1/printers/{printer.id}/permissions/{user.id}",
+            headers=auth_headers,
+            json={"role": "control"},
+        )
+
+        response = client.get(
+            f"/api/v1/printers/{printer.id}/permissions", headers=auth_headers
+        )
+
+        assert response.status_code == 200, response.text
+        listed = response.json()[0]
+        assert listed["username"] == "listed-operator"
+        assert listed["role"] == "control"
+
+    def test_lists_nobody_for_a_printer_nobody_was_granted(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        printer = Printer(name="Private", moonraker_url="http://private.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+
+        response = client.get(
+            f"/api/v1/printers/{printer.id}/permissions", headers=auth_headers
+        )
+
+        assert response.json() == []
+
+    def test_changes_a_role_that_is_already_granted(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        printer = Printer(name="Regraded", moonraker_url="http://regraded.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        user_headers(db_session, "regraded-user")
+        user = db_session.exec(
+            select(User).where(User.username == "regraded-user")
+        ).one()
+        client.put(
+            f"/api/v1/printers/{printer.id}/permissions/{user.id}",
+            headers=auth_headers,
+            json={"role": "view"},
+        )
+
+        response = client.put(
+            f"/api/v1/printers/{printer.id}/permissions/{user.id}",
+            headers=auth_headers,
+            json={"role": "admin"},
+        )
+
+        # Re-granting must update the existing row, not add a second one.
+        assert response.status_code == 200, response.text
+        assert response.json()["role"] == "admin"
+
+    def test_refuses_to_grant_a_role_to_a_user_who_does_not_exist(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        printer = Printer(name="Ghost grant", moonraker_url="http://ghost.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+
+        response = client.put(
+            f"/api/v1/printers/{printer.id}/permissions/999999",
+            headers=auth_headers,
+            json={"role": "view"},
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "user_not_found"
+
+    def test_refuses_to_revoke_a_role_that_was_never_granted(
+        self, client: TestClient, db_session: Session, auth_headers
+    ) -> None:
+        printer = Printer(name="Never granted", moonraker_url="http://never.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        user_headers(db_session, "ungranted-user")
+        user = db_session.exec(
+            select(User).where(User.username == "ungranted-user")
+        ).one()
+
+        response = client.delete(
+            f"/api/v1/printers/{printer.id}/permissions/{user.id}",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "permission_not_found"
+
+    def test_rejects_a_non_superuser_listing_permissions(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        printer = Printer(name="Guarded", moonraker_url="http://guarded.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        headers = user_headers(db_session, "permission-peeker")
+        grant_printer(db_session, "permission-peeker", printer, PrinterRole.ADMIN)
+
+        response = client.get(
+            f"/api/v1/printers/{printer.id}/permissions", headers=headers
+        )
+
+        # Printer-admin is not the same as deployment-admin: who else has access
+        # is fleet-wide information.
+        assert response.status_code == 403, response.text
+
+    def test_rejects_an_unauthenticated_caller(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        printer = Printer(name="Anonymous", moonraker_url="http://anon.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+
+        assert (
+            client.get(f"/api/v1/printers/{printer.id}/permissions").status_code == 401
+        )

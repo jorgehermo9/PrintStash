@@ -14,6 +14,7 @@ explicitly overridden.
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -536,3 +537,114 @@ class TestSendToPrinter:
             )
         assert resp.status_code == 418
         assert resp.json()["detail"] == "teapot"
+
+    def test_refuses_to_start_a_print_the_loaded_material_cannot_do(
+        self, client: TestClient, auth_headers, db_session: Session, monkeypatch
+    ):
+        from app.api.v1 import printers as printers_api
+
+        _, f = self._gcode_file(db_session, "mism")
+        p = Printer(name="Loaded PLA", moonraker_url="http://pla.local:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+        monkeypatch.setattr(
+            printers_api.materials,
+            "compatibility_for_printer",
+            lambda *_a, **_k: SimpleNamespace(verdict="mismatch"),
+        )
+
+        response = client.post(
+            f"/api/v1/printers/{p.id}/send",
+            headers=auth_headers,
+            json={"file_id": f.id, "start_print": True},
+        )
+
+        # PETG G-code into a machine loaded with PLA is a failed print and a
+        # blocked nozzle, so it needs an explicit override rather than a warning.
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "material_mismatch_confirmation_required"
+
+    def test_allows_a_material_mismatch_the_operator_confirmed(
+        self, client: TestClient, auth_headers, db_session: Session, monkeypatch
+    ):
+        from app.api.v1 import printers as printers_api
+
+        _, f = self._gcode_file(db_session, "forc")
+        p = Printer(name="Forced", moonraker_url="http://forced.local:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+        monkeypatch.setattr(
+            printers_api.materials,
+            "compatibility_for_printer",
+            lambda *_a, **_k: SimpleNamespace(verdict="mismatch"),
+        )
+
+        response = client.post(
+            f"/api/v1/printers/{p.id}/send",
+            headers=auth_headers,
+            json={
+                "file_id": f.id,
+                "start_print": True,
+                "compatibility_policy": "force",
+            },
+        )
+
+        # Past the gate: it fails later on the missing blob, not on the material.
+        assert (
+            response.json().get("detail") != "material_mismatch_confirmation_required"
+        )
+
+    def test_reports_a_printer_whose_material_state_cannot_be_read(
+        self, client: TestClient, auth_headers, db_session: Session, monkeypatch
+    ):
+        from app.api.v1 import printers as printers_api
+
+        _, f = self._gcode_file(db_session, "unkn")
+        p = Printer(name="Unknown state", moonraker_url="http://unknown.local:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+
+        def unreadable(*_a, **_k):
+            raise printers_api.materials.MaterialStateError("printer_not_found")
+
+        monkeypatch.setattr(
+            printers_api.materials, "compatibility_for_printer", unreadable
+        )
+
+        response = client.post(
+            f"/api/v1/printers/{p.id}/send",
+            headers=auth_headers,
+            json={"file_id": f.id, "start_print": True},
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "printer_not_found"
+
+    def test_skips_the_material_gate_when_the_caller_is_not_starting_a_print(
+        self, client: TestClient, auth_headers, db_session: Session, monkeypatch
+    ):
+        from app.api.v1 import printers as printers_api
+
+        _, f = self._gcode_file(db_session, "noch")
+        p = Printer(name="Upload only", moonraker_url="http://upload.local:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+        checked: list[object] = []
+        monkeypatch.setattr(
+            printers_api.materials,
+            "compatibility_for_printer",
+            lambda *a, **k: checked.append(a) or SimpleNamespace(verdict="mismatch"),
+        )
+
+        client.post(
+            f"/api/v1/printers/{p.id}/send",
+            headers=auth_headers,
+            json={"file_id": f.id, "start_print": False},
+        )
+
+        # Uploading a file to keep it on the machine is not printing it.
+        assert checked == []

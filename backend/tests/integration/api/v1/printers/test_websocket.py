@@ -102,3 +102,43 @@ class TestWsTicket:
 
         resp = client.post(f"/api/v1/printers/{p.id}/ws-ticket", headers=auth_headers)
         assert resp.status_code == 404
+
+    def test_refuses_a_ticket_for_a_printer_that_was_deleted(
+        self, client: TestClient, auth_headers, db_session: Session
+    ) -> None:
+        from app.core.time import utcnow
+        from app.db.models import Printer
+
+        printer = Printer(name="Gone", moonraker_url="http://gone.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        printer.deleted_at = utcnow()
+        db_session.add(printer)
+        db_session.commit()
+
+        response = client.post(
+            f"/api/v1/printers/{printer.id}/ws-ticket", headers=auth_headers
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "printer_not_found"
+
+    def test_refuses_a_bearer_token_whose_subject_is_not_an_account_id(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.db.models import Printer
+        from app.services.auth import create_access_token
+
+        printer = Printer(name="Socket", moonraker_url="http://socket.local:7125")
+        db_session.add(printer)
+        db_session.commit()
+        db_session.refresh(printer)
+        forged = create_access_token("not-an-id", "ghost", scope="write")  # type: ignore[arg-type]
+
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                f"/api/v1/printers/{printer.id}/ws",
+                headers={"Authorization": f"Bearer {forged}"},
+            ):
+                pass

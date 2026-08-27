@@ -350,3 +350,45 @@ class TestPrinterControl:
             )
         assert resp.status_code == 502
         assert resp.json()["detail"] == "provider_error"
+
+    def test_refuses_an_action_the_provider_cannot_perform(
+        self, client: TestClient, auth_headers, db_session: Session
+    ):
+        from dataclasses import replace
+
+        from app.services.printer_provider import MoonrakerProvider
+
+        p = Printer(name="No pause", moonraker_url="http://10.0.0.9:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+        no_pause = replace(MoonrakerProvider.capabilities, supported=frozenset())
+
+        with patch.object(MoonrakerProvider, "capabilities", no_pause):
+            response = client.post(
+                f"/api/v1/printers/{p.id}/pause", headers=auth_headers
+            )
+
+        # 409, not 502: the machine is fine, it simply cannot do this.
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "operation_not_supported_for_provider"
+
+    def test_refuses_a_gcode_action_for_a_printer_that_was_deleted(
+        self, client: TestClient, auth_headers, db_session: Session
+    ):
+        from app.core.time import utcnow
+
+        p = Printer(name="Deleted", moonraker_url="http://10.0.0.8:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+        p.deleted_at = utcnow()
+        db_session.add(p)
+        db_session.commit()
+
+        response = client.post(
+            f"/api/v1/printers/{p.id}/home", headers=auth_headers, json={"axes": ""}
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "printer_not_found"

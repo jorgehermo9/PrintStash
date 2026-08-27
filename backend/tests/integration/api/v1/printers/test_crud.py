@@ -130,6 +130,24 @@ class TestGetPrinter:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "printer_not_found"
 
+    def test_reports_a_printer_that_was_deleted(
+        self, client: TestClient, auth_headers, db_session: Session
+    ):
+        from app.core.time import utcnow
+
+        p = Printer(name="Gone", moonraker_url="http://gone.local:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+        p.deleted_at = utcnow()
+        db_session.add(p)
+        db_session.commit()
+
+        response = client.get(f"/api/v1/printers/{p.id}", headers=auth_headers)
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "printer_not_found"
+
 
 class TestUpdatePrinter:
     def test_update_requires_auth(self, client: TestClient, db_session: Session):
@@ -315,6 +333,42 @@ class TestUpdatePrinter:
         assert data["model_name"] == "Model X"
         assert data["notes"] == "some notes"
         assert data["group"] == "lab"
+
+    def test_records_the_provider_material_sync_switch(
+        self, client: TestClient, auth_headers, db_session: Session
+    ):
+        p = Printer(name="Sync", moonraker_url="http://sync.local:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+
+        response = client.patch(
+            f"/api/v1/printers/{p.id}",
+            headers=auth_headers,
+            json={"provider_material_sync_enabled": False},
+        )
+
+        assert response.status_code == 200, response.text
+        db_session.refresh(p)
+        assert p.provider_material_sync_enabled is False
+
+    def test_records_the_operator_release_switch(
+        self, client: TestClient, auth_headers, db_session: Session
+    ):
+        p = Printer(name="Release", moonraker_url="http://release.local:7125")
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+
+        response = client.patch(
+            f"/api/v1/printers/{p.id}",
+            headers=auth_headers,
+            json={"operator_release_required": True},
+        )
+
+        assert response.status_code == 200, response.text
+        db_session.refresh(p)
+        assert p.operator_release_required is True
 
 
 class TestDeletePrinter:
