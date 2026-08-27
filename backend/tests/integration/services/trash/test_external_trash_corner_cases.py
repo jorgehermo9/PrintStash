@@ -34,8 +34,6 @@ from tests.paths import FIXTURES_DIR
 FIXTURE_GCODE = FIXTURES_DIR / "sample.gcode"
 
 
-
-
 def _enable_feature(session: Session) -> None:
     runtime_config.set_external_libraries_enabled(session, True)
 

@@ -23,11 +23,13 @@ the column being set is not the promise — being *seen* by the app is.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from sqlmodel import Session, select
 
+from app.core.time import utcnow
 from app.db.models import (
     File,
     FileRevisionStatus,
@@ -408,3 +410,58 @@ class TestScenarios:
         # identically against a filter that returns everything.
         assert member.is_superuser is False
         assert allowed.collection_id != denied.collection_id
+
+
+class TestStorageOwnership:
+    """The one distinction where a wrong builder is dangerous, not just wrong.
+
+    `build_stored_file` and `build_unowned_file` look interchangeable and are
+    opposites: the first may be purged, the second must never be. A test that
+    reaches for the wrong one still passes — it just proves the reverse of what
+    it claims. So both directions are asserted here, through the real GC.
+    """
+
+    def test_a_stored_file_is_purged_with_its_bytes(
+        self, db_session: Session, local_storage
+    ) -> None:
+        from app.services.storage_backend import get_backend
+        from app.services.trash import gc_soft_deleted
+
+        backend = get_backend()
+        model = factories.build_model(db_session)
+        artifact = factories.build_stored_file(db_session, backend, model)
+        artifact.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(artifact)
+        db_session.commit()
+        # Read both off the row *before* the purge: afterwards the instance is
+        # gone and touching an attribute raises ObjectDeletedError.
+        artifact_id, key = artifact.id, artifact.path
+
+        gc_soft_deleted(retention_days=0)
+
+        db_session.expire_all()
+        assert db_session.get(File, artifact_id) is None
+        assert not Path(key).exists()
+
+    def test_an_unowned_file_is_refused_and_its_bytes_survive(
+        self, db_session: Session, local_storage
+    ) -> None:
+        from app.services.storage_backend import get_backend
+        from app.services.trash import gc_soft_deleted
+
+        backend = get_backend()
+        model = factories.build_model(db_session)
+        artifact = factories.build_unowned_file(db_session, backend, model)
+        artifact.deleted_at = utcnow() - timedelta(days=1)
+        db_session.add(artifact)
+        db_session.commit()
+        artifact_id, key = artifact.id, artifact.path
+
+        result = gc_soft_deleted(retention_days=0)
+
+        # The configured data_dir may be somebody's mounted library, so an
+        # unclaimed path is never proof that PrintStash may delete it.
+        db_session.expire_all()
+        assert result["resources_blocked"] == 1
+        assert db_session.get(File, artifact_id) is not None
+        assert Path(key).read_bytes() == b"legacy-user-bytes"

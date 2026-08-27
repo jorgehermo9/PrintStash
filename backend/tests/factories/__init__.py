@@ -20,6 +20,13 @@ false pass, not a failure.
 call site where the reader can see it, and the builder stays readable for the
 next person.
 
+`storage` covers the delete paths: `build_stored_file` writes bytes *and* the
+ownership receipt that lets a purge proceed, `build_unowned_file` writes bytes
+with no receipt — the "somebody else's mounted library" case every purge must
+refuse. Those two are different scenarios, not a complete and an incomplete
+fixture, and confusing them is a silent false pass in the most dangerous place in
+the codebase.
+
 `content` is the other half: byte builders for the *file content* a test uploads
 or parses (`content.png()`, `content.gcode()`, `content.zip_bytes()`), which touch
 no database. Prefer a real slicer file from `tests/fixtures/` when one will do;
@@ -93,6 +100,11 @@ from tests.factories.scenarios import (
     a_model_with_gcode,
     a_printer_with_a_queue,
 )
+from tests.factories.storage import (
+    build_stored_file,
+    build_unowned_file,
+    store_owned_bytes,
+)
 
 __all__ = [
     "PASSWORD",
@@ -122,7 +134,9 @@ __all__ = [
     "build_printer_file",
     "build_provenance_source",
     "build_share_link",
+    "build_stored_file",
     "build_tag",
+    "build_unowned_file",
     "build_user",
     "capture_source",
     "content",
@@ -133,6 +147,7 @@ __all__ = [
     "reject_aliases",
     "reset_counters",
     "save",
+    "store_owned_bytes",
     "tag_model",
     "unique_hash",
 ]

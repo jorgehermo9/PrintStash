@@ -37,59 +37,17 @@ from app.db.models import (
     User,
 )
 from app.services import trash
-from app.services.storage_ownership import record_creation
-
-
-def _owned(session: Session, storage, key: str, data: bytes = b"x") -> str:
-    receipt = storage.create_bytes(data, key)
-    record_creation(session, receipt, object_kind="test")
-    session.commit()
-    return key
-
-
-def _model(session: Session, slug: str) -> Model:
-    row = Model(name=slug, slug=slug, hash=f"hash-{slug}")
-    session.add(row)
-    session.commit()
-    session.refresh(row)
-    return row
-
-
-def _artifact(
-    session: Session,
-    storage,
-    model: Model,
-    *,
-    filename: str,
-    file_type: FileType = FileType.STL,
-    is_recommended: bool = False,
-) -> File:
-    version = model.next_file_version
-    model.next_file_version += 1
-    session.add(model)
-    key = _owned(session, storage, storage.blob_key(model.slug, version, filename))
-    row = File(
-        model_id=model.id,
-        path=key,
-        original_filename=filename,
-        file_type=file_type,
-        version=version,
-        size_bytes=1,
-        sha256=f"sha-{model.slug}-{version}",
-        is_recommended=is_recommended,
-    )
-    session.add(row)
-    session.commit()
-    session.refresh(row)
-    return row
+from tests.factories import build_model, build_stored_file
 
 
 class TestHardDeleteFile:
     def test_clears_the_thumbnail_pointer_of_the_model_it_illustrated(
         self, db_session: Session, storage
     ) -> None:
-        model = _model(db_session, "illustrated")
-        artifact = _artifact(db_session, storage, model, filename="illustrated.stl")
+        model = build_model(db_session, "illustrated")
+        artifact = build_stored_file(
+            db_session, storage, model, filename="illustrated.stl"
+        )
         model.thumbnail_file_id = artifact.id
         model.thumbnail_path = "thumbs/illustrated.png"
         db_session.add(model)
@@ -105,10 +63,14 @@ class TestHardDeleteFile:
     def test_leaves_another_models_thumbnail_pointer_alone(
         self, db_session: Session, storage
     ) -> None:
-        subject = _model(db_session, "subject")
-        bystander = _model(db_session, "bystander")
-        artifact = _artifact(db_session, storage, subject, filename="subject.stl")
-        keeper = _artifact(db_session, storage, bystander, filename="bystander.stl")
+        subject = build_model(db_session, "subject")
+        bystander = build_model(db_session, "bystander")
+        artifact = build_stored_file(
+            db_session, storage, subject, filename="subject.stl"
+        )
+        keeper = build_stored_file(
+            db_session, storage, bystander, filename="bystander.stl"
+        )
         bystander.thumbnail_file_id = keeper.id
         db_session.add(bystander)
         db_session.commit()
@@ -122,20 +84,20 @@ class TestHardDeleteFile:
     def test_moves_the_recommendation_to_the_newest_surviving_revision(
         self, db_session: Session, storage
     ) -> None:
-        model = _model(db_session, "revised")
-        _artifact(
+        model = build_model(db_session, "revised")
+        build_stored_file(
             db_session, storage, model, filename="v1.gcode", file_type=FileType.GCODE
         )
-        second = _artifact(
+        second = build_stored_file(
             db_session, storage, model, filename="v2.gcode", file_type=FileType.GCODE
         )
-        recommended = _artifact(
+        recommended = build_stored_file(
             db_session,
             storage,
             model,
             filename="v3.gcode",
             file_type=FileType.GCODE,
-            is_recommended=True,
+            recommended=True,
         )
 
         trash.hard_delete_file(db_session, recommended)
@@ -149,16 +111,16 @@ class TestHardDeleteFile:
     def test_leaves_nothing_recommended_when_no_revision_survives(
         self, db_session: Session, storage
     ) -> None:
-        model = _model(db_session, "only-revision")
-        recommended = _artifact(
+        model = build_model(db_session, "only-revision")
+        recommended = build_stored_file(
             db_session,
             storage,
             model,
             filename="only.gcode",
             file_type=FileType.GCODE,
-            is_recommended=True,
+            recommended=True,
         )
-        mesh = _artifact(db_session, storage, model, filename="only.stl")
+        mesh = build_stored_file(db_session, storage, model, filename="only.stl")
 
         trash.hard_delete_file(db_session, recommended)
         db_session.commit()
@@ -170,20 +132,20 @@ class TestHardDeleteFile:
     def test_leaves_a_trashed_revision_out_of_the_running(
         self, db_session: Session, storage
     ) -> None:
-        model = _model(db_session, "trashed-candidate")
-        trashed_revision = _artifact(
+        model = build_model(db_session, "trashed-candidate")
+        trashed_revision = build_stored_file(
             db_session, storage, model, filename="old.gcode", file_type=FileType.GCODE
         )
         trashed_revision.deleted_at = utcnow()
         db_session.add(trashed_revision)
         db_session.commit()
-        recommended = _artifact(
+        recommended = build_stored_file(
             db_session,
             storage,
             model,
             filename="new.gcode",
             file_type=FileType.GCODE,
-            is_recommended=True,
+            recommended=True,
         )
 
         trash.hard_delete_file(db_session, recommended)
@@ -261,7 +223,7 @@ class TestHardDeleteModel:
     def test_detaches_the_pending_import_that_produced_the_model(
         self, db_session: Session, storage
     ) -> None:
-        model = _model(db_session, "imported")
+        model = build_model(db_session, "imported")
         owner = User(username="importer", hashed_password="x")
         db_session.add(owner)
         db_session.commit()
@@ -297,7 +259,7 @@ class TestHardDeleteExpiredModels:
     def test_purges_a_model_past_the_retention_window(
         self, db_session: Session, storage
     ) -> None:
-        model = _model(db_session, "expired")
+        model = build_model(db_session, "expired")
         model.deleted_at = utcnow() - timedelta(days=2)
         db_session.add(model)
         db_session.commit()
@@ -309,7 +271,7 @@ class TestHardDeleteExpiredModels:
     def test_purges_nothing_when_retention_is_disabled(
         self, db_session: Session
     ) -> None:
-        model = _model(db_session, "kept-forever")
+        model = build_model(db_session, "kept-forever")
         model.deleted_at = utcnow() - timedelta(days=365)
         db_session.add(model)
         db_session.commit()
