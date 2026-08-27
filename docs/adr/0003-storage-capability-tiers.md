@@ -778,42 +778,73 @@ Each provider section states its tier and consequences in the operator's terms,
 generated from the same per-axis table as the boot log and the UI. One source, so
 the docs cannot promise what the probe denies.
 
-### 12. External libraries are explicitly out of scope, and the ADR records why
+### 12. External libraries stay local-filesystem. This is a decision, not a deferral
 
-`ExternalLibrary` does **not** get storage providers for free, and mostly should
-not want them.
+`ExternalLibrary` keeps reading a local path with POSIX calls. It does not gain
+storage providers, and the reason is not sequencing — **the argument that
+justifies decisions 1–11 does not transfer, and one that runs the other way
+does.**
 
-How it works today: the source bytes are read with raw POSIX calls — `os.walk`,
-`Path.stat()`, `open()` — against `library.root_path`, a local absolute path.
-`get_backend()` is used only for **derived** artifacts (the thumbnail written
-through `create_bytes` + `record_creation`), which already live in vault storage.
-Per `CONTEXT.md`, the folder is the source of truth and *"PrintStash never
-overwrites or deletes a linked file's bytes"*.
+#### The safety argument does not transfer
 
-That asymmetry is why most of this ADR does not apply: with no writes to the
-source and trash/GC skipping external blobs, the write-side safety protocol has
-nothing to protect. A remote external library therefore needs only `list` /
-`stat` / `read`, which every transport provides.
+Everything hazardous about running the *vault* on a mounted share is write-side:
+`os.link` publication, directory `fsync`, inode fingerprints, receipt
+verification, quarantined rollback. External libraries perform **none** of those
+on source bytes. Per `CONTEXT.md` the folder is the source of truth, PrintStash
+never overwrites or deletes a linked file's bytes, and trash/GC skip external
+blobs. `get_backend()` appears in `external_library.py` exactly once, for a
+derived thumbnail that lands in vault storage — never on the external root.
 
-Three things block it regardless, and they are the actual scope of the follow-up:
+So for a read-only external library, **a mount is not a dangerous workaround; it
+is simply how you read a remote folder.** There is no guarantee being silently
+downgraded, because there is no guarantee in play.
 
-1. **`File.path` is an absolute filesystem path.** A remote library needs a
-   storage key plus a provider reference, which changes the meaning of `path` and
-   `is_external` — a data-model change with a migration, not a seam reuse.
-2. **Write-back genuinely writes.** `ingestion.resolve_write_target` routes
-   uploads *into* a library folder, collision-safe today because the local
-   backend only ever adds. On a non-Verified transport that guarantee is gone, so
-   write-back must be gated by tier exactly as vault writes are.
-3. **Watch mode cannot exist.** Real-time watching is already impossible on
-   network mounts (`ExternalLibraryWatchMode` documents precisely this), and over
-   WebDAV or SFTP there is no event mechanism at all — such a library is
-   scheduled-scan-only, and `AUTO`/`EVENTS` become meaningless for it.
+#### A mount is strictly better here, not merely adequate
 
-**Decision:** the provider catalogue is defined as storage-role-agnostic so that
-`ExternalLibrary` can gain an optional provider reference later, and nothing in
-decisions 1–11 assumes the vault is the only consumer. Remote external libraries
-are a separate ADR and a separate issue. Recorded here so the next reader does
-not mistake the omission for an oversight.
+Real-time watching works over a mount and can never work over a transport.
+`watchfiles` gets inotify events on a local filesystem; WebDAV and SFTP have no
+change-notification mechanism at all. Moving external libraries onto providers
+would **remove a capability** that mounting provides.
+
+#### There is no performance case either
+
+Indexing a remote library downloads every file once regardless of transport — the
+hash and the thumbnail both need full bytes, and `_reindex_changed` re-hashes on
+any size/mtime change. FUSE and OpenDAL push the same bytes over the same wire.
+The migration would buy zero throughput.
+
+#### External libraries are the model to copy, not the thing to fix
+
+This subsystem already does what decision 1 asks the vault to start doing:
+
+- `detect_fs_kind()` classifies the filesystem from `/proc/self/mountinfo`.
+- `ExternalLibrary.fs_kind` **persists** that classification.
+- The API **returns** it, alongside a computed `watch_active`.
+- `should_watch()` **degrades a feature honestly** on the strength of it —
+  `AUTO` declines to watch anything that is not `local`.
+
+Detect, persist, expose, degrade. The vault does none of the four. **The
+borrowing direction is external-library → vault**, which is precisely what
+decision 1's probe does by promoting `detect_fs_kind` to a shared module.
+
+#### The trigger that would reopen this
+
+One specific case, not a vague "if demand appears": an operator who **cannot**
+mount — a managed container platform that forbids FUSE or privileged containers,
+where the files live in a hosted Nextcloud. That is a real constraint and a
+narrow audience. If it arrives, the work is already scoped:
+
+1. `File.path` becomes a storage key plus a provider reference, changing what
+   `path` and `is_external` mean — a migration, not a seam reuse.
+2. Write-back (`ingestion.resolve_write_target`) genuinely writes to the external
+   root and is collision-safe today only because the local backend never
+   overwrites. It needs the same tier gate as vault writes.
+3. Watch mode becomes permanently unavailable for such a library, so
+   `AUTO`/`EVENTS` need a third resting state distinct from "network mount".
+
+Until then the catalogue is defined as storage-role-agnostic so nothing in
+decisions 1–11 assumes the vault is its only consumer, and no decision here needs
+reopening to add a second one.
 
 ## Consequences
 
@@ -836,10 +867,10 @@ not mistake the omission for an oversight.
 
 **Deliberately not gained**
 
-- Remote external libraries. `ExternalLibrary` reads its source bytes with raw
-  POSIX calls against a local path and uses `get_backend()` only for derived
-  thumbnails; making it provider-aware is a data-model change plus a write-back
-  tier gate plus the loss of watch mode. Decision 12 records the scope.
+- Remote external libraries — deliberately, not for lack of time. The write-side
+  argument does not apply to a folder we never write to, a mount is the only way
+  real-time watching can work at all, and the byte cost of indexing is identical
+  either way. Decision 12 records the one trigger that would reopen it.
 
 **Accepted costs**
 
