@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from app.services import stl_preview_worker as worker
+from tests.paths import BACKEND_DIR
 
 RESERVOIR_SIZE = 4096
 
@@ -439,6 +440,66 @@ class TestApplyWorkerLimits:
 
 
 class TestMain:
+    """`main` is run as a *subprocess*, the way production launches it.
+
+    Calling it in-process is not merely unfaithful, it is destructive: `main`
+    applies the worker's resource limits with `setrlimit` to whatever process
+    calls it, so an in-process call permanently shrinks the test runner's own
+    address space to the worker's budget. On Linux that kills the pytest-xdist
+    worker outright ("node down: Not properly terminated"); macOS effectively
+    ignores `RLIMIT_AS`, which is why it passed locally and failed only in CI.
+    Even when it survives, every later test on that worker inherits the limit.
+
+    So these drive the real command line through `python -m`, exactly as
+    `stl_streaming.render_stl_preview_isolated` does. `expected-parent-pid` is
+    therefore this process, since it is the launcher.
+    """
+
+    def _run(self, argv: list[str]) -> int:
+        """Launch the worker the way production does and return its exit code."""
+        import subprocess
+        import sys
+
+        # `cwd` is explicit because the autouse `_isolate_cwd` fixture puts every
+        # test in a throwaway directory, from which `-m app.services...` cannot
+        # find the package — that surfaces as a bare exit code 1 with no
+        # traceback, which is a confusing way to learn about a path problem.
+        completed = subprocess.run(
+            [sys.executable, "-m", "app.services.stl_preview_worker", *argv],
+            capture_output=True,
+            cwd=BACKEND_DIR,
+            timeout=120,
+        )
+        assert b"No module named" not in completed.stderr, completed.stderr.decode()
+        return completed.returncode
+
+    def _run_in_process(
+        self,
+        source: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        **overrides: object,
+    ) -> int:
+        """Call `main` directly, for the two cases that must patch its internals.
+
+        `setrlimit` is stubbed out for the duration, and that is not optional:
+        `main` applies the worker's limits to whatever process calls it, so an
+        unguarded in-process call shrinks the test runner's own address space to
+        the worker's budget. On Linux that kills the pytest-xdist worker outright;
+        macOS ignores `RLIMIT_AS`, which is why it passed locally and failed only
+        in CI. Raising the budget instead does not work — the worker validates it
+        and refuses anything over its own cap.
+
+        The limits keep their own rows elsewhere in this class, exercised through
+        the real subprocess, so nothing is lost by stubbing them here.
+        """
+        import os as _os
+        import resource
+
+        monkeypatch.setattr(resource, "setrlimit", lambda *_args: None)
+        overrides.setdefault("expected_parent_pid", _os.getppid())
+        return worker.main(self._argv(source, tmp_path, **overrides))
+
     def _argv(self, source: Path, tmp_path: Path, **overrides: object) -> list[str]:
         import os as _os
 
@@ -454,7 +515,10 @@ class TestMain:
             "timeout-seconds": 30.0,
             "address-space-bytes": 512 * 1024 * 1024,
             "cpu-seconds": 10,
-            "expected-parent-pid": _os.getppid(),
+            # This process is the launcher, so the worker's parent check must
+            # name *us* — production passes `os.getpid()` here for the same
+            # reason.
+            "expected-parent-pid": _os.getpid(),
         }
         args.update({key.replace("_", "-"): value for key, value in overrides.items()})
         return [
@@ -473,7 +537,7 @@ class TestMain:
 
         source = stl(_binary_stl([TRIANGLE, SECOND]))
 
-        code = worker.main(self._argv(source, tmp_path))
+        code = self._run(self._argv(source, tmp_path))
 
         assert code == 0
         manifest = json.loads((tmp_path / "out.json").read_text())
@@ -483,12 +547,12 @@ class TestMain:
     def test_renders_an_ascii_stl(self, stl, tmp_path: Path) -> None:
         source = stl(_ascii_stl([TRIANGLE, SECOND]))
 
-        assert worker.main(self._argv(source, tmp_path)) == 0
+        assert self._run(self._argv(source, tmp_path)) == 0
 
     def test_writes_the_image_it_rendered(self, stl, tmp_path: Path) -> None:
         source = stl(_binary_stl([TRIANGLE, SECOND]))
 
-        worker.main(self._argv(source, tmp_path))
+        self._run(self._argv(source, tmp_path))
 
         assert (tmp_path / "out.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
@@ -517,29 +581,27 @@ class TestMain:
         source = stl(_binary_stl([TRIANGLE]))
 
         # Exit 2 is "the parent invoked me wrongly" — distinct from a bad file.
-        assert worker.main(self._argv(source, tmp_path, **override)) == 2
+        assert self._run(self._argv(source, tmp_path, **override)) == 2
 
     def test_refuses_a_parent_that_is_not_the_launcher(
         self, stl, tmp_path: Path
     ) -> None:
         source = stl(_binary_stl([TRIANGLE]))
 
-        assert (
-            worker.main(self._argv(source, tmp_path, expected_parent_pid=999_998)) == 3
-        )
+        assert self._run(self._argv(source, tmp_path, expected_parent_pid=999_998)) == 3
 
     def test_reports_a_source_that_is_not_there(self, tmp_path: Path) -> None:
-        assert worker.main(self._argv(tmp_path / "missing.stl", tmp_path)) == 3
+        assert self._run(self._argv(tmp_path / "missing.stl", tmp_path)) == 3
 
     def test_reports_a_source_larger_than_its_budget(self, stl, tmp_path: Path) -> None:
         source = stl(_binary_stl([TRIANGLE] * 20))
 
-        assert worker.main(self._argv(source, tmp_path, max_source_bytes=100)) == 3
+        assert self._run(self._argv(source, tmp_path, max_source_bytes=100)) == 3
 
     def test_reports_a_file_it_cannot_parse(self, stl, tmp_path: Path) -> None:
         source = stl(b"solid test\nsurprise\nendsolid test\n")
 
-        assert worker.main(self._argv(source, tmp_path)) == 3
+        assert self._run(self._argv(source, tmp_path)) == 3
 
     def test_reports_a_source_that_changes_between_the_two_passes(
         self, stl, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -556,7 +618,7 @@ class TestMain:
 
         # Two passes over a file somebody can still edit is a TOCTOU; the second
         # pass must not render a frame computed from bytes that are gone.
-        assert worker.main(self._argv(source, tmp_path)) == 3
+        assert self._run_in_process(source, tmp_path, monkeypatch) == 3
 
     def test_reports_an_unexpected_failure_distinctly(
         self, stl, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -570,4 +632,4 @@ class TestMain:
 
         # Exit 4 is "something I did not plan for", which the parent logs rather
         # than treating as a rejected file.
-        assert worker.main(self._argv(source, tmp_path)) == 4
+        assert self._run_in_process(source, tmp_path, monkeypatch) == 4

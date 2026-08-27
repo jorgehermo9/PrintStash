@@ -65,10 +65,13 @@ jobs:
       # the measured value (2026-08: 87%) so a regression fails and drift does not.
       - name: Coverage floor for the autonomous package
         if: matrix.python == '3.11' && matrix.resolution == 'highest'
+        # `uv pip install --python .venv/...` rather than `.venv/bin/pip`: the
+        # venv is created by `uv venv`, which does not install pip into it, so
+        # calling it directly exits 127 and this gate never ran.
         run: |
-          .venv/bin/pip install pytest-cov
+          uv pip install --python .venv/bin/python pytest-cov
           .venv/bin/pytest tests -q \
-            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=86
+            --cov=src/printstash_core --cov-report=term-missing --cov-fail-under=90
 
       - name: Lint autonomous package
         run: .venv/bin/ruff check src tests
