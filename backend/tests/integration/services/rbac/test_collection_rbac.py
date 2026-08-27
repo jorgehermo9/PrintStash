@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -90,7 +91,10 @@ def test_grant_does_not_leak_to_prefix_sibling(db_session: Session) -> None:
 
     _grant(db_session, user, func.id, CollectionRole.ADMIN)
 
-    assert rbac.effective_collection_role(db_session, user, func.id) == CollectionRole.ADMIN
+    assert (
+        rbac.effective_collection_role(db_session, user, func.id)
+        == CollectionRole.ADMIN
+    )
     assert rbac.effective_collection_role(db_session, user, func_tools.id) is None
     assert func_tools.id not in rbac.accessible_collection_ids(db_session, user)
 
@@ -104,7 +108,10 @@ def test_grant_on_child_does_not_leak_up_to_parent(db_session: Session) -> None:
 
     _grant(db_session, user, child.id, CollectionRole.ADMIN)
 
-    assert rbac.effective_collection_role(db_session, user, child.id) == CollectionRole.ADMIN
+    assert (
+        rbac.effective_collection_role(db_session, user, child.id)
+        == CollectionRole.ADMIN
+    )
     assert rbac.effective_collection_role(db_session, user, parent.id) is None
     assert parent.id not in rbac.accessible_collection_ids(db_session, user)
 
@@ -115,7 +122,9 @@ def test_trashed_collection_grants_no_role(db_session: Session) -> None:
     coll = taxonomy.resolve_or_create_collection(db_session, "Temp")
     assert coll is not None
     _grant(db_session, user, coll.id, CollectionRole.EDIT)
-    assert rbac.effective_collection_role(db_session, user, coll.id) == CollectionRole.EDIT
+    assert (
+        rbac.effective_collection_role(db_session, user, coll.id) == CollectionRole.EDIT
+    )
 
     from app.core.time import utcnow
 
@@ -324,7 +333,9 @@ def test_deleting_a_child_does_not_block_deleting_the_parent(
     admin = _user(db_session, "admin-del", superuser=True)
     h = _headers(admin)
 
-    parent = client.post("/api/v1/collections", json={"name": "Parent"}, headers=h).json()
+    parent = client.post(
+        "/api/v1/collections", json={"name": "Parent"}, headers=h
+    ).json()
     child = client.post(
         "/api/v1/collections",
         json={"name": "Child", "parent_id": parent["id"]},
@@ -333,12 +344,19 @@ def test_deleting_a_child_does_not_block_deleting_the_parent(
 
     # A LIVE child still blocks a non-recursive parent delete.
     assert (
-        client.delete(f"/api/v1/collections/{parent['id']}", headers=h).status_code == 409
+        client.delete(f"/api/v1/collections/{parent['id']}", headers=h).status_code
+        == 409
     )
 
     # After the child is trashed, the parent deletes cleanly.
-    assert client.delete(f"/api/v1/collections/{child['id']}", headers=h).status_code == 204
-    assert client.delete(f"/api/v1/collections/{parent['id']}", headers=h).status_code == 204
+    assert (
+        client.delete(f"/api/v1/collections/{child['id']}", headers=h).status_code
+        == 204
+    )
+    assert (
+        client.delete(f"/api/v1/collections/{parent['id']}", headers=h).status_code
+        == 204
+    )
 
 
 def test_role_revocation_takes_effect_immediately(
@@ -402,3 +420,215 @@ def test_collection_rename_updates_descendant_paths(
     assert response.json()["path"] == "active-projects"
     db_session.expire_all()
     assert db_session.get(type(child), child.id).path == "active-projects/parts"
+
+
+class TestEffectiveRolesForCollections:
+    """The bulk resolver behind every listing that shows many collections at once."""
+
+    def test_gives_a_superuser_admin_everywhere_including_the_root(
+        self, db_session: Session
+    ) -> None:
+        admin = _user(db_session, "bulk-admin", superuser=True)
+        collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
+        assert collection is not None
+
+        roles = rbac.effective_roles_for_collections(db_session, admin, [collection.id])
+
+        assert roles[collection.id] == CollectionRole.ADMIN
+        assert roles[None] == CollectionRole.ADMIN
+
+    def test_returns_nothing_for_a_user_with_no_grants_at_all(
+        self, db_session: Session
+    ) -> None:
+        user = _user(db_session, "bulk-nobody")
+        collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
+        assert collection is not None
+
+        roles = rbac.effective_roles_for_collections(db_session, user, [collection.id])
+
+        assert roles[collection.id] is None
+
+    def test_answers_an_empty_request_without_touching_the_database(
+        self, db_session: Session
+    ) -> None:
+        user = _user(db_session, "bulk-empty")
+
+        assert rbac.effective_roles_for_collections(db_session, user, []) == {
+            None: None
+        }
+
+    def test_inherits_a_grant_down_the_tree(self, db_session: Session) -> None:
+        user = _user(db_session, "bulk-inheritor")
+        parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
+        child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
+        assert parent is not None and child is not None
+        _grant(db_session, user, parent.id, CollectionRole.EDIT)
+
+        roles = rbac.effective_roles_for_collections(db_session, user, [child.id])
+
+        assert roles[child.id] == CollectionRole.EDIT
+
+    def test_keeps_the_strongest_of_two_overlapping_grants(
+        self, db_session: Session
+    ) -> None:
+        user = _user(db_session, "bulk-strongest")
+        parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
+        child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
+        assert parent is not None and child is not None
+        _grant(db_session, user, parent.id, CollectionRole.VIEW)
+        _grant(db_session, user, child.id, CollectionRole.ADMIN)
+
+        roles = rbac.effective_roles_for_collections(db_session, user, [child.id])
+
+        # Two grants on the same path is normal; the answer is the better one.
+        assert roles[child.id] == CollectionRole.ADMIN
+
+    def test_does_not_leak_a_grant_to_a_prefix_sibling(
+        self, db_session: Session
+    ) -> None:
+        user = _user(db_session, "bulk-sibling")
+        granted = taxonomy.resolve_or_create_collection(db_session, "Art")
+        sibling = taxonomy.resolve_or_create_collection(db_session, "Artillery")
+        assert granted is not None and sibling is not None
+        _grant(db_session, user, granted.id, CollectionRole.EDIT)
+
+        roles = rbac.effective_roles_for_collections(db_session, user, [sibling.id])
+
+        # "Artillery".startswith("Art") is true and would be a real leak.
+        assert roles[sibling.id] is None
+
+
+class TestEffectiveRolesForUserCollectionPairs:
+    """Resolves many users against many collections in one pass, for the admin views."""
+
+    def test_resolves_every_user_against_every_collection(
+        self, db_session: Session
+    ) -> None:
+        first = _user(db_session, "pairs-one")
+        second = _user(db_session, "pairs-two")
+        collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
+        assert collection is not None
+        _grant(db_session, first, collection.id, CollectionRole.EDIT)
+        _grant(db_session, second, collection.id, CollectionRole.VIEW)
+
+        pairs = rbac.effective_roles_for_user_collection_pairs(
+            db_session, [first.id, second.id], [collection.id]
+        )
+
+        assert pairs[(first.id, collection.id)] == CollectionRole.EDIT
+        assert pairs[(second.id, collection.id)] == CollectionRole.VIEW
+
+    def test_leaves_out_a_pair_with_no_grant(self, db_session: Session) -> None:
+        user = _user(db_session, "pairs-ungranted")
+        collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
+        assert collection is not None
+
+        pairs = rbac.effective_roles_for_user_collection_pairs(
+            db_session, [user.id], [collection.id]
+        )
+
+        # An absent key, not a None value: the caller renders "no access".
+        assert (user.id, collection.id) not in pairs
+
+    def test_inherits_a_grant_down_the_tree(self, db_session: Session) -> None:
+        user = _user(db_session, "pairs-inheritor")
+        parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
+        child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
+        assert parent is not None and child is not None
+        _grant(db_session, user, parent.id, CollectionRole.EDIT)
+
+        pairs = rbac.effective_roles_for_user_collection_pairs(
+            db_session, [user.id], [child.id]
+        )
+
+        assert pairs[(user.id, child.id)] == CollectionRole.EDIT
+
+    def test_keeps_the_strongest_of_two_overlapping_grants(
+        self, db_session: Session
+    ) -> None:
+        user = _user(db_session, "pairs-strongest")
+        parent = taxonomy.resolve_or_create_collection(db_session, "Functional")
+        child = taxonomy.resolve_or_create_collection(db_session, "Functional/Brackets")
+        assert parent is not None and child is not None
+        _grant(db_session, user, parent.id, CollectionRole.VIEW)
+        _grant(db_session, user, child.id, CollectionRole.ADMIN)
+
+        pairs = rbac.effective_roles_for_user_collection_pairs(
+            db_session, [user.id], [child.id]
+        )
+
+        assert pairs[(user.id, child.id)] == CollectionRole.ADMIN
+
+    def test_does_not_leak_a_grant_to_a_prefix_sibling(
+        self, db_session: Session
+    ) -> None:
+        user = _user(db_session, "pairs-sibling")
+        granted = taxonomy.resolve_or_create_collection(db_session, "Art")
+        sibling = taxonomy.resolve_or_create_collection(db_session, "Artillery")
+        assert granted is not None and sibling is not None
+        _grant(db_session, user, granted.id, CollectionRole.EDIT)
+
+        pairs = rbac.effective_roles_for_user_collection_pairs(
+            db_session, [user.id], [sibling.id]
+        )
+
+        assert (user.id, sibling.id) not in pairs
+
+    @pytest.mark.parametrize(
+        ("users", "collections"),
+        [
+            pytest.param(True, False, id="no-collections"),
+            pytest.param(False, True, id="no-users"),
+            pytest.param(False, False, id="neither"),
+        ],
+    )
+    def test_answers_an_empty_request_without_touching_the_database(
+        self, db_session: Session, users: bool, collections: bool
+    ) -> None:
+        user = _user(db_session, f"pairs-empty-{users}-{collections}")
+        collection = taxonomy.resolve_or_create_collection(db_session, "Shelf")
+        assert collection is not None
+
+        pairs = rbac.effective_roles_for_user_collection_pairs(
+            db_session,
+            [user.id] if users else [],
+            [collection.id] if collections else [],
+        )
+
+        assert pairs == {}
+
+
+class TestEffectiveCollectionRole:
+    def test_gives_an_ordinary_user_no_role_at_the_root(
+        self, db_session: Session
+    ) -> None:
+        user = _user(db_session, "root-nobody")
+
+        # The root is not a collection anyone can be granted; only a superuser
+        # reaches it, which is what keeps a shared deployment shareable.
+        assert rbac.effective_collection_role(db_session, user, None) is None
+
+
+class TestRequireModelCollectionRole:
+    def test_refuses_an_ordinary_user_at_the_root(self, db_session: Session) -> None:
+        from fastapi import HTTPException as _HTTPException
+
+        user = _user(db_session, "root-model-nobody")
+
+        with pytest.raises(_HTTPException) as exc_info:
+            rbac.require_model_collection_role(
+                db_session, user, None, CollectionRole.VIEW
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "root_collection_admin_required"
+
+    def test_allows_a_superuser_at_the_root(self, db_session: Session) -> None:
+        admin = _user(db_session, "root-model-admin", superuser=True)
+
+        assert (
+            rbac.require_model_collection_role(
+                db_session, admin, None, CollectionRole.ADMIN
+            )
+            == CollectionRole.ADMIN
+        )
