@@ -35,6 +35,7 @@ is a release decision about every self-hoster's upgrade path.
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -158,4 +159,112 @@ class TestForeignKeyParity:
         assert not extra, (
             "the migration chain creates foreign keys the models do not declare, so "
             f"only upgraded installs enforce them: {extra}"
+        )
+
+
+# `_orphan_schema_issues` reports 136 differences between a chain-built SQLite
+# database and the models, in these categories. Pinning the strings would be 136
+# lines of noise nobody reads; pinning the counts catches new drift and stays
+# legible.
+#
+# The categories are not equally interesting:
+#
+# * `different foreign` / `add_fk` / `remove_fk` — the eighteen constraints
+#   `TestForeignKeyParity` above names individually. These change behaviour.
+# * `different unique` / `different nullable` / `missing index` — shape differences
+#   that can change behaviour, mostly unique *constraints* where the models declare
+#   unique *indexes*.
+# * `different type` / `different default` — enum columns stored as plain text, and
+#   Python-side defaults the migrations never wrote as server defaults. Almost
+#   certainly harmless: SQLAlchemy applies the default on insert either way, and
+#   nothing reads these columns without going through the models. Counted, not
+#   ignored, because "almost certainly" is not a guarantee and a *new* one might not
+#   be harmless.
+# * `unexpected index` / `unexpected constraint` — schema the migrations created and
+#   the models do not declare, so an upgraded installation carries it and a fresh one
+#   does not.
+#
+# Two-sided: a category that grows is fresh drift; one that shrinks is progress that
+# has to be recorded here.
+STRUCTURAL_DIFFERENCE_COUNTS = {
+    "different default": 53,
+    "different type": 27,
+    "unexpected index": 15,
+    "different foreign": 8,
+    "different index": 8,
+    "different unique": 8,
+    "missing index": 8,
+    "unexpected constraint": 5,
+    "different nullable": 2,
+    "structural difference add_fk": 1,
+    "structural difference remove_fk": 1,
+}
+
+
+def _category(issue: str) -> str:
+    """The kind of difference, with the object it is about stripped off."""
+    if issue.startswith("structural difference"):
+        return issue
+    return " ".join(issue.split()[:2])
+
+
+class TestStructuralParity:
+    """The whole schema, not just its foreign keys.
+
+    Running the entire suite a second time against a chain-built database would
+    cover this, slowly. `_orphan_schema_issues` covers it in three seconds and with
+    more authority, because it is the comparison the app itself makes when deciding
+    whether a database is current: dialect-normalised columns, types, nullability
+    and server defaults from Alembic autogenerate, plus explicit checks on primary
+    and foreign keys, unique and check constraints, and partial-index predicates.
+
+    Its verdict on the schema a self-hoster upgraded into is that it is **not**
+    current. That has a consequence worth knowing before relying on it in support:
+    the orphan-rescue path in `run_migrations` can only ever adopt a database built
+    by `create_all`, never one built by the chain.
+    """
+
+    def test_the_migrated_schema_differs_from_the_models_only_as_recorded(
+        self, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        path = tmp_path_factory.mktemp("structural") / "chain.sqlite"
+        url = f"sqlite:///{path}"
+        command.upgrade(migrate_mod._alembic_config(url), "head")
+
+        engine = create_engine(url)
+        try:
+            issues = migrate_mod._orphan_schema_issues(engine)  # noqa: SLF001
+        finally:
+            engine.dispose()
+
+        counts = Counter(_category(issue) for issue in issues)
+
+        grown = {
+            category: (count, STRUCTURAL_DIFFERENCE_COUNTS.get(category, 0))
+            for category, count in counts.items()
+            if count > STRUCTURAL_DIFFERENCE_COUNTS.get(category, 0)
+        }
+        assert not grown, (
+            "the migration chain drifted further from the models: "
+            + ", ".join(
+                f"{category} {now} (was {before})"
+                for category, (now, before) in sorted(grown.items())
+            )
+            + ". A migration has to change the schema the same way `create_all` "
+            "would, which on SQLite means `op.batch_alter_table` — never a DDL "
+            "operation guarded by `if not is_sqlite`."
+        )
+
+        shrunk = {
+            category: (counts.get(category, 0), expected)
+            for category, expected in STRUCTURAL_DIFFERENCE_COUNTS.items()
+            if counts.get(category, 0) < expected
+        }
+        assert not shrunk, (
+            "the schemas converged, so these counts are stale: "
+            + ", ".join(
+                f"{category} {now} (recorded {before})"
+                for category, (now, before) in sorted(shrunk.items())
+            )
+            + ". Lower them here."
         )
