@@ -162,7 +162,7 @@ class TestServerInfo:
 
 class TestQueryStatus:
     @pytest.mark.asyncio
-    async def test_normalizes_state_progress_temperatures_and_message(self) -> None:
+    async def test_normalizes_a_printing_status_into_the_shared_envelope(self) -> None:
         assert await printing_client().query_status() == PRINTING_ENVELOPE
 
     @pytest.mark.asyncio
@@ -270,7 +270,7 @@ class TestFlattenFiles:
         # bare filename here would address the wrong file.
         assert [item["path"] for item in files] == ["folder/cube.gcode"]
 
-    def test_reports_size_and_modification_time(self) -> None:
+    def test_reports_file_size_alongside_modification_time(self) -> None:
         files = OctoPrintClient._flatten_files(
             [{"name": "a.gcode", "type": "machinecode", "size": 2048, "date": 1700}]
         )
@@ -422,7 +422,7 @@ class TestUpload:
 
 class TestStart:
     @pytest.mark.asyncio
-    async def test_selects_the_file_and_asks_the_printer_to_print_it(self) -> None:
+    async def test_start_selects_the_file_with_print_set(self) -> None:
         bodies: list[bytes] = []
         paths: list[str] = []
 
@@ -626,7 +626,7 @@ class TestOctoPrintFactory:
         assert isinstance(client, OctoPrintClient)
         assert client.config is config
 
-    def test_passes_the_injected_transport_and_timeout_through(self) -> None:
+    def test_passes_injected_transport_settings_through_to_the_client(self) -> None:
         transport = httpx.MockTransport(lambda _r: httpx.Response(204))
 
         client = OctoPrintFactory(timeout=3.0, transport=transport).build(
@@ -787,7 +787,7 @@ class TestStatusStateMapping:
         ],
     )
     @pytest.mark.asyncio
-    async def test_derives_the_state_from_flags_and_completion(
+    async def test_derives_the_state_from_flags_rather_than_percentage(
         self, flags: dict, completion: float | None, expected: str
     ) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

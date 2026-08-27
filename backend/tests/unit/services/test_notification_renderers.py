@@ -60,7 +60,7 @@ class TestRenderWebhook:
 
 
 class TestRenderDiscord:
-    def test_discord_builds_embed_with_color_and_fields(self):
+    def test_discord_builds_a_complete_embed_for_a_completed_print(self):
         req = r.render_discord(_ctx(), {"url": "https://discord.com/api/webhooks/x/y"})
         embed = req.json["embeds"][0]
         assert embed["title"] == "✅ Print completed — Ender 3"
@@ -133,7 +133,7 @@ def _decode_header(value: str) -> str:
 
 
 class TestRenderNtfy:
-    def test_ntfy_uses_default_server_headers_and_body(self):
+    def test_ntfy_posts_to_the_default_server_with_an_encoded_title(self):
         req = r.render_ntfy(_ctx(event="print_failed"), {"topic": "my3d"})
         assert req.url == "https://ntfy.sh/my3d"
         # The title carries an em-dash, so it is RFC 2047-encoded for the header but
@@ -144,14 +144,14 @@ class TestRenderNtfy:
         assert req.data and "Printer: Ender 3" in req.data
         assert "Authorization" not in req.headers
 
-    def test_ntfy_custom_server_strips_slash_and_adds_token(self):
+    def test_ntfy_normalizes_a_custom_server_url_with_a_token(self):
         req = r.render_ntfy(
             _ctx(), {"topic": "t", "server_url": "https://push.me/", "token": "tk_abc"}
         )
         assert req.url == "https://push.me/t"
         assert req.headers["Authorization"] == "Bearer tk_abc"
 
-    def test_ntfy_adds_click_and_action_for_model_url(self):
+    def test_ntfy_links_back_to_the_model_page(self):
         req = r.render_ntfy(_ctx(), {"topic": "t"})
         url = "https://www.printables.com/model/123-benchy"
         assert req.headers["Click"] == url

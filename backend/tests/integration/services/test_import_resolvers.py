@@ -64,6 +64,21 @@ def _factory() -> SessionFactory:
     return cast(SessionFactory, _Factory())
 
 
+def _seed_stale_cache(user_id: int) -> tuple[int, str, str]:
+    """Put a live cache entry in front of *user_id*, and return its key.
+
+    Deliberately not expired: an entry that would have lapsed on its own proves
+    nothing about invalidation.
+    """
+    import_resolvers._provider_metadata_cache.clear()
+    key = (user_id, "cults", "widget")
+    import_resolvers._provider_metadata_cache[key] = (
+        ProviderModelMetadata("widget", "stale", None, None, None),
+        utcnow() + timedelta(minutes=5),
+    )
+    return key
+
+
 class TestProviderMetadataCache:
     """Caching a provider's answer per owner, and re-checking when the connection changes."""
 
@@ -220,29 +235,32 @@ class TestProviderMetadataCache:
         assert calls == 2
         assert not import_resolvers._provider_metadata_cache
 
-    def test_provider_connect_and_disconnect_invalidate_owner_cache(
-        self,
-        db_session: Session,
+    def test_connecting_a_provider_drops_that_owners_cached_metadata(
+        self, db_session: Session
     ) -> None:
-        import_resolvers._provider_metadata_cache.clear()
-        user = build_user(db_session, "cache-lifecycle")
+        user = build_user(db_session, "cache-on-connect")
         assert user.id is not None
-        key = (user.id, "cults", "widget")
-        import_resolvers._provider_metadata_cache[key] = (
-            ProviderModelMetadata("widget", "stale", None, None, None),
-            utcnow() + timedelta(minutes=5),
-        )
+        key = _seed_stale_cache(user.id)
 
         provider_connections.connect_cults(db_session, user.id, "user", "password")
+
         assert key not in import_resolvers._provider_metadata_cache
-        import_resolvers._provider_metadata_cache[key] = (
-            ProviderModelMetadata("widget", "stale", None, None, None),
-            utcnow() + timedelta(minutes=5),
-        )
+
+    def test_disconnecting_a_provider_drops_that_owners_cached_metadata(
+        self, db_session: Session
+    ) -> None:
+        # Both halves matter and neither implies the other: a stale entry surviving
+        # a *connect* serves the previous account's titles, and one surviving a
+        # *disconnect* serves them after the credential is gone.
+        user = build_user(db_session, "cache-on-disconnect")
+        assert user.id is not None
+        provider_connections.connect_cults(db_session, user.id, "user", "password")
+        key = _seed_stale_cache(user.id)
 
         assert provider_connections.disconnect_provider_connection(
             db_session, user.id, CaptureProvider.CULTS
         )
+
         assert key not in import_resolvers._provider_metadata_cache
 
     def test_provider_connection_required_is_stable(
@@ -298,7 +316,7 @@ class TestProviderMetadataCache:
 class TestConnectedManifest:
     """Turning an authenticated provider's response into a bounded capture manifest."""
 
-    def test_mmf_connected_manifest_maps_bounded_metadata_and_omits_unknown_fields(
+    def test_mmf_manifest_carries_only_allowlisted_metadata(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -353,7 +371,7 @@ class TestConnectedManifest:
         assert "bearer-secret" not in repr(serialized)
         assert "Authorization" not in repr(serialized)
 
-    def test_cults_connected_manifest_maps_bounded_metadata_and_omits_unknown_fields(
+    def test_cults_manifest_carries_only_allowlisted_metadata(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -576,7 +594,7 @@ class TestProviderFailures:
             ),
         ],
     )
-    def test_provider_errors_are_stable_and_single_call(
+    def test_a_provider_error_surfaces_once_without_a_retry(
         self,
         monkeypatch: pytest.MonkeyPatch,
         error: ProviderConnectionError,
@@ -617,7 +635,7 @@ class TestProviderFailures:
             ),
         ],
     )
-    def test_provider_manifest_contract_failures_are_redacted_and_stable(
+    def test_a_malformed_manifest_fails_without_echoing_its_content(
         self,
         monkeypatch: pytest.MonkeyPatch,
         provider: str,

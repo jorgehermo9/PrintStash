@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +33,44 @@ from tests.factories import (
     build_print_job,
     build_printer,
 )
+
+
+@contextmanager
+def _spoolman_runtime(*, enabled: bool, config: dict | None = None):
+    """Patch the two runtime-config reads `_spoolman_config` makes.
+
+    Both, always: `spoolman_enabled` gates the lookup and `spoolman_config` supplies
+    it, so patching one and leaving the other reading the real database is how a
+    test passes for the wrong reason.
+    """
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(
+                printer_hub_module.runtime_config,
+                "spoolman_enabled",
+                return_value=enabled,
+            )
+        )
+        if config is not None:
+            stack.enter_context(
+                patch.object(
+                    printer_hub_module.runtime_config,
+                    "spoolman_config",
+                    return_value=config,
+                )
+            )
+        yield
+
+
+@contextmanager
+def _capture_limit_mb(limit: int):
+    """Pin `bambu_external_capture_max_mb`, which gates external capture entirely."""
+    with patch.object(
+        printer_hub_module,
+        "settings",
+        SimpleNamespace(bambu_external_capture_max_mb=limit),
+    ):
+        yield
 
 
 class TestPrinterHubLifecycle:
@@ -264,45 +303,61 @@ class TestPrinterHubHandleStatus:
         assert "print_stats" not in snap
         assert "virtual_sdcard" in snap
 
-    def test_hub_material_config_helpers_and_snapshot_attach(
+    @pytest.mark.parametrize("value", ["bad", object()], ids=["string", "object"])
+    def test_reported_int_is_none_for_a_value_that_is_not_a_number(
+        self, value: object
+    ) -> None:
+        assert printer_hub_module._reported_int(value) is None
+
+    @pytest.mark.parametrize("value", ["bad", object()], ids=["string", "object"])
+    def test_reported_float_is_none_for_a_value_that_is_not_a_number(
+        self, value: object
+    ) -> None:
+        assert printer_hub_module._reported_float(value) is None
+
+    def test_spoolman_config_is_none_while_the_integration_is_off(
         self, hub: PrinterHub
     ) -> None:
-        assert printer_hub_module._reported_int("bad") is None
-        assert printer_hub_module._reported_float(object()) is None
+        with _spoolman_runtime(enabled=False):
+            assert hub._spoolman_config() is None
 
-        with patch.object(
-            printer_hub_module.runtime_config, "spoolman_enabled", return_value=False
-        ):
+    def test_spoolman_config_is_none_when_the_stored_config_is_blank(
+        self, hub: PrinterHub
+    ) -> None:
+        # Enabled but never filled in. Returning a `("", None)` pair here would have
+        # the hub build requests against an empty base URL on every poll.
+        with _spoolman_runtime(enabled=True, config={"base_url": "", "api_key": None}):
             assert hub._spoolman_config() is None
-        with (
-            patch.object(
-                printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
-            ),
-            patch.object(
-                printer_hub_module.runtime_config,
-                "spoolman_config",
-                return_value={"base_url": "", "api_key": None},
-            ),
-        ):
-            assert hub._spoolman_config() is None
-        with (
-            patch.object(
-                printer_hub_module.runtime_config, "spoolman_enabled", return_value=True
-            ),
-            patch.object(
-                printer_hub_module.runtime_config,
-                "spoolman_config",
-                return_value={"base_url": "http://spoolman", "api_key": "secret"},
-            ),
+
+    def test_spoolman_config_returns_the_configured_endpoint(
+        self, hub: PrinterHub
+    ) -> None:
+        with _spoolman_runtime(
+            enabled=True,
+            config={"base_url": "http://spoolman", "api_key": "secret"},
         ):
             assert hub._spoolman_config() == ("http://spoolman", "secret")
 
+    def test_attach_sends_the_current_snapshot_to_a_new_client(
+        self, hub: PrinterHub
+    ) -> None:
         websocket = MagicMock()
         websocket.send_json = AsyncMock()
         hub.snapshots[3] = {"print_stats": {"state": "ready"}}
+
         asyncio.run(hub.attach(3, websocket))
+
         websocket.send_json.assert_awaited_once()
-        websocket.send_json.side_effect = RuntimeError("disconnected")
+
+    def test_attach_tolerates_a_client_that_is_already_gone(
+        self, hub: PrinterHub
+    ) -> None:
+        # A browser that closed the tab between subscribing and the first frame.
+        # Raising out of `attach` here would take down the printer's worker.
+        websocket = MagicMock()
+        websocket.send_json = AsyncMock(side_effect=RuntimeError("disconnected"))
+        hub.snapshots[3] = {"print_stats": {"state": "ready"}}
+
         asyncio.run(hub.attach(3, websocket))
         asyncio.run(hub.detach(3, websocket))
 
@@ -426,7 +481,7 @@ class TestPrinterHubSyncActiveJob:
         )
         return p.id, job
 
-    def test_sync_updates_state_and_progress(self, hub, db_session):
+    def test_sync_writes_what_the_printer_reported(self, hub, db_session):
         pid, job = self._setup_job(db_session)
 
         async def _sync():
@@ -997,7 +1052,7 @@ class TestPrinterHubSyncActiveJob:
         assert job.state == PrintJobState.FAILED
         assert job.error == "thermal runaway"
 
-    def test_provider_material_state_sync_creates_updates_and_removes_rows(
+    def test_material_state_sync_reconciles_the_slot_rows(
         self, hub: PrinterHub, db_session
     ) -> None:
         printer = build_printer(
@@ -1096,7 +1151,7 @@ class TestPrinterHubSyncActiveJob:
         hub._sync_material_state_db(printer.id, [{"slot_key": "ignored"}])
         hub._sync_material_state_db(999_999, [{"slot_key": "ignored"}])
 
-    def test_material_slot_enrichment_resolves_inventory_and_degrades_cleanly(
+    def test_slot_enrichment_survives_an_unresolvable_spool(
         self,
         hub: PrinterHub,
     ) -> None:
@@ -1216,7 +1271,7 @@ class TestPrinterHubSyncActiveJob:
         db_session.commit()
         hub._mark_capture_failed(job.id, "ignored")
 
-    def test_external_capture_success_and_cancellation_paths(
+    def test_external_capture_persists_what_it_downloaded(
         self, hub: PrinterHub
     ) -> None:
         client = MagicMock()
@@ -1226,28 +1281,26 @@ class TestPrinterHubSyncActiveJob:
             staged.write_bytes(b"; generated")
 
         client.download_artifact = AsyncMock(side_effect=download)
+
         with (
-            patch.object(
-                printer_hub_module,
-                "settings",
-                SimpleNamespace(bambu_external_capture_max_mb=1),
-            ),
+            _capture_limit_mb(1),
             patch.object(hub, "_persist_external_artifact") as persist,
         ):
             asyncio.run(
                 hub._capture_external_artifact(1, 2, "/cache/external.gcode", client)
             )
-            persist.assert_called_once()
 
+        persist.assert_called_once()
+
+    def test_external_capture_lets_cancellation_propagate(
+        self, hub: PrinterHub
+    ) -> None:
+        # Shutdown has to reach the download. Swallowing `CancelledError` here would
+        # leave the hub's worker un-cancellable while a large artifact transfers.
+        client = MagicMock()
         client.download_artifact = AsyncMock(side_effect=asyncio.CancelledError())
-        with (
-            patch.object(
-                printer_hub_module,
-                "settings",
-                SimpleNamespace(bambu_external_capture_max_mb=1),
-            ),
-            pytest.raises(asyncio.CancelledError),
-        ):
+
+        with _capture_limit_mb(1), pytest.raises(asyncio.CancelledError):
             asyncio.run(
                 hub._capture_external_artifact(1, 2, "/cache/external.gcode", client)
             )
