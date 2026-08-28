@@ -19,7 +19,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -92,6 +92,19 @@ function renderDetail(options: RenderAppOptions & { model?: ModelRead } = {}) {
     },
     ...rest,
   });
+}
+
+/** Open the header's actions menu, which is where every write action lives. */
+async function openActions(user: ReturnType<typeof userEvent.setup>) {
+  await screen.findByText("Benchy");
+  await user.click(screen.getByRole("button", { name: "Model actions" }));
+}
+
+/** Open the edit form, which replaces the header title with an input. */
+async function openEdit(user: ReturnType<typeof userEvent.setup>) {
+  await openActions(user);
+  await user.click(screen.getByRole("menuitem", { name: /Edit details/ }));
+  await screen.findByPlaceholderText("Model name");
 }
 
 beforeEach(() => {
@@ -242,6 +255,206 @@ describe("ModelDetail", () => {
 
       await screen.findByText("Benchy");
       expect(screen.queryByRole("button", { name: /Delete model/i })).toBeNull();
+    });
+
+    it("opens the form on the details the model already has", async () => {
+      // An edit form that starts blank is a form that erases whatever the user
+      // does not retype.
+      const user = userEvent.setup();
+      renderDetail();
+      await openActions(user);
+
+      await user.click(screen.getByRole("menuitem", { name: /Edit details/ }));
+
+      expect(screen.getByPlaceholderText("Model name")).toHaveValue("Benchy");
+    });
+
+    it("saves the name the user typed", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDetail({
+        routes: { "PATCH /api/v1/models/1": json(aModel({ name: "Benchy v2" })) },
+      });
+      await openEdit(user);
+      const name = screen.getByPlaceholderText("Model name");
+      await user.clear(name);
+      await user.type(name, "Benchy v2");
+
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          name: "Benchy v2",
+        }),
+      );
+    });
+
+    it("shows the saved model without a reload", async () => {
+      // The page owns the model it was handed, so a save that only reaches the
+      // server leaves the user looking at the old values.
+      const user = userEvent.setup();
+      renderDetail({
+        routes: { "PATCH /api/v1/models/1": json(aModel({ name: "Benchy v2" })) },
+      });
+      await openEdit(user);
+      const name = screen.getByPlaceholderText("Model name");
+      await user.clear(name);
+      await user.type(name, "Benchy v2");
+
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(await screen.findByText("Benchy v2")).toBeInTheDocument();
+    });
+
+    it("clears a source URL the user emptied", async () => {
+      // An empty string here has to travel as null: `undefined` would leave the
+      // old link in place, so the field would silently refuse to be cleared.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDetail({
+        model: aModel({ source_url: "https://example.test/thing" }),
+        routes: { "PATCH /api/v1/models/1": json(aModel({ source_url: null })) },
+      });
+      await openEdit(user);
+
+      await user.clear(screen.getByPlaceholderText("https://www.printables.com/model/..."));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          source_url: null,
+        }),
+      );
+    });
+
+    it("carries the source URL the user typed", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDetail({
+        routes: { "PATCH /api/v1/models/1": json(aModel()) },
+      });
+      await openEdit(user);
+
+      await user.type(
+        screen.getByPlaceholderText("https://www.printables.com/model/..."),
+        "https://example.test/thing",
+      );
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          source_url: "https://example.test/thing",
+        }),
+      );
+    });
+
+    it("leaves the model alone when the edit is abandoned", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDetail();
+      await openEdit(user);
+      const name = screen.getByPlaceholderText("Model name");
+      await user.clear(name);
+      await user.type(name, "Something else");
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("keeps the form open when the save is refused", async () => {
+      // Closing on failure throws away everything the user just typed.
+      const user = userEvent.setup();
+      renderDetail({
+        routes: { "PATCH /api/v1/models/1": json({ detail: "name_taken" }, 409) },
+      });
+      await openEdit(user);
+
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(await screen.findByPlaceholderText("Model name")).toBeInTheDocument();
+    });
+  });
+
+  describe("deleting the model", () => {
+    it("asks before deleting", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDetail();
+      await openActions(user);
+
+      await user.click(screen.getByRole("menuitem", { name: /Delete model/ }));
+
+      expect(requestsWithMethod("DELETE")).toHaveLength(0);
+    });
+
+    it("says the model goes to the trash rather than away", async () => {
+      // "Delete" reads as permanent; the retention window is the difference
+      // between a mistake and a loss.
+      const user = userEvent.setup();
+      renderDetail();
+      await openActions(user);
+
+      await user.click(screen.getByRole("menuitem", { name: /Delete model/ }));
+
+      expect(
+        await screen.findByText(
+          "This will move the model to trash. Files will be permanently removed after the retention period.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("deletes the model once confirmed", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDetail({
+        routes: { "DELETE /api/v1/models/1": json(null, 204) },
+      });
+      await openActions(user);
+      await user.click(screen.getByRole("menuitem", { name: /Delete model/ }));
+
+      await user.click(
+        within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
+      );
+
+      await waitFor(() =>
+        expect(requestsWithMethod("DELETE").some((call) => call.url.endsWith("/models/1"))).toBe(
+          true,
+        ),
+      );
+    });
+
+    it("stays on the page when the delete is refused", async () => {
+      // Navigating away from a model that still exists loses the user's place
+      // for nothing.
+      const user = userEvent.setup();
+      renderDetail({
+        routes: { "DELETE /api/v1/models/1": json({ detail: "model_in_use" }, 409) },
+      });
+      await openActions(user);
+      await user.click(screen.getByRole("menuitem", { name: /Delete model/ }));
+
+      await user.click(
+        within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
+      );
+
+      expect(await screen.findByText("Benchy")).toBeInTheDocument();
+    });
+  });
+
+  describe("sharing", () => {
+    it("opens the share dialog", async () => {
+      const user = userEvent.setup();
+      renderDetail();
+      await openActions(user);
+
+      await user.click(screen.getByRole("menuitem", { name: /Share/ }));
+
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("offers no sharing to a view-only user", async () => {
+      // A share link hands the model to anybody holding it, which is more than
+      // the viewer's own grant.
+      const user = userEvent.setup();
+      renderDetail({ model: aModel({ effective_role: "view" }), auth: memberSession() });
+      await openActions(user);
+
+      expect(screen.getByRole("menuitem", { name: /Share/ })).toBeDisabled();
     });
   });
 });
