@@ -24,7 +24,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, type RenderOptions, type RenderResult } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { vi } from "vitest";
 
 import { clearLogin, storeLogin } from "@/lib/auth-store";
@@ -88,6 +88,15 @@ export type RouteTable = Record<string, RouteAnswer>;
 export interface RenderAppOptions extends Omit<RenderOptions, "wrapper"> {
   /** The initial location, e.g. `"/?collection=parts"`. */
   at?: string;
+  /**
+   * The route pattern the component sits behind, e.g. `"/documents/:id"`.
+   *
+   * A page that reads `useParams()` gets nothing from a bare `MemoryRouter` —
+   * the params come from the matched *route*, not from the URL. Without this a
+   * detail page renders as though its id were missing, which is a different
+   * screen from the one under test.
+   */
+  routePath?: string;
   /** The session the tree sees. Defaults to a superuser. */
   auth?: AuthState;
   /** Locale for the i18n provider. Defaults to English. */
@@ -142,6 +151,7 @@ function matchRoute(
 export function renderApp(ui: ReactElement, options: RenderAppOptions = {}): RenderAppResult {
   const {
     at = "/",
+    routePath,
     auth = adminSession(),
     locale = "en",
     matchesMedia = () => true,
@@ -208,13 +218,21 @@ export function renderApp(ui: ReactElement, options: RenderAppOptions = {}): Ren
   };
 
   function Providers({ children }: { children: ReactNode }) {
+    const routed =
+      routePath === undefined ? (
+        children
+      ) : (
+        <Routes>
+          <Route path={routePath} element={children} />
+        </Routes>
+      );
     return (
       <MemoryRouter initialEntries={[at]}>
         <QueryClientProvider client={client}>
           <AuthContext.Provider value={auth}>
             <MobileFilterContext.Provider value={mobileFilters}>
               <I18nProvider>
-                {children}
+                {routed}
                 {/* The real toaster, because a toast is how most write paths report
                     what happened — "the batch skipped two" has no other rendering.
                     Without it those outcomes are unassertable, which is how a test
