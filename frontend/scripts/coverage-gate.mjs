@@ -53,11 +53,11 @@ const SUITES = [
     name: "app",
     summary: "coverage/coverage-summary.json",
     command: "pnpm test:coverage",
-    total: { statements: 75.2, branches: 69.7 },
+    total: { statements: 75.7, branches: 69.7 },
     areas: [
       // The tested core: formatters, stores, query hooks, the api client. This is
       // the area where a unit test is the right tier, so it carries the real floor.
-      { prefix: "src/lib/", statements: 89.3, branches: 79.8 },
+      { prefix: "src/lib/", statements: 91.8, branches: 81.0 },
       // The bulk of the app, and where the remaining debt is. Route-level
       // behaviour is covered by Playwright, which v8 cannot see; component-level
       // behaviour is being brought up module by module.
