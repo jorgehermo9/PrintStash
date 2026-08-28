@@ -20,7 +20,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -177,6 +177,103 @@ describe("CollectionReadme", () => {
       });
 
       expect(await screen.findByRole("button", { name: /Add a description/ })).toBeInTheDocument();
+    });
+  });
+  describe("embedding an image", () => {
+    /** A pasted screenshot — how most images reach a folder description. */
+    function anImage() {
+      return new File(["png-bytes"], "shelf.png", { type: "image/png" });
+    }
+
+    it("uploads an image pasted into the editor", async () => {
+      // The alternative is asking somebody to host a photo of their own shelf
+      // somewhere else and paste a link to it.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderReadme({
+        readme: "Brackets.",
+        routes: {
+          "POST /api/v1/collections/5/images": json({ url: "/api/v1/collections/5/images/1" }),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.paste(screen.getByRole("textbox"), {
+        clipboardData: { files: [anImage()], types: ["Files"] },
+      });
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("/images"))).toBe(true),
+      );
+    });
+
+    it("writes the uploaded image into the markdown", async () => {
+      const user = userEvent.setup();
+      renderReadme({
+        readme: "Brackets.",
+        routes: {
+          "POST /api/v1/collections/5/images": json({ url: "/api/v1/collections/5/images/1" }),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.paste(screen.getByRole("textbox"), {
+        clipboardData: { files: [anImage()], types: ["Files"] },
+      });
+
+      await waitFor(() =>
+        expect(screen.getByRole("textbox")).toHaveDisplayValue(/collections\/5\/images\/1/),
+      );
+    });
+
+    it("uploads an image dropped on the editor", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderReadme({
+        readme: "Brackets.",
+        routes: {
+          "POST /api/v1/collections/5/images": json({ url: "/api/v1/collections/5/images/1" }),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.drop(screen.getByRole("textbox"), {
+        dataTransfer: { files: [anImage()], types: ["Files"] },
+      });
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("/images"))).toBe(true),
+      );
+    });
+
+    it("ignores a pasted file that is not an image", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderReadme({ readme: "Brackets." });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.paste(screen.getByRole("textbox"), {
+        clipboardData: {
+          files: [new File(["x"], "notes.txt", { type: "text/plain" })],
+          types: ["Files"],
+        },
+      });
+
+      await waitFor(() => expect(requestsWithMethod("POST")).toHaveLength(0));
+    });
+
+    it("surfaces an image the server refused", async () => {
+      const user = userEvent.setup();
+      renderReadme({
+        readme: "Brackets.",
+        routes: {
+          "POST /api/v1/collections/5/images": json({ detail: "file_too_large" }, 413),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.paste(screen.getByRole("textbox"), {
+        clipboardData: { files: [anImage()], types: ["Files"] },
+      });
+
+      expect(await screen.findByText("File exceeds the upload size limit.")).toBeInTheDocument();
     });
   });
 });

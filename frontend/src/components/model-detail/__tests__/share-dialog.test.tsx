@@ -233,4 +233,93 @@ describe("ShareDialog", () => {
       expect(onClose).toHaveBeenCalled();
     });
   });
+  describe("scoping a link to particular revisions", () => {
+    it("shares every revision by default", async () => {
+      // The common case is "here is the model"; requiring a selection for it
+      // would make every share a two-step decision.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderShare();
+      await screen.findByRole("dialog");
+
+      await user.click(screen.getByRole("button", { name: /Create link|Create/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          revision_file_ids: null,
+        }),
+      );
+    });
+
+    it("shares only the revisions the user ticked", async () => {
+      // A user sharing one tested revision does not want the failed ones going
+      // with it.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderShare({
+        files: [aGcode(), aGcode({ id: 21, gcode_revision_number: 2 })],
+      });
+      await screen.findByRole("dialog");
+      await user.click(screen.getByRole("button", { name: "Selected revisions" }));
+
+      await user.click(screen.getAllByRole("checkbox")[1]);
+      await user.click(screen.getByRole("button", { name: /Create link|Create/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          revision_file_ids: [20],
+        }),
+      );
+    });
+
+    it("cannot create a scoped link with nothing ticked", async () => {
+      // A link scoped to no revisions grants nothing; creating one is a link the
+      // recipient reports as broken.
+      const user = userEvent.setup();
+      renderShare();
+      await screen.findByRole("dialog");
+      await user.click(screen.getByRole("button", { name: "Selected revisions" }));
+      await user.click(screen.getAllByRole("checkbox")[1]);
+
+      await user.click(screen.getAllByRole("checkbox")[1]);
+
+      expect(screen.getByRole("button", { name: /Create link|Create/ })).toBeDisabled();
+    });
+
+    it("says how many revisions an existing link covers", async () => {
+      // "All revisions" and "two of nine" are different grants, and the list is
+      // the only place the difference shows.
+      renderShare({
+        routes: {
+          "GET /api/v1/models/1/shares": json([aShareLink({ revision_file_ids: [20, 21] })]),
+        },
+      });
+
+      expect(await screen.findByText(/2 revs/)).toBeInTheDocument();
+    });
+  });
+
+  describe("handing the link over", () => {
+    it("copies the created link to the clipboard", async () => {
+      // It is shown once and never retrievable; retyping a token by hand is not
+      // a realistic alternative.
+      // `userEvent.setup()` installs a working clipboard stub, so what is asserted
+      // is the text a user would paste.
+      const user = userEvent.setup();
+      renderShare();
+      await screen.findByRole("dialog");
+      await user.click(screen.getByRole("button", { name: /Create link|Create/ }));
+      await screen.findByDisplayValue(/\/share\/abc123/);
+
+      // The copy control sits immediately after the read-only token box; it
+      // carries only an icon.
+      // SAFETY: the sibling is that button — the box is rendered only inside the
+      // created-link row, which is the row this test just made appear.
+      await user.click(
+        screen.getByDisplayValue(/\/share\/abc123/).nextElementSibling as HTMLElement,
+      );
+
+      await waitFor(async () =>
+        expect(await navigator.clipboard.readText()).toContain("/share/abc123"),
+      );
+    });
+  });
 });
