@@ -18,9 +18,9 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FilterSidebar, type FilterSidebarProps } from "@/components/filter-sidebar";
 import { aCollection, aPrinter, aTag } from "@/test-support/factories";
@@ -68,6 +68,10 @@ function renderSidebar(over: Partial<FilterSidebarProps> = {}) {
   );
   return { ...result, ...handlers };
 }
+
+beforeEach(() => {
+  window.sessionStorage.clear();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -234,6 +238,123 @@ describe("FilterSidebar", () => {
       renderSidebar({ loading: true, collections: [] });
 
       expect(screen.getByPlaceholderText("Filter outliner...")).toBeInTheDocument();
+    });
+  });
+  describe("deleting a folder", () => {
+    it("asks before deleting", async () => {
+      const user = userEvent.setup();
+      const { onDeleteCollection } = renderSidebar();
+
+      await user.click(screen.getAllByTitle("Delete collection")[0]);
+
+      expect(onDeleteCollection).not.toHaveBeenCalled();
+    });
+
+    it("names the folder it is about to delete", async () => {
+      // The rows are dense and identically shaped; a confirmation that does not
+      // name the folder is a confirmation the user cannot check.
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(screen.getAllByTitle("Delete collection")[0]);
+
+      expect(await screen.findByText(/Delete “Parts”\?/)).toBeInTheDocument();
+    });
+
+    it("warns that a folder with models is not empty", async () => {
+      // Deleting one sends its models to the recycle bin; a bare "Delete?" hides
+      // that entirely.
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(screen.getAllByTitle("Delete collection")[0]);
+
+      expect(await screen.findByText(/models → recycle bin/)).toBeInTheDocument();
+    });
+
+    it("deletes the folder once confirmed", async () => {
+      const user = userEvent.setup();
+      const { onDeleteCollection } = renderSidebar();
+      await user.click(screen.getAllByTitle("Delete collection")[0]);
+
+      await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+      expect(onDeleteCollection).toHaveBeenCalledWith(1, true);
+    });
+
+    it("says a folder with nothing in it takes nothing with it", async () => {
+      const user = userEvent.setup();
+      renderSidebar({
+        collections: [
+          aCollection({ id: 9, name: "Empty", path: "empty", parent_id: null, model_count: 0 }),
+        ],
+      });
+
+      await user.click(screen.getByTitle("Delete collection"));
+
+      expect(screen.queryByText(/recycle bin/)).toBeNull();
+    });
+
+    it("backs out of the confirmation", async () => {
+      const user = userEvent.setup();
+      const { onDeleteCollection } = renderSidebar();
+      await user.click(screen.getAllByTitle("Delete collection")[0]);
+
+      await user.click(await screen.findByRole("button", { name: "Cancel" }));
+
+      expect(onDeleteCollection).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("remembering the open folders", () => {
+    it("hides a folder's children once it is collapsed", async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+
+      await waitFor(() => expect(screen.queryByText("Brackets")).toBeNull());
+    });
+
+    it("reopens a folder the user expanded again", async () => {
+      // Re-collapsing the tree on every navigation makes a deep vault unusable.
+      const user = userEvent.setup();
+      renderSidebar();
+      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+
+      await user.click(await screen.findByRole("button", { name: "Expand" }));
+
+      expect(await screen.findByText("Brackets")).toBeInTheDocument();
+    });
+
+    it("carries the open folders into the next visit", async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+
+      await waitFor(() =>
+        expect(window.sessionStorage.getItem("ps-filter-expanded")).not.toContain("parts"),
+      );
+    });
+
+    it("opens the ancestors of the folder the user is in", async () => {
+      // Landing in a nested folder with the tree collapsed leaves the user with
+      // no idea where they are.
+      renderSidebar({ selectedCollection: "parts/brackets" });
+
+      expect(screen.getByText("Brackets")).toBeInTheDocument();
+    });
+
+    it("remembers that the model group was collapsed", async () => {
+      const user = userEvent.setup();
+      renderSidebar({ models: [outlinerModel({ id: 5, collection: null, collection_id: null })] });
+
+      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+
+      await waitFor(() =>
+        expect(window.sessionStorage.getItem("ps-filter-all-expanded")).toBe("false"),
+      );
     });
   });
 });
