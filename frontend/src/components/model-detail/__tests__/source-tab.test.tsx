@@ -304,4 +304,28 @@ describe("SourceTab", () => {
       });
     });
   });
+  it("refuses a cover in a format the vault does not store", async () => {
+    // The picker's `accept` is a hint the OS can be told to ignore; the check
+    // has to happen here or a GIF reaches the server and 415s after the upload.
+    const user = userEvent.setup();
+    render(<SourceTab modelId={1} canEdit api={api} />);
+    const input = await screen.findByLabelText("Upload cover");
+
+    await user.upload(input, new File(["x"], "cover.gif", { type: "image/gif" }));
+
+    expect(putCover).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cover larger than the limit", async () => {
+    // Rejecting after the bytes have gone up wastes the upload and the wait.
+    const user = userEvent.setup();
+    render(<SourceTab modelId={1} canEdit api={api} />);
+    const input = await screen.findByLabelText("Upload cover");
+    const huge = new File([new Uint8Array(1)], "cover.png", { type: "image/png" });
+    Object.defineProperty(huge, "size", { value: 16 * 1024 * 1024 });
+
+    await user.upload(input, huge);
+
+    expect(putCover).not.toHaveBeenCalled();
+  });
 });

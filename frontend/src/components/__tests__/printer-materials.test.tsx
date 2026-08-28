@@ -219,4 +219,69 @@ describe("PrinterMaterials", () => {
       await waitFor(() => expect(screen.queryAllByText(/PETG black/).length).toBeGreaterThan(0));
     });
   });
+  describe("adding a manual feed", () => {
+    it("adds a slot the printer never reported", async () => {
+      // A printer with no AMS reports no slots at all, so without this the
+      // material fields are unreachable on exactly the machines that need them
+      // typed in by hand.
+      const user = userEvent.setup();
+      renderMaterials({ state: materialState({ slots: [] }) });
+      await screen.findByRole("button", { name: /Add manual feed|Add feed|Add/ });
+
+      await user.click(screen.getByRole("button", { name: /Add manual feed|Add feed|Add/ }));
+
+      expect(await screen.findByDisplayValue("Manual feed 1")).toBeInTheDocument();
+    });
+
+    it("numbers a second manual feed distinctly", async () => {
+      // Two slots keyed the same would overwrite each other on save.
+      const user = userEvent.setup();
+      renderMaterials({ state: materialState({ slots: [] }) });
+      const add = await screen.findByRole("button", { name: /Add manual feed|Add feed|Add/ });
+      await user.click(add);
+
+      await user.click(add);
+
+      expect(await screen.findByDisplayValue("Manual feed 2")).toBeInTheDocument();
+    });
+  });
+
+  describe("what a slot is doing", () => {
+    it("records a slot the operator emptied", async () => {
+      // "Empty" and "unknown" are different: one says the operator checked.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderMaterials();
+      await screen.findByDisplayValue("PLA");
+
+      await user.selectOptions(screen.getAllByRole("combobox")[0], "empty");
+      await user.click(screen.getByRole("button", { name: /Save/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PUT").at(-1)?.body ?? "{}")).toMatchObject({
+          slots: [expect.objectContaining({ state: "empty" })],
+        }),
+      );
+    });
+
+    it("falls back to unknown for a state nobody ships", async () => {
+      // The select only renders the states we know, so an unmatched value can
+      // only come from a tampered DOM — and "unknown" is the honest answer.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderMaterials();
+      await screen.findByDisplayValue("PLA");
+      const stateSelect = screen.getAllByRole("combobox")[0];
+      const rogue = document.createElement("option");
+      rogue.value = "melted";
+      stateSelect.append(rogue);
+
+      await user.selectOptions(stateSelect, "melted");
+      await user.click(screen.getByRole("button", { name: /Save/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PUT").at(-1)?.body ?? "{}")).toMatchObject({
+          slots: [expect.objectContaining({ state: "unknown" })],
+        }),
+      );
+    });
+  });
 });
