@@ -276,6 +276,120 @@ describe("FilamentProfilesCard", () => {
     });
   });
 
+  describe("syncing from Spoolman", () => {
+    it("offers no sync when Spoolman is not configured", async () => {
+      // The button would 400; a control that only fails reads as the feature
+      // being broken rather than absent.
+      renderCard();
+
+      await screen.findByText("Filament presets");
+      expect(screen.queryByRole("button", { name: /Sync Spoolman/ })).toBeNull();
+    });
+
+    it("pulls the filaments Spoolman knows about", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderCard({
+        spoolman: true,
+        routes: {
+          "POST /api/v1/spoolman/sync-filaments": json({ created: 2, updated: 1, adopted: 0 }),
+        },
+      });
+      await screen.findByText("Filament presets");
+
+      await user.click(screen.getByRole("button", { name: /Sync Spoolman/ }));
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("sync-filaments"))).toBe(
+          true,
+        ),
+      );
+    });
+
+    it("says what the sync changed", async () => {
+      // "Synced" alone leaves the operator unsure whether anything moved.
+      const user = userEvent.setup();
+      renderCard({
+        spoolman: true,
+        routes: {
+          "POST /api/v1/spoolman/sync-filaments": json({ created: 2, updated: 1, adopted: 0 }),
+        },
+      });
+      await screen.findByText("Filament presets");
+
+      await user.click(screen.getByRole("button", { name: /Sync Spoolman/ }));
+
+      expect(await screen.findByText(/2 added, 1 updated/)).toBeInTheDocument();
+    });
+
+    it("surfaces a Spoolman that could not be reached", async () => {
+      const user = userEvent.setup();
+      renderCard({
+        spoolman: true,
+        routes: {
+          "POST /api/v1/spoolman/sync-filaments": json({ detail: "spoolman_unreachable" }, 502),
+        },
+      });
+      await screen.findByText("Filament presets");
+
+      await user.click(screen.getByRole("button", { name: /Sync Spoolman/ }));
+
+      expect(await screen.findByText("Spoolman unreachable.")).toBeInTheDocument();
+    });
+  });
+
+  describe("removing a preset", () => {
+    it("removes the filament preset the user chose", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderCard({
+        routes: { "DELETE /api/v1/filament-profiles/1": json(null, 204) },
+      });
+      await screen.findByText("Filament presets");
+
+      await user.click(screen.getByRole("button", { name: "Delete filament preset Everyday PLA" }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) => call.url.endsWith("/filament-profiles/1")),
+        ).toBe(true),
+      );
+    });
+
+    it("removes the printer preset the user chose", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderCard({
+        routes: { "DELETE /api/v1/printer-profiles/1": json(null, 204) },
+      });
+      await screen.findByText("Filament presets");
+      await user.click(screen.getByRole("tab", { name: /Printers/ }));
+
+      await user.click(
+        screen.getByRole("button", { name: "Delete printer preset Voron 2.4 — 0.4 mm" }),
+      );
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) => call.url.endsWith("/printer-profiles/1")),
+        ).toBe(true),
+      );
+    });
+
+    it("surfaces a preset the server would not remove", async () => {
+      // A preset in use by a revision cannot go; silently leaving it on screen
+      // reads as the button not working.
+      const user = userEvent.setup();
+      renderCard({
+        routes: {
+          "DELETE /api/v1/filament-profiles/1": json({ detail: "profile_in_use" }, 409),
+        },
+      });
+      await screen.findByText("Filament presets");
+
+      await user.click(screen.getByRole("button", { name: "Delete filament preset Everyday PLA" }));
+
+      expect(await screen.findByText("Profile in use.")).toBeInTheDocument();
+    });
+  });
+
   describe("creating a printer preset", () => {
     it("POSTs the preset the user described", async () => {
       const user = userEvent.setup();

@@ -351,4 +351,59 @@ describe("SendToQueue", () => {
       ),
     );
   });
+  it("uploads to every printer the user picked", async () => {
+    // "Send now" is per-printer, unlike the queue: the fleet does not choose,
+    // so each selected machine gets its own upload.
+    sendToPrinter.mockResolvedValue(queuedJob);
+    renderPanel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Send to printer" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(sendToPrinter).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({ file_id: 42, start_print: false }),
+      ),
+    );
+  });
+
+  it("keeps a direct send safe unless the user overrode the check", async () => {
+    // `allow_mismatch` is how a nozzle-incompatible file gets onto a printer;
+    // it must never be the default a plain send carries.
+    sendToPrinter.mockResolvedValue(queuedJob);
+    renderPanel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Send to printer" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(sendToPrinter).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({ compatibility_policy: "safe" }),
+      ),
+    );
+  });
+
+  it("reports which printer a partly-failed send did not reach", async () => {
+    // "Sent" over a fleet where one machine refused is how somebody walks away
+    // from a print that never started.
+    sendToPrinter.mockRejectedValue(new Error("printer offline"));
+    renderPanel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Send to printer" }).at(-1)!);
+
+    expect(await screen.findByText(/Farm printer: printer offline/)).toBeInTheDocument();
+  });
+
+  it("will not send once the user deselects every printer", async () => {
+    // A direct send names its target; with none there is nothing to send to.
+    renderPanel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Send to printer" }));
+    await userEvent.click(screen.getByLabelText("Select Farm printer"));
+
+    expect(screen.getAllByRole("button", { name: "Send to printer" }).at(-1)).toBeDisabled();
+  });
 });
