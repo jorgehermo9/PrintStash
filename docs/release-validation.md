@@ -73,13 +73,16 @@ pnpm test:e2e
 pnpm test:e2e:real
 ```
 
-## Optional database and storage contracts
+## Database and storage contracts
 
-- Run `tests/postgres` with `PRINTSTASH_TEST_POSTGRES_URL` against PostgreSQL
-  16 through Psycopg 3.
+These are part of `full`, not optional: they run against a real PostgreSQL 16 and
+a real SeaweedFS that the suite starts as containers, so Docker must be running.
+
+- Run `tests/integration/postgres` — PostgreSQL 16 through Psycopg 3.
 - Run the async database contract once without extras (explicit capability
   error) and once with `--extra async-db` for SQLite async.
-- Run `tests/test_storage_s3.py` against the pinned SeaweedFS service.
+- Run `tests/contract/services/test_storage_backend.py` — the pinned SeaweedFS
+  image, started for the run.
 - Run `./scripts/test_minio_migration.sh`; it verifies normal, Unicode, and
   multipart objects twice with downloaded-content comparison.
 
