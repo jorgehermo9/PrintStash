@@ -1136,4 +1136,136 @@ describe("ModelBrowser", () => {
       );
     });
   });
+  describe("acting on a folder from the sidebar", () => {
+    it("deletes the folder the sidebar asked to delete", async () => {
+      // The sidebar owns the gesture; the vault owns the request. A folder that
+      // disappears from the tree without a DELETE is a folder that comes back
+      // on reload.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        collections: [aCollection()],
+        routes: { "DELETE /api/v1/collections/1": json(null, 204) },
+      });
+      await screen.findAllByText("Parts");
+      await user.click(screen.getAllByTitle("Delete collection")[0]);
+
+      await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) => call.url.includes("/collections/1")),
+        ).toBe(true),
+      );
+    });
+
+    it("reports a folder the server would not delete", async () => {
+      const user = userEvent.setup();
+      renderVault({
+        collections: [aCollection()],
+        routes: { "DELETE /api/v1/collections/1": json({ detail: "collection_not_empty" }, 409) },
+      });
+      await screen.findAllByText("Parts");
+      await user.click(screen.getAllByTitle("Delete collection")[0]);
+
+      await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+      expect(
+        await screen.findByText("Cannot delete: collection still has models assigned."),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("creating a folder without the rights for it", () => {
+    it("offers no way to create one inside a folder the user cannot administer", async () => {
+      // Creating inside a folder needs admin on *that* folder, and the server
+      // would 403 — refusing up front is the difference between a reason and a
+      // red banner.
+      renderVault({
+        at: "/?c=parts",
+        auth: memberSession(),
+        collections: [aCollection({ effective_role: "view" })],
+        models: [aModelListItem({ name: "Benchy" })],
+      });
+      await screen.findByText("Benchy");
+
+      expect(screen.getByRole("button", { name: /New collection/ })).toBeDisabled();
+    });
+
+    it("says why it is refused", async () => {
+      renderVault({
+        at: "/?c=parts",
+        auth: memberSession(),
+        collections: [aCollection({ effective_role: "view" })],
+        models: [aModelListItem({ name: "Benchy" })],
+      });
+      await screen.findByText("Benchy");
+
+      expect(screen.getByRole("button", { name: /New collection/ })).toHaveAttribute(
+        "title",
+        "Admin access required for this collection",
+      );
+    });
+  });
+
+  describe("undoing a batch", () => {
+    it("offers to undo a tag change", async () => {
+      // Tagging fifty models is one click and fifty writes; without an undo the
+      // only way back is fifty more.
+      const user = userEvent.setup();
+      renderVault({
+        models: [aModelListItem({ id: 1, name: "Benchy" })],
+        tags: [aTag()],
+        routes: {
+          "POST /api/v1/models/batch/tags": json({
+            succeeded_ids: [1],
+            succeeded_count: 1,
+            failed: [],
+            failed_count: 0,
+          }),
+        },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getAllByRole("checkbox")[0]);
+      await user.click(screen.getByRole("button", { name: "Tag" }));
+      const dialog = await screen.findByRole("dialog");
+      await user.type(within(dialog).getAllByRole("combobox")[0], "functional{Enter}");
+
+      await user.click(within(dialog).getByRole("button", { name: /Apply/ }));
+
+      expect(await screen.findByRole("button", { name: "Undo" })).toBeInTheDocument();
+    });
+
+    it("puts the original tags back when the undo is taken", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        models: [aModelListItem({ id: 1, name: "Benchy", tags: ["draft"] })],
+        tags: [aTag()],
+        routes: {
+          "POST /api/v1/models/batch/tags": json({
+            succeeded_ids: [1],
+            succeeded_count: 1,
+            failed: [],
+            failed_count: 0,
+          }),
+          "PATCH /api/v1/models/1": json({ id: 1, tags: ["draft"] }),
+        },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getAllByRole("checkbox")[0]);
+      await user.click(screen.getByRole("button", { name: "Tag" }));
+      const dialog = await screen.findByRole("dialog");
+      await user.type(within(dialog).getAllByRole("combobox")[0], "functional{Enter}");
+      await user.click(within(dialog).getByRole("button", { name: /Apply/ }));
+
+      await user.click(await screen.findByRole("button", { name: "Undo" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          tags: ["draft"],
+        }),
+      );
+    });
+  });
 });
