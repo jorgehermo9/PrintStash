@@ -131,11 +131,10 @@ NON_MIRRORED_DIRS = {
 # whose name describes a topic rather than the module it defends; the fix is to
 # rename it, or to move it into a folder named for that module when one file would
 # be too long.
-PENDING_UNMIRRORED_MODULES = {
-    # Duplicates the URL half of `imports/contracts.py`'s own tests, which is why
-    # it needs a merge rather than a rename.
-    "packages/printstash-core/tests/imports/test_canonical_urls.py",
-}
+#
+# It is empty, and the two assertions below are what keep it that way: one fails on
+# a new violation, the other on an entry that is no longer one.
+PENDING_UNMIRRORED_MODULES: set[str] = set()
 
 
 def _test_modules() -> list[Path]:
@@ -313,15 +312,22 @@ class TestSuiteHygiene:
         )
 
     def test_the_unmirrored_list_has_no_stale_entries(self) -> None:
-        """A file that acquired its mirror leaves the list in the same commit."""
-        resolved = sorted(
+        """A file that acquired its mirror leaves the list in the same commit.
+
+        A *deleted* entry has to leave too, and needs its own check: the mirror
+        lookup answers `None` for a path that no longer exists, which is the same
+        answer it gives a genuine violation. Without this the list would go on
+        claiming a violation for a file nobody can open.
+        """
+        stale = sorted(
             entry
             for entry in PENDING_UNMIRRORED_MODULES
-            if _mirror_of(TESTS_ROOT.parent / entry) is not None
+            if (path := TESTS_ROOT.parent / entry) is not None
+            and (not path.exists() or _mirror_of(path) is not None)
         )
 
-        assert not resolved, (
-            f"now mirrored: {resolved}. Remove them from "
+        assert not stale, (
+            f"no longer violations: {stale}. Remove them from "
             "PENDING_UNMIRRORED_MODULES so the list keeps meaning something."
         )
 
