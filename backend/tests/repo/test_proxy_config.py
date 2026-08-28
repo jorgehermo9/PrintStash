@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.paths import REPO_ROOT
@@ -77,6 +78,32 @@ class TestComposeFiles:
         assert "NGINX_CLIENT_MAX_BODY_SIZE: ${VAULT_MAX_UPLOAD_MB:-512}m" in compose
         assert "VAULT_MAX_UPLOAD_MB: ${VAULT_MAX_UPLOAD_MB:-512}" in compose
 
+    @pytest.mark.parametrize(
+        "compose_file",
+        [
+            "docker-compose.yml",
+            "docker-compose.light.yml",
+            "docker-compose.prod.yml",
+            "docker-compose.manual-test.yml",
+        ],
+    )
+    def test_every_deployment_wires_the_runtime_file_owner(self, compose_file: str) -> None:
+        """The container writes the vault as a uid the host has to be able to read.
+
+        The image drops to an unprivileged user, so every file it creates in a
+        bind-mounted volume is owned by that uid. A self-hoster whose host user
+        is not 10001 gets a vault they cannot read or back up from the host, and
+        the only fix is a `chown -R` after the fact. `PUID`/`PGID` are how they
+        say who they are, and a compose file that omits them silently takes the
+        default — which is why this checks all four rather than the one a
+        contributor happened to edit.
+        """
+        config = yaml.safe_load((_root() / compose_file).read_text())
+
+        environment = config["services"]["api"]["environment"]
+        assert environment["PUID"] == "${PUID:-10001}"
+        assert environment["PGID"] == "${PGID:-10001}"
+
     def test_default_deployments_do_not_publish_api_port(self) -> None:
         root = _root()
         for name in ("docker-compose.yml", "docker-compose.light.yml"):
@@ -120,12 +147,22 @@ class TestBackendDockerfile:
         assert "/app/.venv/bin/python -m app.db.migrate" in entrypoint
 
     def test_runtime_images_use_unprivileged_users(self) -> None:
+        """Neither runtime container may still be root when it serves traffic.
+
+        A container running as root turns any RCE into host access. The backend
+        starts as root on purpose — it has to `chown` the bind-mounted vault to
+        whatever uid the operator asked for — so what matters is that it hands
+        off: it re-execs itself through `gosu` under the requested identity, and
+        the second pass refuses to continue if it is still not that identity.
+        """
         root = _root()
         backend = (root / "backend" / "Dockerfile").read_text()
         frontend = (root / "frontend" / "Dockerfile").read_text()
+        entrypoint = (root / "backend" / "docker-entrypoint.sh").read_text()
 
-        assert (
-            "gosu printstash" in (root / "backend" / "docker-entrypoint.sh").read_text()
-        )
+        assert 'exec gosu "$requested_identity"' in entrypoint
+        assert 'requested_identity="$PUID:$PGID"' in entrypoint
+        # The re-exec is only a hand-off if the second pass verifies it landed.
+        assert 'if [ "$(id -u)" != "$PUID" ] || [ "$(id -g)" != "$PGID" ]; then' in entrypoint
         assert "useradd" in backend
         assert "nginxinc/nginx-unprivileged:alpine" in frontend

@@ -63,7 +63,14 @@ test.describe("documents", () => {
     await page.getByRole("button", { name: "New document" }).click();
     await expect(page).toHaveURL(/\/documents\/new/);
     await page.locator("input.font-semibold").fill("Assembly guide");
-    await page.getByPlaceholder(/Write markdown/).fill("# Step one\n\nGlue part A to part B.");
+    // The table is the reason this body is not just a heading: GFM tables are an
+    // extension, so a renderer without it shows the pipes as literal text and a
+    // build guide's parts list becomes unreadable.
+    await page
+      .getByPlaceholder(/Write markdown/)
+      .fill(
+        "# Step one\n\nGlue part A to part B.\n\n| Part | Material |\n| --- | --- |\n| A | PLA |\n| B | PETG |",
+      );
     await page.getByRole("button", { name: "Save" }).click();
 
     // Saved → real row; the app keeps you in the editor. Switch to Preview to see
@@ -72,6 +79,11 @@ test.describe("documents", () => {
     await page.getByRole("button", { name: "Preview" }).click();
     await expect(page.getByRole("heading", { name: "Step one" })).toBeVisible();
     await expect(page.getByText("Glue part A to part B.")).toBeVisible();
+    await expect(page.getByRole("table")).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Part" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Material" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "A", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "PLA" })).toBeVisible();
 
     // Edit an existing doc → Save returns to preview automatically.
     await page.getByRole("button", { name: "Edit" }).click();

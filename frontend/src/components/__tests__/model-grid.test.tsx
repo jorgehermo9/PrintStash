@@ -131,6 +131,21 @@ function renderVault(
 }
 
 /**
+ * The toolbar exists twice in the DOM: one bar for phones, one for desktop, with
+ * Tailwind `md:` classes hiding whichever does not apply. jsdom applies no CSS,
+ * so both are in the accessibility tree and a bare `getByRole` is ambiguous. The
+ * desktop bar renders second, and the visible-at-one-width guarantee is checked
+ * for real by `tests/e2e/vault.spec.ts`, where CSS is applied.
+ */
+function sortButton() {
+  return screen.getAllByRole("button", { name: "Sort models" }).at(-1)!;
+}
+
+function uploadButton() {
+  return screen.getAllByRole("button", { name: "Upload" }).at(-1)!;
+}
+
+/**
  * The query string of the last *page* request — the one that fetches the grid.
  * The facets and outliner calls share the `/api/v1/models` prefix and carry a
  * different parameter set, so matching the prefix alone reads the wrong request.
@@ -288,8 +303,10 @@ describe("ModelBrowser", () => {
       renderVault({ models: [aModelListItem({ name: "Benchy" })] });
       await screen.findByText("Benchy");
 
-      await user.click(screen.getByRole("button", { name: "Sort models" }));
-      await user.click(screen.getByRole("menuitem", { name: "Name A–Z" }));
+      const sort = sortButton();
+      await user.click(sort);
+      // Each bar owns its own menu, so scope the choice to the one just opened.
+      await user.click(screen.getAllByRole("menuitem", { name: "Name A–Z" }).at(-1)!);
 
       expect(window.localStorage.getItem("ps-vault-sort")).toBe("name-asc");
     });
@@ -300,7 +317,7 @@ describe("ModelBrowser", () => {
       renderVault({ models: [aModelListItem({ name: "Benchy" })] });
 
       await screen.findByText("Benchy");
-      expect(screen.getByRole("button", { name: "Sort models" })).toHaveTextContent("Newest");
+      expect(sortButton()).toHaveTextContent("Newest");
     });
   });
 
@@ -319,7 +336,7 @@ describe("ModelBrowser", () => {
       renderVault({ auth: memberSession({ user: null }) });
 
       await waitFor(() => {
-        const upload = screen.getByRole("button", { name: "Upload" });
+        const upload = uploadButton();
         expect(upload).toBeDisabled();
         expect(upload).toHaveAttribute("title", expect.stringContaining("Sign in"));
       });
@@ -328,7 +345,8 @@ describe("ModelBrowser", () => {
     it("offers uploading to a signed-in user", async () => {
       renderVault();
 
-      expect(await screen.findByRole("button", { name: /Upload/ })).toBeEnabled();
+      await screen.findByRole("button", { name: "Select" });
+      expect(uploadButton()).toBeEnabled();
     });
   });
 

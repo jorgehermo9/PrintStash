@@ -187,6 +187,70 @@ class TestUnlink:
         # only its DB accounting; critically, the replacement remains untouched.
         assert db_session.get(StagingLease, lease.id) is None
 
+    def test_review_lease_releases_a_path_that_is_already_gone(
+        self, db_session: Session, tmp_path: Path
+    ) -> None:
+        """A file somebody else already removed still has to release its receipt.
+
+        The bytes are what the lease exists to clean up, so once they are gone the
+        lease has nothing left to own. Keeping the row would leave the Inbox item
+        undismissable — a capture the user cannot get rid of, over a file that no
+        longer exists.
+        """
+        user = build_user(db_session, "lease-user")
+        inbox = _inbox(db_session, user)
+        staged = tmp_path / "missing.3mf"
+        staged.write_bytes(b"staged")
+        lease = staging_leases.create_review_lease(
+            db_session,
+            inbox_item_id=inbox.id,
+            owner_user_id=user.id,
+            path=staged,
+            size_bytes=6,
+            sha256="b" * 64,
+        )
+        db_session.commit()
+        staged.unlink()
+
+        released = staging_leases.dismiss_review_lease(db_session, inbox_item_id=inbox.id)
+
+        assert released is True
+        assert db_session.get(StagingLease, lease.id) is None
+
+    def test_review_lease_survives_a_staging_directory_it_cannot_read(
+        self, db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """"Cannot tell" is not "gone", and only one of them may drop the receipt.
+
+        An unreadable staging path — a permission change, an unmounted volume — is
+        the one case where the matcher genuinely does not know whether the file is
+        still ours. Releasing the lease there would abandon bytes nothing will
+        ever clean up, so the receipt is kept and the dismissal reports failure.
+        """
+        user = build_user(db_session, "lease-user")
+        inbox = _inbox(db_session, user)
+        staged = tmp_path / "inaccessible.3mf"
+        staged.write_bytes(b"staged")
+        lease = staging_leases.create_review_lease(
+            db_session,
+            inbox_item_id=inbox.id,
+            owner_user_id=user.id,
+            path=staged,
+            size_bytes=6,
+            sha256="c" * 64,
+        )
+        db_session.commit()
+
+        def deny_lstat(_path: Path) -> object:
+            raise PermissionError("staging unavailable")
+
+        monkeypatch.setattr(Path, "lstat", deny_lstat)
+
+        released = staging_leases.dismiss_review_lease(db_session, inbox_item_id=inbox.id)
+
+        assert released is False
+        assert db_session.get(StagingLease, lease.id) is not None
+
 
 class TestDowngrade:
     def test_fc15_round_trips_without_losing_job_lease_data(

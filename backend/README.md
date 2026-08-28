@@ -121,6 +121,13 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 The compose file mounts named volumes under `/data/` so your files and DB
 survive container rebuilds.
 
+The image runs the API as unprivileged `10001:10001` by default. For bind
+mounted data directories, set `PUID` and `PGID` to the positive numeric host
+UID/GID that should own the files (for example, `PUID=1000 PGID=1000` in `.env`)
+before starting Compose. Startup repairs ownership when either value changes,
+then runs migrations and the operator-supplied command as that identity. Zero,
+negative, non-numeric, and out-of-range values fail before migrations run.
+
 The image entrypoint runs migrations before the API starts. Upgrade by pulling
 and recreating the services; do not override the entrypoint with a manual
 Alembic command:

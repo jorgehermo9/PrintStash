@@ -52,6 +52,7 @@ import {
   History,
   Check,
   ChevronDown,
+  MoreHorizontal,
 } from "lucide-react";
 import {
   createCollection,
@@ -96,6 +97,7 @@ import { timeAgo } from "@/lib/format";
 import { rememberLastCollection, readLastView, rememberLastView } from "@/lib/last-collection";
 import { useAuthenticatedAssetUrl } from "@/lib/use-authenticated-asset-url";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { cn } from "@/lib/utils";
 
 type SortKey = ModelSort;
 type ViewMode = "grid" | "list";
@@ -112,6 +114,188 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "filament-asc", label: "Least filament" },
   { value: "cost-asc", label: "Lowest cost" },
 ];
+
+type MenuTriggerSize = "xs" | "sm";
+type MenuTriggerVariant = "outline" | "ghost";
+
+interface SortMenuProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  sortKey: SortKey;
+  onSelect: (sortKey: SortKey) => void;
+  labelFor: (value: string) => string;
+  triggerSize: MenuTriggerSize;
+  triggerVariant?: MenuTriggerVariant;
+  triggerRole?: "menuitem";
+  triggerClassName?: string;
+  wrapperClassName?: string;
+}
+
+function SortMenu({
+  open,
+  onOpenChange,
+  sortKey,
+  onSelect,
+  labelFor,
+  triggerSize,
+  triggerVariant = "outline",
+  triggerRole,
+  triggerClassName,
+  wrapperClassName,
+}: SortMenuProps) {
+  return (
+    <DropdownMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      align="end"
+      className={wrapperClassName}
+      trigger={
+        <Button
+          type="button"
+          variant={triggerVariant}
+          size={triggerSize}
+          role={triggerRole}
+          data-menu-trigger
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={labelFor("Sort models")}
+          onClick={() => onOpenChange(!open)}
+          className={cn(triggerClassName)}
+        >
+          <ArrowUpDown className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">
+            {labelFor(SORT_OPTIONS.find((option) => option.value === sortKey)?.label ?? "Newest")}
+          </span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      }
+      contentClassName="w-52 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+    >
+      {SORT_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onSelect(option.value);
+            onOpenChange(false);
+          }}
+          className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${sortKey === option.value ? "bg-accent text-accent-foreground" : ""}`}
+        >
+          <span className="flex-1">{labelFor(option.label)}</span>
+          {sortKey === option.value && <Check className="h-3.5 w-3.5" />}
+        </button>
+      ))}
+    </DropdownMenu>
+  );
+}
+
+interface DisplayMenuProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  viewMode: ViewMode;
+  compact: boolean;
+  onSelectMode: (mode: ViewMode) => void;
+  onSelectDensity: (compact: boolean) => void;
+  labelFor: (value: string) => string;
+  triggerSize: MenuTriggerSize;
+  triggerVariant?: MenuTriggerVariant;
+  triggerRole?: "menuitem";
+  triggerClassName?: string;
+  onSelectComplete?: () => void;
+}
+
+function DisplayMenu({
+  open,
+  onOpenChange,
+  viewMode,
+  compact,
+  onSelectMode,
+  onSelectDensity,
+  labelFor,
+  triggerSize,
+  triggerVariant = "outline",
+  triggerRole,
+  triggerClassName,
+  onSelectComplete,
+}: DisplayMenuProps) {
+  return (
+    <DropdownMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      align="end"
+      trigger={
+        <Button
+          type="button"
+          variant={triggerVariant}
+          size={triggerSize}
+          role={triggerRole}
+          data-menu-trigger
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => onOpenChange(!open)}
+          className={cn(triggerClassName)}
+        >
+          <Rows3 className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left">{labelFor("Display")}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      }
+      contentClassName="w-48 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+    >
+      <p className="px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
+        {labelFor("Layout")}
+      </p>
+      {(
+        [
+          ["grid", "Grid", Grid],
+          ["list", "List", List],
+        ] as const
+      ).map(([mode, label, Icon]) => (
+        <button
+          key={mode}
+          type="button"
+          role="menuitem"
+          aria-label={`${labelFor(label)} View`}
+          onClick={() => {
+            onSelectMode(mode);
+            onOpenChange(false);
+            onSelectComplete?.();
+          }}
+          className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${viewMode === mode ? "bg-accent text-accent-foreground" : ""}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          <span className="flex-1">{labelFor(label)}</span>
+          {viewMode === mode && <Check className="h-3.5 w-3.5" />}
+        </button>
+      ))}
+      <p className="mt-1 border-t border-border px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
+        {labelFor("Density")}
+      </p>
+      {(
+        [
+          [false, "Comfortable"],
+          [true, "Compact"],
+        ] as const
+      ).map(([isCompact, label]) => (
+        <button
+          key={label}
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onSelectDensity(isCompact);
+            onOpenChange(false);
+            onSelectComplete?.();
+          }}
+          className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${compact === isCompact ? "bg-accent text-accent-foreground" : ""}`}
+        >
+          <span className="flex-1">{labelFor(label)}</span>
+          {compact === isCompact && <Check className="h-3.5 w-3.5" />}
+        </button>
+      ))}
+    </DropdownMenu>
+  );
+}
 
 // Every model filter that lives in the URL as a repeated query parameter.
 const STRUCTURED_FILTER_KEYS = [
@@ -243,7 +427,7 @@ export interface BrowserInitialData {
 }
 
 export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const ui = useCallback((value: string) => translateUiText(locale, value), [locale]);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -292,6 +476,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   const [sortKey, setSortKey] = useState<SortKey>(readSortKey);
   const [sortOpen, setSortOpen] = useState(false);
   const [displayOpen, setDisplayOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [compact, setCompact] = useState(
     () => readVaultPreference("ps-vault-density") === "compact",
   );
@@ -1110,6 +1295,35 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     }
   }
 
+  function toggleFavorites() {
+    const next = !favoritesOnly;
+    setFavoritesOnly(next);
+    const params = new URLSearchParams(searchParams.toString());
+    if (next) params.set("favorites", "true");
+    else params.delete("favorites");
+    router.replace(params.size ? `/?${params}` : "/", { scroll: false });
+  }
+
+  function toggleSelectMode() {
+    if (selectMode) clearSelection();
+    else setSelectMode(true);
+  }
+
+  function selectSort(value: SortKey) {
+    setSortKey(value);
+    localStorage.setItem("ps-vault-sort", value);
+  }
+
+  function selectViewMode(mode: ViewMode) {
+    setViewMode(mode);
+    localStorage.setItem("ps-vault-view", mode);
+  }
+
+  function selectDensity(isCompact: boolean) {
+    setCompact(isCompact);
+    localStorage.setItem("ps-vault-density", isCompact ? "compact" : "comfortable");
+  }
+
   function clearSearch() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete("q");
@@ -1436,32 +1650,186 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           </nav>
 
           {/* Content Top Bar */}
-          <div className="sticky top-0 z-40 border-b border-border bg-background/95 px-4 py-4 backdrop-blur sm:px-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 flex-col space-y-1">
-                <h1 className="text-xl sm:text-2xl font-bold text-foreground tracking-tight truncate">
-                  {selectedName ?? "All Models"}
-                </h1>
-                <p className="text-sm text-muted-foreground">
-                  {loading
-                    ? "Loading..."
-                    : `${displayCount} model${displayCount !== 1 ? "s" : ""} total${selectedName ? ` in this collection` : ""}`}
-                  {refreshing && (
-                    <span className="ml-2 font-mono text-xs text-muted-foreground">
-                      Updating...
-                    </span>
-                  )}
-                </p>
+          <div className="sticky top-0 z-40 border-b border-border bg-background/95 px-4 py-3 backdrop-blur sm:px-6 sm:py-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <div className="flex min-w-0 items-start justify-between gap-3 sm:block">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <h1 className="break-words text-lg font-bold tracking-tight text-foreground sm:truncate sm:text-2xl">
+                    {selectedName ?? "All Models"}
+                  </h1>
+                  <p className="text-sm text-muted-foreground">
+                    {loading
+                      ? "Loading..."
+                      : `${displayCount} model${displayCount !== 1 ? "s" : ""} total${selectedName ? ` in this collection` : ""}`}
+                    {refreshing && (
+                      <span className="ml-2 font-mono text-xs text-muted-foreground">
+                        Updating...
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <Button
+                  onClick={() => {
+                    setDropPreload(null);
+                    setDropCollection(null);
+                    setUploadOpen(true);
+                  }}
+                  disabled={!canUploadToVault}
+                  title={
+                    canUploadToVault ? "Upload artifacts" : "Sign in and get edit access to upload"
+                  }
+                  className="shrink-0 sm:hidden"
+                >
+                  Upload
+                </Button>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
-                <div className="flex items-center space-x-2">
-                  <button
+
+              <div className="flex w-full min-w-0 flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+                <div className="grid w-full min-w-0 grid-cols-3 gap-2 sm:hidden">
+                  <Button
+                    type="button"
+                    variant="outline"
                     onClick={openDrawer}
-                    className="md:hidden flex items-center px-3 py-2 text-xs font-medium text-foreground bg-background border border-border rounded hover:bg-muted transition-colors"
+                    className="w-full min-w-0 px-2"
                   >
-                    <SlidersHorizontal className="w-4 h-4 mr-1.5 text-muted-foreground" />
+                    <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+                    <span className="min-w-0 truncate">Filters</span>
+                  </Button>
+                  <SortMenu
+                    open={sortOpen}
+                    onOpenChange={setSortOpen}
+                    sortKey={sortKey}
+                    onSelect={selectSort}
+                    labelFor={ui}
+                    triggerSize="sm"
+                    triggerClassName="h-10 w-full min-w-0 px-2 text-xs"
+                    wrapperClassName="min-w-0"
+                  />
+                  <DropdownMenu
+                    open={moreOpen}
+                    onOpenChange={setMoreOpen}
+                    align="end"
+                    className="min-w-0"
+                    trigger={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        data-menu-trigger
+                        aria-haspopup="menu"
+                        aria-expanded={moreOpen}
+                        aria-label={t("nav.more")}
+                        onClick={() => setMoreOpen(!moreOpen)}
+                        className="w-full min-w-0 px-2"
+                      >
+                        <MoreHorizontal className="h-4 w-4 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">{t("nav.more")}</span>
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      </Button>
+                    }
+                    contentClassName="w-64 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                  >
+                    {auth.isAuthenticated && (
+                      <>
+                        <button
+                          type="button"
+                          role="menuitemcheckbox"
+                          aria-checked={favoritesOnly}
+                          onClick={() => {
+                            toggleFavorites();
+                            setMoreOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-sm transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${favoritesOnly ? "bg-accent text-accent-foreground" : ""}`}
+                        >
+                          <Star className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />
+                          <span className="flex-1">Favorites</span>
+                          {favoritesOnly && <Check className="h-3.5 w-3.5" />}
+                        </button>
+                        <SavedViewSelector
+                          views={savedViews}
+                          activeId={activeSavedViewId}
+                          modified={savedViewModified}
+                          onSelect={(view) => {
+                            applySavedView(view);
+                            setMoreOpen(false);
+                          }}
+                          onCreate={() => {
+                            setMoreOpen(false);
+                            setSaveViewOpen(true);
+                          }}
+                          onUpdate={(view) =>
+                            manageSavedView(
+                              () => updateSavedView(view.id, { filters: currentViewFilters() }),
+                              "Saved view updated",
+                            )
+                          }
+                          onRename={(view, name) =>
+                            manageSavedView(
+                              () => updateSavedView(view.id, { name }),
+                              "Saved view renamed",
+                            )
+                          }
+                          onDuplicate={(view) =>
+                            manageSavedView(
+                              () => createSavedView(duplicateViewName(view.name), view.filters),
+                              "Saved view duplicated",
+                            )
+                          }
+                          onDelete={(view) =>
+                            manageSavedView(async () => {
+                              await deleteSavedView(view.id);
+                              if (activeSavedViewId === view.id) setActiveSavedViewId(null);
+                            }, "Saved view deleted")
+                          }
+                          triggerClassName="max-w-none w-full justify-start px-2.5 py-2 text-sm"
+                          triggerRole="menuitem"
+                          triggerSize="sm"
+                          triggerVariant="ghost"
+                        />
+                        <button
+                          type="button"
+                          role="menuitemcheckbox"
+                          aria-checked={selectMode}
+                          title="Select Models and folders (S)"
+                          onClick={() => {
+                            toggleSelectMode();
+                            setMoreOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-sm transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectMode ? "bg-accent text-accent-foreground" : ""}`}
+                        >
+                          <CheckSquare className="h-4 w-4" />
+                          <span className="flex-1">{selectMode ? "Done" : "Select"}</span>
+                          {selectMode && <Check className="h-3.5 w-3.5" />}
+                        </button>
+                      </>
+                    )}
+                    <DisplayMenu
+                      open={displayOpen}
+                      onOpenChange={setDisplayOpen}
+                      viewMode={viewMode}
+                      compact={compact}
+                      onSelectMode={selectViewMode}
+                      onSelectDensity={selectDensity}
+                      labelFor={ui}
+                      triggerSize="sm"
+                      triggerVariant="ghost"
+                      triggerRole="menuitem"
+                      triggerClassName="w-full justify-start"
+                      onSelectComplete={() => setMoreOpen(false)}
+                    />
+                  </DropdownMenu>
+                </div>
+
+                <div className="hidden w-full flex-wrap items-center gap-2 sm:flex sm:w-auto">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={openDrawer}
+                    className="h-10 md:hidden sm:h-8"
+                  >
+                    <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
                     Filters
-                  </button>
+                  </Button>
                   <Button
                     variant="outline"
                     size="xs"
@@ -1490,24 +1858,19 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                         ? "Upload artifacts"
                         : "Sign in and get edit access to upload"
                     }
+                    className="h-10 sm:h-8"
                   >
                     Upload
                   </Button>
                 </div>
                 {auth.isAuthenticated && (
-                  <>
+                  <div className="hidden w-full flex-wrap items-center gap-2 border-t border-border pt-3 sm:flex sm:w-auto sm:border-t-0 sm:pt-0">
                     <Button
                       variant={favoritesOnly ? "secondary" : "outline"}
                       size="xs"
                       aria-pressed={favoritesOnly}
-                      onClick={() => {
-                        const next = !favoritesOnly;
-                        setFavoritesOnly(next);
-                        const params = new URLSearchParams(searchParams.toString());
-                        if (next) params.set("favorites", "true");
-                        else params.delete("favorites");
-                        router.replace(params.size ? `/?${params}` : "/", { scroll: false });
-                      }}
+                      onClick={toggleFavorites}
+                      className="h-10 sm:h-8"
                     >
                       <Star className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />{" "}
                       Favorites
@@ -1542,142 +1905,44 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                           if (activeSavedViewId === view.id) setActiveSavedViewId(null);
                         }, "Saved view deleted")
                       }
+                      triggerClassName="h-10 sm:h-8"
                     />
                     <Button
                       variant={selectMode ? "secondary" : "outline"}
                       size="xs"
                       aria-pressed={selectMode}
                       title="Select Models and folders (S)"
-                      onClick={() => {
-                        if (selectMode) clearSelection();
-                        else setSelectMode(true);
-                      }}
+                      onClick={toggleSelectMode}
+                      className="h-10 sm:h-8"
                     >
                       <CheckSquare className="w-4 h-4" />
                       {selectMode ? "Done" : "Select"}
                     </Button>
-                  </>
+                  </div>
                 )}
-                <div className="h-6 w-px bg-muted mx-1 hidden md:block" />
-                <DropdownMenu
-                  open={sortOpen}
-                  onOpenChange={setSortOpen}
-                  align="end"
-                  trigger={
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      data-menu-trigger
-                      aria-haspopup="menu"
-                      aria-expanded={sortOpen}
-                      aria-label={ui("Sort models")}
-                      onClick={() => setSortOpen(!sortOpen)}
-                    >
-                      <ArrowUpDown className="h-3.5 w-3.5" />
-                      <span>
-                        {ui(
-                          SORT_OPTIONS.find((option) => option.value === sortKey)?.label ??
-                            "Newest",
-                        )}
-                      </span>
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                  }
-                  contentClassName="w-52 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-                >
-                  {SORT_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setSortKey(option.value);
-                        localStorage.setItem("ps-vault-sort", option.value);
-                        setSortOpen(false);
-                      }}
-                      className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${sortKey === option.value ? "bg-accent text-accent-foreground" : ""}`}
-                    >
-                      <span className="flex-1">{option.label}</span>
-                      {sortKey === option.value && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                  ))}
-                </DropdownMenu>
-                <DropdownMenu
-                  open={displayOpen}
-                  onOpenChange={setDisplayOpen}
-                  align="end"
-                  trigger={
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      data-menu-trigger
-                      aria-haspopup="menu"
-                      aria-expanded={displayOpen}
-                      onClick={() => setDisplayOpen(!displayOpen)}
-                    >
-                      <Rows3 className="h-3.5 w-3.5" />
-                      {ui("Display")}
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                  }
-                  contentClassName="w-48 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-                >
-                  <p className="px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
-                    Layout
-                  </p>
-                  {(
-                    [
-                      ["grid", "Grid", Grid],
-                      ["list", "List", List],
-                    ] as const
-                  ).map(([mode, label, Icon]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="menuitem"
-                      aria-label={`${label} View`}
-                      onClick={() => {
-                        setViewMode(mode);
-                        localStorage.setItem("ps-vault-view", mode);
-                        setDisplayOpen(false);
-                      }}
-                      className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${viewMode === mode ? "bg-accent text-accent-foreground" : ""}`}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      <span className="flex-1">{label}</span>
-                      {viewMode === mode && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                  ))}
-                  <p className="mt-1 border-t border-border px-2.5 py-1.5 font-mono text-3xs uppercase tracking-wider text-muted-foreground">
-                    Density
-                  </p>
-                  {(
-                    [
-                      [false, "Comfortable"],
-                      [true, "Compact"],
-                    ] as const
-                  ).map(([isCompact, label]) => (
-                    <button
-                      key={label}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setCompact(isCompact);
-                        localStorage.setItem(
-                          "ps-vault-density",
-                          isCompact ? "compact" : "comfortable",
-                        );
-                        setDisplayOpen(false);
-                      }}
-                      className={`flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${compact === isCompact ? "bg-accent text-accent-foreground" : ""}`}
-                    >
-                      <span className="flex-1">{label}</span>
-                      {compact === isCompact && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                  ))}
-                </DropdownMenu>
+                <div className="hidden h-6 w-px bg-muted mx-1 md:block" />
+                <div className="hidden w-full flex-wrap items-center gap-2 border-t border-border pt-3 sm:flex sm:w-auto sm:border-t-0 sm:pt-0">
+                  <SortMenu
+                    open={sortOpen}
+                    onOpenChange={setSortOpen}
+                    sortKey={sortKey}
+                    onSelect={selectSort}
+                    labelFor={ui}
+                    triggerSize="xs"
+                    triggerClassName="h-10 sm:h-8"
+                  />
+                  <DisplayMenu
+                    open={displayOpen}
+                    onOpenChange={setDisplayOpen}
+                    viewMode={viewMode}
+                    compact={compact}
+                    onSelectMode={selectViewMode}
+                    onSelectDensity={selectDensity}
+                    labelFor={ui}
+                    triggerSize="xs"
+                    triggerClassName="h-10 sm:h-8"
+                  />
+                </div>
               </div>
             </div>
           </div>

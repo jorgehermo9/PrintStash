@@ -49,6 +49,8 @@ RUN chmod 0755 ./docker-entrypoint.sh
 ENV VAULT_DATA_DIR=/data/files \
     VAULT_THUMB_DIR=/data/thumbs \
     VAULT_DB_URL=sqlite:////data/db/printstash.sqlite \
+    PUID=10001 \
+    PGID=10001 \
     PRINTSTASH_IMAGE_VARIANT=${PRINTSTASH_VARIANT}
 
 EXPOSE 8000

@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { Localized } from "@/components/ui/localized";
+import { cn } from "@/lib/utils";
 
 const RECENT_KEY = "ps-recent-saved-views";
 
@@ -52,6 +53,10 @@ export function SavedViewSelector({
   onRename,
   onDuplicate,
   onDelete,
+  triggerClassName,
+  triggerRole,
+  triggerSize = "xs",
+  triggerVariant = "outline",
 }: {
   views: SavedViewRead[];
   activeId: number | null;
@@ -62,6 +67,10 @@ export function SavedViewSelector({
   onRename: (view: SavedViewRead, name: string) => Promise<void>;
   onDuplicate: (view: SavedViewRead) => Promise<void>;
   onDelete: (view: SavedViewRead) => Promise<void>;
+  triggerClassName?: string;
+  triggerRole?: "menuitem";
+  triggerSize?: "xs" | "sm";
+  triggerVariant?: "outline" | "ghost";
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -118,13 +127,14 @@ export function SavedViewSelector({
           trigger={
             <Button
               type="button"
-              variant="outline"
-              size="xs"
+              size={triggerSize}
+              variant={triggerVariant}
               data-menu-trigger
+              role={triggerRole}
               aria-haspopup="dialog"
               aria-expanded={open}
               onClick={() => setMenuOpen(!open)}
-              className="max-w-44"
+              className={cn("max-w-44", triggerClassName)}
             >
               <Bookmark className="h-4 w-4" />
               <span className="truncate">{active?.name ?? "Saved views"}</span>

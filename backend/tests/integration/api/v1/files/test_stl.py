@@ -9,10 +9,15 @@ serves its own in-memory result rather than failing or overwriting.
 
 from __future__ import annotations
 
+import io
+
+import numpy as np
 import pytest
+import trimesh
 from fastapi.testclient import TestClient
 
 from app.services.storage_backend import get_backend
+from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 
 CONVERTED = b"converted-stl-bytes"
 
@@ -200,3 +205,42 @@ class TestFileAsStl:
 
         assert response.status_code == 500, response.text
         assert response.json()["detail"] == "stl_conversion_failed"
+
+    def test_converts_a_real_3mf_whose_parts_are_placed_by_transform(
+        self,
+        client: TestClient,
+        auth_headers,
+        make_model,
+        make_file,
+        remove_blob,
+    ) -> None:
+        """The one conversion case that runs the real converter end to end.
+
+        Every other row here stubs `to_stl_bytes`, which is right for testing the
+        caching and the error shape but proves nothing about the conversion. A 3MF
+        written by 3D Builder — and by most CAD exporters — stores one mesh at the
+        origin and positions it through a nested build/component graph, so a
+        converter that ignores the graph serves an STL of a part at 0,0,0. The
+        viewer then shows something the user did not model, with no error to
+        explain it, which is why this route needs one unstubbed pass.
+        """
+        model = make_model("stl-3d-builder")
+        key = "3d-builder-component.3mf"
+        sha = "c3" * 32
+        get_backend().write_bytes(build_3d_builder_component_project(), key)
+        remove_blob(get_backend().stl_cache_key(sha))
+        row = make_file(model, filename=key, ftype="3mf", path=key, sha256=sha)
+
+        response = client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("application/sla")
+        mesh = trimesh.load_mesh(
+            io.BytesIO(response.content), file_type="stl", process=False
+        )
+        # The build/component matrices, baked in — not a part sitting at the origin.
+        np.testing.assert_allclose(
+            mesh.bounds,
+            np.asarray([[110.0, 220.0, 330.0], [112.0, 223.0, 334.0]]),
+            atol=1e-5,
+        )

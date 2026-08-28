@@ -399,4 +399,119 @@ describe("DropdownMenu", () => {
       expect(onOpenChange).not.toHaveBeenCalled();
     });
   });
+  describe("a checkbox item", () => {
+    it("takes focus when the menu opens", () => {
+      // A menu whose only items are toggles would otherwise open with focus
+      // nowhere, and a keyboard user has nothing to arrow from.
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <button type="button" role="menuitemcheckbox" aria-checked="false">
+            Favorites
+          </button>
+        </DropdownMenu>,
+      );
+
+      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+    });
+
+    it("joins the arrow-key rotation", () => {
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <button type="button" role="menuitem">
+            Rename
+          </button>
+          <button type="button" role="menuitemcheckbox" aria-checked="false">
+            Favorites
+          </button>
+        </DropdownMenu>,
+      );
+
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" });
+
+      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+    });
+  });
+
+  describe("a dialog nested inside the panel", () => {
+    /** A dialog-role panel holding a real dialog, as the saved-views picker does. */
+    function withNestedDialog() {
+      return (
+        <DropdownMenu
+          open={true}
+          onOpenChange={vi.fn<(open: boolean) => void>()}
+          role="dialog"
+          trigger={TRIGGER}
+        >
+          <button type="button" role="menuitem">
+            Saved views
+          </button>
+          <div role="dialog">
+            <input aria-label="Find a saved view" />
+          </div>
+        </DropdownMenu>
+      );
+    }
+
+    it("lets the nested dialog keep its own arrow keys", () => {
+      // The picker types and navigates inside itself. If the panel also handled
+      // the arrows it would move a roving focus behind the dialog, which the
+      // user cannot see and did not ask for.
+      openMenu(withNestedDialog());
+
+      const stopped = !fireEvent.keyDown(screen.getByLabelText("Find a saved view"), {
+        key: "ArrowDown",
+      });
+
+      expect(stopped).toBe(false);
+    });
+
+    it("leaves focus in the nested dialog", () => {
+      openMenu(withNestedDialog());
+      const search = screen.getByLabelText("Find a saved view");
+      search.focus();
+
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+
+      expect(search).toHaveFocus();
+    });
+
+    it("still closes the whole panel on Escape", () => {
+      // Escape is the one key the panel keeps: a nested dialog that swallowed it
+      // would leave the user with two layers and no way out of either.
+      const onOpenChange = vi.fn<(open: boolean) => void>();
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={onOpenChange} role="dialog" trigger={TRIGGER}>
+          <div role="dialog">
+            <input aria-label="Find a saved view" />
+          </div>
+        </DropdownMenu>,
+      );
+
+      fireEvent.keyDown(screen.getByLabelText("Find a saved view"), { key: "Escape" });
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it("ignores arrows aimed at a dialog panel with no dialog in it", () => {
+      // `role="dialog"` on the panel is a hint about its contents, not a promise
+      // that a `[role=dialog]` element exists — a panel of plain form fields is
+      // the common case, and it must not crash reading one.
+      openMenu(
+        <DropdownMenu
+          open={true}
+          onOpenChange={vi.fn<(open: boolean) => void>()}
+          role="dialog"
+          trigger={TRIGGER}
+        >
+          <input aria-label="View name" />
+        </DropdownMenu>,
+      );
+
+      const notCancelled = fireEvent.keyDown(screen.getByLabelText("View name"), {
+        key: "ArrowDown",
+      });
+
+      expect(notCancelled).toBe(true);
+    });
+  });
 });

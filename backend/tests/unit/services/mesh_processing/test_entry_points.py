@@ -33,13 +33,16 @@ quietly taking 700 MB longer.
 
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path
 
 import numpy as np
+import trimesh
 
 from app.core.config import _overlay
 from app.services import mesh_processing
+from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 
 from .._meshes import (
     _fake_mesh,
@@ -570,6 +573,45 @@ class TestToStlBytes:
         p = tmp_path / "raw.stl"
         _write_binary_stl(p, 10)
         assert mesh_processing.to_stl_bytes(p) == p.read_bytes()
+
+    def test_to_stl_bytes_bakes_the_scene_transforms_into_the_geometry(
+        self, tmp_path: Path
+    ) -> None:
+        """A 3MF places its parts with transforms; STL has nowhere to put them.
+
+        3D Builder and most CAD exporters write one mesh and position it through
+        a nested build/component graph, so the vertices in the file are at the
+        origin and the placement lives in the matrices above them. Converting the
+        mesh without flattening that graph produces an STL of a part sitting at
+        0,0,0 — the preview and the download both show something that is not what
+        the user modelled, with no error to explain it.
+        """
+        path = tmp_path / "3d-builder-component.3mf"
+        path.write_bytes(build_3d_builder_component_project())
+
+        converted = mesh_processing.to_stl_bytes(path)
+
+        assert converted is not None and len(converted) > 84
+        mesh = trimesh.load_mesh(io.BytesIO(converted), file_type="stl", process=False)
+        np.testing.assert_allclose(
+            mesh.bounds,
+            np.asarray([[110.0, 220.0, 330.0], [112.0, 223.0, 334.0]]),
+            atol=1e-5,
+        )
+
+    def test_to_stl_bytes_fails_closed_on_a_3mf_it_cannot_open(
+        self, tmp_path: Path
+    ) -> None:
+        """A 3MF is a zip; something that is not one has to answer None.
+
+        The route turns `None` into a 422 the user can read. Letting the zip error
+        escape turns a corrupt upload — or a file renamed to `.3mf` — into a 500
+        on a download link.
+        """
+        path = tmp_path / "malformed.3mf"
+        path.write_bytes(b"not a zip archive")
+
+        assert mesh_processing.to_stl_bytes(path) is None
 
     def test_to_stl_bytes_read_failure_returns_none(
         self, tmp_path: Path, monkeypatch

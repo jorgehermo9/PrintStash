@@ -4,6 +4,10 @@
 
 ### Added
 
+- **GitHub-flavoured Markdown tables.** Collection READMEs and Markdown
+  documents now render pipe-table syntax as semantic tables while retaining
+  the existing sanitisation boundary
+  ([#88](https://github.com/xiao-villamor/PrintStash/issues/88)).
 - **Rich URL capture and Model Source records.** Pending Imports can now accept
   browser-transferred files, show complete/partial outcomes, retry only failed
   or partial captures, and preserve per-Artifact source snapshots, confirmed or
@@ -52,6 +56,13 @@
 
 ### Fixed
 
+- API containers now honour positive numeric `PUID` and `PGID` values for
+  bind-mounted data, repair ownership when that identity changes, and reject
+  invalid or root IDs before migrations start
+  ([#83](https://github.com/xiao-villamor/PrintStash/issues/83)).
+- 3MF previews now preserve component and build transforms used by 3D Builder
+  projects when producing the browser's STL representation
+  ([#84](https://github.com/xiao-villamor/PrintStash/issues/84)).
 - Pending Imports can now be dismissed after a completed capture without
   affecting its imported Model or Artifacts; expired terminal import jobs no
   longer make a subsequent upload fail during pruning, and dismissed items

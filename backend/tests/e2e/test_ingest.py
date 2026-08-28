@@ -17,6 +17,7 @@ from datetime import timedelta
 
 import numpy as np
 import pytest
+import trimesh
 from PIL import Image
 from sqlmodel import select
 
@@ -25,6 +26,7 @@ from app.core.time import utcnow
 from app.db.models import BackgroundJob, InboxItem, InboxItemState, User
 from app.services.jobs import registry
 from app.services.setup_token import current_setup_token
+from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 from tests.paths import FIXTURES_DIR
 
 FIXTURE = FIXTURES_DIR / "real_orca_ender3_benchy.gcode"
@@ -318,3 +320,49 @@ class TestMetadata:
         with Image.open(io.BytesIO(thumbnail.content)) as image:
             pixels = np.asarray(image.convert("RGB"))
         assert np.all(pixels == color)
+
+    @pytest.mark.asyncio
+    async def test_a_3mf_whose_parts_are_placed_by_transform_previews_correctly(
+        self, api, tmp_path, e2e_db
+    ):
+        """The whole 3MF path, from upload to STL, through the real app.
+
+        A 3MF written by 3D Builder stores one mesh at the origin and positions it
+        through a nested build/component graph. Every layer between the upload and
+        the viewer has to carry that placement — ingestion, the conversion, the
+        content-addressed cache, the route — and any one of them dropping it
+        serves a part at 0,0,0 with no error to explain it. Only the e2e tier
+        exercises all four together.
+        """
+        headers = await _setup_and_login(api, tmp_path)
+
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={
+                "file": (
+                    "3d-builder-component.3mf",
+                    build_3d_builder_component_project(),
+                    "model/3mf",
+                )
+            },
+            data={"model_name": "3D Builder Component"},
+            headers=headers,
+        )
+        assert uploaded.status_code == 202, uploaded.text
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+        assert job["state"] == "completed", job
+
+        response = await api.get(
+            f"/api/v1/files/{job['file_id']}/stl", headers=headers
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("application/sla")
+        mesh = trimesh.load_mesh(
+            io.BytesIO(response.content), file_type="stl", process=False
+        )
+        np.testing.assert_allclose(
+            mesh.bounds,
+            np.asarray([[110.0, 220.0, 330.0], [112.0, 223.0, 334.0]]),
+            atol=1e-5,
+        )

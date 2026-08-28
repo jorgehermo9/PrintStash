@@ -56,8 +56,8 @@ class TestLoadMesh:
     def test_load_mesh_returns_none_for_unrecognised_extension(
         self, tmp_path: Path
     ) -> None:
-        # trimesh can't even pick a loader for an unknown extension, so this raises
-        # inside trimesh.load_mesh — exercising _load_mesh's broad except-and-log path.
+        # trimesh cannot even pick a loader for an unknown extension, so this raises
+        # inside trimesh.load_scene — exercising _load_mesh's broad except-and-log path.
         p = tmp_path / "garbage.foobar"
         p.write_bytes(b"this is not a mesh at all \x00\x01\x02")
         assert mesh_processing._load_mesh(p) is None
@@ -65,11 +65,11 @@ class TestLoadMesh:
     def test_load_mesh_flattens_scene_with_multiple_geometries(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        # trimesh.load_mesh(...) already concatenates a multi-geometry
-        # Scene into one Trimesh internally, so _load_mesh's own Scene-flattening
-        # branch is normally unreachable through that call. Stub trimesh.load_mesh to
-        # return a real Scene so this (still-real) fallback path is exercised —
-        # it's a legitimate defensive path for a future/edge-case trimesh return.
+        # `_load_mesh` keeps the scene rather than asking trimesh for a mesh, because
+        # `dump()` is what bakes each graph path's transforms in. A real Scene is
+        # stubbed here so the flattening runs over real trimesh geometry: reading
+        # `scene.geometry` instead would return each source mesh once, untransformed.
+        # Exporting and reloading the scene would flatten it before we saw it.
 
         scene = trimesh.Scene()
         scene.add_geometry(trimesh.creation.box(extents=[5, 5, 5]), node_name="a")
@@ -80,7 +80,7 @@ class TestLoadMesh:
         p = tmp_path / "scene.3mf"
         scene.export(p, file_type="3mf")
 
-        monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: scene)
+        monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: scene)
         mesh = mesh_processing._load_mesh(p)
         assert mesh is not None
         # Concatenated geometry from both boxes.
@@ -93,7 +93,54 @@ class TestLoadMesh:
         empty_scene = trimesh.Scene()  # no geometry at all
         p = tmp_path / "empty.3mf"
         p.write_bytes(b"placeholder")
-        monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: empty_scene)
+        monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: empty_scene)
+        assert mesh_processing._load_mesh(p) is None
+
+    def test_load_mesh_declines_a_scene_it_cannot_flatten(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """`dump()` is where the transforms are applied, and it can throw.
+
+        A malformed component graph — a 3MF referencing a component that is not
+        in the file — raises inside trimesh rather than returning an empty scene.
+        Letting it escape turns a bad upload into a 500 on the preview route, so
+        it becomes the same honest `None` as any other unloadable mesh.
+        """
+
+        class UnflattenableScene(trimesh.Scene):
+            def dump(self, *_args: object, **_kwargs: object):
+                raise ValueError("component graph references a missing object")
+
+        p = tmp_path / "broken-graph.3mf"
+        p.write_bytes(b"placeholder")
+        monkeypatch.setattr(
+            trimesh, "load_scene", lambda *a, **k: UnflattenableScene()
+        )
+
+        assert mesh_processing._load_mesh(p) is None
+
+    def test_load_mesh_declines_a_scene_whose_parts_will_not_concatenate(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Two meshes that flatten fine can still refuse to join.
+
+        Mismatched vertex attributes across instances make `concatenate` raise,
+        and the geometry is by then already loaded — so this branch is the last
+        one before the caller, and the only thing standing between a mixed-format
+        3MF and a 500.
+        """
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.creation.box(extents=[5, 5, 5]), node_name="a")
+        scene.add_geometry(trimesh.creation.box(extents=[3, 3, 3]), node_name="b")
+        p = tmp_path / "unjoinable.3mf"
+        p.write_bytes(b"placeholder")
+        monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: scene)
+
+        def refuse(*_args: object, **_kwargs: object):
+            raise ValueError("vertex attributes differ between instances")
+
+        monkeypatch.setattr(trimesh.util, "concatenate", refuse)
+
         assert mesh_processing._load_mesh(p) is None
 
     def test_load_mesh_scene_with_single_geometry_returns_it_directly(
@@ -105,7 +152,7 @@ class TestLoadMesh:
         scene.add_geometry(box, node_name="a")
         p = tmp_path / "single.3mf"
         p.write_bytes(b"placeholder")
-        monkeypatch.setattr(trimesh, "load_mesh", lambda *a, **k: scene)
+        monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: scene)
         mesh = mesh_processing._load_mesh(p)
         assert mesh is not None
         assert len(mesh.faces) == 12
@@ -116,11 +163,11 @@ class TestLoadMesh:
 
         p = tmp_path / "cloud.stl"
         p.write_bytes(b"placeholder")
-        # A defensive loader may return a PointCloud (or other non-mesh geometry) for
-        # some inputs; _load_mesh must decline rather than mishandle it.
+        # A loader may return a PointCloud (or other non-mesh geometry) for some
+        # inputs; _load_mesh must decline rather than mishandle it.
         monkeypatch.setattr(
             trimesh,
-            "load_mesh",
+            "load_scene",
             lambda *a, **k: trimesh.points.PointCloud([[0, 0, 0]]),
         )
         assert mesh_processing._load_mesh(p) is None
@@ -136,7 +183,7 @@ class TestLoadMesh:
             calls.append((args, kwargs))
             return expected
 
-        monkeypatch.setattr(trimesh, "load_mesh", typed_loader)
+        monkeypatch.setattr(trimesh, "load_scene", typed_loader)
         path = tmp_path / "typed.stl"
         path.write_bytes(b"placeholder")
 
