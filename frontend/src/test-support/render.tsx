@@ -63,9 +63,12 @@ export function memberSession(override?: Partial<AuthState>): AuthState {
  * `json(models)` stays `ModelListItem[]`, not a widened dictionary.
  */
 export function json<T>(payload: T, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
+  // 204/205/304 are defined as bodiless, and the `Response` constructor throws
+  // rather than ignoring one — so `json(null, 204)` has to mean "no content".
+  const bodiless = status === 204 || status === 205 || status === 304;
+  return new Response(bodiless ? null : JSON.stringify(payload), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: bodiless ? undefined : { "content-type": "application/json" },
   });
 }
 
