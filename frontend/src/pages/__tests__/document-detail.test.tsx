@@ -18,7 +18,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,6 +52,11 @@ function renderDocument(options: RenderAppOptions & { document?: DocumentRead } 
     },
     ...rest,
   });
+}
+
+/** A pasted screenshot, which is how most images reach a document. */
+function anImage() {
+  return new File(["png-bytes"], "diagram.png", { type: "image/png" });
 }
 
 beforeEach(() => {
@@ -211,6 +216,95 @@ describe("DocumentDetailPage", () => {
       });
 
       await waitFor(() => expect(screen.queryByText("Assembly notes")).toBeNull());
+    });
+  });
+  describe("embedding images", () => {
+    it("uploads an image pasted into the editor", async () => {
+      // The alternative is asking somebody to host a photo of their own printer
+      // somewhere else and paste a link.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDocument({
+        routes: {
+          "POST /api/v1/documents/3/images": json({ url: "/api/v1/documents/3/images/1" }),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.paste(screen.getByPlaceholderText(/Write markdown/), {
+        clipboardData: { files: [anImage()], types: ["Files"] },
+      });
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("/images"))).toBe(true),
+      );
+    });
+
+    it("writes the uploaded image into the markdown", async () => {
+      const user = userEvent.setup();
+      renderDocument({
+        routes: {
+          "POST /api/v1/documents/3/images": json({ url: "/api/v1/documents/3/images/1" }),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.paste(screen.getByPlaceholderText(/Write markdown/), {
+        clipboardData: { files: [anImage()], types: ["Files"] },
+      });
+
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText(/Write markdown/)).toHaveDisplayValue(
+          /documents\/3\/images\/1/,
+        ),
+      );
+    });
+
+    it("uploads an image dropped on the editor", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDocument({
+        routes: {
+          "POST /api/v1/documents/3/images": json({ url: "/api/v1/documents/3/images/1" }),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.drop(screen.getByPlaceholderText(/Write markdown/), {
+        dataTransfer: { files: [anImage()], types: ["Files"] },
+      });
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("/images"))).toBe(true),
+      );
+    });
+
+    it("refuses to attach an image to a document that has no row yet", async () => {
+      // The upload endpoint is keyed by document id, and an unsaved draft has
+      // none — so the image would be posted at nothing.
+      renderDocument({ at: "/documents/new" });
+      await screen.findByPlaceholderText(/Write markdown/);
+
+      fireEvent.paste(screen.getByPlaceholderText(/Write markdown/), {
+        clipboardData: { files: [anImage()], types: ["Files"] },
+      });
+
+      expect(
+        await screen.findByText("Save the document before adding images."),
+      ).toBeInTheDocument();
+    });
+
+    it("ignores a pasted file that is not an image", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderDocument();
+      await user.click(await screen.findByRole("button", { name: /Edit/ }));
+
+      fireEvent.paste(screen.getByPlaceholderText(/Write markdown/), {
+        clipboardData: {
+          files: [new File(["x"], "notes.txt", { type: "text/plain" })],
+          types: ["Files"],
+        },
+      });
+
+      await waitFor(() => expect(requestsWithMethod("POST")).toHaveLength(0));
     });
   });
 });

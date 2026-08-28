@@ -23,7 +23,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -357,5 +357,81 @@ describe("PrinterCard", () => {
     expect(patched.url).toBe("/api/v1/printers/1");
     const payload: PrinterUpdate = JSON.parse(patched.body);
     expect(payload).toEqual({ model_name: "Homebrew CoreXY" });
+  });
+});
+
+describe("PrintersPage", () => {
+  describe("removing a printer", () => {
+    it("asks before removing", async () => {
+      // Removing a printer takes its access grants and its job history with it.
+      renderPrintersPage({ printers: [makePrinter()] });
+
+      await userEvent.click(screen.getByRole("button", { name: /Remove/ }));
+
+      expect(requestsWithMethod("DELETE")).toHaveLength(0);
+    });
+
+    it("names the printer it is about to remove", async () => {
+      renderPrintersPage({ printers: [makePrinter()] });
+
+      await userEvent.click(screen.getByRole("button", { name: /Remove/ }));
+
+      expect(
+        await screen.findByText('"Voron 2.4" will be removed from PrintStash.'),
+      ).toBeInTheDocument();
+    });
+
+    it("removes it once confirmed", async () => {
+      renderPrintersPage({ printers: [makePrinter()] });
+      await userEvent.click(screen.getByRole("button", { name: /Remove/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+
+      await waitFor(() => expect(requestsWithMethod("DELETE")).toHaveLength(1));
+      expect(requestsWithMethod("DELETE")[0]!.url).toBe("/api/v1/printers/1");
+    });
+
+    it("offers no removal to somebody who may not administer it", async () => {
+      // The control says "Restricted" rather than disappearing, so a viewer can
+      // see the action exists and is not theirs.
+      renderPrintersPage({
+        printers: [
+          makePrinter({
+            access: {
+              role: "print",
+              can_view: true,
+              can_print: true,
+              can_control: false,
+              can_admin: false,
+            },
+          }),
+        ],
+      });
+
+      expect(screen.getByRole("button", { name: /Restricted/ })).toBeDisabled();
+    });
+  });
+
+  describe("the fleet tabs", () => {
+    it("offers the queue to somebody who may print", async () => {
+      renderPrintersPage({ printers: [makePrinter()] });
+
+      expect(screen.getByRole("tab", { name: "Queue" })).toBeInTheDocument();
+    });
+
+    it("offers maintenance to somebody who may administer a printer", async () => {
+      renderPrintersPage({ printers: [makePrinter()] });
+
+      expect(screen.getByRole("tab", { name: "Maintenance" })).toBeInTheDocument();
+    });
+
+    it("opens the queue when it is chosen", async () => {
+      renderPrintersPage({ printers: [makePrinter()] });
+
+      await userEvent.click(screen.getByRole("tab", { name: "Queue" }));
+
+      expect(screen.getByRole("tab", { name: "Queue" })).toHaveAttribute("aria-selected", "true");
+    });
   });
 });
