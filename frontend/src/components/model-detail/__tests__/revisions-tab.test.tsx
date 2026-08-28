@@ -47,6 +47,28 @@ function aRevision(over: Partial<FileRead> = {}): FileRead {
   };
 }
 
+/** The model the batch re-reads once its labels have landed. */
+function aModel(over: Partial<ModelRead> = {}): ModelRead {
+  return {
+    id: 1,
+    name: "Benchy",
+    slug: "benchy",
+    hash: "a".repeat(64),
+    collection: null,
+    collection_id: null,
+    description: null,
+    source_url: null,
+    effective_role: "admin",
+    tags: [],
+    thumbnail_url: null,
+    created_at: FROZEN_NOW,
+    updated_at: FROZEN_NOW,
+    files: [],
+    starred: false,
+    ...over,
+  };
+}
+
 function renderRevisions(options: RenderAppOptions & { revisions?: FileRead[] } = {}) {
   const {
     revisions = [aRevision(), aRevision({ id: 21, gcode_revision_number: 2, version: 2 })],
@@ -207,6 +229,130 @@ describe("RevisionsTab", () => {
       await waitFor(() =>
         expect(screen.queryAllByRole("button", { name: "Edit revision" })).toHaveLength(0),
       );
+    });
+  });
+  describe("applying one label to several revisions", () => {
+    /** Enter selection mode and tick the first revision. */
+    async function selectFirst(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(await screen.findByRole("button", { name: "Edit labels" }));
+      await user.click(await screen.findByRole("checkbox", { name: "Select revision 1" }));
+    }
+
+    it("cannot apply a label with nothing selected", async () => {
+      // A batch over an empty selection is a request that changes nothing and
+      // reports success.
+      const user = userEvent.setup();
+      renderRevisions();
+
+      await user.click(await screen.findByRole("button", { name: "Edit labels" }));
+
+      expect(screen.getByRole("button", { name: /Apply label/ })).toBeDisabled();
+    });
+
+    it("counts what is selected", async () => {
+      const user = userEvent.setup();
+      renderRevisions();
+
+      await selectFirst(user);
+
+      expect(screen.getByText("1 selected")).toBeInTheDocument();
+    });
+
+    it("labels the revisions the user ticked", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderRevisions({
+        routes: {
+          "PATCH /api/v1/models/batch/revision-labels": json({ updated: 1 }),
+          "GET /api/v1/models/1": json(aModel()),
+        },
+      });
+      await selectFirst(user);
+      await user.type(screen.getByPlaceholderText("Label (blank clears)"), "PETG tested");
+
+      await user.click(screen.getByRole("button", { name: /Apply label/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          file_ids: [20],
+          revision_label: "PETG tested",
+        }),
+      );
+    });
+
+    it("clears the label when the field is left blank", async () => {
+      // Blank has to mean "remove", or there is no way back from a label
+      // applied by mistake across a dozen revisions.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderRevisions({
+        routes: {
+          "PATCH /api/v1/models/batch/revision-labels": json({ updated: 1 }),
+          "GET /api/v1/models/1": json(aModel()),
+        },
+      });
+      await selectFirst(user);
+
+      await user.click(screen.getByRole("button", { name: /Apply label/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          revision_label: "",
+        }),
+      );
+    });
+
+    it("re-reads the model so the new labels are on screen", async () => {
+      const user = userEvent.setup();
+      const { onModel } = renderRevisions({
+        routes: {
+          "PATCH /api/v1/models/batch/revision-labels": json({ updated: 1 }),
+          "GET /api/v1/models/1": json(aModel()),
+        },
+      });
+      await selectFirst(user);
+
+      await user.click(screen.getByRole("button", { name: /Apply label/ }));
+
+      await waitFor(() => expect(onModel).toHaveBeenCalled());
+    });
+
+    it("leaves selection mode once the batch lands", async () => {
+      const user = userEvent.setup();
+      renderRevisions({
+        routes: {
+          "PATCH /api/v1/models/batch/revision-labels": json({ updated: 1 }),
+          "GET /api/v1/models/1": json(aModel()),
+        },
+      });
+      await selectFirst(user);
+
+      await user.click(screen.getByRole("button", { name: /Apply label/ }));
+
+      expect(await screen.findByRole("button", { name: "Edit labels" })).toBeInTheDocument();
+    });
+
+    it("stays in selection mode when the batch is refused", async () => {
+      // Dropping the selection on failure means ticking a dozen rows again.
+      const user = userEvent.setup();
+      renderRevisions({
+        routes: {
+          "PATCH /api/v1/models/batch/revision-labels": json({ detail: "forbidden" }, 403),
+        },
+      });
+      await selectFirst(user);
+
+      await user.click(screen.getByRole("button", { name: /Apply label/ }));
+
+      expect(await screen.findByRole("button", { name: "Cancel selection" })).toBeInTheDocument();
+    });
+
+    it("unticks a revision the user changed their mind about", async () => {
+      const user = userEvent.setup();
+      renderRevisions();
+      await selectFirst(user);
+
+      await user.click(screen.getByRole("checkbox", { name: "Select revision 1" }));
+
+      expect(screen.getByText("0 selected")).toBeInTheDocument();
     });
   });
 });

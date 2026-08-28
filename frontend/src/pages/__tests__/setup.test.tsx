@@ -15,7 +15,7 @@
  * thread.
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -178,5 +178,49 @@ describe("SetupPage", () => {
     expect(screen.getByLabelText("Backup bucket")).not.toBeVisible();
     await user.click(screen.getByText("Off-site backup"));
     expect(screen.getByLabelText("Backup bucket")).toBeVisible();
+  });
+  it("refuses S3 storage with no bucket named", async () => {
+    // The wizard is the only chance to get this right: a vault that boots
+    // pointed at no bucket cannot write its first artifact, and the operator
+    // has no UI yet to fix it from.
+    const user = await reachStorage();
+    await user.click(screen.getByRole("button", { name: /S3 \/ R2/ }));
+
+    await user.click(screen.getByRole("button", { name: /Complete setup/ }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("S3/R2 storage needs a bucket name.");
+  });
+
+  it("refuses local storage with a directory left blank", async () => {
+    const user = await reachStorage();
+    await user.clear(screen.getByLabelText("Data directory"));
+
+    await user.click(screen.getByRole("button", { name: /Complete setup/ }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Local storage needs both data and thumbnail directories.",
+    );
+  });
+
+  it("refuses a negative backup retention", async () => {
+    // Negative days would be read as a window, and the first scheduled purge
+    // would take everything.
+    const user = await reachStorage();
+    fireEvent.change(screen.getByLabelText("Retention days"), { target: { value: "-5" } });
+
+    await user.click(screen.getByRole("button", { name: /Complete setup/ }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Backup retention must be 0 or more days.");
+  });
+
+  it("accepts a retention of zero, which means keep nothing", async () => {
+    const user = await reachStorage();
+    const days = screen.getByLabelText("Retention days");
+    await user.clear(days);
+    await user.type(days, "0");
+
+    await user.click(screen.getByRole("button", { name: /Complete setup/ }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

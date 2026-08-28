@@ -67,6 +67,17 @@ const reviewItem: InboxItem = {
   completion: null,
 };
 
+/**
+ * A capture in the given state. The parameter is a plain string rather than the
+ * union: this file has to cover a state a newer backend sends that this build's
+ * union does not list, which is the case the fallback exists for.
+ */
+function itemInState(state: string): InboxItem {
+  // SAFETY: `state` is the only field being varied, and every consumer of it in
+  // the page either matches a known value or renders the string as it arrived.
+  return { ...reviewItem, state } as InboxItem;
+}
+
 function renderPage(collections: CollectionRead[] = []) {
   return render(
     <I18nProvider>
@@ -288,5 +299,76 @@ describe("InboxDetailPage", () => {
       "focus-visible:ring-offset-2",
       "ring-offset-background",
     );
+  });
+  describe("what the capture is doing", () => {
+    it.each([
+      ["captured", "Captured"],
+      ["resolving", "Resolving"],
+      ["importing", "Importing"],
+      ["failed", "Failed"],
+      ["completed", "Completed"],
+    ])("names the %s state in words", async (state, label) => {
+      // A capture moves through five states on its own; a raw enum tells the
+      // user nothing about whether to wait or to act.
+      vi.mocked(api.getPendingImport).mockResolvedValue(itemInState(state));
+
+      renderPage();
+
+      expect(await screen.findByText(label)).toBeInTheDocument();
+    });
+
+    it("shows an unfamiliar state as it arrived", async () => {
+      // A newer backend can report a state this build has no wording for, and a
+      // blank badge is worse than an unfamiliar word.
+      vi.mocked(api.getPendingImport).mockResolvedValue(itemInState("quarantined"));
+
+      renderPage();
+
+      expect(await screen.findByText("quarantined")).toBeInTheDocument();
+    });
+  });
+
+  describe("where the capture came from", () => {
+    it.each([
+      ["cults3d.com", "Cults3D"],
+      ["makerworld.com", "MakerWorld"],
+      ["myminifactory.com", "MyMiniFactory"],
+      ["printables.com", "Printables"],
+      ["thingiverse.com", "Thingiverse"],
+    ])("names %s properly", async (hostname, label) => {
+      // These are brand names, and rendering "Myminifactory" reads as a bug in
+      // the one place the user is checking they captured the right thing.
+      vi.mocked(api.getPendingImport).mockResolvedValue({
+        ...reviewItem,
+        source_hostname: hostname,
+      });
+
+      renderPage();
+
+      expect(await screen.findByText(label)).toBeInTheDocument();
+    });
+
+    it("capitalises a host it has no brand name for", async () => {
+      vi.mocked(api.getPendingImport).mockResolvedValue({
+        ...reviewItem,
+        source_hostname: "models.example.com",
+      });
+
+      renderPage();
+
+      expect(await screen.findByText("Example")).toBeInTheDocument();
+    });
+
+    it("says the web when there is no host at all", async () => {
+      vi.mocked(api.getPendingImport).mockResolvedValue({
+        ...reviewItem,
+        source_url: null,
+        source_hostname: null,
+      });
+
+      renderPage();
+
+      expect(await screen.findByText("Web")).toBeInTheDocument();
+    });
   });
 });
