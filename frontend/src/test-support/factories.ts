@@ -36,11 +36,15 @@
  */
 
 import type {
+  CollectionRead,
   ModelListItem,
   PrinterAccess,
   PrinterCapabilities,
   PrinterRead,
   PrintJobRead,
+  StorageUsageRead,
+  TagRead,
+  VaultStatsRead,
 } from "@/types";
 
 /** A fixed instant. Every builder's timestamps derive from this one. */
@@ -157,6 +161,58 @@ export function aPrintJob(override?: Partial<PrintJobRead>): PrintJobRead {
     finished_at: null,
     created_at: FROZEN_NOW,
     updated_at: FROZEN_NOW,
+    ...override,
+  };
+}
+
+/** A folder in the library, at the root, that the caller may administer. */
+export function aCollection(override?: Partial<CollectionRead>): CollectionRead {
+  return {
+    id: 1,
+    name: "Parts",
+    slug: "parts",
+    path: "parts",
+    parent_id: null,
+    model_count: 2,
+    effective_role: "admin",
+    ...override,
+  };
+}
+
+export function aTag(override?: Partial<TagRead>): TagRead {
+  return { id: 1, name: "functional", slug: "functional", model_count: 3, ...override };
+}
+
+export function storageUsage(override?: Partial<StorageUsageRead>): StorageUsageRead {
+  return {
+    backend: "local",
+    prefix: null,
+    bucket: null,
+    object_count: 40,
+    total_size_bytes: 1024,
+    ok: true,
+    error: null,
+    ...override,
+  };
+}
+
+/**
+ * The library-wide totals the vault header and the settings overview render.
+ *
+ * `storage` is composed rather than deep-merged, like every other nested block
+ * here: `vaultStats({ storage: storageUsage({ ok: false }) })`.
+ */
+export function vaultStats(override?: Partial<VaultStatsRead>): VaultStatsRead {
+  return {
+    model_count: 12,
+    file_count: 40,
+    source_file_count: 20,
+    gcode_file_count: 20,
+    collection_count: 3,
+    tag_count: 5,
+    printer_count: 1,
+    indexed_size_bytes: 1024,
+    storage: storageUsage(),
     ...override,
   };
 }
