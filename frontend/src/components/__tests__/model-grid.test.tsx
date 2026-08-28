@@ -24,9 +24,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelBrowser } from "@/components/model-grid";
+import { MODEL_DND_MIME } from "@/lib/model-dnd";
 import { queryKeys } from "@/lib/query-client";
 import type { CollectionRead, ModelListItem, SavedViewRead, TagRead } from "@/types";
-import { aModelListItem } from "@/test-support/factories";
+import { aModelListItem, aPrinter } from "@/test-support/factories";
 import {
   adminSession,
   json,
@@ -1266,6 +1267,128 @@ describe("ModelBrowser", () => {
           tags: ["draft"],
         }),
       );
+    });
+  });
+  describe("the active-filter chips", () => {
+    it("names the printer being filtered on", async () => {
+      // The filter is invisible otherwise: the grid just looks short, and the
+      // user reports missing models.
+      renderVault({
+        at: "/?printer_id=4",
+        seed: [[queryKeys.printers, [aPrinter({ id: 4, name: "Voron" })]]],
+        routes: { "GET /api/v1/printers": json([aPrinter({ id: 4, name: "Voron" })]) },
+      });
+
+      expect(await screen.findByText("Printer: Voron")).toBeInTheDocument();
+    });
+
+    it("falls back to the id for a printer that is gone", async () => {
+      // A deleted printer leaves its id in bookmarks; a blank chip hides an
+      // active filter entirely.
+      renderVault({ at: "/?printer_id=99" });
+
+      expect(await screen.findByText("Printer: 99")).toBeInTheDocument();
+    });
+
+    it("drops the printer filter when its chip is removed", async () => {
+      const user = userEvent.setup();
+      const { requests } = renderVault({
+        at: "/?printer_id=4",
+        seed: [[queryKeys.printers, [aPrinter({ id: 4, name: "Voron" })]]],
+        routes: { "GET /api/v1/printers": json([aPrinter({ id: 4, name: "Voron" })]) },
+      });
+      await screen.findByText("Printer: Voron");
+
+      await user.click(screen.getByTitle("Remove Printer: Voron"));
+
+      await waitFor(() => expect(lastModelsQuery(requests).get("printer_id")).toBeNull());
+    });
+
+    it("names a vault-only filter in words", async () => {
+      // "printer_presence=none" means nothing to the person reading the chip.
+      renderVault({ at: "/?printer_presence=none" });
+
+      expect(await screen.findByText("Vault only")).toBeInTheDocument();
+    });
+
+    it("names an on-a-printer filter in words", async () => {
+      renderVault({ at: "/?printer_presence=any" });
+
+      expect(await screen.findByText("On a printer")).toBeInTheDocument();
+    });
+
+    it("names a structured filter readably", async () => {
+      // The raw key is `revision_status=needs_test`; the chip has to read as
+      // English or the user cannot tell which filter to drop.
+      renderVault({ at: "/?revision_status=needs_test" });
+
+      expect(await screen.findByText("revision status: needs test")).toBeInTheDocument();
+    });
+
+    it("names an upload-date filter", async () => {
+      renderVault({ at: "/?uploaded_after=2026-01-01" });
+
+      expect(await screen.findByText("Uploaded after: 2026-01-01")).toBeInTheDocument();
+    });
+
+    it("names the search term", async () => {
+      renderVault({ at: "/?q=bracket" });
+
+      expect(await screen.findByText("Search: bracket")).toBeInTheDocument();
+    });
+  });
+
+  describe("dragging a model onto a folder", () => {
+    /**
+     * The folder card in the grid. The drop handlers sit on the card, and the
+     * folder name also appears in the sidebar tree, so the grid one is found by
+     * walking up from the name inside the card.
+     */
+    async function folderCard() {
+      await screen.findAllByText("Parts");
+      // SAFETY: the grid renders one card per collection and the fixture has
+      // exactly one; the sidebar tree uses list rows, not this attribute.
+      return document.querySelector('[data-collection-path="parts"]') as HTMLElement;
+    }
+
+    /** A model drag carries a MIME nobody else sets, so file drags pass through. */
+    function modelDrag(id: number) {
+      return {
+        types: [MODEL_DND_MIME],
+        getData: () => String(id),
+        dropEffect: "",
+      };
+    }
+
+    it("moves the model into the folder it was dropped on", async () => {
+      const { requestsWithMethod } = renderVault({
+        collections: [aCollection()],
+        models: [aModelListItem({ id: 1, name: "Benchy" })],
+        routes: { "PATCH /api/v1/models/1": json({ id: 1, collection: "parts" }) },
+      });
+      const folder = await folderCard();
+
+      fireEvent.drop(folder, { dataTransfer: modelDrag(1) });
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          collection: "parts",
+        }),
+      );
+    });
+
+    it("ignores a file drag over a folder", async () => {
+      // An OS file drag carries no model id; treating it as one would move a
+      // random model every time somebody dragged a file across the tree.
+      const { requestsWithMethod } = renderVault({
+        collections: [aCollection()],
+        models: [aModelListItem({ id: 1, name: "Benchy" })],
+      });
+      const folder = await folderCard();
+
+      fireEvent.drop(folder, { dataTransfer: { types: ["Files"], files: [] } });
+
+      expect(requestsWithMethod("PATCH")).toHaveLength(0);
     });
   });
 });
