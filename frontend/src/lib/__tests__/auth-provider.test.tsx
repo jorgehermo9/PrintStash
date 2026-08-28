@@ -60,7 +60,7 @@ function Probe() {
       <button type="button" onClick={() => void login("maker", "hunter2").catch(() => {})}>
         sign in
       </button>
-      <button type="button" onClick={() => void logout()}>
+      <button type="button" onClick={() => void logout().catch(() => {})}>
         sign out
       </button>
       <button type="button" onClick={() => void refresh().catch(() => {})}>
