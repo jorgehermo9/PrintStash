@@ -25,9 +25,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelBrowser } from "@/components/model-grid";
 import { queryKeys } from "@/lib/query-client";
-import type { CollectionRead, ModelListItem, TagRead } from "@/types";
+import type { CollectionRead, ModelListItem, SavedViewRead, TagRead } from "@/types";
 import { aModelListItem } from "@/test-support/factories";
-import { json, memberSession, renderApp, type RenderAppOptions } from "@/test-support/render";
+import {
+  adminSession,
+  json,
+  memberSession,
+  renderApp,
+  type RenderAppOptions,
+} from "@/test-support/render";
 
 function aCollection(override: Partial<CollectionRead> = {}): CollectionRead {
   return {
@@ -44,6 +50,43 @@ function aCollection(override: Partial<CollectionRead> = {}): CollectionRead {
 
 function aTag(override: Partial<TagRead> = {}): TagRead {
   return { id: 1, name: "functional", slug: "functional", model_count: 3, ...override };
+}
+
+/** The filter set a view stores: every key present, nothing selected. */
+const EMPTY_VIEW_FILTERS: SavedViewRead["filters"] = {
+  collection: null,
+  direct: true,
+  tag: [],
+  q: null,
+  printer_id: null,
+  printer_presence: null,
+  favorites: false,
+  file_type: [],
+  material_type: [],
+  slicer_name: [],
+  printer_model: [],
+  revision_status: [],
+  print_outcome: [],
+  storage: [],
+  printed: null,
+  uploaded_after: null,
+  uploaded_before: null,
+};
+
+function aSavedView(override: Partial<SavedViewRead> = {}): SavedViewRead {
+  return {
+    id: 1,
+    name: "PETG only",
+    filters: EMPTY_VIEW_FILTERS,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...override,
+  };
+}
+
+/** No account, so no saved views and no write affordances. */
+function signedOutSession() {
+  return adminSession({ user: null });
 }
 
 const EMPTY_FACETS = {
@@ -532,6 +575,113 @@ describe("ModelBrowser", () => {
     });
   });
 
+  describe("acting on several folders at once", () => {
+    /** Turn on select mode and tick the folder card. */
+    async function selectFolder(user: ReturnType<typeof userEvent.setup>, name = "Parts") {
+      await screen.findAllByText(name);
+      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByLabelText(`Select folder ${name}`));
+    }
+
+    it("renames the folders the user picked", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        collections: [aCollection()],
+        routes: { "PATCH /api/v1/collections/1": json(aCollection({ name: "Spares" })) },
+      });
+      await selectFolder(user);
+      await user.click(await screen.findByRole("button", { name: /Rename/ }));
+      const dialog = await screen.findByRole("dialog");
+      await user.clear(within(dialog).getByRole("textbox"));
+      await user.type(within(dialog).getByRole("textbox"), "Spares");
+
+      await user.click(within(dialog).getByRole("button", { name: /Rename/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          name: "Spares",
+        }),
+      );
+    });
+
+    it("offers no tagging when a folder is in the selection", async () => {
+      // Tags belong to models; a folder has none, so the action would apply to
+      // part of the selection and silently skip the rest.
+      const user = userEvent.setup();
+      renderVault({
+        collections: [aCollection()],
+        models: [aModelListItem({ id: 1, name: "Benchy" })],
+      });
+      await selectFolder(user);
+
+      expect(screen.queryByRole("button", { name: /^Tag$/ })).toBeNull();
+    });
+
+    it("deletes a folder with everything inside it", async () => {
+      // A folder is deleted with its contents; deleting only the row would leave
+      // orphaned models with no way back to them.
+      const user = userEvent.setup();
+      const { requests } = renderVault({
+        collections: [aCollection()],
+        routes: { "DELETE /api/v1/collections/1": json(null, 204) },
+      });
+      await selectFolder(user);
+      await user.click(await screen.findByRole("button", { name: /^Delete$/ }));
+
+      await user.click(
+        within(await screen.findByRole("dialog")).getByRole("button", {
+          name: /Delete/,
+        }),
+      );
+
+      await waitFor(() =>
+        expect(
+          requests().some(
+            (call) => call.method === "DELETE" && call.url.includes("recursive=true"),
+          ),
+        ).toBe(true),
+      );
+    });
+
+    it("moves a folder under the destination the user chose", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        collections: [aCollection(), aCollection({ id: 2, name: "Spares", path: "spares" })],
+        routes: { "PATCH /api/v1/collections/1": json(aCollection({ parent_id: 2 })) },
+      });
+      await selectFolder(user);
+      await user.click(await screen.findByRole("button", { name: /Move/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      await user.click(within(dialog).getByRole("button", { name: /spares/ }));
+      await user.click(within(dialog).getByRole("button", { name: /^Move/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          parent_id: 2,
+        }),
+      );
+    });
+
+    it("reports the folders it could not act on", async () => {
+      // A batch that half-succeeded and says "Renamed 1" hides the other one.
+      const user = userEvent.setup();
+      renderVault({
+        collections: [aCollection()],
+        routes: { "PATCH /api/v1/collections/1": json({ detail: "conflict" }, 409) },
+      });
+      await selectFolder(user);
+      await user.click(await screen.findByRole("button", { name: /Rename/ }));
+      const dialog = await screen.findByRole("dialog");
+      await user.clear(within(dialog).getByRole("textbox"));
+      await user.type(within(dialog).getByRole("textbox"), "Spares");
+
+      await user.click(within(dialog).getByRole("button", { name: /Rename/ }));
+
+      expect(await screen.findByText("1 skipped")).toBeInTheDocument();
+    });
+  });
+
   describe("batch outcomes", () => {
     async function selectOneModel(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Benchy");
@@ -712,6 +862,213 @@ describe("ModelBrowser", () => {
           true,
         ),
       );
+    });
+
+    it("saves the filters that are actually on screen", async () => {
+      // A view that stores something other than what the user was looking at is
+      // worse than no view: it silently reproduces the wrong search later.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        at: "/?tag=functional&favorites=true",
+        models: [aModelListItem({ name: "Benchy" })],
+        tags: [aTag()],
+        routes: { "POST /api/v1/saved-views": json(aSavedView()) },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+      await user.click(await screen.findByRole("button", { name: /Save current view/ }));
+      const dialog = await screen.findByRole("dialog");
+      await user.type(within(dialog).getByRole("textbox"), "PETG");
+
+      await user.click(within(dialog).getByRole("button", { name: "Save view" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          name: "PETG",
+          filters: { tag: ["functional"], favorites: true },
+        }),
+      );
+    });
+
+    it("will not save a view with no name", async () => {
+      const user = userEvent.setup();
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      await screen.findByText("Benchy");
+
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+      await user.click(await screen.findByRole("button", { name: /Save current view/ }));
+
+      expect(
+        within(await screen.findByRole("dialog")).getByRole("button", { name: "Save view" }),
+      ).toBeDisabled();
+    });
+
+    it("lists the views already saved", async () => {
+      const user = userEvent.setup();
+      renderVault({
+        models: [aModelListItem({ name: "Benchy" })],
+        routes: { "GET /api/v1/saved-views": json([aSavedView({ name: "Ready to print" })]) },
+      });
+      await screen.findByText("Benchy");
+
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+
+      expect(await screen.findByRole("button", { name: /Rename Ready to print/ })).toBeVisible();
+    });
+
+    it("says so when no view has been saved", async () => {
+      const user = userEvent.setup();
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      await screen.findByText("Benchy");
+
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+
+      expect(await screen.findByText("No saved views yet")).toBeInTheDocument();
+    });
+
+    it("puts the view's filters into the URL when it is chosen", async () => {
+      // The URL is the filter state, so a view that only updates React would be
+      // lost on reload and unshareable.
+      const user = userEvent.setup();
+      const { requests } = renderVault({
+        models: [aModelListItem({ name: "Benchy" })],
+        tags: [aTag()],
+        routes: {
+          "GET /api/v1/saved-views": json([
+            aSavedView({ filters: { ...EMPTY_VIEW_FILTERS, tag: ["functional"] } }),
+          ]),
+        },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+
+      await user.click(await screen.findByRole("button", { name: "PETG only" }));
+
+      await waitFor(() => expect(lastModelsQuery(requests).getAll("tag")).toEqual(["functional"]));
+    });
+
+    it("updates a view to the filters now on screen", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        at: "/?favorites=true",
+        models: [aModelListItem({ name: "Benchy" })],
+        routes: {
+          "GET /api/v1/saved-views": json([aSavedView()]),
+          "PATCH /api/v1/saved-views/1": json(aSavedView()),
+        },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+
+      await user.click(await screen.findByRole("button", { name: "Update PETG only" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          filters: { favorites: true },
+        }),
+      );
+    });
+
+    it("renames a view", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        models: [aModelListItem({ name: "Benchy" })],
+        routes: {
+          "GET /api/v1/saved-views": json([aSavedView()]),
+          "PATCH /api/v1/saved-views/1": json(aSavedView({ name: "PLA only" })),
+        },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+      await user.click(await screen.findByRole("button", { name: "Rename PETG only" }));
+      const dialog = await screen.findByRole("dialog");
+      await user.clear(within(dialog).getByRole("textbox"));
+      await user.type(within(dialog).getByRole("textbox"), "PLA only");
+
+      await user.click(within(dialog).getByRole("button", { name: /Save|Rename/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          name: "PLA only",
+        }),
+      );
+    });
+
+    it("duplicates a view under a name nobody is using", async () => {
+      // Two views with the same name are indistinguishable in the picker, which
+      // is the only place they are ever chosen from.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        models: [aModelListItem({ name: "Benchy" })],
+        routes: {
+          "GET /api/v1/saved-views": json([
+            aSavedView(),
+            aSavedView({ id: 2, name: "PETG only copy" }),
+          ]),
+          "POST /api/v1/saved-views": json(aSavedView({ id: 3 })),
+        },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+
+      await user.click(await screen.findByRole("button", { name: "Duplicate PETG only" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          name: "PETG only copy 2",
+        }),
+      );
+    });
+
+    it("asks before deleting a view", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        models: [aModelListItem({ name: "Benchy" })],
+        routes: { "GET /api/v1/saved-views": json([aSavedView()]) },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+
+      await user.click(await screen.findByRole("button", { name: "Delete PETG only" }));
+
+      expect(requestsWithMethod("DELETE").some((call) => call.url.includes("saved-views"))).toBe(
+        false,
+      );
+    });
+
+    it("deletes the view once confirmed", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        models: [aModelListItem({ name: "Benchy" })],
+        routes: {
+          "GET /api/v1/saved-views": json([aSavedView()]),
+          "DELETE /api/v1/saved-views/1": json(null, 204),
+        },
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+      await user.click(await screen.findByRole("button", { name: "Delete PETG only" }));
+
+      await user.click(await screen.findByRole("button", { name: /^Delete$/ }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) => call.url.endsWith("/saved-views/1")),
+        ).toBe(true),
+      );
+    });
+
+    it("offers no saved views to a signed-out visitor", async () => {
+      // Views belong to an account, so a session without one simply has none —
+      // rather than showing somebody else's.
+      renderVault({
+        auth: signedOutSession(),
+        models: [aModelListItem({ name: "Benchy" })],
+        routes: { "GET /api/v1/saved-views": json([aSavedView()]) },
+      });
+
+      await screen.findByText("Benchy");
+      expect(screen.queryByRole("button", { name: /Saved views/ })).toBeNull();
     });
   });
 
