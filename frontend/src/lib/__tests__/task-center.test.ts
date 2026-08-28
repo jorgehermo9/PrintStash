@@ -467,9 +467,13 @@ describe("waitForImportJob", () => {
     // the life of the tab.
     listIngestJobs.mockResolvedValue([aJob({ state: "running" })]);
     const pending = tc.waitForImportJob("job-1", "Import", 5_000);
+    // The rejection fires *inside* the timer advance, so the handler has to be
+    // attached before it: awaiting afterwards makes node report an unhandled
+    // rejection, which vitest counts as an error even though the test passes.
+    const rejects = expect(pending).rejects.toThrow(/Timed out/);
     await vi.advanceTimersByTimeAsync(6_000);
 
-    await expect(pending).rejects.toThrow(/Timed out/);
+    await rejects;
   });
 
   it("keeps polling after a failed sync", async () => {
