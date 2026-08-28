@@ -1474,4 +1474,86 @@ describe("ModelBrowser", () => {
       await waitFor(() => expect(lastModelsQuery(requests).get("favorites")).toBeNull());
     });
   });
+  describe("undoing a move", () => {
+    async function selectAndMove(user: ReturnType<typeof userEvent.setup>) {
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByLabelText("Select Benchy"));
+      await user.click(await screen.findByRole("button", { name: /Move/ }));
+      const dialog = await screen.findByRole("dialog");
+      await user.click(within(dialog).getByRole("button", { name: /spares/ }));
+      await user.click(within(dialog).getByRole("button", { name: /^Move/ }));
+    }
+
+    it("offers to undo the move", async () => {
+      // Moving fifty models is one click and one request; without an undo the
+      // only way back is remembering where every one of them came from.
+      const user = userEvent.setup();
+      renderVault({
+        collections: [aCollection({ id: 2, name: "Spares", path: "spares" })],
+        models: [aModelListItem({ id: 1, name: "Benchy", collection: "parts" })],
+        routes: {
+          "POST /api/v1/models/batch/move": json({
+            succeeded_ids: [1],
+            succeeded_count: 1,
+            failed: [],
+            failed_count: 0,
+          }),
+        },
+      });
+
+      await selectAndMove(user);
+
+      expect(await screen.findByRole("button", { name: "Undo" })).toBeInTheDocument();
+    });
+
+    it("puts each model back where it came from", async () => {
+      // The models in one move can come from different folders, so the undo has
+      // to group them by origin rather than send them all to one place.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderVault({
+        collections: [aCollection({ id: 2, name: "Spares", path: "spares" })],
+        models: [aModelListItem({ id: 1, name: "Benchy", collection: "parts" })],
+        routes: {
+          "POST /api/v1/models/batch/move": json({
+            succeeded_ids: [1],
+            succeeded_count: 1,
+            failed: [],
+            failed_count: 0,
+          }),
+        },
+      });
+      await selectAndMove(user);
+
+      await user.click(await screen.findByRole("button", { name: "Undo" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          collection: "parts",
+        }),
+      );
+    });
+
+    it("reports the models the move skipped", async () => {
+      // A move that half-succeeded and says "Moved 1" leaves the user believing
+      // models are somewhere they are not.
+      const user = userEvent.setup();
+      renderVault({
+        collections: [aCollection({ id: 2, name: "Spares", path: "spares" })],
+        models: [aModelListItem({ id: 1, name: "Benchy", collection: "parts" })],
+        routes: {
+          "POST /api/v1/models/batch/move": json({
+            succeeded_ids: [],
+            succeeded_count: 0,
+            failed: [{ model_id: 1, reason: "forbidden" }],
+            failed_count: 1,
+          }),
+        },
+      });
+
+      await selectAndMove(user);
+
+      expect(await screen.findByText("1 skipped")).toBeInTheDocument();
+    });
+  });
 });
