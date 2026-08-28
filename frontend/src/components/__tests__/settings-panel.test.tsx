@@ -41,6 +41,8 @@ const VAULT_CONFIG = {
   storage_backend: "local",
   data_dir: "/data/files",
   trash_retention_days: 30,
+  model_thumbnail_width: 640,
+  currency: "USD",
 };
 
 const VAULT_STATS = vaultStats();
@@ -934,6 +936,227 @@ describe("SettingsPanel", () => {
 
       await screen.findByRole("navigation", { name: "Settings sections" });
       await waitFor(() => expect(screen.queryAllByText(/Voron/).length).toBeGreaterThan(0));
+    });
+  });
+  describe("exporting the library", () => {
+    it("downloads the metadata as JSON", async () => {
+      const user = userEvent.setup();
+      const { requests } = renderSettings({
+        routes: { "GET /api/v1/models/export": json([]) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /JSON/ }));
+
+      await waitFor(() =>
+        expect(requests().some((call) => call.url.includes("export?format=json"))).toBe(true),
+      );
+    });
+
+    it("downloads the same metadata as CSV", async () => {
+      // Two formats for two audiences: a spreadsheet and a script. Offering one
+      // and calling it both is how somebody ends up parsing JSON in Excel.
+      const user = userEvent.setup();
+      const { requests } = renderSettings({
+        routes: { "GET /api/v1/models/export": json([]) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /CSV/ }));
+
+      await waitFor(() =>
+        expect(requests().some((call) => call.url.includes("export?format=csv"))).toBe(true),
+      );
+    });
+
+    it("exports a full archive for moving to another installation", async () => {
+      const user = userEvent.setup();
+      const { requests } = renderSettings({
+        routes: { "GET /api/v1/models/library-archive": json([]) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Export full library/ }));
+
+      await waitFor(() =>
+        expect(requests().some((call) => call.url.includes("library-archive"))).toBe(true),
+      );
+    });
+
+    it("surfaces an export the server refused", async () => {
+      const user = userEvent.setup();
+      renderSettings({
+        routes: { "GET /api/v1/models/export": json({ detail: "export_too_large" }, 413) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /JSON/ }));
+
+      expect(await screen.findByText("Export too large.")).toBeInTheDocument();
+    });
+  });
+
+  describe("display preferences", () => {
+    it("saves the display currency", async () => {
+      // Every cost in the app is rendered in it, so a wrong one misprices the
+      // whole library at once.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=design",
+        routes: { "PUT /api/v1/config": json({ ...VAULT_CONFIG, currency: "EUR" }) },
+      });
+
+      await user.selectOptions(await screen.findByLabelText("Display currency"), "EUR");
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PUT").at(-1)?.body ?? "{}")).toMatchObject({
+          currency: "EUR",
+        }),
+      );
+    });
+
+    it("puts the currency back when the server refuses", async () => {
+      // A select showing EUR over a vault still storing USD relabels every
+      // price on screen with a currency nobody saved.
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=design",
+        routes: { "PUT /api/v1/config": json({ detail: "forbidden" }, 403) },
+      });
+      const select = await screen.findByLabelText("Display currency");
+
+      await user.selectOptions(select, "EUR");
+
+      await waitFor(() => expect(select).toHaveValue("USD"));
+    });
+  });
+
+  describe("preview quality", () => {
+    it("saves the model image width", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=previews",
+        routes: { "PUT /api/v1/config": json({ ...VAULT_CONFIG, model_thumbnail_width: 1280 }) },
+      });
+
+      await user.selectOptions(await screen.findByLabelText("Model image quality"), "1280");
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PUT").at(-1)?.body ?? "{}")).toMatchObject({
+          model_thumbnail_width: 1280,
+        }),
+      );
+    });
+
+    it("puts the width back when the server refuses", async () => {
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=previews",
+        routes: { "PUT /api/v1/config": json({ detail: "forbidden" }, 403) },
+      });
+      const select = await screen.findByLabelText("Model image quality");
+
+      await user.selectOptions(select, "1280");
+
+      await waitFor(() => expect(select).toHaveValue("640"));
+    });
+
+    it("queues a rebuild of the images already generated", async () => {
+      // A quality change only affects new images; without this the setting
+      // looks like it did nothing to a library that is already full.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=previews",
+        routes: {
+          "POST /api/v1/files/thumbnails/rebuild": json({
+            job_id: "job-9",
+            state: "pending",
+            message: "queued",
+          }),
+        },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Recreate all images/ }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("POST").some((call) => call.url.includes("thumbnails/rebuild")),
+        ).toBe(true),
+      );
+    });
+
+    it("remembers the viewer quality in this browser", async () => {
+      // It is a per-device GPU trade-off, not a vault setting: syncing it would
+      // give a phone the resolution somebody chose on a workstation.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({ at: "/settings?section=previews" });
+
+      await user.selectOptions(await screen.findByLabelText("Preview quality"), "detail");
+
+      expect(requestsWithMethod("PUT")).toHaveLength(0);
+    });
+  });
+
+  describe("restoring a backup", () => {
+    const BACKUP_META = {
+      backup_id: "2026-01-01T000000Z",
+      created_at: "2026-01-01T00:00:00Z",
+      location: "local",
+      app_version: "0.12.1",
+      file_count: 42,
+      size_bytes: 1024,
+      storage_backend: "local",
+    };
+
+    it("restores the backup once confirmed", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=storage",
+        routes: {
+          "GET /api/v1/backups": json([BACKUP_META]),
+          "POST /api/v1/backups/2026-01-01T000000Z/restore": json({ restored_files: 42 }),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Restore/ }));
+
+      await user.click(
+        within(await screen.findByRole("dialog")).getByRole("button", { name: "Restore" }),
+      );
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("/restore"))).toBe(true),
+      );
+    });
+
+    it("says what a restore is about to replace", async () => {
+      // It overwrites the database and every stored file; the sentence is the
+      // only warning between a click and that.
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=storage",
+        routes: { "GET /api/v1/backups": json([BACKUP_META]) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Restore/ }));
+
+      expect(
+        await screen.findByText(
+          "This replaces the current database and stored files with the selected backup.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("downloads a backup off the server", async () => {
+      const user = userEvent.setup();
+      const { requests } = renderSettings({
+        at: "/settings?section=storage",
+        routes: {
+          "GET /api/v1/backups": json([BACKUP_META]),
+          "GET /api/v1/backups/2026-01-01T000000Z/download": json([]),
+        },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Download/ }));
+
+      await waitFor(() =>
+        expect(requests().some((call) => call.url.includes("/download"))).toBe(true),
+      );
     });
   });
 });
