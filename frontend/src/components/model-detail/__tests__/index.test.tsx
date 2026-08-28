@@ -457,4 +457,124 @@ describe("ModelDetail", () => {
       expect(screen.getByRole("menuitem", { name: /Share/ })).toBeDisabled();
     });
   });
+  describe("resizing the details panel", () => {
+    /** The drag handle, which keyboard users reach instead of dragging. */
+    async function handle() {
+      return screen.findByRole("separator", { name: "Resize details panel" });
+    }
+
+    it("widens the panel with the left arrow", async () => {
+      // The panel holds the settings table, unreadably narrow on a laptop at
+      // the default width — and dragging is not available to keyboard users.
+      const user = userEvent.setup();
+      renderDetail();
+      const bar = await handle();
+      const before = Number(bar.getAttribute("aria-valuenow"));
+
+      bar.focus();
+      await user.keyboard("{ArrowLeft}");
+
+      expect(Number(bar.getAttribute("aria-valuenow"))).toBeGreaterThan(before);
+    });
+
+    it("narrows it with the right arrow", async () => {
+      const user = userEvent.setup();
+      renderDetail();
+      const bar = await handle();
+      const before = Number(bar.getAttribute("aria-valuenow"));
+
+      bar.focus();
+      await user.keyboard("{ArrowRight}");
+
+      expect(Number(bar.getAttribute("aria-valuenow"))).toBeLessThan(before);
+    });
+
+    it("goes to the narrowest width with Home", async () => {
+      const user = userEvent.setup();
+      renderDetail();
+      const bar = await handle();
+
+      bar.focus();
+      await user.keyboard("{Home}");
+
+      expect(bar.getAttribute("aria-valuenow")).toBe(bar.getAttribute("aria-valuemin"));
+    });
+
+    it("goes as wide as the window allows with End", async () => {
+      // The stated maximum is a preference, not a promise: the panel is still
+      // clamped to the viewport, or it would push the model out of view.
+      const user = userEvent.setup();
+      renderDetail();
+      const bar = await handle();
+      const before = Number(bar.getAttribute("aria-valuenow"));
+
+      bar.focus();
+      await user.keyboard("{End}");
+
+      expect(Number(bar.getAttribute("aria-valuenow"))).toBeGreaterThan(before);
+    });
+
+    it("returns to the default width on a double-click", async () => {
+      // Dragging to an unusable width is easy; dragging back from one is not.
+      const user = userEvent.setup();
+      renderDetail();
+      const bar = await handle();
+      bar.focus();
+      await user.keyboard("{Home}");
+      const narrowest = bar.getAttribute("aria-valuenow");
+
+      await user.dblClick(bar);
+
+      expect(bar.getAttribute("aria-valuenow")).not.toBe(narrowest);
+    });
+
+    it("leaves a key that means something else alone", async () => {
+      // Swallowing every keystroke would trap a keyboard user on the handle.
+      const user = userEvent.setup();
+      renderDetail();
+      const bar = await handle();
+      const before = bar.getAttribute("aria-valuenow");
+
+      bar.focus();
+      await user.keyboard("{Tab}");
+
+      expect(bar.getAttribute("aria-valuenow")).toBe(before);
+    });
+  });
+
+  describe("adding a revision", () => {
+    it("opens the upload dialog from the revisions tab", async () => {
+      const user = userEvent.setup();
+      renderDetail({
+        model: aModel({
+          files: [aFile({ id: 12, file_type: "gcode", original_filename: "part.gcode" })],
+        }),
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("tab", { name: /Revisions/ }));
+
+      await user.click(await screen.findByRole("button", { name: /Add/ }));
+
+      expect(await screen.findByText("Add G-code revision")).toBeInTheDocument();
+    });
+
+    it("opens no upload dialog for somebody who may only read", async () => {
+      // The revision would 403 on save; refusing at the dialog is the difference
+      // between "you cannot" and a form that throws away what was typed.
+      const user = userEvent.setup();
+      renderDetail({
+        model: aModel({
+          effective_role: "view",
+          files: [aFile({ id: 12, file_type: "gcode", original_filename: "part.gcode" })],
+        }),
+        auth: memberSession(),
+      });
+      await screen.findByText("Benchy");
+      await user.click(screen.getByRole("tab", { name: /Revisions/ }));
+
+      await user.click(await screen.findByRole("button", { name: /Add/ }));
+
+      expect(screen.queryByText("Add G-code revision")).toBeNull();
+    });
+  });
 });
