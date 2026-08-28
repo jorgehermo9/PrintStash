@@ -401,3 +401,86 @@ describe("createImportJobSynchronizer", () => {
     stop();
   });
 });
+
+describe("waitForImportJob", () => {
+  /** One job, trimmed to the fields the task centre reads. */
+  function aJob(over: Partial<IngestJobStatus> = {}): IngestJobStatus {
+    return {
+      job_id: "job-1",
+      state: "completed",
+      model_id: 1,
+      file_id: 1,
+      error: null,
+      started_at: null,
+      finished_at: null,
+      ...over,
+    };
+  }
+
+  it("resolves as soon as the job is already terminal", async () => {
+    // Every modal workflow awaits this rather than starting a second polling
+    // loop of its own; making them wait a full poll interval for an answer the
+    // module already has would stall each one by a second.
+    listIngestJobs.mockResolvedValue([aJob()]);
+
+    const job = await tc.waitForImportJob("job-1");
+
+    expect(job.state).toBe("completed");
+  });
+
+  it("resolves with the failure rather than throwing", async () => {
+    // The caller decides what a failure means; throwing here would make every
+    // caller wrap the wait in a try just to read the reason.
+    listIngestJobs.mockResolvedValue([aJob({ state: "failed", error: "unsupported_file_type" })]);
+
+    const job = await tc.waitForImportJob("job-1");
+
+    expect(job.error).toBe("unsupported_file_type");
+  });
+
+  it("waits for a job that is still running", async () => {
+    listIngestJobs.mockResolvedValue([aJob({ state: "running" })]);
+    const pending = tc.waitForImportJob("job-1");
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(settled).toBe(false);
+  });
+
+  it("resolves once a running job finishes", async () => {
+    listIngestJobs.mockResolvedValue([aJob({ state: "running" })]);
+    const pending = tc.waitForImportJob("job-1");
+    await vi.advanceTimersByTimeAsync(50);
+
+    listIngestJobs.mockResolvedValue([aJob({ state: "completed" })]);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(pending).resolves.toMatchObject({ state: "completed" });
+  });
+
+  it("gives up rather than waiting forever", async () => {
+    // A job the server forgot about would otherwise hold a modal's spinner for
+    // the life of the tab.
+    listIngestJobs.mockResolvedValue([aJob({ state: "running" })]);
+    const pending = tc.waitForImportJob("job-1", "Import", 5_000);
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    await expect(pending).rejects.toThrow(/Timed out/);
+  });
+
+  it("keeps polling after a failed sync", async () => {
+    // Losing the network must not end the wait: the job is still running on the
+    // server, and the answer arrives when the connection comes back.
+    listIngestJobs.mockRejectedValueOnce(new Error("offline"));
+    listIngestJobs.mockResolvedValue([aJob({ state: "completed" })]);
+
+    const pending = tc.waitForImportJob("job-1");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    await expect(pending).resolves.toMatchObject({ state: "completed" });
+  });
+});
