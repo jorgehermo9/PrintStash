@@ -1159,4 +1159,109 @@ describe("SettingsPanel", () => {
       );
     });
   });
+  describe("the metrics on a model card", () => {
+    it("puts the metric the user chose into its slot", async () => {
+      // The card shows three of eight, so the choice is the whole feature; it
+      // lives in this browser and shows nowhere else.
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=design" });
+      await screen.findByText("Model card metrics");
+
+      await user.click(screen.getAllByRole("button", { name: "MaterialMAT", pressed: false })[0]);
+
+      expect(window.localStorage.getItem("printstash.card.metrics")).toContain("material");
+    });
+
+    it("cannot put one metric in two slots", async () => {
+      // Two identical columns on a card waste a third of the space it has, so a
+      // metric already in use elsewhere is offered as taken rather than as free.
+      renderSettings({ at: "/settings?section=design" });
+
+      await screen.findByText("Model card metrics");
+      expect(screen.getAllByRole("button", { name: /^Layer heightSlot \d/ })[0]).toBeDisabled();
+    });
+
+    it("tells the grid about the change without a reload", async () => {
+      // The grid reads the choice from storage on a storage event; without the
+      // event the cards keep the old columns until the tab is reloaded.
+      const user = userEvent.setup();
+      const events: string[] = [];
+      window.addEventListener("storage", (event) => events.push(String(event.key)));
+      renderSettings({ at: "/settings?section=design" });
+      await screen.findByText("Model card metrics");
+
+      await user.click(screen.getAllByRole("button", { name: "MaterialMAT", pressed: false })[0]);
+
+      expect(events).toContain("printstash.card.metrics");
+    });
+
+    it("puts the metrics back to the defaults", async () => {
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=design" });
+      await screen.findByText("Model card metrics");
+      await user.click(screen.getAllByRole("button", { name: "MaterialMAT", pressed: false })[0]);
+
+      // Two cards on this section carry a Reset; the metrics card is the first.
+      await user.click(screen.getAllByRole("button", { name: "Reset" })[0]);
+
+      expect(await screen.findByText("Card metrics reset.")).toBeInTheDocument();
+    });
+  });
+
+  describe("which metadata a model page shows", () => {
+    it("hides a field the user turned off", async () => {
+      // Slicer metadata runs to twenty fields; showing all of them buries the
+      // three anybody actually reads.
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=design" });
+      await screen.findByText("Model metadata");
+
+      await user.click(screen.getByRole("button", { name: "Infill", pressed: true }));
+
+      expect(window.localStorage.getItem("printstash.metadata.visible")).toContain("infill");
+    });
+
+    it("counts how many are showing", async () => {
+      renderSettings({ at: "/settings?section=design" });
+
+      expect(await screen.findByText(/of \d+ shown/)).toBeInTheDocument();
+    });
+
+    it("turns every field on at once", async () => {
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=design" });
+      await screen.findByText("Model metadata");
+
+      await user.click(screen.getByRole("button", { name: "Show all" }));
+
+      expect(screen.getByRole("button", { name: "Infill" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+
+    it("turns every field off at once", async () => {
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=design" });
+      await screen.findByText("Model metadata");
+
+      await user.click(screen.getByRole("button", { name: "Hide all" }));
+
+      expect(screen.getByRole("button", { name: "Infill" })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+    });
+
+    it("puts the fields back to the defaults", async () => {
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=design" });
+      await screen.findByText("Model metadata");
+      await user.click(screen.getByRole("button", { name: "Hide all" }));
+
+      await user.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+
+      expect(await screen.findByText("Metadata display reset.")).toBeInTheDocument();
+    });
+  });
 });
