@@ -18,7 +18,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -355,6 +355,69 @@ describe("FilterSidebar", () => {
       await waitFor(() =>
         expect(window.sessionStorage.getItem("ps-filter-all-expanded")).toBe("false"),
       );
+    });
+  });
+  describe("filtering by tag", () => {
+    it("adds the tag the user clicked", async () => {
+      const user = userEvent.setup();
+      const { onTagsChange } = renderSidebar();
+
+      await user.click(await screen.findByRole("button", { name: /functional/ }));
+
+      expect(onTagsChange).toHaveBeenCalledWith(["functional"]);
+    });
+
+    it("takes a tag back off when it is clicked again", async () => {
+      // The chip is the only way to remove it from here; without the toggle a
+      // user has to clear every filter to drop one tag.
+      const user = userEvent.setup();
+      const { onTagsChange } = renderSidebar({ selectedTags: ["functional"] });
+
+      await user.click(await screen.findByRole("button", { name: /functional/ }));
+
+      expect(onTagsChange).toHaveBeenCalledWith([]);
+    });
+
+    it("keeps the other tags when one is removed", async () => {
+      const user = userEvent.setup();
+      const { onTagsChange } = renderSidebar({
+        tags: [aTag(), aTag({ id: 2, name: "bracket", slug: "bracket" })],
+        selectedTags: ["functional", "bracket"],
+      });
+
+      await user.click(await screen.findByRole("button", { name: /functional/ }));
+
+      expect(onTagsChange).toHaveBeenCalledWith(["bracket"]);
+    });
+  });
+
+  describe("resizing the sidebar", () => {
+    it("remembers the width across visits", async () => {
+      // The tree is the primary navigation for a deep vault; a width that
+      // resets on every page load is a width nobody bothers setting.
+      const { container } = renderSidebar();
+      const handle = container.ownerDocument.querySelector(".cursor-col-resize")!;
+
+      fireEvent.mouseDown(handle, { clientX: 200 });
+      fireEvent.mouseMove(document, { clientX: 260 });
+      fireEvent.mouseUp(document);
+
+      await waitFor(() => expect(window.localStorage.getItem("ps-sidebar-width")).not.toBeNull());
+    });
+
+    it("stops resizing once the pointer is released", async () => {
+      // Leaving the listeners attached makes every later mouse move drag the
+      // sidebar, which reads as the page being possessed.
+      const { container } = renderSidebar();
+      const handle = container.ownerDocument.querySelector(".cursor-col-resize")!;
+      fireEvent.mouseDown(handle, { clientX: 200 });
+      fireEvent.mouseMove(document, { clientX: 260 });
+      fireEvent.mouseUp(document);
+      const settled = window.localStorage.getItem("ps-sidebar-width");
+
+      fireEvent.mouseMove(document, { clientX: 400 });
+
+      expect(window.localStorage.getItem("ps-sidebar-width")).toBe(settled);
     });
   });
 });

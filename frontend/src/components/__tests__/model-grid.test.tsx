@@ -1391,4 +1391,87 @@ describe("ModelBrowser", () => {
       expect(requestsWithMethod("PATCH")).toHaveLength(0);
     });
   });
+  describe("the drop-to-upload overlay", () => {
+    /** A drag carrying OS files, which is what the vault-wide zone reacts to. */
+    function fileDrag() {
+      return { types: ["Files"], dropEffect: "" };
+    }
+
+    it("invites the drop once a file drag enters the vault", async () => {
+      // Without the overlay a user dragging a file over the page has no way to
+      // know the page will take it, and drops it on the desktop instead.
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      const main = await screen.findByText("Benchy");
+
+      fireEvent.dragEnter(main, { dataTransfer: fileDrag() });
+
+      expect(await screen.findByText("Drop to upload")).toBeInTheDocument();
+    });
+
+    it("ignores a model drag, which the folders handle", async () => {
+      // The folder cards are the drop targets for a model; lighting the whole
+      // vault up would suggest dropping anywhere works.
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      const main = await screen.findByText("Benchy");
+
+      fireEvent.dragEnter(main, { dataTransfer: { types: [MODEL_DND_MIME] } });
+
+      expect(screen.queryByText("Drop to upload")).toBeNull();
+    });
+
+    it("keeps the invitation up while the drag crosses child elements", async () => {
+      // A drag over a grid fires leave/enter pairs constantly as it passes
+      // between cards; a naive handler flickers the overlay on every one.
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      const main = await screen.findByText("Benchy");
+      fireEvent.dragEnter(main, { dataTransfer: fileDrag() });
+      fireEvent.dragEnter(main, { dataTransfer: fileDrag() });
+
+      fireEvent.dragLeave(main, { dataTransfer: fileDrag() });
+
+      expect(screen.getByText("Drop to upload")).toBeInTheDocument();
+    });
+
+    it("takes the invitation down when the drag really leaves", async () => {
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      const main = await screen.findByText("Benchy");
+      fireEvent.dragEnter(main, { dataTransfer: fileDrag() });
+
+      fireEvent.dragLeave(main, { dataTransfer: fileDrag() });
+
+      await waitFor(() => expect(screen.queryByText("Drop to upload")).toBeNull());
+    });
+  });
+
+  describe("the back button", () => {
+    it("restores the filters the previous page had", async () => {
+      // The filter state lives in the URL but also in React, and only the URL
+      // moves on a history pop — without this the back button changes the
+      // address bar and nothing else.
+      const { requests } = renderVault({
+        at: "/?tag=functional",
+        tags: [aTag()],
+        models: [aModelListItem({ name: "Benchy" })],
+      });
+      await screen.findByText("Benchy");
+
+      window.history.replaceState({}, "", "/?tag=bracket");
+      fireEvent.popState(window);
+
+      await waitFor(() => expect(lastModelsQuery(requests).getAll("tag")).toEqual(["bracket"]));
+    });
+
+    it("drops a filter the previous page did not have", async () => {
+      const { requests } = renderVault({
+        at: "/?favorites=true",
+        models: [aModelListItem({ name: "Benchy" })],
+      });
+      await screen.findByText("Benchy");
+
+      window.history.replaceState({}, "", "/");
+      fireEvent.popState(window);
+
+      await waitFor(() => expect(lastModelsQuery(requests).get("favorites")).toBeNull());
+    });
+  });
 });
