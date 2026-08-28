@@ -19,7 +19,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -66,6 +66,11 @@ function renderUpload(
 /** Choose one of the four ways in. */
 function mode(name: "Files" | "Bulk" | "From URL" | "From ZIP") {
   return screen.getByRole("button", { name: new RegExp(`\\s*${name}\\s*`) });
+}
+
+/** The mesh and G-code slots, in the order the dialog renders them. */
+function fileInputs(container: HTMLElement) {
+  return container.ownerDocument.querySelectorAll<HTMLInputElement>('input[type="file"]');
 }
 
 beforeEach(() => {
@@ -408,6 +413,108 @@ describe("UploadModal", () => {
       await user.click(screen.getByRole("button", { name: "Close" }));
 
       expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+  describe("dropping a file on a slot", () => {
+    /** The mesh slot, which is the first drop target the dialog renders. */
+    function meshSlot() {
+      // The slot is the sibling of its label: the drop handlers live on the box,
+      // not on the caption above it.
+      return screen.getByText("3D Model").nextElementSibling!;
+    }
+
+    it("takes a mesh dropped on the mesh slot", async () => {
+      // Dragging out of a file manager is how most uploads start; requiring the
+      // picker turns one gesture into three.
+      renderUpload();
+      await screen.findByText(".stl .3mf .obj .step");
+
+      fireEvent.drop(meshSlot(), {
+        dataTransfer: { files: [new File(["x"], "cube.stl")], types: ["Files"] },
+      });
+
+      expect(await screen.findByText("cube.stl")).toBeInTheDocument();
+    });
+
+    it("refuses a file the slot does not take", async () => {
+      // Accepting a G-code into the mesh slot uploads it to the wrong ingester,
+      // which loses every slicer setting the file carries.
+      renderUpload();
+      await screen.findByText(".stl .3mf .obj .step");
+
+      fireEvent.drop(meshSlot(), {
+        dataTransfer: { files: [new File(["x"], "part.gcode")], types: ["Files"] },
+      });
+
+      expect(await screen.findByText(/Wrong file type for 3D Model/)).toBeInTheDocument();
+    });
+
+    it("says what the slot does take", async () => {
+      renderUpload();
+      await screen.findByText(".stl .3mf .obj .step");
+
+      fireEvent.drop(meshSlot(), {
+        dataTransfer: { files: [new File(["x"], "part.gcode")], types: ["Files"] },
+      });
+
+      expect(await screen.findByText(/Drop a .* file here/)).toBeInTheDocument();
+    });
+
+    it("ignores a drop carrying no file at all", async () => {
+      // A dragged selection of text produces a drop event with an empty file
+      // list, and treating it as a file would clear whatever was chosen.
+      const user = userEvent.setup();
+      const { container } = renderUpload();
+      await screen.findByText(".stl .3mf .obj .step");
+      await user.upload(fileInputs(container)[0], new File(["x"], "cube.stl"));
+
+      fireEvent.drop(meshSlot(), { dataTransfer: { files: [], types: [] } });
+
+      expect(screen.getByText("cube.stl")).toBeInTheDocument();
+    });
+  });
+
+  describe("creating a tag while uploading", () => {
+    it("creates one the vault does not have yet", async () => {
+      // Tagging at upload time is the only moment the user remembers what the
+      // model was for; sending them to settings first loses that.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderUpload({
+        routes: { "POST /api/v1/tags": json({ id: 9, name: "spares", slug: "spares" }) },
+      });
+      await screen.findByText(".stl .3mf .obj .step");
+
+      await user.type(await screen.findByPlaceholderText(/Search or create/), "spares{Enter}");
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          name: "spares",
+        }),
+      );
+    });
+
+    it("selects an existing tag rather than creating a duplicate", async () => {
+      // Two tags differing only in case are two tags nobody can tell apart in
+      // the filter list.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderUpload();
+      await screen.findByText(".stl .3mf .obj .step");
+
+      await user.type(await screen.findByPlaceholderText(/Search or create/), "Functional{Enter}");
+
+      expect(requestsWithMethod("POST")).toHaveLength(0);
+    });
+
+    it("survives a tag the server refused", async () => {
+      const user = userEvent.setup();
+      renderUpload({
+        routes: { "POST /api/v1/tags": json({ detail: "tag_exists" }, 409) },
+      });
+      await screen.findByText(".stl .3mf .obj .step");
+
+      await user.type(await screen.findByPlaceholderText(/Search or create/), "spares{Enter}");
+
+      expect(await screen.findByPlaceholderText(/Search or create/)).toBeInTheDocument();
     });
   });
 });
