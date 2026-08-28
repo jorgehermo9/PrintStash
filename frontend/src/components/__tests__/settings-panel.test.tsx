@@ -20,14 +20,15 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/settings-panel";
 import { queryKeys } from "@/lib/query-client";
-import { aPrinter, vaultStats } from "@/test-support/factories";
+import { aCollection, aPrinter, vaultStats } from "@/test-support/factories";
 import { json, memberSession, renderApp, type RenderAppOptions } from "@/test-support/render";
+import type { CollectionPermissionRead, PrinterPermissionRead, UserRead } from "@/types";
 
 const HEALTH = {
   status: "ok",
@@ -43,6 +44,66 @@ const VAULT_CONFIG = {
 };
 
 const VAULT_STATS = vaultStats();
+
+const TRASHED_MODEL = {
+  id: 7,
+  name: "Old bracket",
+  deleted_at: "2026-01-01T00:00:00Z",
+  expires_at: "2026-02-01T00:00:00Z",
+  file_count: 2,
+  size_bytes: 2048,
+  collection: null,
+};
+
+const ISSUED_KEY = {
+  id: 9,
+  name: "Slicer",
+  prefix: "ps_test",
+  created_at: "2026-01-01T00:00:00Z",
+  last_used_at: null,
+};
+
+/** The mint response, which carries the secret a listing never returns again. */
+const MINTED_KEY = { ...ISSUED_KEY, api_key: "ps_test_this-is-not-a-real-key" };
+
+function aUser(over: Partial<UserRead> = {}): UserRead {
+  return {
+    id: 2,
+    username: "maker",
+    email: null,
+    is_superuser: false,
+    is_active: true,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...over,
+  };
+}
+
+function aCollectionPermission(
+  over: Partial<CollectionPermissionRead> = {},
+): CollectionPermissionRead {
+  return {
+    collection_id: 5,
+    user_id: 2,
+    username: "maker",
+    role: "edit",
+    inherited: false,
+    ...over,
+  };
+}
+
+function aPrinterPermission(over: Partial<PrinterPermissionRead> = {}): PrinterPermissionRead {
+  return {
+    id: 11,
+    printer_id: 4,
+    user_id: 2,
+    username: "maker",
+    role: "print",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...over,
+  };
+}
 
 function renderSettings(options: RenderAppOptions = {}) {
   const { seed = [], routes = {}, ...rest } = options;
@@ -161,41 +222,621 @@ describe("SettingsPanel", () => {
   });
 
   describe("user administration", () => {
-    it("creates a user from the form", async () => {
+    it("creates the user the admin described", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: { "POST /api/v1/admin/users": json(aUser({ id: 2, username: "maker" })) },
+      });
+      await screen.findByRole("navigation", { name: "Settings sections" });
+      await user.type(screen.getByLabelText("Username"), "maker");
+      await user.type(screen.getByLabelText("Initial password"), "Password123");
+
+      await user.click(screen.getByRole("button", { name: "Create" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          username: "maker",
+        }),
+      );
+    });
+
+    it("carries the email when one was given", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: { "POST /api/v1/admin/users": json(aUser({ id: 2, username: "maker" })) },
+      });
+      await screen.findByRole("navigation", { name: "Settings sections" });
+      await user.type(screen.getByLabelText("Username"), "maker");
+      await user.type(screen.getByLabelText("Email"), "maker@example.test");
+      await user.type(screen.getByLabelText("Initial password"), "Password123");
+
+      await user.click(screen.getByRole("button", { name: "Create" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          email: "maker@example.test",
+        }),
+      );
+    });
+
+    it("refuses a password below the minimum length", async () => {
+      // The server enforces it too, but letting the form submit means the admin
+      // types a whole user and then loses it to a 422.
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=access" });
+      await screen.findByRole("navigation", { name: "Settings sections" });
+      await user.type(screen.getByLabelText("Username"), "maker");
+
+      await user.type(screen.getByLabelText("Initial password"), "short");
+
+      expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    });
+
+    it("lists the users already in the vault", async () => {
+      renderSettings({
+        at: "/settings?section=access",
+        routes: { "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]) },
+      });
+
+      expect(await screen.findAllByText("maker")).not.toHaveLength(0);
+    });
+
+    it("marks which users are vault admins", async () => {
+      // Admin is the account that can change storage and empty the trash; a list
+      // that does not show it is a list nobody can audit.
+      renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "root", is_superuser: true })]),
+        },
+      });
+
+      expect(await screen.findAllByText("Admin")).not.toHaveLength(0);
+    });
+
+    it("marks a disabled account", async () => {
+      renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "gone", is_active: false })]),
+        },
+      });
+
+      expect(await screen.findByText("Disabled")).toBeInTheDocument();
+    });
+
+    it("promotes a user to admin", async () => {
       const user = userEvent.setup();
       const { requestsWithMethod } = renderSettings({
         at: "/settings?section=access",
         routes: {
-          "POST /api/v1/admin/users": json({
-            id: 2,
-            username: "maker",
-            email: null,
-            is_superuser: false,
-            is_active: true,
-          }),
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]),
+          "PATCH /api/v1/admin/users/2": json(aUser({ id: 2, is_superuser: true })),
         },
       });
-      await screen.findByRole("navigation", { name: "Settings sections" });
 
-      const username = screen.queryByPlaceholderText(/username/i);
-      if (username === null) return;
-      await user.type(username, "maker");
-      const password = screen.getByPlaceholderText(/password/i);
-      await user.type(password, "Password123");
-      await user.click(screen.getByRole("button", { name: /Create user/i }));
+      await user.click(await screen.findByRole("button", { name: "Make admin" }));
 
       await waitFor(() =>
-        expect(requestsWithMethod("POST").some((call) => call.url.includes("admin/users"))).toBe(
-          true,
-        ),
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          is_superuser: true,
+        }),
       );
+    });
+
+    it("disables an account rather than deleting it", async () => {
+      // A deleted user takes their grants and their audit trail with them;
+      // disabling keeps both while ending access.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]),
+          "DELETE /api/v1/admin/users/2": json(null, 204),
+        },
+      });
+
+      await user.click(await screen.findByRole("button", { name: "Disable" }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) => call.url.endsWith("/admin/users/2")),
+        ).toBe(true),
+      );
+    });
+
+    it("re-enables a disabled account", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, is_active: false })]),
+          "PATCH /api/v1/admin/users/2": json(aUser({ id: 2 })),
+        },
+      });
+
+      await user.click(await screen.findByRole("button", { name: "Enable" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PATCH").at(-1)?.body ?? "{}")).toMatchObject({
+          is_active: true,
+        }),
+      );
+    });
+
+    it("resets a password to what the admin typed", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2 })]),
+          "POST /api/v1/admin/users/2/password": json(aUser({ id: 2 })),
+        },
+      });
+      await user.type(await screen.findByPlaceholderText("New password"), "Password123");
+
+      await user.click(screen.getByRole("button", { name: "Reset password" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          password: "Password123",
+        }),
+      );
+    });
+
+    it("will not reset a password to one below the minimum", async () => {
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=access",
+        routes: { "GET /api/v1/admin/users": json([aUser({ id: 2 })]) },
+      });
+
+      await user.type(await screen.findByPlaceholderText("New password"), "short");
+
+      expect(screen.getByRole("button", { name: "Reset password" })).toBeDisabled();
     });
 
     it("hides administration from a non-admin", async () => {
       renderSettings({ at: "/settings?section=access", auth: memberSession() });
 
       await screen.findByRole("navigation", { name: "Settings sections" });
-      expect(screen.queryByRole("button", { name: /Create user/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Create" })).toBeNull();
+    });
+  });
+
+  describe("collection access", () => {
+    it("grants the role the admin chose", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]),
+          "GET /api/v1/collections": json([aCollection({ id: 5, name: "Parts" })]),
+          "GET /api/v1/collections/5/permissions": json([]),
+          "PUT /api/v1/collections/5/permissions/2": json(aCollectionPermission()),
+        },
+      });
+      await screen.findByRole("navigation", { name: "Settings sections" });
+      await user.selectOptions((await screen.findAllByLabelText("User"))[0], "2");
+      await user.selectOptions(screen.getByLabelText("Collection"), "5");
+
+      await user.click(screen.getByRole("button", { name: "Grant" }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("PUT").some((call) =>
+            call.url.endsWith("/collections/5/permissions/2"),
+          ),
+        ).toBe(true),
+      );
+    });
+
+    it("cannot grant before a user is chosen", async () => {
+      // The grant is per user *and* per collection; a half-filled form would
+      // otherwise send a request naming nobody.
+      renderSettings({
+        at: "/settings?section=access",
+        routes: { "GET /api/v1/collections": json([aCollection({ id: 5, name: "Parts" })]) },
+      });
+
+      expect(await screen.findByRole("button", { name: "Grant" })).toBeDisabled();
+    });
+
+    it("does not offer an admin as a grantee", async () => {
+      // A vault admin already has every collection; listing them invites a grant
+      // that changes nothing and reads as though it did.
+      renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 3, username: "root", is_superuser: true })]),
+        },
+      });
+
+      const [select] = await screen.findAllByLabelText("User");
+      expect(within(select).queryByRole("option", { name: "root" })).toBeNull();
+    });
+
+    it("lists the grants already made", async () => {
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]),
+          "GET /api/v1/collections": json([aCollection({ id: 5, name: "Parts" })]),
+          "GET /api/v1/collections/5/permissions": json([aCollectionPermission()]),
+        },
+      });
+
+      await user.selectOptions((await screen.findAllByLabelText("User"))[0], "2");
+
+      expect(await screen.findByTitle("Remove collection access")).toBeInTheDocument();
+    });
+
+    it("revokes a grant", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]),
+          "GET /api/v1/collections": json([aCollection({ id: 5, name: "Parts" })]),
+          "GET /api/v1/collections/5/permissions": json([aCollectionPermission()]),
+          "DELETE /api/v1/collections/5/permissions/2": json(null, 204),
+        },
+      });
+
+      await user.selectOptions((await screen.findAllByLabelText("User"))[0], "2");
+
+      await user.click(await screen.findByTitle("Remove collection access"));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) =>
+            call.url.endsWith("/collections/5/permissions/2"),
+          ),
+        ).toBe(true),
+      );
+    });
+  });
+
+  describe("printer access", () => {
+    it("grants the printer role the admin chose", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]),
+          "GET /api/v1/printers": json([aPrinter({ id: 4, name: "Voron" })]),
+          "GET /api/v1/printers/4/permissions": json([]),
+          "PUT /api/v1/printers/4/permissions/2": json(aPrinterPermission()),
+        },
+      });
+      await screen.findByRole("navigation", { name: "Settings sections" });
+      await user.selectOptions((await screen.findAllByLabelText("User"))[1], "2");
+      await user.selectOptions(screen.getByLabelText("Printer"), "4");
+
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("PUT").some((call) => call.url.endsWith("/printers/4/permissions/2")),
+        ).toBe(true),
+      );
+    });
+
+    it("revokes a printer grant", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/admin/users": json([aUser({ id: 2, username: "maker" })]),
+          "GET /api/v1/printers": json([aPrinter({ id: 4, name: "Voron" })]),
+          "GET /api/v1/printers/4/permissions": json([aPrinterPermission()]),
+          "DELETE /api/v1/printers/4/permissions/2": json(null, 204),
+        },
+      });
+
+      await user.selectOptions((await screen.findAllByLabelText("User"))[1], "2");
+
+      await user.click(await screen.findByTitle("Remove printer access"));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) =>
+            call.url.endsWith("/printers/4/permissions/2"),
+          ),
+        ).toBe(true),
+      );
+    });
+  });
+
+  describe("API keys", () => {
+    it("mints a key under the name the user gave", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: { "POST /api/v1/auth/api-keys": json(MINTED_KEY) },
+      });
+      const name = await screen.findByLabelText("Key name");
+      await user.clear(name);
+      await user.type(name, "Slicer");
+
+      await user.click(screen.getByRole("button", { name: "Generate" }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
+          name: "Slicer",
+        }),
+      );
+    });
+
+    it("shows the minted key once so it can be copied", async () => {
+      // The server never returns it again; a key shown nowhere is a key nobody
+      // can use.
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=access",
+        routes: { "POST /api/v1/auth/api-keys": json(MINTED_KEY) },
+      });
+      await screen.findByLabelText("Key name");
+
+      await user.click(screen.getByRole("button", { name: "Generate" }));
+
+      expect(await screen.findByTitle("Copy API key")).toBeInTheDocument();
+    });
+
+    it("lists the keys already issued", async () => {
+      renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/auth/api-keys": json([ISSUED_KEY]),
+        },
+      });
+
+      expect(await screen.findByText("Slicer")).toBeInTheDocument();
+    });
+
+    it("revokes a key", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=access",
+        routes: {
+          "GET /api/v1/auth/api-keys": json([ISSUED_KEY]),
+          "DELETE /api/v1/auth/api-keys/9": json(null, 204),
+        },
+      });
+
+      await user.click(await screen.findByTitle("Revoke API key"));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) => call.url.endsWith("/auth/api-keys/9")),
+        ).toBe(true),
+      );
+    });
+  });
+
+  describe("backups", () => {
+    const BACKUP = {
+      backup_id: "2026-01-01T000000Z",
+      created_at: "2026-01-01T00:00:00Z",
+      location: "local",
+      app_version: "0.12.1",
+      file_count: 42,
+      size_bytes: 1024 * 1024,
+      storage_backend: "local",
+    };
+
+    it("says so when nothing has been backed up", async () => {
+      renderSettings({ at: "/settings?section=storage" });
+
+      expect(await screen.findByText("No backups found.")).toBeInTheDocument();
+    });
+
+    it("lists the backups taken", async () => {
+      renderSettings({
+        at: "/settings?section=storage",
+        routes: { "GET /api/v1/backups": json([BACKUP]) },
+      });
+
+      expect(await screen.findByText("2026-01-01T000000Z")).toBeInTheDocument();
+    });
+
+    it("says which version of the app wrote each one", async () => {
+      // Restoring a backup written by a newer app is how a vault ends up with a
+      // schema its code cannot read.
+      renderSettings({
+        at: "/settings?section=storage",
+        routes: { "GET /api/v1/backups": json([BACKUP]) },
+      });
+
+      expect(await screen.findByText("v0.12.1")).toBeInTheDocument();
+    });
+
+    it("takes a backup on demand", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=storage",
+        routes: { "POST /api/v1/backups": json(BACKUP) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Backup now/ }));
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("/backups"))).toBe(true),
+      );
+    });
+
+    it("asks before restoring over the live vault", async () => {
+      // A restore replaces the database and every stored file; doing it on one
+      // click is unrecoverable.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=storage",
+        routes: { "GET /api/v1/backups": json([BACKUP]) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Restore/ }));
+
+      expect(requestsWithMethod("POST").some((call) => call.url.includes("restore"))).toBe(false);
+    });
+
+    it("tells a non-admin they cannot see the backups", async () => {
+      renderSettings({ at: "/settings?section=storage", auth: memberSession() });
+
+      expect(await screen.findByText("Superuser access is required.")).toBeInTheDocument();
+    });
+  });
+
+  describe("trash retention", () => {
+    it("saves the retention window", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=trash",
+        routes: { "PUT /api/v1/config": json({ ...VAULT_CONFIG, trash_retention_days: 7 }) },
+      });
+      const days = await screen.findByLabelText("Days");
+      await user.clear(days);
+      await user.type(days, "7");
+
+      await user.click(screen.getByRole("button", { name: /Save retention/ }));
+
+      await waitFor(() =>
+        expect(JSON.parse(requestsWithMethod("PUT").at(-1)?.body ?? "{}")).toMatchObject({
+          trash_retention_days: 7,
+        }),
+      );
+    });
+
+    it("offers no purge when retention is set to keep forever", async () => {
+      // -1 means nothing ever expires, so "purge expired" would delete nothing
+      // and read as though the setting were being ignored.
+      renderSettings({ at: "/settings?section=trash" });
+      const days = await screen.findByLabelText("Days");
+
+      fireEvent.change(days, { target: { value: "-1" } });
+
+      expect(screen.getByRole("button", { name: /Purge expired/ })).toBeDisabled();
+    });
+
+    it("purges what has already expired", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=trash",
+        routes: { "DELETE /api/v1/models/trash/expired": json({ purged: 3, freed_bytes: 2048 }) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Purge expired/ }));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("DELETE").some((call) => call.url.includes("trash/expired")),
+        ).toBe(true),
+      );
+    });
+
+    it("restores a model out of the trash", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=trash",
+        routes: {
+          "GET /api/v1/models/trash": json([TRASHED_MODEL]),
+          "POST /api/v1/models/7/restore": json({ id: 7 }),
+        },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Restore/ }));
+
+      await waitFor(() =>
+        expect(requestsWithMethod("POST").some((call) => call.url.includes("/restore"))).toBe(true),
+      );
+    });
+
+    it("asks before deleting a model for good", async () => {
+      // Purging is the one action in the vault with nothing behind it.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=trash",
+        routes: { "GET /api/v1/models/trash": json([TRASHED_MODEL]) },
+      });
+
+      await user.click(await screen.findByRole("button", { name: /Delete/ }));
+
+      expect(requestsWithMethod("DELETE").some((call) => call.url.includes("/models/7"))).toBe(
+        false,
+      );
+    });
+
+    it("purges the model once the operator confirms", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderSettings({
+        at: "/settings?section=trash",
+        routes: {
+          "GET /api/v1/models/trash": json([TRASHED_MODEL]),
+          "DELETE /api/v1/models/7": json(null, 204),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: /Delete/ }));
+
+      await user.click(await screen.findByRole("button", { name: "Delete forever" }));
+
+      await waitFor(() =>
+        expect(requestsWithMethod("DELETE").some((call) => call.url.includes("/models/7"))).toBe(
+          true,
+        ),
+      );
+    });
+  });
+
+  describe("about", () => {
+    it("shows the version running", async () => {
+      renderSettings({ at: "/settings?section=about" });
+
+      expect(await screen.findByText("v0.12.1")).toBeInTheDocument();
+    });
+
+    it("says the deployment is current", async () => {
+      renderSettings({ at: "/settings?section=about" });
+
+      expect(await screen.findByText("Latest published release installed.")).toBeInTheDocument();
+    });
+
+    it("says when an update is out", async () => {
+      // Self-hosters have no auto-update; this line is the only prompt they get.
+      renderSettings({
+        at: "/settings?section=about",
+        routes: {
+          "GET /api/v1/health/releases/latest": json({
+            status: "update_available",
+            update_available: true,
+            current_version: "0.12.1",
+            latest_version: "0.13.0",
+          }),
+        },
+      });
+
+      expect(await screen.findByText(/Update available: v0\.13\.0/)).toBeInTheDocument();
+    });
+
+    it("says so when the release check itself could not run", async () => {
+      // Silence here reads as "you are up to date", which is the one thing it
+      // does not know.
+      renderSettings({
+        at: "/settings?section=about",
+        routes: {
+          "GET /api/v1/health/releases/latest": json({
+            status: "unavailable",
+            update_available: false,
+            current_version: "0.12.1",
+            latest_version: null,
+          }),
+        },
+      });
+
+      expect(
+        await screen.findByText("Release check unavailable. Try again later."),
+      ).toBeInTheDocument();
     });
   });
 
