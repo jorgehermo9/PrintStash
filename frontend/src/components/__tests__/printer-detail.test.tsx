@@ -708,4 +708,57 @@ describe("PrinterDetailPage", () => {
       expect(await screen.findByText(/printer_unreachable/)).toBeInTheDocument();
     });
   });
+  describe("the live snapshot", () => {
+    /** Push a Moonraker `update` patch, which carries only what changed. */
+    async function pushUpdate(data: LiveSnapshot) {
+      await waitFor(() => expect(FakeSocket.latest?.onmessage).not.toBeNull());
+      act(() => {
+        FakeSocket.latest?.onmessage?.({ data: JSON.stringify({ type: "update", data }) });
+      });
+    }
+
+    it("keeps the fields an update did not mention", async () => {
+      // A patch carries only what changed. Replacing the snapshot with it would
+      // blank the filename and the duration on every temperature tick, which
+      // arrives about once a second.
+      renderPrinter();
+      await screen.findByText("Voron");
+      await pushSnapshot({
+        print_stats: { state: "printing", filename: "bracket.gcode", print_duration: 60 },
+      });
+
+      await pushUpdate({ print_stats: { print_duration: 120 } });
+
+      expect(await screen.findAllByText(/bracket\.gcode/)).not.toHaveLength(0);
+    });
+
+    it("takes the new value the update carried", async () => {
+      renderPrinter();
+      await screen.findByText("Voron");
+      await pushSnapshot({ print_stats: { state: "paused", filename: "bracket.gcode" } });
+
+      await pushUpdate({ print_stats: { state: "printing" } });
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /Pause/ })).toBeInTheDocument(),
+      );
+    });
+  });
+
+  describe("controlling a print that will not obey", () => {
+    it("says so when the printer refuses a pause", async () => {
+      // The button going quiet reads as the click not registering, and the user
+      // presses it again.
+      const user = userEvent.setup();
+      renderPrinter({
+        routes: { "POST /api/v1/printers/4/pause": json({ detail: "printer_busy" }, 409) },
+      });
+      await screen.findByText("Voron");
+      await pushSnapshot(PRINTING);
+
+      await user.click(await screen.findByRole("button", { name: /Pause/ }));
+
+      expect(await screen.findByText("Printer busy.")).toBeInTheDocument();
+    });
+  });
 });

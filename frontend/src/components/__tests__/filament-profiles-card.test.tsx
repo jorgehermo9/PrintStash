@@ -412,4 +412,101 @@ describe("FilamentProfilesCard", () => {
       );
     });
   });
+  describe("editing a printer preset in place", () => {
+    it("saves a changed field when the row is left", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderCard({
+        routes: { "PATCH /api/v1/printer-profiles/1": json(aPrinterProfile({ name: "MK4" })) },
+      });
+      await screen.findByText("Filament presets");
+      await user.click(screen.getByRole("tab", { name: /Printers/ }));
+      const name = await screen.findByLabelText("Printer preset name 1");
+
+      await user.clear(name);
+      await user.type(name, "MK4");
+      await user.click(screen.getByText("Printer presets"));
+
+      await waitFor(() =>
+        expect(
+          requestsWithMethod("PATCH").some((call) => call.url.includes("printer-profiles/1")),
+        ).toBe(true),
+      );
+    });
+
+    it("saves nothing when the row is left unchanged", async () => {
+      // Blur fires on every pass through a row, so an unconditional save would
+      // rewrite every preset a user merely scrolled past.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderCard();
+      await screen.findByText("Filament presets");
+      await user.click(screen.getByRole("tab", { name: /Printers/ }));
+      const name = await screen.findByLabelText("Printer preset name 1");
+
+      await user.click(name);
+      await user.click(screen.getByText("Printer presets"));
+
+      expect(requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("refuses a nozzle diameter that is not a number", async () => {
+      // It is written into every G-code compatibility check; a NaN there
+      // silently matches nothing.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderCard();
+      await screen.findByText("Filament presets");
+      await user.click(screen.getByRole("tab", { name: /Printers/ }));
+      const nozzle = await screen.findByLabelText("Printer nozzle diameter 1");
+
+      await user.clear(nozzle);
+      await user.type(nozzle, "wide");
+      await user.click(screen.getByText("Printer presets"));
+
+      expect(requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("surfaces a preset the server would not save", async () => {
+      const user = userEvent.setup();
+      renderCard({
+        routes: { "PATCH /api/v1/printer-profiles/1": json({ detail: "name_taken" }, 409) },
+      });
+      await screen.findByText("Filament presets");
+      await user.click(screen.getByRole("tab", { name: /Printers/ }));
+      const name = await screen.findByLabelText("Printer preset name 1");
+
+      await user.clear(name);
+      await user.type(name, "MK4");
+      await user.click(screen.getByText("Printer presets"));
+
+      expect(await screen.findByText("Name taken.")).toBeInTheDocument();
+    });
+  });
+
+  describe("when a filament preset cannot be saved", () => {
+    it("surfaces the server's refusal", async () => {
+      const user = userEvent.setup();
+      renderCard({
+        routes: { "PATCH /api/v1/filament-profiles/1": json({ detail: "name_taken" }, 409) },
+      });
+      const name = await screen.findByLabelText("Filament preset name 1");
+
+      await user.clear(name);
+      await user.type(name, "PETG");
+      await user.click(screen.getByText("Filament presets"));
+
+      expect(await screen.findByText("Name taken.")).toBeInTheDocument();
+    });
+
+    it("refuses a cost that is not a number", async () => {
+      // Cost feeds the statistics page; a NaN there poisons every total.
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderCard();
+      const cost = await screen.findByLabelText("Filament cost per kg 1");
+
+      await user.clear(cost);
+      await user.type(cost, "cheap");
+      await user.click(screen.getByText("Filament presets"));
+
+      expect(requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+  });
 });
