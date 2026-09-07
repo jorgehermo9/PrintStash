@@ -2,6 +2,7 @@
  * The storage setup headline flow crosses the browser, real API, process restart, and WebDAV.
  * It proves the provider selected during setup becomes the probed active provider afterward.
  */
+import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -105,6 +106,7 @@ test.describe("storage provider setup", () => {
     await page.getByRole("button", { name: "I'll do this later" }).click();
 
     await writeFile(restartTrigger, "restart\n", "utf8");
+    await expect.poll(() => existsSync(restartTrigger)).toBe(false);
     await expect
       .poll(async () => {
         try {
@@ -180,6 +182,7 @@ test.describe("storage provider setup", () => {
     await page.getByRole("button", { name: "Save configuration" }).click();
 
     await writeFile(restartTrigger, "restart\n", "utf8");
+    await expect.poll(() => existsSync(restartTrigger)).toBe(false);
     await expect
       .poll(async () => {
         try {
@@ -249,6 +252,7 @@ test.describe("storage provider setup", () => {
     await page.getByRole("button", { name: "Save configuration" }).click();
 
     await writeFile(restartTrigger, "restart\n", "utf8");
+    await expect.poll(() => existsSync(restartTrigger)).toBe(false);
     await expect
       .poll(async () => {
         try {

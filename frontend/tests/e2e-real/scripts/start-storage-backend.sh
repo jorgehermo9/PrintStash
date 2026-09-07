@@ -81,10 +81,11 @@ trap cleanup EXIT INT TERM
 start_backend
 while kill -0 "$BACKEND_PID" 2>/dev/null; do
   if [[ -f "$RESTART_TRIGGER" ]]; then
-    rm -f "$RESTART_TRIGGER"
     kill "$BACKEND_PID"
     wait "$BACKEND_PID" || true
     start_backend
+    # Acknowledge only after the old process has exited.
+    rm -f "$RESTART_TRIGGER"
   fi
   sleep 0.2
 done
