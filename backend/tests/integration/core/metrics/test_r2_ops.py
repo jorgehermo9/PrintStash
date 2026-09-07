@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -103,8 +103,10 @@ class TestMetricsEndpoint:
 
 class TestResetOrphanedScans:
     def test_reset_orphaned_scans_recovers_stranded_library(
-        self, db_session: Session
+        self, db_session: Session, monkeypatch
     ) -> None:
+        now = datetime(2026, 1, 1, 12, 0, 30, tzinfo=UTC)
+        monkeypatch.setattr(external_library, "utcnow", lambda: now)
         lib = ExternalLibrary(
             name="nas",
             root_path="/mnt/nas",
@@ -134,7 +136,7 @@ class TestResetOrphanedScans:
         assert lib.id not in external_library.libraries_due_for_scan(db_session)
 
         # Once the schedule has elapsed, it becomes eligible again as normal.
-        lib.last_scanned_at = utcnow() - timedelta(minutes=2)
+        lib.last_scanned_at = now - timedelta(minutes=2)
         db_session.add(lib)
         db_session.commit()
         assert lib.id in external_library.libraries_due_for_scan(db_session)
