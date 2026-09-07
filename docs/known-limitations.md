@@ -152,9 +152,9 @@ manufacturing platform.
 - Notifications are opt-in, off by default, and superuser-managed.
 - Channels cover print completed/failed/cancelled and printer-offline events,
   delivered to generic webhooks, Discord, Telegram, or ntfy.
-- Channel secrets (webhook URLs, bot tokens, signing secrets) are stored
-  unencrypted in the database, like the other configured secrets. Keep your
-  install on a trusted network.
+- Channel secrets (webhook URLs, bot tokens, signing secrets) are encrypted at
+  rest in the database, like the other configured secrets, and read APIs mask
+  them. Keep your install on a trusted network.
 - Delivery is at-least-once: a retried or recovered send can arrive more than
   once, so receivers should de-duplicate on the `Idempotency-Key` header.
 - The dispatcher is built for the supported single-process deployment. Its
