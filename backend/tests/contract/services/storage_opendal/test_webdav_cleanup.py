@@ -21,7 +21,9 @@ class TestWebDAVCleanupEvidence:
             assert client.put(key, content=b"original").is_success
             set_mtime("object", 1234)
             etag = client.head(key).headers["etag"]
-            # Different sizes force a new validator even within one timestamp tick.
+            # Nextcloud can reuse its validator for writes in the same second.
+            # Cross that real server clock boundary before arranging a stale ETag.
+            time.sleep(1.1)
             assert client.put(key, content=b"replacement").is_success
             set_mtime("object", 1235)
             assert client.head(key).headers["etag"] != etag
@@ -50,7 +52,9 @@ class TestWebDAVCleanupEvidence:
             assert client.put(key, content=b"original").is_success
             set_mtime("object", 1234)
             etag = client.head(key).headers["etag"]
-            # Different sizes force a new validator even within one timestamp tick.
+            # Nextcloud can reuse its validator for writes in the same second.
+            # Cross that real server clock boundary before arranging a stale ETag.
+            time.sleep(1.1)
             assert client.put(key, content=b"replacement").is_success
             set_mtime("object", 1235)
             assert client.head(key).headers["etag"] != etag
