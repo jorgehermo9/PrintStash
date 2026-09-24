@@ -11,24 +11,20 @@ from __future__ import annotations
 import importlib.util
 import time
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session
 
 from app.core.errors import ErrorKind, OperationError
-from app.db.models import ACTIVE_JOB_STATES, Job, User
+from app.db.models import Job, User
 from app.db.session import get_session_factory
 from app.modules.work.catalog import NETWORK
 from app.modules.work.contracts import JobContext, JobDefinition, Step
 
 DOWNLOAD_DEFINITION = "inference.model_download"
+# Every download shares one subject, so the active-subject index makes "one at
+# a time" a database guarantee rather than a check two requests can both pass.
+# The model a Job installs is its result's ``model_id``.
+DOWNLOAD_SUBJECT = "model/download"
 _RUNTIME_MODULES = ("onnxruntime", "onnx", "tokenizers")
-
-
-def subject_key(identity: str) -> str:
-    return f"model/{identity}"
-
-
-def _identity(subject: str) -> str:
-    return subject.split("/", 1)[1]
 
 
 def _allowed(session: Session, actor_id: int | None) -> bool:
@@ -54,6 +50,7 @@ def request(session: Session, actor: User, key: str) -> str:
     from app.modules.inference.model_registry import require
     from app.modules.search.configuration import settings
     from app.modules.work import service as work_service
+    from app.modules.work.jobs import ActiveJobExists
 
     flags = settings(session)
     if not actor.is_superuser or not actor.is_active:
@@ -67,20 +64,26 @@ def request(session: Session, actor: User, key: str) -> str:
     entry = require(key)
     if not all(importlib.util.find_spec(name) for name in _RUNTIME_MODULES):
         raise OperationError("embedding_runtime_unavailable", kind=ErrorKind.CONFLICT)
-    busy = session.exec(
-        select(Job.id).where(
-            Job.kind == DOWNLOAD_DEFINITION, col(Job.state).in_(ACTIVE_JOB_STATES)
+    try:
+        return work_service.request(
+            session,
+            definition=DOWNLOAD_DEFINITION,
+            subject_key=DOWNLOAD_SUBJECT,
+            owner_user_id=actor.id,
+            status={"result": {"model_id": entry.id}},
         )
-    ).first()
-    if busy is not None:
-        raise OperationError("embedding_download_busy", kind=ErrorKind.CONFLICT)
-    return work_service.request(
-        session,
-        definition=DOWNLOAD_DEFINITION,
-        subject_key=subject_key(entry.id),
-        owner_user_id=actor.id,
-        status={"result": {"model_id": entry.id}},
-    )
+    except ActiveJobExists:
+        raise OperationError(
+            "embedding_download_busy", kind=ErrorKind.CONFLICT
+        ) from None
+
+
+def _model_of(job_id: str) -> str | None:
+    from app.modules.work.jobs import jobs
+
+    status = jobs.get(job_id)
+    model = (status.result or {}).get("model_id") if status is not None else None
+    return model if isinstance(model, str) else None
 
 
 def _download(ctx: JobContext) -> None:
@@ -89,7 +92,10 @@ def _download(ctx: JobContext) -> None:
     from app.modules.inference.model_acquisition import Acquisition
     from app.modules.inference.model_registry import require
 
-    identity = _identity(ctx.subject_key)
+    identity = _model_of(ctx.job_id)
+    if identity is None:
+        ctx.finish("failed", error="embedding_download_failed", retryable=False)
+        return
     entry = require(identity)
     sessions = get_session_factory()
     with sessions.scoped_session() as session:

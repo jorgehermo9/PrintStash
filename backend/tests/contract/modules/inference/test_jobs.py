@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from app.core.errors import OperationError
+from app.db.models import Job
 from app.db.session import get_session_factory
 from app.modules.inference import jobs as inference_jobs
 from app.modules.search.configuration import update
@@ -82,6 +83,19 @@ class TestModelDownload:
 
         with pytest.raises(OperationError, match="embedding_download_busy"):
             _request(session, actor, fake.entry.id)
+
+    def test_every_download_claims_the_same_subject(self, download_case) -> None:
+        # One subject for all models, so the active-subject index (not a check
+        # two racing requests could both pass) keeps downloads one at a time.
+        session, actor, fake, _ = download_case
+        job_id = _request(session, actor, fake.entry.id)
+
+        with get_session_factory().scoped_session() as rows:
+            job = rows.get(Job, job_id)
+            assert job is not None
+            assert job.subject_key == inference_jobs.DOWNLOAD_SUBJECT
+        status = jobs.get(job_id)
+        assert status is not None and status.result == {"model_id": fake.entry.id}
 
     def test_a_cancel_stops_the_transfer(self, download_case, work_engine) -> None:
         session, actor, fake, cache = download_case
