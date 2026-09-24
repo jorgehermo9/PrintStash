@@ -359,6 +359,32 @@ docker compose pull && docker compose up -d
 Read [UPGRADE.md](../UPGRADE.md) and make a backup before updating. Check health
 at `http://localhost:3000/api/v1/health` (use your chosen host/port).
 
+## Background work and workers
+
+Imports, previews, metadata, backups, scans and notifications run as background
+Jobs. By default the API process runs them itself, which is right for almost
+every home installation. Settings → Background work shows what is running and
+lets an administrator change how many Jobs of each kind run at once.
+
+| Topology | How | Requires |
+| --- | --- | --- |
+| One process (default) | Any Compose file; `VAULT_PROCESS_ROLE=all` | SQLite or PostgreSQL |
+| API plus workers | API with `VAULT_PROCESS_ROLE=api`; add `worker` containers | PostgreSQL and one shared volume |
+| API without jobs | `docker-compose.workers.yml` (`VAULT_API_RUNS_JOBS=false`) | PostgreSQL and one shared volume |
+
+A worker runs the API image with `VAULT_PROCESS_ROLE=worker` and the command
+`/app/.venv/bin/python -m app.worker`. It serves no HTTP, never migrates (it
+waits for the API to), and stops cleanly on `SIGTERM`. Every process must mount
+the same `files`, `thumbs`, `staging` and `backups` volumes at the same paths and
+set `VAULT_SHARED_STORAGE=true`; uploads are staged on local disk and the worker
+that commits one reads what the API staged. Startup refuses a split topology on
+SQLite or without that declaration. Keep exactly one API container per vault.
+
+The engine keeps its own state beside the vault database (SQLite) or in the
+`dbos` schema (PostgreSQL). It is disposable, not part of a backup, and rebuilt
+after a restore. Tuning settings are listed in
+[Background work](architecture/background-work.md#configuration).
+
 ## Which Compose file should I use?
 
 | File | Purpose |
@@ -368,6 +394,7 @@ at `http://localhost:3000/api/v1/health` (use your chosen host/port).
 | `docker-compose.yml` | Existing configurable deployment with opt-in PostgreSQL and S3 profiles. |
 | `docker-compose.light.yml` | Smaller API image without browser automation or STEP tessellation; exposes advanced variables. |
 | `docker-compose.prod.yml` | Standalone configuration for a TLS reverse proxy, with localhost binding and log rotation. |
+| `docker-compose.workers.yml` | Split deployment: PostgreSQL, an API that runs no background work, and `worker` replicas on shared volumes. See [Background work](#background-work-and-workers). |
 | `docker-compose.build.yml` | Source-build overlay for the original `docker-compose.yml`. |
 | `docker-compose.light.build.yml` | Source-build overlay for the light file. |
 | `docker-compose.manual-test.yml` | Maintainer testing stack. |

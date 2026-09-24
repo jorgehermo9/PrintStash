@@ -87,11 +87,19 @@ manufacturing platform.
   SQLite only. PostgreSQL installations must use operator-managed `pg_dump`
   and restore procedures; the backup API exposes this capability explicitly
   and rejects unsupported database operations without modifying data.
-- One API process is the supported topology. Do not pass `--workers` greater
-  than one or run multiple API replicas against the same vault: scheduling,
-  rate limits, session coordination, and background registries are deliberately
-  process-local. Startup claims a vault lock and fails fast if another API
-  process is already active.
+- One API process per vault. Do not pass `--workers` greater than one or run
+  multiple API replicas against the same vault: rate limits, session
+  coordination and printer/folder supervisors are deliberately process-local.
+  Startup claims a vault lock and fails fast if another API process is already
+  active. Background work can be spread over `python -m app.worker` processes,
+  but only on PostgreSQL with one volume every process mounts (staged uploads
+  live on local disk); SQLite supports a single process.
+- Realtime notices (a thumbnail landing, a Job finishing) are best effort. A
+  dropped notice is recovered by the page's periodic refresh or on reconnect,
+  not immediately.
+- Engine state (`printstash-dbos.sqlite`, or the PostgreSQL `dbos` schema) is not
+  backed up; work in flight at a restore is rebuilt from the restored database,
+  and queued work at an upgrade is marked failed for retry.
 - PrintStash is designed for trusted self-hosted networks. Do not expose it
   directly to the public internet without TLS, reverse proxy hardening, strong
   secrets, and network-level care.

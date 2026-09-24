@@ -24,9 +24,11 @@ library/trash/storage code.
     [providers.md](providers.md).
 - `db/scopes.py` — `live()` / `trashed()` predicates. Hand-written
   `deleted_at.is_(None)` is a bug.
-- `bootstrap/` constructs and closes dependencies; `runtime/` owns local
-  scheduling hints, maintenance and event delivery. `WorkWakeup` is not a
-  durable Cloud queue. Event publication accepts message sinks, not WebSockets.
+- `bootstrap/` constructs and closes dependencies; `runtime/` owns maintenance
+  admission, the job engines and event transports. Background work is a Job of
+  a definition declared by its owner; see
+  [background-work.md](background-work.md). Event publication accepts message
+  sinks, not WebSockets.
 - Shared business lives in `printstash-core` behind operation-specific ports;
   product adapters own authorization and SQL transactions. Core has no ORM,
   framework or external-service dependencies.

@@ -47,6 +47,7 @@ and changelog instead of reconstructing their contents.
 | Branch, commit, PR, changelog | [references/conventions.md](references/conventions.md) |
 | Cut / publish a release, version bump | [references/release.md](references/release.md) |
 | Backend, config | [references/backend.md](references/backend.md) |
+| Background work: Job definitions, sources, lanes, derivative kinds, recipe bumps | [references/background-work.md](references/background-work.md) |
 | Schema change, migration, soft-delete query | [references/database.md](references/database.md) — autogenerate only; SQLite constraint work needs `op.batch_alter_table` |
 | Write, change, or audit tests (any layer) | [references/testing.md](references/testing.md) — coverage matrix mandatory; then its per-runtime reference |
 | Run the suites, chase a failure, move a coverage floor | [references/running-tests.md](references/running-tests.md) |

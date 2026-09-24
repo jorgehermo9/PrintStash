@@ -99,8 +99,11 @@ def validate_topology() -> None:
 
     A worker, or an API that does not run jobs, shares work with another
     process. That needs a database every process can reach concurrently
-    (PostgreSQL) and storage every process can reach (S3/WebDAV/SFTP, or a
-    volume declared shared with ``VAULT_SHARED_STORAGE=true``).
+    (PostgreSQL) and disk every process can reach, declared with
+    ``VAULT_SHARED_STORAGE=true``: uploads are staged on local disk whatever
+    the storage backend, and the worker that commits one reads the bytes the
+    API staged. With local storage the same volume also holds the vault and
+    thumbnails.
     """
     from sqlalchemy.engine import make_url
 
@@ -114,12 +117,12 @@ def validate_topology() -> None:
             f"VAULT_PROCESS_ROLE={role} splits work across processes and requires "
             "PostgreSQL (VAULT_DB_URL); SQLite supports the unified and api roles"
         )
-    local_storage = str(settings.storage_backend) in {"", "local"}
-    if local_storage and not settings.shared_storage:
+    if not settings.shared_storage:
+        local_storage = str(settings.storage_backend) in {"", "local"}
+        mounted = "vault, thumbnails and staging" if local_storage else "staging"
         raise RuntimeError(
-            "a split topology with local storage requires one volume mounted by "
-            "every process (vault, thumbnails, staging); declare it with "
-            "VAULT_SHARED_STORAGE=true"
+            f"a split topology requires the {mounted} directories on one volume "
+            "mounted by every process; declare it with VAULT_SHARED_STORAGE=true"
         )
 
 

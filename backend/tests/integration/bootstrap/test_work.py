@@ -159,10 +159,24 @@ class TestValidateTopology:
 
         work_bootstrap.validate_topology()
 
-    def test_a_split_topology_accepts_object_storage(self) -> None:
+    def test_object_storage_still_needs_a_shared_staging_volume(self) -> None:
+        # Uploads are staged on local disk whatever the storage backend; the
+        # worker that commits one reads the bytes the API staged.
         _overlay["process_role"] = "worker"
         _overlay["db_url"] = POSTGRES
         _overlay["storage_backend"] = "s3"
+        _overlay["shared_storage"] = False
+
+        with pytest.raises(RuntimeError, match="staging"):
+            work_bootstrap.validate_topology()
+
+    def test_a_split_topology_accepts_object_storage_with_shared_staging(
+        self,
+    ) -> None:
+        _overlay["process_role"] = "worker"
+        _overlay["db_url"] = POSTGRES
+        _overlay["storage_backend"] = "s3"
+        _overlay["shared_storage"] = True
 
         work_bootstrap.validate_topology()
 

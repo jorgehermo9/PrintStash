@@ -86,14 +86,13 @@ selected for a build.
 
 **Artifact persistence**:
 The invariant-heavy sequence `version → canonical publication → File row +
-Metadata + committed ownership`, owned solely by
+committed ownership`, owned solely by
 `modules/ingestion/ingestion.persist_artifact`. That primary boundary is atomic: once
 the database commit begins, uncertain outcomes preserve the published bytes and
 their ownership evidence for reconciliation rather than deleting them.
-Thumbnails are retryable derivatives published after the primary transaction;
-their failure never invalidates an otherwise complete Artifact. Both background
-ingestion and revision attachment call this service; nothing else re-implements
-it.
+Metadata and thumbnails are Derivatives produced by Jobs after the commit;
+their failure never invalidates an otherwise complete Artifact. Ingest Jobs and
+revision attachment call this service; nothing else re-implements it.
 
 **Revision**:
 A G-code Artifact with test-outcome bookkeeping (label, status, notes,
@@ -301,6 +300,54 @@ Create-only web uploads or revisions routed into a mounted library folder
 instead of Vault storage (`ingestion.resolve_write_target`). It is disabled for
 S3, WebDAV, and SFTP library sources. Mounted write-back only adds files and
 never overwrites existing bytes.
+
+### Background work
+
+**Job**:
+The user-visible record of background work on one Subject: state, progress,
+owner and attempts. The row is also the pending marker the Reconciler finds.
+One active Job per Job Definition and Subject.
+_Avoid_: task (the browser's Task Center row), background job, workflow
+
+**Job Definition**:
+A named kind of work with a Lane, ordered Steps and an optional Work Source,
+declared by its owning module. It says what cancelling does to its Subject.
+_Avoid_: job type, handler
+
+**Step**:
+An idempotent unit of a Job with its own retry policy.
+
+**Subject**:
+The domain key a Job's intent belongs to (`file/42`, `library/3`).
+
+**Work Source**:
+Computes a Job Definition's pending Subjects from domain state, bounded by the
+room it is given. A Schedule Source derives them from a cadence.
+
+**Reconciler**:
+Runs each Work Source, repairs Jobs whose execution was lost or belongs to
+another version, and submits what is owed. It is what guarantees work happens.
+
+**Nudge**:
+A request to run one source's pass sooner. Losing one costs latency, never work.
+_Avoid_: enqueue, trigger
+
+**Lane**:
+A concurrency class and engine queue (`ingest`, `derive.native`, `notify`, …).
+
+**Fence**:
+A database lease that stops new Steps from starting, held by restore and
+migrations.
+
+**Derivative**:
+A pure function of one Artifact's bytes plus a Recipe (metadata, thumbnail,
+toolpath), produced by a Job after the Artifact commits. A missing Derivative is
+unknown, never zero.
+_Avoid_: enrichment, processing
+
+**Recipe (version)**:
+The versioned definition of how one Derivative kind is produced. Bumping it
+re-derives every Artifact at backfill priority.
 
 ## Flagged ambiguities
 

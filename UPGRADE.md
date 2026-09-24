@@ -1,5 +1,35 @@
 # PrintStash Upgrade Guide
 
+## Unreleased: background work on a durable engine
+
+Background work now runs as Jobs on an embedded engine (DBOS). Nothing new has
+to be installed or configured for the default single-container deployment.
+
+- **Finish or cancel imports first.** Work that is queued or running when you
+  upgrade is not carried over: those Jobs are marked failed with a message
+  saying so, and the files they had staged are reclaimed by the usual staging
+  cleanup. Retry them after the upgrade.
+- **Previews and metadata are kept.** Existing thumbnails and metadata are
+  recorded as already derived, so the library is not re-rendered. Meshes that
+  never had geometry are derived in the background after startup.
+- **Engine state is disposable.** On SQLite it is `printstash-dbos.sqlite`
+  beside the vault database; on PostgreSQL the `dbos` schema of the same
+  database. It is not part of a backup, and a restore rebuilds it. Do not copy
+  it between installations.
+- **API changes for scripts and integrations.** Poll `GET /api/v1/jobs/{id}`
+  instead of `/api/v1/ingest/jobs/{id}`. Job states are `queued`, `running`,
+  `interrupted`, `completed`, `failed` and `cancelled`. `POST /api/v1/backups`
+  returns `202` with a `job_id`; the finished Job's `result` is the backup.
+  `POST /api/v1/files/thumbnails/rebuild` is replaced by
+  `POST /api/v1/admin/work/derivatives/thumbnail/regenerate` with
+  `{"mode": "all"}`. A binary G-code toolpath that is still being prepared
+  answers `202` with `{"state": …}`. Pending Imports report `job_id`.
+- **Optional workers.** On PostgreSQL, with one volume every process mounts
+  (`VAULT_SHARED_STORAGE=true`), you can add
+  `python -m app.worker` processes; see
+  [Background work](docs/architecture/background-work.md#topologies). A worker
+  never migrates; start the API (which migrates) first or alongside it.
+
 ## Unreleased: canonical Artifact downloads
 
 Clients using `/api/v1/files/{id}/download-url` or `download-direct` must use

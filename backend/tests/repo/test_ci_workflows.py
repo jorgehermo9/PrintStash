@@ -232,9 +232,7 @@ class TestContainerVulnerabilityScanning:
 
         assert len(rows) == 8
         assert all(row.get("load", True) is True for row in rows)
-        assert scan["with"]["image"] == (
-            "${{ matrix.image }}:${{ matrix.arch }}-ci"
-        )
+        assert scan["with"]["image"] == ("${{ matrix.image }}:${{ matrix.arch }}-ci")
         assert scan["with"]["report-name"] == (
             "ci-${{ matrix.image }}-${{ matrix.arch }}"
         )
@@ -243,9 +241,7 @@ class TestContainerVulnerabilityScanning:
         workflow = _workflow("container-publish.yml")
         scan_job = workflow["jobs"]["scan"]
         merge_job = workflow["jobs"]["merge"]
-        resolve = next(
-            step for step in scan_job["steps"] if step.get("id") == "target"
-        )
+        resolve = next(step for step in scan_job["steps"] if step.get("id") == "target")
         scan = next(
             step
             for step in scan_job["steps"]
@@ -273,9 +269,7 @@ class TestContainerVulnerabilityScanning:
         assert "--output table=/reports/report.txt" in scan["run"]
         assert "--output json=/reports/report.json" in scan["run"]
         assert "--output sarif=/reports/report.sarif" in scan["run"]
-        assert "ghcr.io/anchore/grype:v0.118.0@sha256:" in scan["env"][
-            "GRYPE_IMAGE"
-        ]
+        assert "ghcr.io/anchore/grype:v0.118.0@sha256:" in scan["env"]["GRYPE_IMAGE"]
         assert upload["with"]["retention-days"] == 90
         assert upload["with"]["if-no-files-found"] == "warn"
 
@@ -336,7 +330,9 @@ class TestContainerVulnerabilityScanning:
             (REPO_ROOT / ".github/actions/grype-scan/action.yml").read_text()
         )
         upload = next(
-            step for step in action["runs"]["steps"] if step["name"] == "Upload SARIF report"
+            step
+            for step in action["runs"]["steps"]
+            if step["name"] == "Upload SARIF report"
         )
 
         assert workflow_job["permissions"]["security-events"] == "write"

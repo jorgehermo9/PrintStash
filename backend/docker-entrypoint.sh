@@ -94,6 +94,11 @@ if [ "$(id -u)" != "$PUID" ] || [ "$(id -g)" != "$PGID" ]; then
   exit 64
 fi
 
-/app/.venv/bin/python -m app.db.migrate
+# The API owns the schema. A worker (VAULT_PROCESS_ROLE=worker) never migrates:
+# several replicas would race, and one of an older build must not downgrade
+# what a newer API applied. `python -m app.worker` waits for the schema instead.
+if [ "${VAULT_PROCESS_ROLE:-all}" != "worker" ]; then
+  /app/.venv/bin/python -m app.db.migrate
+fi
 
 exec "$@"

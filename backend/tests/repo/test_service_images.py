@@ -30,7 +30,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # Every compose file that runs one of these services for real. A new stack that
 # pins its own version has to be added here, or it is a third definition nobody
 # is comparing.
-COMPOSE_FILES = ("docker-compose.yml", "docker-compose.manual-test.yml")
+COMPOSE_FILES = (
+    "docker-compose.yml",
+    "docker-compose.manual-test.yml",
+    "docker-compose.workers.yml",
+)
 
 
 def _service_images(service: str) -> dict[str, str]:

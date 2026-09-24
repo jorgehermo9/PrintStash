@@ -25,6 +25,7 @@ delegate.
 
 ## Layout
 - `backend/` FastAPI + SQLModel + Alembic. Capability owners in `backend/app/modules/`, composition in `bootstrap/`, process coordination in `runtime/`; HTTP in `api/`, tables in `db/models/`. Boundaries: `docs/architecture/backend.md`. Tests in `backend/tests` mirror these owners.
+- Background work: the engine-agnostic model in `backend/app/modules/work/` (Jobs, definitions, sources, reconciler, fences, events), Artifact derivatives in `modules/derivatives/`, engines in `runtime/engine/` (DBOS; inline for tests), composition in `bootstrap/work.py`, the worker process in `app/worker.py`.
 - `frontend/` Vite + React + TS.
 - Domain language: read `CONTEXT.md` before touching library/trash/storage code — terms there are binding (Model, Artifact, Revision, live/trashed, storage key…).
 - Design + motion language: read `DESIGN.md` before adding or restyling UI — tokens, the motion scale, and the `components/ui/` primitives are binding. Compose the primitives; never hand-roll an overlay, and never type a raw duration, cubic-bezier, or `[var(--…)]` color into a component.
@@ -81,7 +82,8 @@ executed rather than what was asserted. Playwright is invisible to all of it.
 2. Version bumps are a triple: `backend/pyproject.toml` + `backend/app/core/config.py` + `frontend/package.json` (+ git tag) must match.
 3. Use one short-lived branch per change, branched from `main` and named for its purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `docs/<slug>`, etc.). Merge features independently; version only after the planned release set is on `main`, then tag and publish. Semver: 0.x.y patch = fixes only.
 4. One PR per bug/feature. **Tests are mandatory for any change to production code** — no "too small to test" exception; the test-design coverage matrix is the proof. Tests first on data-integrity/security fixes.
-5. Keep cloud seams clean: StorageBackend and SessionFactory retain explicit contracts; event publication is separate from WebSocket delivery. OSS WorkWakeup is a local scheduler hint, not Cloud's durable task queue. Shared business in printstash-core has no framework, ORM or external-service hard dependencies.
+5. Keep cloud seams clean: StorageBackend, SessionFactory and JobEngine retain explicit contracts; event publication is separate from WebSocket delivery. Background work is intent in the application database, found by a Work Source and executed through `JobEngine`; a nudge is a latency hint, never the record of the work. Only `app/runtime/engine/` imports DBOS. Shared business in printstash-core has no framework, ORM, engine or external-service hard dependencies.
+7. Background work goes through a Job Definition (`<module>/jobs.py`, see `docs/architecture/background-work.md`). No `BackgroundTasks`, `asyncio.create_task` or `to_thread` loops for work in production code, and a request never runs enrichment inline: a new derived output is a Derivative kind (`docs/derivatives.md`). Bump a recipe version when a producer's output changes.
 6. Frontend UI follows `DESIGN.md`. The zero-counts are load-bearing: no `transition-all`, no `ease-in`, no raw durations/cubic-beziers, no arbitrary `[var(--…)]` colors. Nothing animates over 300ms; route navigation never animates.
 
 ## Release & roadmap

@@ -1,0 +1,154 @@
+# Background work
+
+Everything PrintStash does outside a request (imports, derivatives, backups,
+scans, notifications, fleet dispatch, audits, migrations, retention) is a
+**Job** of a registered **Job Definition**, executed by a durable engine behind
+a port. Why it is shaped this way is in
+[ADR 0008](../adr/0008-job-engine.md); this page is how it works.
+
+```text
+ request / watcher / printer event          tick (every JOBS_RECONCILE_INTERVAL)
+            │ commit intent, then nudge(definition)      │
+            ▼                                            ▼
+   ┌────────────────────── reconciler pass (work.reconcile) ──────────────────┐
+   │ repair: Job rows ⨯ engine evidence → decide() → resubmit/interrupt/fail  │
+   │ discover: source.pending(now, headroom) → create Job → submit            │
+   └─────────────────────────────┬────────────────────────────────────────────┘
+                                 ▼
+                 JobEngine port (DBOS, or inline in tests)
+                   lanes = queues · execution_id · dedupe_key
+                                 ▼
+                    runner: fences → steps → settle Job → nudge
+```
+
+## The model
+
+| Term | Code | Meaning |
+| --- | --- | --- |
+| Job | `db.models.Job`, `work.jobs` | The user-visible record of work on one subject, with its status, owner and attempts. The row is also the pending marker the reconciler finds. |
+| Job Definition | `work.contracts.JobDefinition` | Name, lane, ordered steps, an optional source, and what cancel/retry/failure do to the subject. Declared by the owning module in `<module>/jobs.py`. |
+| Step | `work.contracts.Step` | An idempotent unit with its own `RetryPolicy`. |
+| Subject | `Job.subject_key` | The domain key the Job's intent belongs to (`file/42`, `library/3`). One active Job per definition and subject (`uq_jobs_active_subject`). |
+| Work Source | `work.sources` | Computes pending subjects from domain state, bounded by the room it is given. `StateSource` for domain rows, `ScheduleSource` for a cadence. |
+| Lane | `work.catalog` | A concurrency class and an engine queue: `ingest`, `derive.native`, `derive.light`, `similarity`, `network`, `notify` (partitioned per channel), `printing` (per printer), `maintenance`, `reconcile`. |
+| Priority | `WorkPriority` | `interactive` (a user is waiting) or `backfill`. A child Job never raises it. |
+| Fence | `work.fences` | A database lease (holder, heartbeat, TTL) checked before every step; restore and migrations hold them. |
+| Executor | `work.executors` | A process that runs Jobs, heartbeating its role, lanes and in-flight writes. |
+
+Definitions without a source (uploads, backups on request, archive imports) are
+requested: a route records the Job with its intent in one transaction and
+nudges. Definitions with a source are discovered: the source finds the work.
+
+## Engine guarantees
+
+The port (`work.contracts.JobEngine`) names exactly two, both provided by DBOS:
+
+- `execution_id = <job id>:<attempt>`: one execution per attempt, ever.
+- `dedupe_key = <definition>|<subject>`: at most one active execution per
+  subject. Partitioned lanes cannot deduplicate in DBOS; there the
+  active-subject index is the claim.
+
+Nothing else is assumed of the engine. Its state is disposable: SQLite keeps it
+in `printstash-dbos.sqlite` beside the vault database; PostgreSQL keeps it in
+the `dbos` schema of the same database. Backups do not include it.
+
+## The reconciler
+
+One pass (`work.reconciler.run_pass`) per definition, claimed through its
+`reconcile_cursors` row so two processes never run the same source at once:
+
+1. **Repair.** Active Job rows are compared with the engine's evidence for
+   their current attempt, and the pure `decide()` returns none, complete,
+   resubmit, interrupt or fail. Work of another application version, or
+   stranded on an executor that stopped heartbeating, is cancelled and rerun.
+   A Job resubmitted more than `JOBS_MAX_RESUBMITS` times fails.
+2. **Discover.** The source is asked for at most
+   `min(JOBS_RECONCILE_BATCH, lane headroom)` items, where headroom is the
+   lane's concurrency × `JOBS_LANE_HEADROOM_FACTOR` minus its depth. Each item
+   becomes a Job (unless its subject already has one) and is submitted.
+3. **Continue or stop.** A full batch that created Jobs while the lane still had
+   room runs again immediately. A full lane stops; each Job's completion nudges
+   its source. A nudge that arrived during the pass (the dirty mark,
+   `nudged_at`) makes the pass run once more before it releases.
+
+A nudge (`work.nudge`) stamps the dirty mark and queues a pass unless one is
+already queued within `JOBS_SUBMIT_GRACE_SECONDS`. An interactive nudge is not
+absorbed by a queued backfill pass. The tick, a single `@DBOS.scheduled`
+workflow, nudges every definition at `JOBS_RECONCILE_INTERVAL_SECONDS` as a
+safety net, and schedule sources become due on it.
+
+## Derivatives
+
+See [derivatives.md](../derivatives.md). In short: three producer groups
+(`derive.mesh`, `derive.gcode`, `derive.toolpath`) pull Artifacts missing a kind
+at its recipe version through a bounded anti-join, one mesh load produces
+geometry and the thumbnail together, and each kind's row records ready,
+skipped, failed (with backoff) or cancelled.
+
+## Realtime notices
+
+`work.events` publishes ids and a hint, never protected data:
+
+- `jobs:<user id>` for the owner's Jobs, `work:admin` for every Job;
+- `model:<id>` when a derivative of one of the Model's Artifacts changes.
+
+`GET /api/v1/events/ws` (one-use ticket from `POST /api/v1/events/ticket`)
+delivers them. The client follows a Model with `{"subscribe": "model:<id>"}`;
+the server checks the viewer may see it. Delivery is best effort: in one
+process it is in memory, across processes it is PostgreSQL `NOTIFY`, and a
+reconnect delivers `{"type": "resync"}` so clients refetch.
+
+## Topologies
+
+| Topology | Settings | Needs |
+| --- | --- | --- |
+| Unified (default) | `VAULT_PROCESS_ROLE=all` | SQLite or PostgreSQL, any storage |
+| API plus workers | `VAULT_PROCESS_ROLE=api` (API also runs jobs), `worker` replicas | PostgreSQL, a shared volume |
+| API without jobs | `VAULT_PROCESS_ROLE=api`, `VAULT_API_RUNS_JOBS=false`, `worker` replicas | PostgreSQL, a shared volume |
+
+A worker is `python -m app.worker`: no HTTP, no printer or folder supervisors;
+it waits until the API has migrated the schema, then runs every lane.
+"Shared storage" is one volume mounted by every process at the same paths and
+declared with `VAULT_SHARED_STORAGE=true`; startup refuses a split topology
+without it. Uploads are staged on local disk whatever the storage backend, and
+the worker that commits one reads what the API staged, so the staging directory
+is always on it; with local storage the vault and thumbnails are too.
+`docker-compose.workers.yml` runs the third topology.
+
+## Configuration
+
+| Setting (`VAULT_…`) | Default | Meaning |
+| --- | --- | --- |
+| `JOBS_RECONCILE_INTERVAL_SECONDS` | 300 | Safety-net tick |
+| `JOBS_RECONCILE_BATCH` | 500 | Most Jobs one pass creates |
+| `JOBS_LANE_HEADROOM_FACTOR` | 2 | Queue depth allowed per unit of concurrency |
+| `JOBS_MAX_RESUBMITS` | 3 | Interrupted attempts before a Job fails |
+| `JOBS_RESUBMIT_COOLDOWN_SECONDS` / `JOBS_RESUBMIT_BURST` | 30 / 3 | A subject finished this often waits the window out |
+| `JOBS_SUBMIT_GRACE_SECONDS` | 60 | How long a queued pass absorbs further nudges |
+| `JOBS_EXECUTOR_STALE_SECONDS` | 120 | Heartbeat age after which an executor's work is rerun |
+| `JOBS_RETENTION_DAYS` / `JOBS_RETENTION_PER_USER` | 7 / 500 | User Job history |
+| `JOBS_SYSTEM_RETENTION_HOURS` | 24 | Ownerless (backfill) Job history |
+| `ENGINE_HISTORY_RETENTION_DAYS` | 7 | Settled engine executions |
+| `DERIVATIVE_MAX_ATTEMPTS` / `DERIVATIVE_BACKOFF_SECONDS` | 5 / 30 | Derivative retries, doubling, capped at a day |
+| `FENCE_HEARTBEAT_SECONDS` / `FENCE_TTL_SECONDS` | 15 / 60 | Fence liveness |
+| `JOBS_<LANE>_CONCURRENCY` | ingest 2, derive.light 4, network 4, similarity 1, notify 1, printing 1, maintenance 1 | Per-lane concurrency; `derive.native` defaults to `MAX_RENDER_JOBS` |
+| `JOBS_NOTIFY_RATE_PER_MINUTE` | 30 | Deliveries per channel |
+
+Administrators override lane concurrency at runtime on Settings → Background
+work; the override is stored in the database and applies to every process.
+
+## Failure and recovery
+
+- **A process dies mid-step.** Its executor stops heartbeating; after
+  `JOBS_EXECUTOR_STALE_SECONDS` a pass sees the execution stranded, cancels it
+  and resubmits the next attempt. Derivative rows it left running go stale and
+  are offered again.
+- **Upgrade.** The new version cancels executions of the old one at startup and
+  reruns them on the new code, without waiting for staleness.
+- **Restore.** A restore holds the restore fence, so no step starts; afterwards
+  the engine's state is discarded and every definition reconciled against the
+  restored database.
+- **A nudge is lost.** Nothing happens until the next tick or completion nudge;
+  the intent is still in the database.
+- **A notice is dropped.** Clients also refresh on a slow interval and on
+  `resync`.

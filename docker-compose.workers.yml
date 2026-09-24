@@ -1,0 +1,133 @@
+# Split deployment: one API that runs no background work, plus worker replicas.
+#
+# Background work (imports, previews, backups, scans, notifications…) runs in
+# the `worker` replicas; the API serves HTTP and the events socket only. Every
+# process shares PostgreSQL and one set of volumes: uploads are staged on local
+# disk and the worker that commits one reads what the API staged.
+#
+# See docs/architecture/background-work.md#topologies.
+#
+# Usage (standalone):
+#   docker compose -f docker-compose.workers.yml up -d
+#   docker compose -f docker-compose.workers.yml up -d --scale worker=4
+#
+# Set at minimum VAULT_JWT_SECRET and POSTGRES_PASSWORD in .env.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-vault-environment: &vault-environment
+  VAULT_DB_URL: postgresql://${POSTGRES_USER:-printstash}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-printstash}
+  VAULT_STORAGE_BACKEND: local
+  VAULT_DATA_DIR: /data/files
+  VAULT_THUMB_DIR: /data/thumbs
+  VAULT_STAGING_DIR: /data/staging
+  VAULT_BACKUP_DIR: /data/backups
+  # Every process mounts the same volumes below; this declares it.
+  VAULT_SHARED_STORAGE: "true"
+  VAULT_JWT_SECRET: ${VAULT_JWT_SECRET:?set a strong VAULT_JWT_SECRET in .env}
+  VAULT_SECRETS_KEY: ${VAULT_SECRETS_KEY:-}
+  VAULT_LOG_LEVEL: ${VAULT_LOG_LEVEL:-INFO}
+  PUID: "${PUID:-10001}"
+  PGID: "${PGID:-10001}"
+  TZ: UTC
+
+x-vault-volumes: &vault-volumes
+  - printstash_data:/data/files
+  - printstash_thumbs:/data/thumbs
+  - printstash_db:/data/db
+  - printstash_staging:/data/staging
+  - printstash_backups:/data/backups
+
+services:
+  frontend:
+    image: ghcr.io/xiao-villamor/printstash-frontend:${PRINTSTASH_VERSION:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "${PRINTSTASH_HTTP_PORT:-3000}:3000"
+    networks:
+      - printstash_net
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    image: ghcr.io/xiao-villamor/printstash-api:${PRINTSTASH_VERSION:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    expose:
+      - "8000"
+    environment:
+      <<: *vault-environment
+      VAULT_PROCESS_ROLE: api
+      VAULT_API_RUNS_JOBS: "false"
+      VAULT_SETUP_MODE: ${VAULT_SETUP_MODE:-trusted_network}
+      VAULT_RESTART_ENABLED: ${VAULT_RESTART_ENABLED:-true}
+    volumes: *vault-volumes
+    networks:
+      - printstash_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # The entrypoint migrates the schema before the server starts.
+
+  worker:
+    image: ghcr.io/xiao-villamor/printstash-api:${PRINTSTASH_VERSION:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    # No HTTP: a worker runs background work and waits for the API's schema.
+    command: ["/app/.venv/bin/python", "-m", "app.worker"]
+    environment:
+      <<: *vault-environment
+      VAULT_PROCESS_ROLE: worker
+    volumes: *vault-volumes
+    networks:
+      - printstash_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: ${PRINTSTASH_WORKERS:-2}
+    # SIGTERM finishes the current step's bookkeeping and leaves cleanly.
+    stop_grace_period: 60s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-printstash}
+      POSTGRES_USER: ${POSTGRES_USER:-printstash}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - printstash_postgres:/var/lib/postgresql/data
+    networks:
+      - printstash_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-printstash} -d ${POSTGRES_DB:-printstash}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  printstash_net:
+    driver: bridge
+
+volumes:
+  printstash_data:
+  printstash_thumbs:
+  printstash_db:
+  printstash_staging:
+  printstash_backups:
+  printstash_postgres:

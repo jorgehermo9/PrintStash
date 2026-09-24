@@ -1,0 +1,95 @@
+# Derivatives
+
+A **derivative** is a pure function of one Artifact's bytes and a **recipe**:
+its metadata (geometry, or slicer facts), its thumbnail, and for binary G-code
+its converted toolpath. Uploading commits a bare Artifact; derivatives are
+produced afterwards by Jobs, so an upload never waits on a renderer and a
+renderer crash never loses an upload.
+
+## Data model
+
+`artifact_derivatives` holds one row per Artifact, kind and recipe version:
+
+| Column | Meaning |
+| --- | --- |
+| `file_id`, `kind`, `recipe_version` | Unique together; a row at an older recipe does not count |
+| `state` | `running`, `ready`, `skipped`, `failed` or `cancelled` |
+| `attempts`, `next_attempt_at`, `failure_reason` | Retry bookkeeping |
+| `storage_key`, `output_json` | Where the output lives and a small summary |
+| `duration_ms`, `peak_rss_bytes` | What producing it cost |
+
+The outputs themselves stay with their owners: geometry and slicer facts in
+`metadata`, the thumbnail as a blob pointed at by `File.thumbnail_path`, the
+toolpath as a blob under `_derivatives/`. No row means **pending**: nothing has
+been attempted at the current recipe, so every value the kind supplies is
+unknown. Search, filters, sorting and similarity treat an unknown value as
+unknown, never as zero.
+
+A kind is satisfied for now when it is `ready` or `skipped` (until an
+administrator regenerates it), `cancelled`, `failed` while waiting out its
+backoff (`DERIVATIVE_BACKOFF_SECONDS`, doubling, capped at a day), `failed`
+after `DERIVATIVE_MAX_ATTEMPTS` or with a deterministic cause (bytes that can
+never render), or `running` unless a lost execution left it there too long.
+
+## Why kinds are pulled
+
+Earlier releases pushed enrichment from the upload path, so every new kind or
+renderer change needed backfill code and a startup `UPDATE`, and an Artifact
+whose push was lost stayed without a thumbnail forever. Now each producer
+group's source (`derivatives.source.DerivativeSource`) asks the database which
+Artifacts are missing a kind at its current recipe:
+
+- a **bounded anti-join** of live, non-sentinel Artifacts of the group's types
+  against satisfying rows, never scanning more than it was asked for;
+- first everything above a **high-water mark** (fresh uploads, interactive
+  priority), then a **rotating window** of older ids (backfill priority), so a
+  pass over a fully derived library of any size costs the same few queries.
+
+A new kind, a recipe bump or "regenerate all" therefore needs no migration
+code: the anti-join starts matching again and the reconciler works through the
+library at backfill priority while uploads keep interactive priority.
+
+## Producer groups
+
+| Definition | Lane | Kinds | Produced from |
+| --- | --- | --- | --- |
+| `derive.mesh` | `derive.native` | `metadata` (geometry), `thumbnail` | One native mesh load (also hands similarity its fingerprints) |
+| `derive.gcode` | `derive.light` | `metadata` (slicer facts, material requirements), `thumbnail` | One header read; no embedded image means `skipped` |
+| `derive.toolpath` | `derive.native` | `toolpath` | The binary G-code converter, under resource limits |
+
+A producer derives only the kinds still owed, records every outcome on the
+kind's row, and tells viewers of the Model on `model:<id>` so an open page
+refreshes when a thumbnail lands.
+
+## Bumping a recipe
+
+The recipe constants in `app/modules/derivatives/kinds.py` are the code's
+statement that a kind's output would now differ for the same bytes. Increase
+one, by hand, in the change that alters what its producer emits: a new
+renderer, a parser that reads a field it used to miss, a different encoding.
+Do not bump for a refactor that cannot change any output. Every Artifact is
+re-derived in the background, and its old output stays visible until the
+replacement is ready.
+
+## Adding a kind
+
+1. Add the kind and its recipe constant to `kinds.py`, in the group whose
+   producer can compute it from the bytes it already reads (or a new group with
+   its own definition and lane).
+2. Produce it in `producers.py`, recording `ready`, `skipped` or `failed`
+   through `records`; decide which failures are deterministic.
+3. Store the output with its owner, never in `artifact_derivatives`.
+4. Treat it as unknown until ready wherever it is read.
+5. Test the source (`pending` finds it), the producer (each outcome), the Job
+   (convergence after commit) and the consumer's unknown case.
+
+## Operating
+
+- **Per Artifact:** the Model's Files tab shows what is still being prepared
+  and what failed; an editor can retry a failure
+  (`POST /api/v1/files/{id}/derivatives/{kind}/retry`).
+- **Library-wide:** Settings → Background work offers, per kind, *Derive
+  missing* (nudge only) and *Regenerate all* (every Artifact again, current
+  outputs kept until replaced).
+- **Audit repair:** a vault audit that finds a thumbnail missing from storage
+  invalidates and re-derives it (`derivatives.repair`).

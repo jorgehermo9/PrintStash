@@ -11,18 +11,20 @@ HTTP endpoint or persisted archive format.
 | Owner | Responsibilities | Public operations and contracts |
 | --- | --- | --- |
 | `library` | Models, Artifacts, G-code Revisions, taxonomy, multipart sets, provenance and trash | `commands`, `revisions`, `model_views.{listing,pagination,detail,facets,exports,statistics,trash}`, `multipart_models`, `part_options`, `provenance`, `source_covers`, `taxonomy`, `saved_views`, `trash` |
-| `ingestion` | Accepting bytes, staging, Inbox review, URL imports and portable transfer | `ingestion.persist_artifact`, `background`, `inbox`, `importer`, `library_transfer`, `staging_leases`, `staging_cleanup` |
+| `ingestion` | Accepting bytes, staging, Inbox review, URL imports and portable transfer | `ingestion.persist_artifact`, `requests`, `jobs`, `background`, `inbox`, `importer`, `library_transfer`, `staging_leases`, `staging_cleanup` |
 | `sources` | Mounted/remote libraries, discovery, root enrollment and watching | `contracts`, `root_binding`, `library_source`, `external_library`, `library_watcher`, `library_locations` |
 | `storage` | Object identity, ownership, publication, reading and verified deletion | `storage_backend.contracts`, `artifact_content`, `storage_ownership`, `storage_deletion`, `storage_operations`, `storage_connections`, `storage_paths`, `storage_providers` |
 | `backups` | Snapshot creation, catalogue, verification, replicas and journaled restore | `backup.creation`, `backup.catalogue`, `backup.verification`, `backup.adoption`, `backup.deletion`, `backup.restore`, `backup.recovery`, `backup_runs`, `retry_commands`, `backup_schedule` |
 | `printing` | Printers, provider adapters, fleet scheduling, materials and print history | `dispatch`, `costing`, `printer_provider`, `printer_hub`, `fleet`, `materials`, `printer_files`, `printer_jobs`, `print_results`, `multipart_builds` |
 | `similarity` | Versioned geometric evidence, indexed retrieval, durable analysis runs and explicit review | `fingerprints`, `retrieval`, `processing`, `candidates`, `review`, `composition` |
 | `inference` | Local native embedding contracts, immutable index generations and authorized semantic queries | `local`, `manifest`, `store`, `search` |
-| `media` | Mesh processing, thumbnails, source covers and toolpaths | `mesh_operations`, `thumbnail_engine`, `thumbnail_generations`, `thumbnail_repair`, `toolpath`, `source_cover_processing` |
+| `media` | Mesh processing, thumbnail rendering and publication, source covers and toolpath conversion | `mesh_operations`, `thumbnail_engine`, `thumbnail_publication`, `toolpath`, `source_cover_processing`, `compute_slots` |
+| `derivatives` | What each Artifact owes (metadata, thumbnail, toolpath), found by anti-join and produced by Jobs | `kinds`, `records`, `source`, `producers`, `repair`, `jobs` |
+| `work` | The engine-agnostic background work model: Jobs, definitions, sources, the reconciler, fences and realtime notices | `contracts`, `catalog`, `jobs`, `sources`, `reconciler`, `submission`, `runner`, `service`, `fences`, `executors`, `events` |
 | `identity` | Product identity, collection/printer authorization, sharing and tickets | `auth`, `oidc`, `rbac`, `printer_rbac`, `share`, `ws_tickets` |
 | `notifications` | Notification preparation and delivery | `notifications`, `notification_renderers` |
 | `administration` | Dynamic OSS settings, setup, audit and operational inspection | `runtime_config`, `setup_bootstrap`, `audit`, `vault_audit`, `release_check` |
-| `runtime` | Local process coordination, maintenance, job tracking and delivery transports | `maintenance`, `jobs`, `work_wakeup`, `realtime` |
+| `runtime` | Process coordination: maintenance admission, the job engines and event transports | `maintenance`, `engine.dbos_engine`, `engine.inline`, `realtime` |
 | `db` | Session factories, SQL schema and metadata registration | `session`, `scopes`, `models`, `publication`, `transactions` |
 
 The table identifies interfaces, not permission to reach through an operation
@@ -117,10 +119,15 @@ responsibilities.
 Library metadata, taxonomy, favorite and batch commands live in
 `library.commands`; their rollback boundary does not depend on the router.
 `printing.dispatch` receives its provider builder and storage dependency and
-owns immediate-send state transitions. Import job handlers and review manifests
-live in `ingestion.background`, with the existing local lifecycle. These are
-OSS operations, not additional shared-core contracts: adoption in Cloud must
-preserve its durable worker and tenant policies.
+owns immediate-send state transitions. Import Job steps and review manifests
+live in `ingestion.background`; their definitions are in `ingestion.jobs`.
+These are OSS operations, not additional shared-core contracts: adoption in
+Cloud must preserve its durable worker and tenant policies.
+
+Background work is declared by its owner (`<module>/jobs.py`) with the
+`work.contracts` types and composed in `bootstrap.work`. Only
+`runtime.engine` imports DBOS. See
+[background-work.md](background-work.md) and [ADR 0008](../adr/0008-job-engine.md).
 
 ## Guarantees that interfaces must retain
 
@@ -130,20 +137,24 @@ recovery. Never compensate an unknown commit by blindly deleting a pathname.
 `artifact_content` remains the entry point for reading an Artifact's bytes.
 Deletion must prove provider, namespace, key and exact object identity.
 
-OSS task transport is a process-local wake-up hint. Accepted work is stored in
-the database; this transport supplies neither durable delivery nor leases.
-Cloud's durable queue and worker fencing are separate product adapters, not an
-implementation of the same enqueue/dequeue contract.
+Accepted work is intent stored in the application database (a Job row, an
+ingest request, a missing derivative); the engine executes it and its state is
+disposable. A nudge only makes the reconciler run sooner, so losing one costs
+latency, never work. Cloud's durable queue and tenant-aware worker fencing
+remain separate product adapters behind the same `JobEngine` port.
 
 Event publication and HTTP connections are separate responsibilities. Local
-fan-out is best effort. Cloud's transactional outbox must be written inside its
+fan-out is best effort, and so is the PostgreSQL `NOTIFY` bus a split topology
+uses; after a reconnect clients are told to resync. Cloud's transactional outbox must be written inside its
 unit of work when an event must survive a crash after commit. A successful
 in-process publish is not evidence of durable browser delivery.
 
 Restore recovery retains its sidecar journal, storage receipts, database marker,
 maintenance gate and drain protocol. These are part of the storage consistency
-contract. The OSS in-memory maintenance gate is valid only in the supported
-single-process deployment; it is not a distributed lock.
+contract. The maintenance gate is a database fence (`work.fences`) with a
+holder, heartbeat and TTL, so it also stops Job steps in other processes; an
+interrupted restore is still governed by its filesystem journal, and a fence's
+expiry never overrides it.
 
 ## Validation
 
@@ -154,9 +165,10 @@ not just successful imports. Run query budgets, OpenAPI, schema parity,
 migration upgrades and publication/restore failure cases throughout extraction.
 See `docs/backend-refactor-validation.md` for the behavior matrix and evidence.
 
-Similarity analysis is an optional derivative of committed Artifacts. The runtime
-coordinates wakeups, restore/cleanup admission and the shared thumbnail compute
-budget; the capability owner checkpoints each mesh, shortlist or verified pair.
+Similarity analysis is an optional derivative of committed Artifacts. Its Job
+(`similarity.analyze`) runs in the `similarity` lane under restore/cleanup
+admission and the shared native compute budget; the capability owner
+checkpoints each mesh, shortlist or verified pair.
 Geometry arrays and embedding contracts live in `printstash-core`; file parsers,
 OCP/ONNX children, storage materialization and SQL authorization stay in the app.
 See [ADR 0005](../adr/0005-similar-models-evidence.md) for source/version fencing

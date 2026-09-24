@@ -2,7 +2,35 @@
 
 ## Unreleased
 
+### Changed
+
+- **Background work runs on a durable engine.** Imports, previews, metadata,
+  backups, scans, notifications, fleet dispatch, audits and migrations are Jobs
+  on DBOS, found by a reconciler from what the database says is owed, so a
+  crash, restart or upgrade resumes them instead of losing them. Uploads now
+  commit the Artifact and return; its metadata, thumbnail and binary G-code
+  toolpath are derived afterwards and appear on an open page without a reload.
+  A new kind or a renderer change re-derives the library in the background
+  while current previews stay visible.
+- Follow any Job at `GET /api/v1/jobs/{id}` (cancel and retry beside it) and
+  live changes on the `/api/v1/events/ws` socket. **Breaking:**
+  `/api/v1/ingest/jobs`, `POST /api/v1/files/thumbnails/rebuild`, plain
+  `POST /api/v1/ingest/archive` and `POST /api/v1/storage/migrations/{id}/advance`
+  are removed; `POST /api/v1/backups` now answers 202 with a `job_id` and the new
+  backup is the Job's result; a binary toolpath still being derived answers 202;
+  Pending Imports expose `job_id` instead of `background_job_id`.
+
 ### Added
+
+- Settings → **Background work** shows every lane with a runtime concurrency
+  override, each kind of Job with its queue and schedule, the processes running
+  work, and recent failures to retry; administrators can derive missing or
+  regenerate every thumbnail or metadata output. Each source Artifact shows what
+  is still being prepared and offers a retry for a failure.
+- Split deployments: an API that runs no jobs (`VAULT_API_RUNS_JOBS=false`) with
+  `python -m app.worker` replicas, on PostgreSQL with one volume every process
+  mounts, declared with `VAULT_SHARED_STORAGE=true` (`docker-compose.workers.yml`).
+  Realtime notices cross processes over PostgreSQL `NOTIFY`.
 
 - Model Families preserve independent Models and Revisions while recording human
   variant roles, an explicit canonical selection and relative measurements.
