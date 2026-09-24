@@ -1,21 +1,26 @@
-"""OSS import jobs and short-lived review manifests, independent of HTTP routing."""
+"""The bodies of the URL, archive and collection import Jobs.
+
+Each function runs as one job step for Job ``job_id``, reports progress onto
+that Job, and settles it. A review flow (a multi-file model page, a collection
+in review mode, an archive) ends its Job with a manifest *and* records that
+manifest on the Job's ingest request; the selection that follows presents the
+Job id as its token, so any process can serve it and a restart loses nothing.
+"""
 
 from __future__ import annotations
 
-import threading
-import time
-import uuid
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import asdict
 from pathlib import Path
-from typing import Generic, Optional, TypeVar
+from typing import Optional
 
+from printstash_core.files import ArchiveEntry
 from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import get_logger
 from app.db.session import SessionFactory
-from app.modules.ingestion import import_resolvers, importer
-from app.runtime.jobs import registry
+from app.modules.ingestion import import_resolvers, importer, requests
+from app.modules.work.jobs import jobs as registry
 from app.schemas.ingest import (
     ArchiveEntryRead,
     ArchiveManifest,
@@ -29,77 +34,7 @@ from app.schemas.ingest import (
 logger = get_logger(__name__)
 
 GCODE_SUFFIXES = {".gcode", ".g", ".gco", ".bgcode"}
-
-
 MESH_SUFFIXES = {".stl", ".3mf", ".obj", ".step", ".stp"}
-
-
-@dataclass
-class _PendingModelFiles:
-    page_url: str
-    page_title: str
-    owner_user_id: Optional[int]
-    files: list[import_resolvers.ModelFile]
-    created_at: float = field(default_factory=time.time)
-
-
-@dataclass
-class _PendingCollection:
-    title: str
-    target_collection: str
-    owner_user_id: Optional[int]
-    members: list[import_resolvers.CollectionMember]
-    # Retained in the in-memory contract for backwards compatibility. MakerWorld
-    # collection resolution is extension-only and this value is always ``None``.
-    makerworld_cookie: Optional[str] = None
-    created_at: float = field(default_factory=time.time)
-
-
-T = TypeVar("T")
-
-
-class _PendingRegistry(Generic[T]):
-    """In-process token store for review manifests (1h TTL)."""
-
-    _TTL = 3600.0
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._items: dict[str, T] = {}
-
-    def add(self, pending: T) -> str:
-        token = uuid.uuid4().hex
-        with self._lock:
-            self._prune()
-            self._items[token] = pending
-        return token
-
-    def get(self, token: str) -> Optional[T]:
-        with self._lock:
-            return self._items.get(token)
-
-    def pop(self, token: str) -> Optional[T]:
-        with self._lock:
-            return self._items.pop(token, None)
-
-    def _prune(self) -> None:
-        cutoff = time.time() - self._TTL
-        for key in [
-            k for k, v in self._items.items() if getattr(v, "created_at", 0) < cutoff
-        ]:
-            self._items.pop(key, None)
-
-
-pending_model_files: _PendingRegistry[_PendingModelFiles] = _PendingRegistry()
-
-
-pending_collections: _PendingRegistry[_PendingCollection] = _PendingRegistry()
-
-
-def _makerworld_cookie(override: Optional[str]) -> Optional[str]:
-    """Ignore the deprecated server-side MakerWorld credential field."""
-    del override
-    return None
 
 
 def collection_target(parent: Optional[str], title: str) -> str:
@@ -140,19 +75,14 @@ async def _download_and_collect(download_url: str) -> list[tuple[Path, str]]:
 
 async def _stage_members(
     members: list[import_resolvers.CollectionMember],
-    *,
-    makerworld_cookie: Optional[str],
 ) -> list[importer.ResolvedGroup]:
     """Resolve + download every collection member, isolating per-member failures."""
     groups: list[importer.ResolvedGroup] = []
     for member in members:
         group = importer.ResolvedGroup(source_url=member.page_url, title=member.title)
         try:
-            link = (
-                await import_resolvers.resolve_page_url(
-                    member.page_url, makerworld_cookie=makerworld_cookie
-                )
-                or member.page_url
+            link = await import_resolvers.resolve_page_url(member.page_url) or (
+                member.page_url
             )
             group.staged_files = await _download_and_collect(link)
             if not group.staged_files:
@@ -166,12 +96,12 @@ async def _stage_members(
     return groups
 
 
-def manifest_from_pending(
-    archive_id: str, pending: "importer.PendingArchive"
+def archive_manifest(
+    archive_id: str, archive_name: str, entries: list[ArchiveEntry]
 ) -> ArchiveManifest:
     return ArchiveManifest(
         archive_id=archive_id,
-        archive_name=pending.archive_name,
+        archive_name=archive_name,
         entries=[
             ArchiveEntryRead(
                 entry_id=e.entry_id,
@@ -180,29 +110,48 @@ def manifest_from_pending(
                 file_type=e.file_type,
                 is_image=e.is_image,
             )
-            for e in pending.entries
+            for e in entries
         ],
     )
+
+
+def _record_archive(
+    job_id: str,
+    *,
+    archive_name: str,
+    entries: list[ArchiveEntry],
+    source_url: str | None,
+) -> ArchiveManifest:
+    requests.store_manifest(
+        job_id,
+        "archive",
+        {
+            "archive_name": archive_name,
+            "entries": [asdict(entry) for entry in entries],
+            "source_url": source_url,
+        },
+    )
+    return archive_manifest(job_id, archive_name, entries)
 
 
 def _stage_model_files_manifest(
     job_id: str,
     req: UrlIngestRequest,
-    actor_user_id: int,
     listing: tuple[str, list[import_resolvers.ModelFile]],
 ) -> None:
-    """Stash a multi-file model page and report a manifest job result."""
+    """Record a multi-file model page's files and end the Job with the manifest."""
     page_title, files = listing
-    token = pending_model_files.add(
-        _PendingModelFiles(
-            page_url=req.url,
-            page_title=page_title,
-            owner_user_id=actor_user_id,
-            files=files,
-        )
+    requests.store_manifest(
+        job_id,
+        "model_files",
+        {
+            "page_url": req.url,
+            "page_title": page_title,
+            "files": [asdict(f) for f in files],
+        },
     )
     manifest = ModelFilesManifest(
-        files_token=token,
+        files_token=job_id,
         page_title=page_title,
         files=[
             ModelFileRead(
@@ -229,12 +178,9 @@ async def _handle_collection_url(
     actor_user_id: int,
     session_factory: SessionFactory,
 ) -> None:
-    """Resolve a collection URL; either stage a review manifest or import all."""
+    """Resolve a collection URL; either record a review manifest or import all."""
     registry.update(job_id, state="running", stage="resolving")
-    cookie = _makerworld_cookie(req.makerworld_cookie)
-    resolved = await import_resolvers.resolve_collection_url(
-        req.url, makerworld_cookie=cookie
-    )
+    resolved = await import_resolvers.resolve_collection_url(req.url)
     if not resolved:
         registry.update(job_id, state="failed", error="collection_resolve_failed")
         return
@@ -242,17 +188,17 @@ async def _handle_collection_url(
     target = collection_target(req.collection, title)
 
     if req.review:
-        token = pending_collections.add(
-            _PendingCollection(
-                title=title,
-                target_collection=target,
-                owner_user_id=actor_user_id,
-                members=members,
-                makerworld_cookie=cookie,
-            )
+        requests.store_manifest(
+            job_id,
+            "collection",
+            {
+                "title": title,
+                "target_collection": target,
+                "members": [asdict(m) for m in members],
+            },
         )
         manifest = CollectionManifest(
-            collection_token=token,
+            collection_token=job_id,
             collection_name=title,
             target_collection=target,
             members=[
@@ -270,7 +216,7 @@ async def _handle_collection_url(
         return
 
     registry.update(job_id, stage="downloading", total=len(members))
-    groups = await _stage_members(members, makerworld_cookie=cookie)
+    groups = await _stage_members(members)
     await run_in_threadpool(
         importer.import_resolved_groups,
         job_id=job_id,
@@ -282,6 +228,25 @@ async def _handle_collection_url(
     )
 
 
+def _lease_archive(job_id: str, staged: Path, actor_user_id: int) -> None:
+    """Make the URL Job the owner of the archive it downloaded for review."""
+    from app.db.session import get_session_factory
+    from app.modules.ingestion import staging_leases
+    from app.modules.storage.hashing import sha256_file
+
+    with get_session_factory().scoped_session() as session:
+        staging_leases.create_job_lease(
+            session,
+            job_id=job_id,
+            owner_user_id=actor_user_id,
+            path=staged,
+            size_bytes=staged.stat().st_size,
+            sha256=sha256_file(staged),
+            check_capacity=False,
+        )
+        session.commit()
+
+
 async def import_from_url(
     *,
     job_id: str,
@@ -289,7 +254,7 @@ async def import_from_url(
     actor_user_id: int,
     session_factory: SessionFactory,
 ) -> None:
-    """Background task: download a URL, then ingest it or stage it as an archive.
+    """Download a URL, then ingest it or record it as an archive to review.
 
     If ``req.url`` is a collection, it fans out into many models (auto or review);
     a multi-file Printables page returns a file-selection manifest; otherwise a
@@ -309,13 +274,11 @@ async def import_from_url(
         # A Printables page with more than one file → let the user pick which.
         listing = await import_resolvers.list_model_files(req.url)
         if listing is not None and len(listing[1]) > 1:
-            _stage_model_files_manifest(job_id, req, actor_user_id, listing)
+            _stage_model_files_manifest(job_id, req, listing)
             return
         download_url = (
             await import_resolvers.resolve_page_url(
-                req.url,
-                makerworld_cookie=_makerworld_cookie(req.makerworld_cookie),
-                thingiverse_cookie=req.thingiverse_cookie,
+                req.url, thingiverse_cookie=req.thingiverse_cookie
             )
             or req.url
         )
@@ -326,7 +289,7 @@ async def import_from_url(
         return
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("url import download failed: %s", req.url)
-        registry.update(job_id, state="failed", error=str(exc))
+        registry.update(job_id, state="failed", error=str(exc), retryable=True)
         return
 
     suffix = Path(original_filename).suffix.lower()
@@ -346,15 +309,13 @@ async def import_from_url(
             staged.unlink(missing_ok=True)
             registry.update(job_id, state="failed", error=str(exc))
             return
-        pending = importer.PendingArchive(
-            path=staged,
+        await run_in_threadpool(_lease_archive, job_id, staged, actor_user_id)
+        manifest = _record_archive(
+            job_id,
             archive_name=original_filename,
-            owner_user_id=actor_user_id,
             entries=entries,
             source_url=req.url,
         )
-        archive_id = importer.archives.add(pending)
-        manifest = manifest_from_pending(archive_id, pending)
         registry.update(
             job_id,
             state="completed",
@@ -370,8 +331,6 @@ async def import_from_url(
         registry.update(job_id, state="failed", error="url_not_a_direct_file")
         return
 
-    # Single direct file — ingest under the user's chosen collection. Offload
-    # the (blocking, CPU-heavy) pipeline so the event loop stays free.
     await run_in_threadpool(
         importer.import_assets,
         job_id=job_id,
@@ -384,26 +343,18 @@ async def import_from_url(
     )
 
 
-async def inspect_uploaded_archive(
-    *, job_id: str, staged: Path, original_filename: str, actor_user_id: int
+def inspect_uploaded_archive(
+    *, job_id: str, staged: Path, original_filename: str
 ) -> None:
-    """Inspect an uploaded ZIP in background and return its selection manifest."""
+    """Inspect an uploaded ZIP the Job already owns and record its manifest."""
     try:
         registry.update(
-            job_id,
-            state="running",
-            stage="inspecting",
-            current_item=original_filename,
+            job_id, state="running", stage="inspecting", current_item=original_filename
         )
-        entries = await run_in_threadpool(importer.inspect_archive, staged)
-        pending = importer.PendingArchive(
-            path=staged,
-            archive_name=original_filename,
-            owner_user_id=actor_user_id,
-            entries=entries,
+        entries = importer.inspect_archive(staged)
+        manifest = _record_archive(
+            job_id, archive_name=original_filename, entries=entries, source_url=None
         )
-        archive_id = importer.archives.add(pending)
-        manifest = manifest_from_pending(archive_id, pending)
         registry.update(
             job_id,
             state="completed",
@@ -412,12 +363,43 @@ async def inspect_uploaded_archive(
             result={"kind": "archive_manifest", **manifest.model_dump()},
         )
     except importer.ImportError_ as exc:
-        staged.unlink(missing_ok=True)
-        registry.update(job_id, state="failed", error=str(exc), retryable=True)
-    except Exception as exc:  # noqa: BLE001 — background IO boundary
-        staged.unlink(missing_ok=True)
-        logger.exception("archive inspection failed")
-        registry.update(job_id, state="failed", error=str(exc), retryable=True)
+        registry.update(job_id, state="failed", error=str(exc), retryable=False)
+
+
+def run_archive_selection(
+    *,
+    job_id: str,
+    archive: Path,
+    archive_name: str,
+    names: list[str],
+    collection: Optional[str],
+    tags: Optional[str],
+    source_url: Optional[str],
+    actor_user_id: int,
+    session_factory: SessionFactory,
+) -> None:
+    """Extract the chosen entries of an owned archive and import each one."""
+    registry.update(
+        job_id, state="running", stage="extracting", current_item=archive_name
+    )
+    try:
+        staged_files = importer.extract_selected(archive, names)
+    except importer.ImportError_ as exc:
+        registry.update(job_id, state="failed", error=str(exc))
+        return
+    if not staged_files:
+        registry.update(job_id, state="failed", error="no_importable_files")
+        return
+    importer.import_assets(
+        job_id=job_id,
+        staged_files=staged_files,
+        collection=importer.archive_collection_path(collection, archive_name),
+        tags=tags,
+        source_url=source_url,
+        actor_user_id=actor_user_id,
+        session_factory=session_factory,
+        nest_subdirs=True,
+    )
 
 
 async def run_file_selection_import(
@@ -430,7 +412,7 @@ async def run_file_selection_import(
     actor_user_id: int,
     session_factory: SessionFactory,
 ) -> None:
-    """Background task: download a chosen subset of a page's files and ingest them."""
+    """Download a chosen subset of a page's files and ingest them."""
     try:
         registry.update(job_id, state="running", stage="resolving")
         links = await import_resolvers.resolve_selected_download(page_url, files)
@@ -443,7 +425,7 @@ async def run_file_selection_import(
         return
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("file selection import failed: %s", page_url)
-        registry.update(job_id, state="failed", error=str(exc))
+        registry.update(job_id, state="failed", error=str(exc), retryable=True)
         return
     if not staged_files:
         registry.update(job_id, state="failed", error="no_importable_files")
@@ -468,17 +450,16 @@ async def run_collection_member_import(
     tags: Optional[str],
     actor_user_id: int,
     session_factory: SessionFactory,
-    makerworld_cookie: Optional[str] = None,
 ) -> None:
-    """Background task: stage selected collection members and ingest them."""
+    """Stage the selected collection members and ingest them."""
     try:
         registry.update(
             job_id, state="running", stage="downloading", total=len(members)
         )
-        groups = await _stage_members(members, makerworld_cookie=makerworld_cookie)
+        groups = await _stage_members(members)
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("collection member import failed")
-        registry.update(job_id, state="failed", error=str(exc))
+        registry.update(job_id, state="failed", error=str(exc), retryable=True)
         return
     await run_in_threadpool(
         importer.import_resolved_groups,

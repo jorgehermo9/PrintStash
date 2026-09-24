@@ -9,7 +9,6 @@ from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     HTTPException,
     Query,
@@ -19,17 +18,15 @@ from fastapi import (
 from fastapi.responses import (
     PlainTextResponse,
 )
-from sqlalchemy import func
-from sqlmodel import Session, col, select
+from sqlmodel import Session
 
 from app.api.artifact_responses import delivery_request, render_delivery
 from app.core.config import settings
 from app.core.http import get_or_404
 from app.core.logging import get_logger
-from app.core.security import get_current_user, require_superuser, require_user
+from app.core.security import get_current_user, require_user
 from app.db.models import CollectionRole, File, FileType, Model, User
-from app.db.scopes import live
-from app.db.session import SessionFactory, get_session, get_session_factory
+from app.db.session import get_session, get_session_factory
 from app.modules.identity import auth, rbac
 from app.modules.media.three_mf_preview import (
     EmbeddedGcodeError,
@@ -50,14 +47,11 @@ from app.modules.storage.delivery_contracts import content_disposition
 from app.modules.storage.storage_backend.contracts import StorageCollisionError
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_ownership import publish_bytes
-from app.runtime.jobs import registry
-from app.schemas.ingest import IngestResponse
+from app.schemas.jobs import DerivativeRead
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
-
-_MESH_TYPES = {FileType.STL, FileType.THREE_MF, FileType.OBJ, FileType.STEP}
 
 
 def _live_file(session: Session, file_id: int) -> File:
@@ -400,178 +394,82 @@ def stl_response(
         )
 
 
-def _run_thumbnail_rebuild(
-    job_id: str, force: bool, session_factory: SessionFactory
-) -> None:
-    """Walk models and re-render thumbnails. Runs as a background task."""
-    from app.modules.media.thumbnail_generations import ThumbnailEnsureOutcome
-    from app.modules.media.thumbnail_repair import regenerate_model_thumbnail_result
+@router.get(
+    "/{file_id}/derivatives",
+    response_model=list[DerivativeRead],
+    summary="Derivative states of one Artifact at the current recipes",
+    description=(
+        "Every derivative kind that applies to the Artifact (metadata, thumbnail, "
+        "toolpath) with its state. `pending` means no attempt exists yet at the "
+        "current recipe, so every value the kind supplies is still unknown."
+    ),
+)
+def list_file_derivatives(
+    file_id: int,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> list[DerivativeRead]:
+    from app.modules.derivatives import records
 
-    registry.update(job_id, state="running", label="scanning_models")
-    try:
-        with session_factory.scoped_session() as session:
-            stmt = select(Model).where(live(Model))
-            if not force:
-                stmt = stmt.where(Model.thumbnail_file_id.is_(None))  # type: ignore[union-attr]
-            total = session.exec(
-                select(func.count()).select_from(stmt.subquery())
-            ).one()
-            registry.update(
-                job_id,
-                stage="thumbnailing",
-                processed=0,
-                total=total,
-                total_steps=total,
-            )
-
-            rebuilt: list[int] = []
-            cached: list[int] = []
-            coalesced: list[int] = []
-            negative_cached: list[int] = []
-            skipped: list[int] = []
-            failed: list[int] = []
-            processed = 0
-            after_id = 0
-            while True:
-                page_stmt = (
-                    stmt.where(col(Model.id) > after_id)
-                    .order_by(col(Model.id))
-                    .limit(100)
-                )
-                models = session.exec(page_stmt).all()
-                if not models:
-                    break
-                for m in models:
-                    assert m.id is not None
-                    processed += 1
-                    registry.update(
-                        job_id,
-                        step=processed,
-                        total_steps=total,
-                        label=f"rendering model {m.id}",
-                        progress=(processed - 1) / max(total, 1) * 100,
-                        stage="thumbnailing",
-                        processed=processed - 1,
-                        total=total,
-                    )
-                    mesh_file = session.exec(
-                        select(File)
-                        .where(
-                            File.model_id == m.id,
-                            File.file_type.in_(_MESH_TYPES),  # type: ignore[attr-defined]
-                            live(File),
-                        )
-                        .order_by(File.version.desc())  # type: ignore[attr-defined]
-                    ).first()
-                    if mesh_file is None:
-                        skipped.append(m.id)
-                        continue
-
-                    try:
-                        result = regenerate_model_thumbnail_result(
-                            session, m.id, force=force
-                        )
-                    except Exception:  # noqa: BLE001 — task boundary
-                        logger.exception(
-                            "rebuild: thumbnail regeneration crashed for model %s",
-                            m.id,
-                        )
-                        failed.append(m.id)
-                        continue
-
-                    if result.outcome is ThumbnailEnsureOutcome.GENERATED:
-                        rebuilt.append(m.id)
-                    elif result.outcome is ThumbnailEnsureOutcome.CACHED:
-                        cached.append(m.id)
-                    elif result.outcome is ThumbnailEnsureOutcome.COALESCED:
-                        coalesced.append(m.id)
-                    elif result.outcome is ThumbnailEnsureOutcome.NEGATIVE_CACHED:
-                        negative_cached.append(m.id)
-                    else:
-                        failed.append(m.id)
-                after_id = models[-1].id or after_id
-
-            registry.update(
-                job_id,
-                state="completed",
-                stage="completed",
-                processed=processed,
-                total=total,
-                succeeded=len(rebuilt) + len(cached),
-                skipped=len(skipped),
-                failed=len(failed),
-                completion="partial" if failed else "complete",
-                thumbnail_status=(
-                    "failed"
-                    if failed
-                    else "generated"
-                    if rebuilt or cached
-                    else "skipped"
-                ),
-                thumbnail_reason=(
-                    "renderer_no_output"
-                    if failed
-                    else "no_mesh"
-                    if skipped and not rebuilt
-                    else None
-                ),
-                result={
-                    "scanned": processed,
-                    "rebuilt": rebuilt,
-                    "cache_hits": cached,
-                    "coalesced": coalesced,
-                    "negative_cached": negative_cached,
-                    "skipped_no_mesh": skipped,
-                    "failed_render": failed,
-                },
-            )
-    except Exception as exc:  # noqa: BLE001 — top-level task boundary
-        logger.exception("rebuild[%s] failed: %s", job_id, exc)
-        registry.update(job_id, state="failed", error=str(exc))
+    file = _accessible_file(session, file_id, current_user)
+    return records.read(session, file)
 
 
 @router.post(
-    "/thumbnails/rebuild",
-    response_model=IngestResponse,
+    "/{file_id}/derivatives/{kind}/retry",
+    response_model=list[DerivativeRead],
     status_code=202,
-    dependencies=[Depends(require_superuser)],
-    summary="Regenerate mesh thumbnails for existing models",
-    description=(
-        "Walks non-soft-deleted models and tries to render a thumbnail from "
-        "the newest mesh file (STL/3MF/OBJ). By default only missing "
-        "thumbnails are rebuilt; pass force=true to refresh existing "
-        "thumbnails after renderer improvements without re-uploading. "
-        "Runs in the background: poll GET /ingest/jobs/{job_id}; the final "
-        "per-model summary lands in the job's `result` field."
-    ),
+    summary="Retry one failed or cancelled derivative of an Artifact",
 )
-def rebuild_missing_thumbnails(
-    background_tasks: BackgroundTasks,
-    force: bool = False,
-    current_user: User = Depends(require_superuser),
-    session_factory: SessionFactory = Depends(get_session_factory),
-) -> IngestResponse:
-    job_id = registry.create(owner_user_id=current_user.id, kind="thumbnail_rebuild")
-    background_tasks.add_task(_run_thumbnail_rebuild, job_id, force, session_factory)
-    return IngestResponse(
-        job_id=job_id, state="pending", message="thumbnail rebuild queued"
+def retry_file_derivative(
+    file_id: int,
+    kind: str,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> list[DerivativeRead]:
+    from app.modules.derivatives import records
+    from app.modules.derivatives.kinds import definitions_for_kind, recipes_for
+    from app.modules.work import nudge
+
+    file = _accessible_file(session, file_id, current_user)
+    rbac.require_model_collection_role(
+        session,
+        current_user,
+        _model_collection_id(session, file),
+        CollectionRole.EDIT,
     )
+    recipes = recipes_for(file)
+    if kind not in recipes:
+        raise HTTPException(status_code=404, detail="derivative_kind_not_found")
+    if not records.reset(session, file, {kind: recipes[kind]}):
+        raise HTTPException(status_code=409, detail="derivative_not_retryable")
+    session.commit()
+    for definition in definitions_for_kind(kind):
+        nudge(definition)
+    return records.read(session, file)
+
+
+def _model_collection_id(session: Session, file: File) -> int | None:
+    model = session.get(Model, file.model_id)
+    return model.collection_id if model is not None else None
 
 
 @router.get(
-    "/{file_id}/toolpath", summary="Bounded ASCII toolpath from the original Artifact"
+    "/{file_id}/toolpath",
+    summary="Bounded ASCII toolpath of a G-code Artifact",
+    description=(
+        "ASCII G-code is served from the Artifact itself. Binary G-code (.bgcode) "
+        "is served from its toolpath derivative; while that is still being "
+        "derived the response is 202 with the derivative's state, and a failed "
+        "conversion answers 422 with its reason."
+    ),
 )
-async def get_toolpath(
+def get_toolpath(
     file_id: int,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ):
-    from app.modules.media import toolpath
+    from app.api.toolpath_response import toolpath_response
 
     file = _accessible_file(session, file_id, current_user)
-    content = await toolpath.render(file)
-    return Response(
-        content=content,
-        media_type="text/plain",
-        headers={"Cache-Control": "private, no-store"},
-    )
+    return toolpath_response(session, file)

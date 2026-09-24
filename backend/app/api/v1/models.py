@@ -12,13 +12,12 @@ import shutil
 import tempfile
 import uuid
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Literal, Optional
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     Form,
     HTTPException,
@@ -47,7 +46,6 @@ import app.modules.library.model_views.trash as models_trash
 import app.modules.printing.costing as models_costing
 from app.core.config import settings
 from app.core.security import require_auth, require_superuser, require_user
-from app.core.time import utcnow
 from app.db.models import (
     CollectionRole,
     FilamentProfile,
@@ -65,9 +63,9 @@ from app.db.models import (
     User,
 )
 from app.db.scopes import live
-from app.db.session import get_session, get_session_factory
+from app.db.session import get_session
 from app.modules.identity import rbac
-from app.modules.ingestion import library_transfer
+from app.modules.ingestion import library_transfer, staging_leases
 from app.modules.ingestion.ingestion import add_gcode_revision_to_model
 from app.modules.library import commands as model_commands
 from app.modules.library import (
@@ -95,9 +93,10 @@ from app.modules.storage.storage_deletion import (
     process_storage_delete_intents,
 )
 from app.modules.storage.storage_ownership import UnsafeStorageDeleteError
-from app.runtime.jobs import registry
+from app.modules.work import nudge
+from app.modules.work import service as work_service
 from app.schemas.family_types import VariantRole
-from app.schemas.ingest import IngestResponse
+from app.schemas.jobs import JobAccepted
 from app.schemas.models import (
     ArtifactOutcomeRead,
     FileRevisionUpdate,
@@ -572,18 +571,16 @@ def export_library_archive(
 
 @router.post(
     "/library-import",
-    response_model=IngestResponse,
+    response_model=JobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_superuser)],
     summary="Import a portable full-library archive",
 )
 def import_library_archive(
-    background_tasks: BackgroundTasks,
     file: UploadFile = UploadFileParam(...),
     current_user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
-    session_factory=Depends(get_session_factory),
-) -> IngestResponse:
+) -> JobAccepted:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix != ".zip":
         raise HTTPException(status_code=400, detail="archive_zip_required")
@@ -616,7 +613,6 @@ def import_library_archive(
     if writable_bytes <= 0:
         raise HTTPException(status_code=507, detail="staging_capacity_exceeded")
     fd, name = tempfile.mkstemp(suffix=".zip", dir=settings.incoming_dir)
-    job_id: str | None = None
     try:
         digest = hashlib.sha256()
         written = 0
@@ -629,49 +625,36 @@ def import_library_archive(
                 digest.update(chunk)
             target.flush()
             os.fsync(target.fileno())
-        job_id = registry.create(owner_user_id=current_user.id, kind="library_import")
-        staged = Path(name)
-        stat = staged.stat(follow_symlinks=False)
-        session.add(
-            StagingLease(
-                id=uuid.uuid4().hex,
-                path=name,
-                owner_user_id=current_user.id,
-                background_job_id=job_id,
-                size_bytes=written,
-                sha256=digest.hexdigest(),
-                device=stat.st_dev,
-                inode=stat.st_ino,
-                ctime_ns=stat.st_ctime_ns,
-                expires_at=utcnow() + timedelta(hours=24),
-            )
+        job_id = uuid.uuid4().hex
+        work_service.request(
+            session,
+            definition=library_transfer.IMPORT_DEFINITION,
+            subject_key=f"job/{job_id}",
+            owner_user_id=current_user.id,
+            job_id=job_id,
+        )
+        staging_leases.create_job_lease(
+            session,
+            job_id=job_id,
+            owner_user_id=current_user.id,
+            path=Path(name),
+            size_bytes=written,
+            sha256=digest.hexdigest(),
+            check_capacity=False,
         )
         session.commit()
-        background_tasks.add_task(
-            library_transfer.run_import_job,
-            job_id=job_id,
-            archive_path=Path(name),
-            user_id=current_user.id,
-            session_factory=session_factory,
-        )
-        return IngestResponse(job_id=job_id, state="pending")
     except (ValueError, zipfile.BadZipFile) as exc:
+        session.rollback()
         Path(name).unlink(missing_ok=True)
-        if job_id is not None:
-            registry.finish(job_id, state="failed", error=str(exc), retryable=True)
         code = str(exc)
         status_code = 507 if code == "staging_capacity_exceeded" else 400
         raise HTTPException(status_code=status_code, detail=code) from exc
     except Exception:
+        session.rollback()
         Path(name).unlink(missing_ok=True)
-        if job_id is not None:
-            registry.finish(
-                job_id,
-                state="failed",
-                error="staging_lease_failed",
-                retryable=True,
-            )
         raise
+    nudge(library_transfer.IMPORT_DEFINITION)
+    return JobAccepted(job_id=job_id)
 
 
 @router.get(
@@ -991,8 +974,8 @@ async def add_gcode_revision(
 
     staged = await run_in_threadpool(_stage_gcode_upload, file, suffix)
     try:
-        # Hashing + header parsing + thumbnail extraction are blocking file
-        # I/O — keep them off the event loop.
+        # Hashing and publishing the bytes are blocking file I/O; parsing and
+        # the thumbnail are derivatives and happen in their own Jobs.
         await run_in_threadpool(
             add_gcode_revision_to_model,
             session=session,

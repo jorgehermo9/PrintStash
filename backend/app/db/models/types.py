@@ -147,11 +147,46 @@ class StorageObjectState(str, Enum):
     BLOCKED = "blocked"
 
 
-class ThumbnailGenerationState(str, Enum):
-    PENDING = "pending"
+class JobState(str, Enum):
+    """Lifecycle of one background Job, shared by every job definition.
+
+    ``interrupted`` is not terminal: the execution was lost (crash, upgrade,
+    restore) and the reconciler resubmits the same Job as its next attempt.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    INTERRUPTED = "interrupted"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class WorkPriority(str, Enum):
+    """Scheduling tier of a submission; children inherit it and may only lower it."""
+
+    INTERACTIVE = "interactive"
+    BACKFILL = "backfill"
+
+
+class DerivativeState(str, Enum):
+    QUEUED = "queued"
     RUNNING = "running"
     READY = "ready"
+    SKIPPED = "skipped"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class IngestRequestKind(str, Enum):
+    """What an accepted ingest request asks the ``ingest`` jobs to do."""
+
+    UPLOAD = "upload"
+    URL = "url"
+    ARCHIVE_INSPECT = "archive_inspect"
+    ARCHIVE_SELECTION = "archive_selection"
+    URL_SELECTION = "url_selection"
+    COLLECTION = "collection"
 
 
 class CaptureProvider(str, Enum):

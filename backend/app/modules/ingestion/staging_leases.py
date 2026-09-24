@@ -25,10 +25,10 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.core.time import ensure_utc, utcnow
 from app.db.models import (
-    BackgroundJob,
     CaptureUploadSlot,
     CaptureUploadSlotState,
     InboxItem,
+    Job,
     ModelSourceCover,
     StagingLease,
 )
@@ -624,7 +624,7 @@ def _one_owner_lease(
     column, owner_id = (
         (StagingLease.inbox_item_id, inbox_item_id)
         if inbox_item_id is not None
-        else (StagingLease.background_job_id, job_id)
+        else (StagingLease.job_id, job_id)
         if job_id is not None
         else (StagingLease.model_source_cover_id, model_source_cover_id)
         if model_source_cover_id is not None
@@ -866,8 +866,8 @@ def reconcile_capture_slots(session: Session, backend: StorageBackend) -> int:
 def transfer_capture_slots_to_job(
     session: Session, *, inbox_item_id: int, job_id: str, now: datetime | None = None
 ) -> list[StagingLease]:
-    if session.get(BackgroundJob, job_id) is None:
-        raise StagingLeaseError("background job does not exist")
+    if session.get(Job, job_id) is None:
+        raise StagingLeaseError("job does not exist")
     slots = list(
         session.exec(
             select(CaptureUploadSlot).where(
@@ -887,7 +887,7 @@ def transfer_capture_slots_to_job(
             raise StagingLeaseError("capture upload slot lease missing")
         lease.capture_upload_slot_origin_id = slot.id
         lease.capture_upload_slot_id = None
-        lease.background_job_id = job_id
+        lease.job_id = job_id
         lease.expires_at = (now or utcnow()) + timedelta(
             hours=settings.staging_import_lease_hours
         )
@@ -913,7 +913,7 @@ def return_capture_slots_to_review(
             session.exec(
                 select(StagingLease).where(
                     StagingLease.capture_upload_slot_origin_id == slot.id,
-                    StagingLease.background_job_id == job_id,
+                    StagingLease.job_id == job_id,
                 )
             )
         )
@@ -921,7 +921,7 @@ def return_capture_slots_to_review(
             raise StagingLeaseError("capture upload slot job lease missing")
         leases.append((slot, matches[0]))
     for slot, lease in leases:
-        lease.background_job_id = None
+        lease.job_id = None
         lease.capture_upload_slot_origin_id = None
         lease.capture_upload_slot_id = slot.id
         lease.expires_at = (now or utcnow()) + timedelta(
@@ -941,7 +941,7 @@ def return_inbox_lease_to_review(
     current = ensure_utc(now or utcnow())
     if ensure_utc(lease.expires_at) <= current:
         raise StagingLeaseError("staging lease expired")
-    lease.background_job_id = None
+    lease.job_id = None
     lease.inbox_item_id = inbox_item_id
     lease.expires_at = current + timedelta(days=settings.staging_review_lease_days)
     session.flush()
@@ -1061,16 +1061,85 @@ def transfer_inbox_to_job(
 ) -> StagingLease:
     """Atomically replace an inbox owner with a 24-hour job owner."""
     lease = _one_owner_lease(session, inbox_item_id=inbox_item_id)
-    if session.get(BackgroundJob, job_id) is None:
-        raise StagingLeaseError("background job does not exist")
+    if session.get(Job, job_id) is None:
+        raise StagingLeaseError("job does not exist")
     timestamp = now or utcnow()
     # The XOR check is deferred only by this single UPDATE at flush time; no
     # intermediate committed state has zero or two owners.
     lease.inbox_item_id = None
-    lease.background_job_id = job_id
+    lease.job_id = job_id
     lease.expires_at = timestamp + timedelta(hours=settings.staging_import_lease_hours)
     session.flush()
     return lease
+
+
+def create_job_lease(
+    session: Session,
+    *,
+    job_id: str,
+    owner_user_id: int | None,
+    path: Path,
+    size_bytes: int,
+    sha256: str,
+    check_capacity: bool = True,
+    now: datetime | None = None,
+) -> StagingLease:
+    """Make ``job_id`` the exact owner of one staged file for an import lease."""
+    if session.get(Job, job_id) is None:
+        raise StagingLeaseError("job does not exist")
+    try:
+        received = path.lstat()
+    except OSError as exc:
+        raise StagingLeaseError("staged path is unavailable") from exc
+    if not stat.S_ISREG(received.st_mode) or received.st_size != size_bytes:
+        raise StagingLeaseError("staged path identity does not match receipt")
+    if check_capacity:
+        _ensure_capacity(
+            session,
+            owner_user_id=owner_user_id,
+            size_bytes=size_bytes,
+            capacity_path=path.parent,
+        )
+    lease = StagingLease(
+        id=uuid.uuid4().hex,
+        path=str(path),
+        owner_user_id=owner_user_id,
+        job_id=job_id,
+        size_bytes=size_bytes,
+        sha256=sha256,
+        device=received.st_dev,
+        inode=received.st_ino,
+        ctime_ns=received.st_ctime_ns,
+        expires_at=(now or utcnow())
+        + timedelta(hours=settings.staging_import_lease_hours),
+    )
+    session.add(lease)
+    session.flush()
+    return lease
+
+
+def transfer_job_leases(
+    session: Session, *, from_job_id: str, to_job_id: str, now: datetime | None = None
+) -> list[StagingLease]:
+    """Hand every lease of one Job to another (a manifest to its selection)."""
+    if session.get(Job, to_job_id) is None:
+        raise StagingLeaseError("job does not exist")
+    leases = list(
+        session.exec(select(StagingLease).where(StagingLease.job_id == from_job_id))
+    )
+    if not leases:
+        raise StagingLeaseNotFoundError("expected at least one staging lease for job")
+    for lease in leases:
+        lease.job_id = to_job_id
+        lease.expires_at = (now or utcnow()) + timedelta(
+            hours=settings.staging_import_lease_hours
+        )
+    session.flush()
+    return leases
+
+
+def job_leases(session: Session, job_id: str) -> list[StagingLease]:
+    return list(session.exec(select(StagingLease).where(StagingLease.job_id == job_id)))
 
 
 def renew_review_lease(
@@ -1088,9 +1157,7 @@ def renew_job_lease(
     session: Session, *, job_id: str, now: datetime | None = None
 ) -> StagingLease:
     leases = list(
-        session.exec(
-            select(StagingLease).where(StagingLease.background_job_id == job_id)
-        )
+        session.exec(select(StagingLease).where(StagingLease.job_id == job_id))
     )
     if not leases:
         raise StagingLeaseError("expected at least one staging lease for job")

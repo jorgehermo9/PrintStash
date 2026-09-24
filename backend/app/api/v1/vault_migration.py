@@ -70,14 +70,18 @@ def status(run_id: str, _user: User = Depends(require_superuser)):
     return invoke(lambda: owner().get(run_id))
 
 
+def _copying(result):
+    """The run is copying: its ``vault.migrate`` Job does the copy."""
+    from app.modules.storage.jobs import MIGRATE_DEFINITION
+    from app.modules.work import nudge
+
+    nudge(MIGRATE_DEFINITION)
+    return result
+
+
 @router.post("/{run_id}/start", response_model=MigrationRunRead)
 def start(run_id: str, body: PlanRequest, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().start(run_id, body.plan_digest))
-
-
-@router.post("/{run_id}/advance", response_model=MigrationRunRead)
-def advance(run_id: str, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().advance(run_id))
+    return _copying(invoke(lambda: owner().start(run_id, body.plan_digest)))
 
 
 @router.post("/{run_id}/cutover", response_model=MigrationRunRead)
@@ -122,12 +126,12 @@ def pause(run_id: str, _user: User = Depends(require_superuser)):
 
 @router.post("/{run_id}/resume", response_model=MigrationRunRead)
 def resume(run_id: str, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().resume(run_id))
+    return _copying(invoke(lambda: owner().resume(run_id)))
 
 
 @router.post("/{run_id}/retry", response_model=MigrationRunRead)
 def retry(run_id: str, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().resume(run_id, failed_only=True))
+    return _copying(invoke(lambda: owner().resume(run_id, failed_only=True)))
 
 
 @router.post("/{run_id}/full-audit", response_model=MigrationRunRead)

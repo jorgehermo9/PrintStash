@@ -20,12 +20,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.db.models import (
+    ArtifactDerivative,
     ArtifactProvenanceLink,
     CaptureUploadSlot,
     Collection,
     CollectionPermission,
     CollectionRole,
     CollectionTagLink,
+    DerivativeState,
     Document,
     DocumentKind,
     EmbeddingSpace,
@@ -39,6 +41,8 @@ from app.db.models import (
     InboxItemState,
     InboxSourceKind,
     IndexGeneration,
+    Job,
+    JobState,
     Model,
     ModelFamily,
     ModelFamilyMember,
@@ -78,6 +82,8 @@ from app.db.models import (
     VaultGeneration,
     VaultMigrationObject,
     VaultMigrationRun,
+    WorkExecutor,
+    WorkFence,
 )
 
 
@@ -345,6 +351,53 @@ class MakeExternalLibrary(Protocol):
     ) -> ExternalLibrary: ...
 
 
+class MakeJob(Protocol):
+    def __call__(
+        self,
+        *,
+        kind: str = "work.housekeeping",
+        state: JobState = ...,
+        owner: User | None = None,
+        subject: str | None = None,
+        finished: bool | None = None,
+        **overrides: Any,
+    ) -> Job: ...
+
+
+class MakeDerivative(Protocol):
+    def __call__(
+        self,
+        file: File,
+        kind: str,
+        *,
+        state: DerivativeState = ...,
+        recipe_version: int | None = None,
+        exhausted: bool = False,
+        **overrides: Any,
+    ) -> ArtifactDerivative: ...
+
+
+class MakeWorkFence(Protocol):
+    def __call__(
+        self,
+        name: str,
+        *,
+        holder: str = "another-executor",
+        expired: bool = False,
+        **overrides: Any,
+    ) -> WorkFence: ...
+
+
+class MakeWorkExecutor(Protocol):
+    def __call__(
+        self,
+        executor_id: str | None = None,
+        *,
+        stale: bool = False,
+        **overrides: Any,
+    ) -> WorkExecutor: ...
+
+
 class MakeDocument(Protocol):
     def __call__(
         self,
@@ -423,6 +476,10 @@ __all__ = [
     "MakeProvenanceSource",
     "MakeShareLink",
     "MakeUser",
+    "MakeJob",
+    "MakeDerivative",
+    "MakeWorkFence",
+    "MakeWorkExecutor",
     "TagCollection",
     "TagFile",
     "UserHeaders",

@@ -12,7 +12,7 @@ from app.core.time import utcnow
 from app.db.models import (
     ArtifactUploadSession,
     ArtifactUploadState,
-    BackgroundJob,
+    Job,
 )
 from app.db.session import SessionFactory, get_session_factory
 
@@ -104,11 +104,7 @@ def reconcile_artifact_uploads(
             )
         )
         for upload in ingesting:
-            job = (
-                session.get(BackgroundJob, upload.background_job_id)
-                if upload.background_job_id
-                else None
-            )
+            job = session.get(Job, upload.job_id) if upload.job_id else None
             if job is not None and job.state == "completed":
                 manager.transition(
                     upload,
@@ -159,7 +155,7 @@ def reconcile_artifact_uploads(
     )
 
 
-def _job_retryable(job: BackgroundJob) -> bool:
+def _job_retryable(job: Job) -> bool:
     import json
 
     try:

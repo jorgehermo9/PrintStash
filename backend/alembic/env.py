@@ -87,6 +87,16 @@ def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool
     return False
 
 
+def _include_name(name: str | None, type_: str, parent_names: object) -> bool:
+    """Leave the job engine's schema alone.
+
+    On PostgreSQL the engine keeps its system tables in a ``dbos`` schema of the
+    application database. They are the engine's, disposable and versioned by
+    it, so autogenerate must never offer to drop or reshape them.
+    """
+    return not (type_ == "schema" and name == "dbos")
+
+
 def _is_sqlite_url(url: str) -> bool:
     return url.startswith("sqlite")
 
@@ -101,6 +111,7 @@ def _configure_context(
         "compare_type": True,
         "compare_server_default": True,
         "render_item": _render_item,
+        "include_name": _include_name,
         "process_revision_directives": _process_revision_directives,
         "render_as_batch": (
             connection.dialect.name == "sqlite"

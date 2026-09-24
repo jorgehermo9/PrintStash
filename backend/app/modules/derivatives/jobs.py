@@ -1,0 +1,91 @@
+"""Job definitions for Artifact derivatives: one per producer group."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from sqlmodel import Session, select
+
+from app.core.time import utcnow
+from app.db.models import File
+from app.db.scopes import live
+from app.modules.work.catalog import DERIVE_LIGHT, DERIVE_NATIVE
+from app.modules.work.contracts import JobContext, JobDefinition, Step
+
+from . import producers, records
+from .kinds import (
+    GCODE_DEFINITION,
+    MESH_DEFINITION,
+    TOOLPATH_DEFINITION,
+    DerivativeGroup,
+    group,
+)
+from .source import DerivativeSource, file_id_of
+
+
+def _step(produce: Callable[[int], producers.Outcome]) -> Callable[[JobContext], None]:
+    def run(ctx: JobContext) -> None:
+        outcome = produce(file_id_of(ctx.subject_key))
+        ctx.update(result=outcome.as_result(), processed=1, total=1)
+
+    return run
+
+
+def _file(session: Session, subject_key: str) -> File | None:
+    return session.exec(
+        select(File).where(File.id == file_id_of(subject_key), live(File))
+    ).first()
+
+
+def _hooks(derivative_group: DerivativeGroup):
+    def cancel(session: Session, subject_key: str) -> None:
+        file_row = _file(session, subject_key)
+        if file_row is not None:
+            records.cancel(session, file_row, derivative_group.kinds, now=utcnow())
+
+    def on_failure(session: Session, subject_key: str, reason: str) -> None:
+        records.fail_in_flight(session, file_id_of(subject_key), reason, now=utcnow())
+
+    def retry(session: Session, subject_key: str) -> bool:
+        file_row = _file(session, subject_key)
+        if file_row is None:
+            return False
+        records.reset(session, file_row, derivative_group.kinds)
+        return True
+
+    return cancel, on_failure, retry
+
+
+def _definition(
+    name: str, lane: str, produce: Callable[[int], producers.Outcome]
+) -> JobDefinition:
+    derivative_group = group(name)
+    cancel, on_failure, retry = _hooks(derivative_group)
+    return JobDefinition(
+        name=name,
+        lane=lane,
+        steps=(Step(f"{name}.produce", _step(produce)),),
+        source=DerivativeSource(derivative_group),
+        cancel=cancel,
+        on_failure=on_failure,
+        retry=retry,
+        label=derivative_group.label,
+    )
+
+
+def definitions() -> list[JobDefinition]:
+    return [
+        _definition(MESH_DEFINITION, DERIVE_NATIVE, producers.derive_mesh),
+        _definition(GCODE_DEFINITION, DERIVE_LIGHT, producers.derive_gcode),
+        _definition(TOOLPATH_DEFINITION, DERIVE_NATIVE, producers.derive_toolpath),
+    ]
+
+
+def nudge_for(file_row: File) -> None:
+    """After an Artifact commit: nudge every group that applies to it."""
+    from app.modules.work import nudge
+
+    from .kinds import groups_for
+
+    for derivative_group in groups_for(file_row):
+        nudge(derivative_group.definition)

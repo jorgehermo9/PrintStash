@@ -31,7 +31,6 @@ from app.core.time import utcnow
 from app.db.models import (
     SUFFIX_TO_FILE_TYPE,
     ArtifactProvenanceLink,
-    BackgroundJob,
     CaptureUploadSlot,
     CaptureUploadSlotState,
     Collection,
@@ -67,7 +66,9 @@ from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_deletion import enqueue_creation_receipt
 from app.modules.storage.storage_ownership import publish_file
 from app.modules.storage.storage_paths import unlink_managed_file
-from app.runtime.jobs import registry, safe_error, safe_item
+from app.modules.work import service as work_service
+from app.modules.work.jobs import jobs as registry
+from app.modules.work.jobs import safe_error, safe_item
 from app.schemas.inbox import (
     CaptureSourceDraft,
     CaptureUploadSlotRead,
@@ -225,7 +226,7 @@ def read(
         manifest=manifest,
         target_collection_id=row.target_collection_id,
         requested_tags=requested_tags(row.requested_tags_json),
-        background_job_id=row.background_job_id,
+        job_id=row.job_id,
         resulting_model_id=row.resulting_model_id,
         results=result_reads,
         error_code=row.error_code,
@@ -316,7 +317,7 @@ def prune_expired_browser_leases() -> int:
                 continue
             expired_slot_item_ids[slot.inbox_item_id] = (
                 expired_slot_item_ids.get(slot.inbox_item_id, False)
-                or lease.background_job_id is not None
+                or lease.job_id is not None
             )
         expired_items = 0
         for inbox_item_id, job_owned in expired_slot_item_ids.items():
@@ -1181,9 +1182,12 @@ def _managed_staging(item_id: int, source: Path) -> Path:
 def _begin_resolve(item_id: int) -> tuple[bool, str | None, int | None]:
     with get_session_factory().scoped_session() as session:
         row = session.get(InboxItem, item_id)
+        # RESOLVING is accepted so an interrupted resolve Job resumes its own
+        # work; the Job's active-subject claim keeps it the only resolver.
         if row is None or row.state not in {
             InboxItemState.CAPTURED,
             InboxItemState.FAILED,
+            InboxItemState.RESOLVING,
         }:
             return False, None, None
         row.state = InboxItemState.RESOLVING
@@ -1532,14 +1536,28 @@ def _zip_result_key(source_selection_id: str, entry_name: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-async def run_import(
-    item_id: int, selected_ids: list[str], session_factory: SessionFactory
+def run_import_job(item_id: int, job_id: str) -> None:
+    """The ``inbox.import`` step: rebuild the import from the item and run it.
+
+    Everything is re-read from the Pending Import on every attempt, so a Job
+    interrupted mid-import resumes it: files an earlier attempt committed are
+    skipped by their ingestion keys.
+    """
+    from app.modules.work.async_steps import run_async
+
+    session_factory = get_session_factory()
+    with session_factory.scoped_session() as session:
+        row = session.get(InboxItem, item_id)
+        if row is None or row.state != InboxItemState.IMPORTING or row.job_id != job_id:
+            registry.finish(job_id, state="cancelled", error="pending_import_moved_on")
+            return
+        context = _import_context(session, row, job_id)
+    run_async(_run_import(item_id, context, session_factory))
+
+
+async def _run_import(
+    item_id: int, context: dict[str, Any], session_factory: SessionFactory
 ) -> None:
-    context = await asyncio.to_thread(
-        _begin_import, item_id, selected_ids, session_factory
-    )
-    if context is None:
-        return
     manifest = context["manifest"]
     selected = context["selected"]
     source_url = context["source_url"]
@@ -1662,93 +1680,105 @@ async def run_import(
         await asyncio.to_thread(_fail_import, item_id, exc, session_factory)
 
 
-def _begin_import(
-    item_id: int, selected_ids: list[str], session_factory: SessionFactory
-) -> dict[str, Any] | None:
-    with session_factory.scoped_session() as session:
-        row = session.get(InboxItem, item_id)
-        if row is None or row.state != InboxItemState.REVIEW:
-            return
-        user = session.get(User, row.owner_user_id)
-        if user is None:
-            return
-        _require_target(session, user, row.target_collection_id)
-        collection = (
-            session.get(Collection, row.target_collection_id)
-            if row.target_collection_id
-            else None
-        )
-        collection_path = collection.path if collection else None
-        tags = ",".join(requested_tags(row.requested_tags_json)) or None
-        manifest = _json_dict(row.manifest_json)
-        selected = validate_import_selection(row, selected_ids)
-        row.state = InboxItemState.IMPORTING
-        row.error_code = None
-        row.retryable = False
-        row.updated_at = utcnow()
-        job_id = registry.create(
-            owner_user_id=row.owner_user_id, kind="pending_import", session=session
-        )
-        job_row = session.get(BackgroundJob, job_id)
-        if job_row is not None:
-            job_row.kind = "pending_import"
-            job_row.replay_safe = True
-            session.add(job_row)
-        row.background_job_id = job_id
-        if row.source_kind == InboxSourceKind.BROWSER:
-            if row.id is None:
-                raise RuntimeError("persisted inbox item has no id")
-            try:
-                has_slots = (
-                    session.exec(
-                        select(CaptureUploadSlot).where(
-                            CaptureUploadSlot.inbox_item_id == row.id
-                        )
-                    ).first()
-                    is not None
-                )
-                if has_slots:
-                    staging_leases.transfer_capture_slots_to_job(
-                        session, inbox_item_id=row.id, job_id=job_id
-                    )
-                else:
-                    staging_leases.transfer_inbox_to_job(
-                        session, inbox_item_id=row.id, job_id=job_id
-                    )
-            except staging_leases.StagingLeaseError:
-                # Do not dispatch a browser import without durable ownership.
-                session.rollback()
-                row = session.get(InboxItem, item_id)
-                if row is None:
-                    return None
-                row.state = InboxItemState.FAILED
-                row.error_code = "staging_expired"
-                row.retryable = False
-                row.background_job_id = None
-                session.add(row)
-                session.commit()
-                return None
-        session.add(row)
-        session.commit()
-        return {
-            "manifest": manifest,
-            "selected": selected,
-            "source_url": row.source_url,
-            "staging_key": row.staging_key,
-            "job_id": job_id,
-            "collection_path": collection_path,
-            "tags": tags,
-            "owner_id": row.owner_user_id,
-            "slot_storage": {
-                slot.source_file_id: slot.storage_key
-                for slot in session.exec(
+IMPORT_DEFINITION = "inbox.import"
+RESOLVE_DEFINITION = "inbox.resolve"
+
+
+def begin_import(
+    session: Session, row: InboxItem, selected_ids: list[str]
+) -> str | None:
+    """Accept an import: REVIEW becomes IMPORTING under a new queued Job.
+
+    Records the selection on the item, the Job, and (for a browser capture)
+    the transfer of its staged bytes to the Job, in one commit. The caller
+    nudges ``inbox.import``. ``None`` when the item's staged bytes have
+    expired: the item is failed instead, since an import without durable
+    ownership of its bytes must not be dispatched.
+    """
+    if row.state != InboxItemState.REVIEW:
+        raise OperationError("pending_import_not_ready", kind=ErrorKind.CONFLICT)
+    assert row.id is not None
+    user = session.get(User, row.owner_user_id)
+    if user is None:
+        raise OperationError("pending_import_owner_missing", kind=ErrorKind.GONE)
+    _require_target(session, user, row.target_collection_id)
+    selected = validate_import_selection(row, selected_ids)
+    manifest = _json_dict(row.manifest_json)
+    manifest["selected_ids"] = selected
+    row.manifest_json = json.dumps(manifest, separators=(",", ":"))
+    row.state = InboxItemState.IMPORTING
+    row.error_code = None
+    row.retryable = False
+    row.updated_at = utcnow()
+    job_id = work_service.request(
+        session,
+        definition=IMPORT_DEFINITION,
+        subject_key=f"inbox_item/{row.id}",
+        owner_user_id=row.owner_user_id,
+    )
+    row.job_id = job_id
+    if row.source_kind == InboxSourceKind.BROWSER:
+        try:
+            has_slots = (
+                session.exec(
                     select(CaptureUploadSlot).where(
                         CaptureUploadSlot.inbox_item_id == row.id
                     )
-                ).all()
-                if slot.role == "file" and slot.source_file_id and slot.storage_key
-            },
-        }
+                ).first()
+                is not None
+            )
+            if has_slots:
+                staging_leases.transfer_capture_slots_to_job(
+                    session, inbox_item_id=row.id, job_id=job_id
+                )
+            else:
+                staging_leases.transfer_inbox_to_job(
+                    session, inbox_item_id=row.id, job_id=job_id
+                )
+        except staging_leases.StagingLeaseError:
+            session.rollback()
+            item_id = row.id
+            fresh = session.get(InboxItem, item_id)
+            if fresh is None:
+                return None
+            fresh.state = InboxItemState.FAILED
+            fresh.error_code = "staging_expired"
+            fresh.retryable = False
+            fresh.job_id = None
+            session.add(fresh)
+            session.commit()
+            return None
+    session.add(row)
+    session.commit()
+    return job_id
+
+
+def _import_context(session: Session, row: InboxItem, job_id: str) -> dict[str, Any]:
+    collection = (
+        session.get(Collection, row.target_collection_id)
+        if row.target_collection_id
+        else None
+    )
+    manifest = _json_dict(row.manifest_json)
+    return {
+        "manifest": manifest,
+        "selected": selected_ids(row.manifest_json),
+        "source_url": row.source_url,
+        "staging_key": row.staging_key,
+        "job_id": job_id,
+        "collection_path": collection.path if collection else None,
+        "tags": ",".join(requested_tags(row.requested_tags_json)) or None,
+        "owner_id": row.owner_user_id,
+        "slot_storage": {
+            slot.source_file_id: slot.storage_key
+            for slot in session.exec(
+                select(CaptureUploadSlot).where(
+                    CaptureUploadSlot.inbox_item_id == row.id
+                )
+            ).all()
+            if slot.role == "file" and slot.source_file_id and slot.storage_key
+        },
+    }
 
 
 def _finish_import(item_id: int, job_id: str, session_factory: SessionFactory) -> None:
@@ -1951,7 +1981,7 @@ def retry(session: Session, row: InboxItem) -> InboxItem:
         if row.id is None:
             raise RuntimeError("persisted inbox item has no id")
         try:
-            if row.background_job_id is not None:
+            if row.job_id is not None:
                 has_slots = (
                     session.exec(
                         select(CaptureUploadSlot.id).where(
@@ -1962,11 +1992,11 @@ def retry(session: Session, row: InboxItem) -> InboxItem:
                 )
                 if has_slots:
                     staging_leases.return_capture_slots_to_review(
-                        session, inbox_item_id=row.id, job_id=row.background_job_id
+                        session, inbox_item_id=row.id, job_id=row.job_id
                     )
                 else:
                     staging_leases.return_inbox_lease_to_review(
-                        session, inbox_item_id=row.id, job_id=row.background_job_id
+                        session, inbox_item_id=row.id, job_id=row.job_id
                     )
             else:
                 staging_leases.renew_review_lease(session, inbox_item_id=row.id)
@@ -2000,7 +2030,7 @@ def dismiss(session: Session, row: InboxItem) -> None:
         if not released:
             raise OperationError("staging_cleanup_failed", kind=ErrorKind.CONFLICT)
         row.staging_key = None
-        row.background_job_id = None
+        row.job_id = None
     elif row.staging_key:
         path = Path(row.staging_key)
         unlink_managed_file(path, settings.incoming_dir)
@@ -2023,12 +2053,10 @@ def _dismiss_completed_browser_staging(session: Session, row: InboxItem) -> bool
     there is no lease left to return. Legacy browser uploads still retain a
     job-owned review lease and use the normal exact-identity cleanup path.
     """
-    if row.background_job_id is None:
+    if row.job_id is None:
         return True
     has_job_lease = session.exec(
-        select(StagingLease.id).where(
-            StagingLease.background_job_id == row.background_job_id
-        )
+        select(StagingLease.id).where(StagingLease.job_id == row.job_id)
     ).first()
     if has_job_lease is None:
         return True
@@ -2039,9 +2067,9 @@ def _dismiss_browser_lease(session: Session, row: InboxItem) -> bool:
     """Return a failed job lease to inbox ownership before exact dismissal."""
     assert row.id is not None
     try:
-        if row.background_job_id is not None:
+        if row.job_id is not None:
             staging_leases.return_inbox_lease_to_review(
-                session, inbox_item_id=row.id, job_id=row.background_job_id
+                session, inbox_item_id=row.id, job_id=row.job_id
             )
         return staging_leases.dismiss_review_lease(session, inbox_item_id=row.id)
     except staging_leases.StagingLeaseNotFoundError as exc:
@@ -2090,29 +2118,39 @@ def reconcile_interrupted_items() -> int:
                 )
             )
         ).all()
+        settled = 0
         for row in rows:
-            job = registry.get(row.background_job_id) if row.background_job_id else None
-            if (
+            job = registry.get(row.job_id) if row.job_id else None
+            if row.state == InboxItemState.RESOLVING and job is None:
+                # A resolve has no Job row of its own to resume; hand it back to
+                # the resolve source, which finds CAPTURED items by itself.
+                row.state = InboxItemState.CAPTURED
+            elif job is not None and not job.terminal:
+                # The reconciler resumes an interrupted Job; nothing to settle.
+                continue
+            elif (
                 row.state == InboxItemState.IMPORTING
                 and job is not None
                 and job.state == "completed"
                 and job.model_id is not None
             ):
-                if row.id is not None and row.background_job_id is not None:
-                    completed_imports.append((row.id, row.background_job_id))
+                if row.id is not None and row.job_id is not None:
+                    completed_imports.append((row.id, row.job_id))
                 continue
-            row.state = InboxItemState.FAILED
-            row.error_code = "import_interrupted"
-            row.retryable = True
+            else:
+                row.state = InboxItemState.FAILED
+                row.error_code = "import_interrupted"
+                row.retryable = True
             row.updated_at = utcnow()
             session.add(row)
+            settled += 1
         session.commit()
     for item_id, job_id in completed_imports:
         # Preserve every durable terminalization step: per-file results,
         # optional source cover, capture receipt cleanup, and rollback rules.
         _finish_import(item_id, job_id, get_session_factory())
     _recover_completed_capture_cleanups()
-    return len(rows)
+    return settled + len(completed_imports)
 
 
 def _recover_completed_capture_cleanups() -> int:
@@ -2185,3 +2223,126 @@ def reconcile_storage_publications() -> int:
     backend = get_backend()
     with get_session_factory().scoped_session() as session:
         return _reconcile_storage_publications(session, backend)
+
+
+def _item_id(subject_key: str) -> int:
+    prefix, _, value = subject_key.partition("/")
+    if prefix != "inbox_item" or not value.isdigit():
+        raise ValueError(f"not_a_pending_import:{subject_key}")
+    return int(value)
+
+
+class ResolveSource:
+    """Captured URL imports that still need resolving to a manifest.
+
+    Pull, so a capture never depends on the request that created it having
+    dispatched anything: every CAPTURED item with a source URL is pending.
+    """
+
+    def pending(self, session: Session, *, now, limit: int):
+        from app.db.models import WorkPriority
+        from app.modules.work.contracts import WorkItem
+
+        rows = session.exec(
+            select(InboxItem.id, InboxItem.owner_user_id)
+            .where(
+                InboxItem.state == InboxItemState.CAPTURED,
+                col(InboxItem.source_url).is_not(None),
+            )
+            .order_by(col(InboxItem.id))
+            .limit(limit)
+        ).all()
+        return [
+            WorkItem(
+                subject_key=f"inbox_item/{item_id}",
+                priority=WorkPriority.INTERACTIVE,
+                owner_user_id=owner,
+            )
+            for item_id, owner in rows
+        ]
+
+    def next_due(self, session: Session, *, now):
+        return None
+
+
+def _resolve_step(ctx) -> None:
+    from app.modules.work.async_steps import run_async
+
+    run_async(resolve(_item_id(ctx.subject_key)))
+
+
+def _import_step(ctx) -> None:
+    run_import_job(_item_id(ctx.subject_key), ctx.job_id)
+
+
+def _withdraw(session: Session, subject_key: str) -> None:
+    """Cancelling a Pending Import's Job fails the item; the user may dismiss it."""
+    row = session.get(InboxItem, _item_id(subject_key))
+    if row is None or row.state not in {
+        InboxItemState.CAPTURED,
+        InboxItemState.RESOLVING,
+        InboxItemState.IMPORTING,
+    }:
+        return
+    row.state = InboxItemState.FAILED
+    row.error_code = "cancelled"
+    row.retryable = True
+    row.updated_at = utcnow()
+    session.add(row)
+
+
+def _failed(session: Session, subject_key: str, reason: str) -> None:
+    row = session.get(InboxItem, _item_id(subject_key))
+    if row is None or row.state not in {
+        InboxItemState.RESOLVING,
+        InboxItemState.IMPORTING,
+    }:
+        return
+    row.state = InboxItemState.FAILED
+    row.error_code = safe_error(reason) or "import_failed"
+    row.retryable = True
+    row.updated_at = utcnow()
+    session.add(row)
+
+
+def _retention() -> dict[str, int]:
+    return {
+        "history": prune_history(),
+        "browser_leases": prune_expired_browser_leases(),
+    }
+
+
+def definitions():
+    from app.modules.work.catalog import NETWORK
+    from app.modules.work.contracts import JobDefinition, Step
+    from app.modules.work.sources import fixed, scheduled
+
+    return [
+        scheduled(
+            "inbox.retention",
+            cron=fixed("35 * * * *"),
+            run=_retention,
+            label="Pending Import retention",
+        ),
+        JobDefinition(
+            name=RESOLVE_DEFINITION,
+            lane=NETWORK,
+            steps=(Step(f"{RESOLVE_DEFINITION}.run", _resolve_step),),
+            source=ResolveSource(),
+            cancel=_withdraw,
+            on_failure=_failed,
+            # Pending Imports own their retry (it may reselect files): the
+            # Job's own retry defers to that flow.
+            retry=lambda _session, _subject: False,
+            label="Pending Import resolution",
+        ),
+        JobDefinition(
+            name=IMPORT_DEFINITION,
+            lane=NETWORK,
+            steps=(Step(f"{IMPORT_DEFINITION}.run", _import_step),),
+            cancel=_withdraw,
+            on_failure=_failed,
+            retry=lambda _session, _subject: False,
+            label="Pending Imports",
+        ),
+    ]

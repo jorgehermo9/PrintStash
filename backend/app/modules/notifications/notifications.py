@@ -10,13 +10,13 @@ Two halves:
   outbox can't be lost — and because the hub edge-triggers state changes, an
   event is enqueued exactly once.
 
-* :func:`run_dispatcher_loop` is a background task started in the app lifespan.
-  It polls due deliveries, renders each via :mod:`app.modules.notifications.notification_renderers`,
-  POSTs through the shared HTTP client, and records success / retry / failure
-  with exponential backoff, surfacing a "last notification" status on the
-  channel for the UI.
-
-All blocking DB work runs in worker threads to keep the event loop free.
+* Delivery is the ``notify.deliver`` Job, one per delivery, on a lane
+  partitioned (and rate-limited) per channel. Its source reports due rows; the
+  enqueue nudges it after the caller's commit, and its ``next_due`` is the
+  earliest scheduled retry, so backoff needs no polling loop. Each Job renders
+  the delivery via :mod:`app.modules.notifications.notification_renderers`,
+  POSTs it, and records success / retry / failure with exponential backoff,
+  surfacing a "last notification" status on the channel for the UI.
 """
 
 from __future__ import annotations
@@ -72,8 +72,6 @@ _SECRET_CONFIG_KEYS: Dict[NotificationTarget, set] = {
 _BACKOFF_SECONDS: List[int] = [30, 120, 600, 1800]
 _MAX_ATTEMPTS = len(_BACKOFF_SECONDS) + 1
 
-# How often the dispatcher wakes to look for due deliveries.
-_POLL_INTERVAL_S = 15
 # Max deliveries processed per tick (bounds memory / burst load).
 _BATCH_SIZE = 50
 # Per-request network timeout.
@@ -232,6 +230,9 @@ def enqueue_for_event(
         event_type.value,
         printer_id,
     )
+    from app.modules.work.submission import nudge_after_commit
+
+    nudge_after_commit(session, DELIVER_DEFINITION)
     return len(matching)
 
 
@@ -482,25 +483,158 @@ async def dispatch_due() -> int:
     return len(items)
 
 
-async def run_dispatcher_loop() -> None:
-    """Background task: poll and deliver due notifications until cancelled."""
-    from app.runtime.maintenance import (
-        begin_mutating_operation,
-        end_mutating_operation,
-    )
+DELIVER_DEFINITION = "notify.deliver"
 
-    while True:
-        await asyncio.sleep(_POLL_INTERVAL_S)
-        if not begin_mutating_operation():
-            continue
+
+def _claim_delivery(delivery_id: int) -> Dict[str, Any] | None:
+    """Claim one delivery for its Job: PENDING (or its own stale SENDING) -> SENDING.
+
+    The Job's active-subject claim makes it the only sender of this delivery,
+    so a resubmitted Job may take back a SENDING row its lost attempt left.
+    """
+    now = utcnow()
+    with get_session_factory().session() as session:
+        pair = session.exec(
+            select(NotificationDelivery, NotificationChannel)
+            .join(
+                NotificationChannel,
+                NotificationDelivery.channel_id == NotificationChannel.id,  # type: ignore[arg-type]
+            )
+            .where(NotificationDelivery.id == delivery_id)
+        ).first()
+        if pair is None:
+            return None
+        delivery, channel = pair
+        if delivery.status not in {
+            NotificationDeliveryStatus.PENDING,
+            NotificationDeliveryStatus.SENDING,
+        }:
+            return None
+        delivery.status = NotificationDeliveryStatus.SENDING
+        delivery.updated_at = now
+        session.add(delivery)
+        session.commit()
         try:
-            await dispatch_due()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("notification dispatcher tick failed")
-        finally:
-            end_mutating_operation()
+            config = json.loads(channel.config_json or "{}")
+        except (TypeError, ValueError):
+            config = {}
+        try:
+            context = json.loads(delivery.context_json or "{}")
+        except (TypeError, ValueError):
+            context = {}
+        return {
+            "delivery_id": delivery.id,
+            "channel_id": channel.id,
+            "target": channel.target,
+            "config": config,
+            "context": context,
+            "attempts": delivery.attempts,
+        }
+
+
+def deliver(delivery_id: int) -> bool:
+    """Send one delivery now. ``False`` when it was not pending."""
+    from app.modules.work.async_steps import run_async
+
+    item = _claim_delivery(delivery_id)
+    if item is None:
+        return False
+    run_async(_send_one(item))
+    return True
+
+
+def _delivery_id(subject: str) -> int:
+    return int(subject.split("/", 1)[1])
+
+
+class DeliverySource:
+    """Due deliveries of the transactional outbox, one Job per delivery.
+
+    ``next_due`` is the earliest scheduled retry, so a backoff is honoured by
+    a delayed nudge rather than a polling loop.
+    """
+
+    def pending(self, session: Session, *, now: datetime, limit: int):
+        from app.db.models import WorkPriority
+        from app.modules.work.contracts import WorkItem
+
+        stuck_cutoff = now - timedelta(seconds=_STUCK_SENDING_SECONDS)
+        rows = session.exec(
+            select(NotificationDelivery.id, NotificationDelivery.channel_id)
+            .where(
+                or_(
+                    (NotificationDelivery.status == NotificationDeliveryStatus.PENDING)
+                    & (NotificationDelivery.next_retry_at <= now),
+                    (NotificationDelivery.status == NotificationDeliveryStatus.SENDING)
+                    & (NotificationDelivery.updated_at < stuck_cutoff),
+                )
+            )
+            .order_by(NotificationDelivery.next_retry_at)  # type: ignore[arg-type]
+            .limit(limit)
+        ).all()
+        return [
+            WorkItem(
+                subject_key=f"channel/{channel_id}/delivery/{delivery_id}",
+                priority=WorkPriority.INTERACTIVE,
+            )
+            for delivery_id, channel_id in rows
+        ]
+
+    def next_due(self, session: Session, *, now: datetime):
+        from sqlalchemy import func
+
+        due = session.exec(
+            select(func.min(NotificationDelivery.next_retry_at)).where(
+                NotificationDelivery.status == NotificationDeliveryStatus.PENDING,
+                NotificationDelivery.next_retry_at > now,  # type: ignore[operator]
+            )
+        ).one()
+        return due
+
+
+def _deliver_step(ctx) -> None:
+    delivery_id = int(ctx.subject_key.rsplit("/", 1)[1])
+    ctx.update(result={"sent": deliver(delivery_id)})
+
+
+def _cancel_delivery(session: Session, subject: str) -> None:
+    delivery = session.get(NotificationDelivery, int(subject.rsplit("/", 1)[1]))
+    if delivery is not None and delivery.status in {
+        NotificationDeliveryStatus.PENDING,
+        NotificationDeliveryStatus.SENDING,
+    }:
+        delivery.status = NotificationDeliveryStatus.FAILED
+        delivery.last_error = "cancelled"
+        session.add(delivery)
+
+
+def _channel_partition(subject: str) -> str:
+    return subject.split("/", 2)[1]
+
+
+def definitions():
+    from app.modules.work.catalog import NOTIFY
+    from app.modules.work.contracts import JobDefinition, Step
+    from app.modules.work.sources import fixed, scheduled
+
+    return [
+        scheduled(
+            "notify.retention",
+            cron=fixed("25 * * * *"),
+            run=prune_deliveries,
+            label="Notification history retention",
+        ),
+        JobDefinition(
+            name=DELIVER_DEFINITION,
+            lane=NOTIFY,
+            steps=(Step(f"{DELIVER_DEFINITION}.send", _deliver_step),),
+            source=DeliverySource(),
+            cancel=_cancel_delivery,
+            partition=_channel_partition,
+            retry=lambda _session, _subject: False,
+            label="Notifications",
+        ),
+    ]
 
 
 def prune_deliveries(retention_days: int = _DELIVERY_RETENTION_DAYS) -> int:

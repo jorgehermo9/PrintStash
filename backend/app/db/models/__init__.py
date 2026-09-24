@@ -72,9 +72,6 @@ from .inference import EmbeddingSpace as EmbeddingSpace
 from .inference import IndexGeneration as IndexGeneration
 from .inference import PassageVector as PassageVector
 from .ingestion import (
-    BackgroundJob as BackgroundJob,
-)
-from .ingestion import (
     CaptureUploadSlot as CaptureUploadSlot,
 )
 from .ingestion import (
@@ -82,6 +79,9 @@ from .ingestion import (
 )
 from .ingestion import (
     InboxItemResult as InboxItemResult,
+)
+from .ingestion import (
+    IngestRequest as IngestRequest,
 )
 from .ingestion import (
     StagingLease as StagingLease,
@@ -148,10 +148,13 @@ from .library import (
     Tag as Tag,
 )
 from .media import (
-    ThumbnailGeneration as ThumbnailGeneration,
+    ArtifactDerivative as ArtifactDerivative,
 )
 from .media import (
-    ThumbnailRenderSlot as ThumbnailRenderSlot,
+    DerivativeRegeneration as DerivativeRegeneration,
+)
+from .media import (
+    NativeComputeSlot as NativeComputeSlot,
 )
 from .notifications import (
     NotificationChannel as NotificationChannel,
@@ -280,6 +283,9 @@ from .types import (
     CompatibilityPolicy as CompatibilityPolicy,
 )
 from .types import (
+    DerivativeState as DerivativeState,
+)
+from .types import (
     DocumentKind as DocumentKind,
 )
 from .types import (
@@ -313,7 +319,13 @@ from .types import (
     InboxSourceKind as InboxSourceKind,
 )
 from .types import (
+    IngestRequestKind as IngestRequestKind,
+)
+from .types import (
     JobPriority as JobPriority,
+)
+from .types import (
+    JobState as JobState,
 )
 from .types import (
     LibrarySourceKind as LibrarySourceKind,
@@ -358,9 +370,6 @@ from .types import (
     StorageObjectState as StorageObjectState,
 )
 from .types import (
-    ThumbnailGenerationState as ThumbnailGenerationState,
-)
-from .types import (
     VaultAuditFindingState as VaultAuditFindingState,
 )
 from .types import (
@@ -372,6 +381,15 @@ from .types import (
 from .types import (
     VaultAuditSeverity as VaultAuditSeverity,
 )
+from .types import (
+    WorkPriority as WorkPriority,
+)
 from .vault_migration import VaultGeneration as VaultGeneration
 from .vault_migration import VaultMigrationObject as VaultMigrationObject
 from .vault_migration import VaultMigrationRun as VaultMigrationRun
+from .work import ACTIVE_JOB_STATES as ACTIVE_JOB_STATES
+from .work import Job as Job
+from .work import ReconcileCursor as ReconcileCursor
+from .work import WorkExecutor as WorkExecutor
+from .work import WorkFence as WorkFence
+from .work import WorkLaneOverride as WorkLaneOverride

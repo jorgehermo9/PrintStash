@@ -378,7 +378,8 @@ class TestDataMigrations:
         finally:
             engine.dispose()
 
-        command.upgrade(cfg, "head")
+        # The revision before the job engine renamed these columns.
+        command.upgrade(cfg, "0118bda3e719")
         engine = create_engine(url)
         try:
             inbox_fks = {
@@ -1107,12 +1108,13 @@ class TestUpgrade:
             "updated_at",
             "id",
         ]
-        background_job_indexes = {
-            index["name"]: index for index in inspector.get_indexes("background_jobs")
-        }
-        assert background_job_indexes["ix_background_jobs_visible_state_owner_updated"][
-            "column_names"
-        ] == ["visible", "state", "owner_user_id", "updated_at"]
+        job_indexes = {index["name"]: index for index in inspector.get_indexes("jobs")}
+        assert job_indexes["ix_jobs_owner_state_updated"]["column_names"] == [
+            "owner_user_id",
+            "state",
+            "updated_at",
+        ]
+        assert bool(job_indexes["uq_jobs_active_subject"]["unique"]) is True
         printer_indexes = {
             index["name"]: index for index in inspector.get_indexes("printers")
         }
@@ -1147,7 +1149,7 @@ class TestUpgrade:
             fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
             for fk in inspector.get_foreign_keys("inbox_items")
         }
-        assert inbox_fks["background_job_id"] == "SET NULL"
+        assert inbox_fks["job_id"] == "SET NULL"
         provenance_source_indexes = {
             index["name"]: index
             for index in inspector.get_indexes("model_provenance_sources")

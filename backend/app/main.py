@@ -27,11 +27,11 @@ from app.core.config import settings
 from app.core.errors import OperationError
 from app.core.logging import get_logger
 from app.core.metrics import (
-    background_job_depth,
     fleet_blocked_jobs,
     fleet_jobs,
     fleet_scheduler_last_tick,
     fleet_scheduler_running,
+    job_depth,
     observe_request,
     printer_status,
     staging_bytes,
@@ -254,14 +254,12 @@ def _refresh_fleet_gauges() -> None:
 def _refresh_persistence_gauges() -> None:
     from sqlalchemy import func
 
-    from app.db.models import BackgroundJob, StagingLease, StorageDeleteIntent
+    from app.db.models import Job, StagingLease, StorageDeleteIntent
 
     try:
         with get_session_factory().session() as session:
             jobs = session.exec(
-                select(
-                    col(BackgroundJob.state), func.count(col(BackgroundJob.id))
-                ).group_by(col(BackgroundJob.state))
+                select(col(Job.state), func.count(col(Job.id))).group_by(col(Job.state))
             ).all()
             staged = session.exec(
                 select(func.coalesce(func.sum(StagingLease.size_bytes), 0))
@@ -275,9 +273,9 @@ def _refresh_persistence_gauges() -> None:
     except Exception:
         logger.exception("metrics: failed to refresh persistence gauges")
         return
-    background_job_depth.clear()
+    job_depth.clear()
     for state, count in jobs:
-        background_job_depth.labels(state=str(state)).set(count)
+        job_depth.labels(state=str(state)).set(count)
     staging_bytes.set(int(staged))
     storage_delete_intents.clear()
     for intent_state, count in intents:

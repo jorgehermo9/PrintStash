@@ -295,9 +295,8 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
     from PIL import Image
 
     from app.modules.administration import audit
-    from app.modules.ingestion.ingestion import strategy_for_artifact
-    from app.modules.media.thumbnail_engine import ThumbnailEngine
-    from app.modules.media.thumbnail_generations import ensure_thumbnail
+    from app.modules.derivatives.kinds import METADATA, THUMBNAIL
+    from app.modules.derivatives.repair import now as rederive_now
 
     assert run.id is not None
     allowed = set(json.loads(run.repair_actions_json)) & SAFE_REPAIR_ACTIONS
@@ -349,21 +348,9 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
                     ).first()
                     is None
                 ):
-                    with get_backend().local_path(file.path) as path:
-                        values, _ = strategy_for_artifact(file.file_type).process(
-                            path, lambda _label: None
-                        )
-                    session.add(
-                        Metadata(
-                            file_id=file.id,
-                            **{
-                                key: value
-                                for key, value in values.items()
-                                if key in Metadata.model_fields
-                            },
-                        )
-                    )
+                    session.add(Metadata(file_id=file.id))
                     session.commit()
+                    rederive_now(file.id, [METADATA])
                 ok = (
                     session.exec(
                         select(Metadata).where(Metadata.file_id == file.id)
@@ -374,16 +361,9 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
                 "thumbnail_missing",
                 "thumbnail_unreadable",
             }:
-                result = ensure_thumbnail(
-                    session,
-                    file,
-                    force=True,
-                    promote=True,
-                    backend=get_backend(),
-                    engine=ThumbnailEngine(),
-                )
+                outcome = rederive_now(file.id, [THUMBNAIL])
                 session.refresh(file)
-                if result.available and file.thumbnail_path:
+                if outcome.get(THUMBNAIL) == "ready" and file.thumbnail_path:
                     with (
                         get_backend().local_path(file.thumbnail_path) as path,
                         Image.open(path) as image,

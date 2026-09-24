@@ -287,15 +287,19 @@ def list_runs(*, limit: int = 50, offset: int = 0) -> list[dict]:
 
 
 def reconcile_interrupted_runs() -> None:
-    """Recover execution status after acquiring the process-wide operation lock.
+    """Settle backup rows a lost backup left "running", when none is live.
 
-    The supported deployment has one process. Once this lock is held, publishing
-    states from earlier operations are interrupted, never concurrent writers.
-    Storage reconciliation remains exact and is performed before a retry.
+    A backup may run on any worker, so this process's operation lock alone no
+    longer proves nothing is publishing: the cross-process backup fence must
+    be free too (or held by this thread's own operation). Only then are
+    running and publishing states interrupted leftovers, never concurrent
+    writers. Storage reconciliation remains exact and runs before a retry.
     """
     from app.db.models import BackupRetryAttempt
 
     with backup_maintenance.backup_operation_lock:
+        if backup_maintenance.backup_in_progress_elsewhere():
+            return
         with get_session_factory().scoped_session() as session:
             runs = session.exec(
                 select(BackupRun).where(BackupRun.outcome == "running")

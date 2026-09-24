@@ -64,7 +64,7 @@ from app.modules.storage import capacity_estimates, storage
 from app.modules.storage.artifact_content import ArtifactContentError, resolve
 from app.modules.storage.capacity import CapacityManager
 from app.modules.storage.storage_backend.runtime import get_backend
-from app.runtime.jobs import registry
+from app.modules.work.jobs import jobs as registry
 from app.schemas.family_transfer import PortableFamily
 from app.schemas.models import PartGroupWrite, PartOptionWrite
 
@@ -1944,8 +1944,6 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
                         file_type=FileType(artifact_data["file_type"]),
                         blob_hash=artifact_data["sha256"],
                         meta=artifact_data.get("metadata", {}),
-                        thumb_bytes=None,
-                        overwrite_thumbnail=False,
                         revision_label=artifact_data.get("revision_label"),
                         revision_status=FileRevisionStatus(
                             artifact_data["revision_status"]
@@ -2336,7 +2334,7 @@ def run_import_job(
                 raise ValueError("user_not_found")
             result = import_archive(session, archive_path, user)
             lease = session.exec(
-                select(StagingLease).where(StagingLease.background_job_id == job_id)
+                select(StagingLease).where(StagingLease.job_id == job_id)
             ).first()
             if lease is not None:
                 session.delete(lease)
@@ -2354,3 +2352,62 @@ def run_import_job(
         archive_path.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001 - durable job boundary
         registry.finish(job_id, state="failed", error=str(exc), retryable=True)
+
+
+IMPORT_DEFINITION = "ingest.library_import"
+
+
+def _import_step(ctx) -> None:
+    from app.db.session import get_session_factory
+    from app.modules.ingestion import staging_leases
+
+    job_id = ctx.job_id
+    with get_session_factory().scoped_session() as session:
+        leases = staging_leases.job_leases(session, job_id)
+        job = registry.row(session, job_id)
+        owner = job.owner_user_id if job is not None else None
+    if not leases or owner is None or not Path(leases[0].path).exists():
+        registry.finish(job_id, state="failed", error="staging_expired")
+        return
+    run_import_job(
+        job_id=job_id,
+        archive_path=Path(leases[0].path),
+        user_id=owner,
+        session_factory=get_session_factory(),
+    )
+
+
+def _cancel_import(session, subject_key: str) -> None:
+    from app.modules.ingestion import staging_leases
+
+    job_id = subject_key.split("/", 1)[1]
+    for lease in staging_leases.job_leases(session, job_id):
+        Path(lease.path).unlink(missing_ok=True)
+        session.delete(lease)
+
+
+def _retry_import(session, subject_key: str) -> bool:
+    from app.modules.ingestion import staging_leases
+
+    job_id = subject_key.split("/", 1)[1]
+    leases = staging_leases.job_leases(session, job_id)
+    if not leases or not all(Path(lease.path).exists() for lease in leases):
+        return False
+    staging_leases.renew_job_lease(session, job_id=job_id)
+    return True
+
+
+def definitions():
+    from app.modules.work.catalog import INGEST
+    from app.modules.work.contracts import JobDefinition, Step
+
+    return [
+        JobDefinition(
+            name=IMPORT_DEFINITION,
+            lane=INGEST,
+            steps=(Step(f"{IMPORT_DEFINITION}.run", _import_step),),
+            cancel=_cancel_import,
+            retry=_retry_import,
+            label="Library imports",
+        )
+    ]

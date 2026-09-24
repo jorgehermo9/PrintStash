@@ -56,6 +56,25 @@ def _alembic_config(url: str) -> Config:
     return cfg
 
 
+def schema_is_current(database_url: str) -> bool:
+    """Whether the database is at every migration head this build ships.
+
+    A worker process never migrates; it waits for this to hold, so it cannot
+    run against a schema older (or newer) than the code it executes.
+    """
+    from alembic.script import ScriptDirectory
+
+    url = normalize_database_url(database_url)
+    heads = set(ScriptDirectory.from_config(_alembic_config(url)).get_heads())
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            current = set(MigrationContext.configure(connection).get_current_heads())
+    finally:
+        engine.dispose()
+    return bool(current) and current == heads
+
+
 def _current_revision(engine) -> str | None:
     """The DB's recorded Alembic revision, or None when it has never been stamped."""
     with engine.connect() as conn:

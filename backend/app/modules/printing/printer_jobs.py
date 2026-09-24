@@ -36,7 +36,6 @@ from app.modules.storage.artifact_content import (
     resolve,
 )
 from app.modules.storage.storage_backend.runtime import get_backend
-from app.runtime.work_wakeup import WorkWakeup
 
 logger = get_logger(__name__)
 
@@ -140,12 +139,35 @@ def reproducibility_payload(
 
 
 def scheduler_snapshot() -> dict[str, object]:
-    return {
-        "running": scheduler_status.running,
-        "last_tick_at": scheduler_status.last_tick_at,
-        "last_dispatch_at": scheduler_status.last_dispatch_at,
-        "last_error": scheduler_status.last_error,
-    }
+    """The dispatcher's state, read from the database so every process agrees.
+
+    ``running`` means dispatch Jobs can run (the engine is bound); ticks and
+    outcomes come from the dispatch definition's cursor and latest Job, not
+    from process memory, because the dispatch may run on another worker.
+    """
+    import json
+
+    from sqlmodel import col
+
+    from app.db.models import Job, ReconcileCursor
+    from app.modules.printing.jobs import DISPATCH_DEFINITION
+    from app.modules.work import bound
+
+    with get_session_factory().scoped_session() as session:
+        cursor = session.get(ReconcileCursor, DISPATCH_DEFINITION)
+        latest = session.exec(
+            select(Job)
+            .where(Job.kind == DISPATCH_DEFINITION)
+            .order_by(col(Job.updated_at).desc())
+            .limit(1)
+        ).first()
+        result = json.loads(latest.status_json).get("result") or {} if latest else {}
+        return {
+            "running": bound(),
+            "last_tick_at": cursor.last_pass_finished_at if cursor else None,
+            "last_dispatch_at": result.get("last_dispatch_at"),
+            "last_error": result.get("last_error"),
+        }
 
 
 class PrinterJobError(Exception):
@@ -525,41 +547,25 @@ async def _dispatch_claimed(job_id: int, provider_builder: ProviderBuilder) -> N
     await asyncio.to_thread(_mark_dispatch_started, job_id, context)
 
 
-async def run_fleet_scheduler(
-    work_wakeup: WorkWakeup, provider_builder: ProviderBuilder
-) -> None:
-    from app.runtime.maintenance import (
-        begin_mutating_operation,
-        end_mutating_operation,
-    )
+async def drain_dispatch_queue(
+    provider_builder: ProviderBuilder, *, budget_seconds: float
+) -> int:
+    """Dispatch eligible queued fleet jobs until none is eligible or time runs out."""
+    import time
 
-    scheduler_status.running = True
-    try:
-        while True:
-            if not begin_mutating_operation():
-                await asyncio.sleep(0.5)
-                continue
-            scheduler_status.last_tick_at = utcnow()
-            try:
-                dispatched = await dispatch_next(provider_builder)
-                scheduler_status.last_error = None
-                if dispatched is not None:
-                    scheduler_status.last_dispatch_at = utcnow()
-            except Exception as exc:  # noqa: BLE001 - survive one bad tick
-                logger.exception("fleet scheduler tick failed")
-                scheduler_status.last_error = exc.__class__.__name__
-                dispatched = None
-            finally:
-                end_mutating_operation()
-            if dispatched is not None:
-                await asyncio.sleep(0)
-                continue
-            # Database remains source of truth; WorkWakeup is a low-latency wake
-            # transport. Timeout polling recovers queued work after restarts or
-            # a lost in-memory notification without external dependencies.
-            try:
-                await asyncio.wait_for(work_wakeup.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                pass
-    finally:
-        scheduler_status.running = False
+    deadline = time.monotonic() + budget_seconds
+    dispatched = 0
+    while time.monotonic() < deadline:
+        scheduler_status.last_tick_at = utcnow()
+        try:
+            job_id = await dispatch_next(provider_builder)
+            scheduler_status.last_error = None
+        except Exception as exc:  # noqa: BLE001 - one bad claim ends the slice
+            logger.exception("fleet dispatch slice failed")
+            scheduler_status.last_error = exc.__class__.__name__
+            break
+        if job_id is None:
+            break
+        dispatched += 1
+        scheduler_status.last_dispatch_at = utcnow()
+    return dispatched

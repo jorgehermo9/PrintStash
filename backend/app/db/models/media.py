@@ -1,15 +1,15 @@
-"""Thumbnail generation state and render-slot reservations."""
+"""Artifact derivatives and native-memory compute admission."""
 
 from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger,
     Column,
     ForeignKey,
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlmodel import Field
@@ -17,21 +17,36 @@ from sqlmodel import Field
 from app.core.time import utcnow
 
 from .base import SQLModel
-from .types import ThumbnailGenerationState
+from .types import DerivativeState
 
 
-class ThumbnailGeneration(SQLModel, table=True):
-    """Durable identity and lease for one thumbnail source/recipe."""
+class ArtifactDerivative(SQLModel, table=True):
+    """The lifecycle record of one derived output of one Artifact.
 
-    __tablename__ = "thumbnail_generations"
+    A derivative is a pure function of an Artifact's bytes and a versioned
+    recipe. Its *output* stays with the owner of that output (``metadata``,
+    ``File.thumbnail_path``, a toolpath blob); this row records whether the
+    output exists at the current recipe, how many attempts it took, and why it
+    failed. An Artifact with no row for an applicable kind at the current recipe
+    is pending: the derivative source finds it with an anti-join, so ingestion
+    never needs to know which kinds exist.
+    """
+
+    __tablename__ = "artifact_derivatives"
     __table_args__ = (
         UniqueConstraint(
             "file_id",
-            "source_sha256",
-            "recipe_fingerprint",
-            name="uq_thumbnail_generation_recipe",
+            "kind",
+            "recipe_version",
+            name="uq_artifact_derivatives_recipe",
         ),
-        Index("ix_thumbnail_generation_state_lease", "state", "lease_expires_at"),
+        Index(
+            "ix_artifact_derivatives_kind_recipe_state",
+            "kind",
+            "recipe_version",
+            "state",
+            "next_attempt_at",
+        ),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -43,47 +58,62 @@ class ThumbnailGeneration(SQLModel, table=True):
             index=True,
         )
     )
-    source_sha256: str = Field(max_length=64)
-    recipe_fingerprint: str = Field(max_length=64)
-    state: ThumbnailGenerationState = Field(
-        default=ThumbnailGenerationState.PENDING,
-        sa_column=Column(String(16), nullable=False, index=True),
+    kind: str = Field(max_length=32)
+    recipe_version: int
+    state: DerivativeState = Field(
+        default=DerivativeState.QUEUED,
+        sa_column=Column(String(16), nullable=False),
     )
-    storage_key: Optional[str] = Field(default=None, max_length=2048)
-    output_sha256: Optional[str] = Field(default=None, max_length=64)
-    output_size_bytes: Optional[int] = Field(default=None, sa_type=BigInteger)
-    output_etag: Optional[str] = Field(default=None, max_length=256)
-    width: Optional[int] = None
-    height: Optional[int] = None
-    strategy: Optional[str] = Field(default=None, max_length=32)
-    complete: bool = Field(default=False)
-    failure_reason: Optional[str] = Field(default=None, max_length=64)
     attempts: int = Field(default=0)
-    lease_token: Optional[str] = Field(default=None, max_length=64, index=True)
-    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
+    next_attempt_at: Optional[datetime] = None
+    failure_reason: Optional[str] = Field(default=None, max_length=64)
+    # The storage object this derivative published, when it publishes one.
+    # A column rather than JSON because trash, backup ownership and vault
+    # migration must find (and remap) every derivative object by key.
+    storage_key: Optional[str] = Field(default=None, max_length=2048)
+    # Owner-defined description of the output (a size, a strategy). Never
+    # input: a re-derivation reads the Artifact, not this.
+    output_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     duration_ms: Optional[int] = None
-    peak_rss_bytes: Optional[int] = Field(default=None, sa_type=BigInteger)
+    peak_rss_bytes: Optional[int] = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class ThumbnailRenderSlot(SQLModel, table=True):
-    """Database-backed render permit shared by every application instance."""
+class NativeComputeSlot(SQLModel, table=True):
+    """A database-backed native-memory permit shared by every process.
 
-    __tablename__ = "thumbnail_render_slots"
+    Job concurrency is the lane's business. This permit exists because native
+    work also runs on the request path (a semantic search embeds its query), and
+    request-path and job-path native processes share one memory budget.
+    """
+
+    __tablename__ = "native_compute_slots"
 
     id: Optional[int] = Field(default=None, primary_key=True)
     slot_number: int = Field(unique=True, index=True)
-    generation_id: Optional[int] = Field(
-        default=None,
-        sa_column=Column(
-            Integer,
-            ForeignKey("thumbnail_generations.id", ondelete="SET NULL"),
-            nullable=True,
-            index=True,
-        ),
-    )
     lease_token: Optional[str] = Field(default=None, max_length=64, index=True)
     lease_expires_at: Optional[datetime] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class DerivativeRegeneration(SQLModel, table=True):
+    """An administrator's "regenerate all" for one derivative kind.
+
+    A recipe bump is the code saying outputs changed. This is an operator
+    saying so without a code change (for example after changing the thumbnail
+    width): every output of the kind older than ``requested_at`` counts as
+    stale to the derivative source until it is re-derived.
+    """
+
+    __tablename__ = "derivative_regenerations"
+
+    kind: str = Field(primary_key=True, max_length=32)
+    requested_at: datetime = Field(default_factory=utcnow)
+    requested_by: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ),
+    )

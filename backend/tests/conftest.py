@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 from fastapi import FastAPI
@@ -377,9 +377,53 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     # flip. Dropping the ref (not aclose) avoids touching the dead loop.
     import app.core.http_client as _http_client_mod
 
-    _http_client_mod._http_client = None
+    _http_client_mod.reset_for_tests()
+
+    from app.runtime import maintenance
+
+    maintenance.reset_for_tests()
 
     _reset_every_rate_limiter()
+
+
+@pytest.fixture(scope="session")
+def work_catalog():
+    """Every job definition, built once: the catalog is immutable per process."""
+    from app.bootstrap.work import definitions
+    from app.modules.work.catalog import WorkCatalog
+
+    return WorkCatalog(definitions())
+
+
+@pytest.fixture(autouse=True)
+def work_engine(work_catalog) -> Iterator[Any]:
+    """Bind a fresh deterministic engine for every test, and unbind it after.
+
+    Production code only records intent and nudges; nothing runs until a test
+    calls ``work_engine.drain()``. That keeps "a route accepted the work" and
+    "the work happened" separate assertions, and makes every run of a job an
+    explicit step of the test rather than a race with it. The engine is the
+    same port the durable engine implements (``tests/contract/runtime/engine``
+    holds both to one contract), so what drains here is what DBOS runs.
+    """
+    from app.modules.work import catalog as catalog_module
+    from app.modules.work import events
+    from app.modules.work.executors import reset_executor_id
+    from app.modules.work.jobs import jobs
+    from app.runtime.engine.inline import InlineJobEngine
+
+    engine = InlineJobEngine(work_catalog)
+    engine.launch(listen_lanes=None)
+    jobs.clear_listeners()
+    events.bind(None)
+    reset_executor_id()
+    catalog_module.bind(engine, work_catalog)
+    try:
+        yield engine
+    finally:
+        catalog_module.bind(None, None)
+        jobs.clear_listeners()
+        events.bind(None)
 
 
 @pytest.fixture(autouse=True)
@@ -485,19 +529,19 @@ def app() -> FastAPI:
         get_provider_client,
     )
     from app.runtime.realtime import InProcessBus
-    from app.runtime.work_wakeup import LocalWorkWakeup
 
     registry = build_provider_registry()
     _app.state.printer_provider_registry = registry
+    bus = InProcessBus()
+    _app.state.event_bus = bus
     hub = PrinterHub(
-        InProcessBus(),
+        bus,
         session_factory=get_session_factory(),
         provider_builder=lambda printer: get_provider_client(
             printer, registry=registry
         ),
     )
     _app.state.printer_hub = hub
-    _app.state.work_wakeup = LocalWorkWakeup()
     return _app
 
 

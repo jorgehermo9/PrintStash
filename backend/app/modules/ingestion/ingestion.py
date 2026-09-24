@@ -1,10 +1,18 @@
-"""Ingestion orchestrator — runs in a FastAPI BackgroundTask."""
+"""Artifact commit: staged bytes become a durable, deduplicated Artifact.
+
+This is the whole hot path of ingestion. Hash, dedupe, resolve the Model,
+publish the blob and commit the File row with an empty ``metadata`` row, then
+nudge the derivative sources. Nothing here parses G-code, renders a mesh or
+extracts a thumbnail: those are derivatives, computed by their own jobs from
+the committed bytes, so an upload is durable as soon as its bytes are.
+"""
 
 from __future__ import annotations
 
 import threading
 import uuid
 from dataclasses import dataclass, replace
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, ParamSpec, TypeVar
@@ -13,7 +21,6 @@ from sqlalchemy import case, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-import app.modules.media.mesh_operations as mesh_operations
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.models import (
@@ -37,16 +44,12 @@ from app.db.scopes import live
 from app.db.session import SessionFactory, get_session_factory
 from app.modules.identity import rbac
 from app.modules.library import taxonomy
-from app.modules.media import gcode_parser, thumbnail
-from app.modules.media.mesh_processing import FallbackThumbnail
-from app.modules.printing.profile_detection import upsert_detected_profiles
 from app.modules.storage import storage
 from app.modules.storage.hashing import sha256_file
 from app.modules.storage.storage_backend.contracts import StorageCollisionError
 from app.modules.storage.storage_backend.local import LocalStorageBackend
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_ownership import provider_ref_for_backend, publish_file
-from app.runtime.jobs import registry
 
 if TYPE_CHECKING:
     from app.modules.library.provenance import ProvenanceContext
@@ -70,26 +73,8 @@ def _noop_progress(_label: str) -> None:
     return None
 
 
-@dataclass
-class IngestionStrategy:
-    """Variant step in the pipeline: parse a staged file into metadata + thumbnail.
-
-    ``step_labels`` enumerates the labels ``process`` reports, in order, so the
-    pipeline can map them onto step counters for job progress hints.
-    """
-
-    file_type: FileType
-    overwrite_thumbnail: bool
-    process: Callable[[Path, ProgressFn], tuple[dict[str, Any], bytes | None]]
-    step_labels: tuple[str, ...]
-
-
 class ArtifactDurabilityError(RuntimeError):
     """A committed artifact cannot be used from a fresh session/storage view."""
-
-
-class ThumbnailDurabilityError(RuntimeError):
-    """A thumbnail reported as generated is not visible in storage."""
 
 
 class ArtifactCommitUncertain(RuntimeError):
@@ -167,9 +152,8 @@ def verify_durable_artifact(
     *,
     model_id: int,
     file_id: int,
-    thumbnail_status: str,
 ) -> None:
-    """Verify rows and objects from a new transaction before publishing terminal."""
+    """Verify rows and the blob from a new transaction before publishing terminal."""
     with session_factory.scoped_session() as verification_session:
         model = verification_session.get(Model, model_id)
         artifact = verification_session.get(File, file_id)
@@ -184,18 +168,14 @@ def verify_durable_artifact(
         ):
             raise ArtifactDurabilityError("artifact_rows_not_durable")
         primary_key = artifact.path
-        thumbnail_key = artifact.thumbnail_path
+        external = artifact.is_external
 
-    backend = get_backend()
-    if not backend.exists(primary_key):
+    if external:
+        # A linked NAS Artifact is owned by its library, not the vault backend,
+        # so only its row is ours to verify.
+        return
+    if not get_backend().exists(primary_key):
         raise ArtifactDurabilityError("artifact_blob_not_durable")
-    if thumbnail_status in {"generated", "fallback_generated"}:
-        # New generations are immutable, recipe-versioned objects. Keep the
-        # legacy address only as a read-compatible fallback for artifacts that
-        # predate durable thumbnail generations.
-        candidate = thumbnail_key or backend.thumbnail_key(file_id)
-        if not backend.exists(candidate):
-            raise ThumbnailDurabilityError("thumbnail_blob_not_durable")
 
 
 def _model_exists_with_slug(session: Session, slug: str) -> bool:
@@ -373,9 +353,7 @@ def persist_artifact(
     original_filename: str,
     file_type: FileType,
     blob_hash: str,
-    meta: dict[str, Any],
-    thumb_bytes: bytes | None,
-    overwrite_thumbnail: bool,
+    meta: dict[str, Any] | None = None,
     revision_label: str | None = None,
     revision_status: FileRevisionStatus | None = None,
     revision_notes: str | None = None,
@@ -389,11 +367,13 @@ def persist_artifact(
     provenance_context: ProvenanceContext | None = None,
     session_factory: SessionFactory | None = None,
 ) -> File:
-    """Persist a parsed, staged artifact onto *model* — the deep core shared
-    by background ingestion and synchronous revision attachment.
+    """Persist a staged artifact onto *model*: the only Artifact-persistence path.
 
-    Owns: version allocation, the canonical blob move, the File row, the
-    thumbnail write (+ model thumbnail selection), and the Metadata row.
+    Owns: version allocation, the canonical blob move, the File row and its
+    Metadata row. ``meta`` carries facts the caller already has (a portable
+    library import); otherwise the Metadata row starts empty, every value
+    unknown, and the derivative jobs fill it. After the commit it nudges the
+    derivative sources, which find this Artifact by themselves.
 
     Destination modes:
     - **Vault** (default): write into vault storage at ``blob_key(...)`` via
@@ -571,10 +551,10 @@ def persist_artifact(
             source_mtime=source_mtime,
             ingestion_key=ingestion_key,
         )
-        # One transaction for the whole artifact: a File row committed before its
-        # Metadata is a model that renders with no print time, filament or cost and
-        # no error to explain it. flush() allocates the id the thumbnail key needs
-        # without ending the transaction.
+        # One transaction for the whole artifact: a File row committed without
+        # its Metadata row would have no row for the derivatives to fill.
+        # flush() allocates the id provenance needs without ending the
+        # transaction.
         session.add(file_row)
         session.flush()
         assert file_row.id is not None
@@ -583,9 +563,14 @@ def persist_artifact(
             # A provenance failure therefore follows the established rollback
             # path for both its link and the bytes/row it describes.
             _attach_ingested_artifact(session, file_row, provenance_context)
-        # The parser may carry detection-only keys (e.g. printer_preset_name)
-        # that have no Metadata column.
-        md_fields = {k: v for k, v in meta.items() if k in Metadata.model_fields}
+        # A caller's facts may carry detection-only keys (e.g.
+        # printer_preset_name) that have no Metadata column.
+        meta = meta or {}
+        md_fields = {
+            k: v
+            for k, v in meta.items()
+            if k in Metadata.model_fields and k not in {"id", "file_id", "created_at"}
+        }
         session.add(Metadata(file_id=file_row.id, **md_fields))
         requirements = meta.get("material_requirements")
         if isinstance(requirements, list):
@@ -647,46 +632,15 @@ def persist_artifact(
         if reservation is not None:
             reservation.release()
 
-    # A successfully resolved commit is terminal for this call. The detached
-    # row is returned and thumbnail work is left to the derivative reconciler;
-    # continuing with the rolled-back caller session could create a second,
-    # unrelated transaction against stale Model state.
+    # Derivatives are not part of the File+Metadata integrity boundary. The
+    # sources find this Artifact by themselves; the nudge only makes that
+    # happen now rather than at the next tick. A resolved commit returns the
+    # detached row without touching the rolled-back caller session.
+    from app.modules.derivatives.jobs import nudge_for
+
+    nudge_for(file_row)
     if commit_resolved:
         return file_row
-
-    # A thumbnail is a retryable derivative, not part of the File+Metadata
-    # integrity boundary. Publish it only after that transaction commits so its
-    # own durable reservation never competes with an already-open SQLite writer.
-    if thumb_bytes:
-        assert file_row.id is not None
-        try:
-            from app.modules.media.thumbnail_engine import ThumbnailStrategy
-            from app.modules.media.thumbnail_generations import (
-                publish_precomputed_thumbnail,
-            )
-
-            is_fallback = isinstance(thumb_bytes, FallbackThumbnail)
-            publish_precomputed_thumbnail(
-                session,
-                file_row,
-                thumb_bytes,
-                strategy=(
-                    ThumbnailStrategy.FALLBACK
-                    if is_fallback
-                    else ThumbnailStrategy.FULL
-                ),
-                complete=not is_fallback or thumb_bytes.complete,
-                promote=overwrite_thumbnail or not model.thumbnail_path,
-                normalize=file_type != FileType.GCODE,
-                backend=backend,
-            )
-        except Exception:  # noqa: BLE001 - thumbnail is a retryable derivative
-            session.rollback()
-            logger.exception(
-                "thumbnail derivation failed; continuing Artifact persistence",
-                extra={"file_id": file_row.id},
-            )
-
     session.refresh(file_row)
     return file_row
 
@@ -806,453 +760,230 @@ def resolve_write_target(
     return WriteTarget(str(canonical_target), True, library_id, None)
 
 
-def run_ingestion_pipeline(
+@dataclass(frozen=True)
+class StagedArtifact:
+    """Everything the commit needs about one staged file, from its intent row."""
+
+    staged_path: Path
+    original_filename: str
+    model_name: str
+    file_type: FileType
+    collection: Optional[str] = None
+    tags: Optional[str] = None
+    source_hash: Optional[str] = None
+    source_url: Optional[str] = None
+    target_library_id: int | None = None
+
+
+@dataclass(frozen=True)
+class CommitOutcome:
+    model_id: int
+    file_id: int
+    created: bool
+    deduplicated: bool
+    committed_at: datetime
+    resumed: bool = False
+
+
+Report = Callable[..., None]
+
+
+def _no_report(**_fields: Any) -> None:
+    return None
+
+
+def commit_staged_artifact(
+    artifact: StagedArtifact,
     *,
-    job_id: str,
-    staged_path: Path,
-    original_filename: str,
-    model_name: str,
-    collection: Optional[str],
-    tags: Optional[str],
-    source_hash: Optional[str],
-    strategy: IngestionStrategy,
+    ingestion_key: str,
     actor_user_id: int | None = None,
     session_factory: SessionFactory | None = None,
-    source_url: Optional[str] = None,
-    target_library_id: int | None = None,
     provenance_context: ProvenanceContext | None = None,
-) -> None:
-    """Full ingestion pipeline.
+    report: Report = _no_report,
+) -> CommitOutcome:
+    """Commit one staged file as an Artifact, exactly once per ``ingestion_key``.
 
-    Hash, dedup, persist the model, version-manage the file blob, extract
-    thumbnail, build metadata — all behind a single call. The *strategy*
-    determines what parse+thumbnail variant runs (gcode or mesh). The
-    *session_factory* is a callable that returns a new SQLModel Session;
-    when absent, falls back to the module-level engine (legacy).
+    Idempotent across attempts: a retry after the commit finds the Artifact by
+    its ingestion key and reports it as resumed instead of creating another.
+    Raises on failure; the staged bytes are left for the caller's lease.
     """
-    logger.info("ingestion_job job_id=%s stage=start result=running", job_id)
-
-    # Step plan: hashing → strategy sub-steps → persisting. The registry keeps
-    # the coarse state machine; step/label/progress are additive hints.
-    step_plan = ("hashing", *strategy.step_labels, "persisting")
-    total_steps = len(step_plan)
-
-    def report(label: str) -> None:
-        try:
-            step = step_plan.index(label) + 1
-        except ValueError:
-            step = None  # type: ignore[assignment]
-        registry.update(
-            job_id,
-            step=step,
-            total_steps=total_steps,
-            label=label,
-            progress=(step - 1) / total_steps * 100 if step else None,
-            stage=(
-                "hashing"
-                if label == "hashing"
-                else "thumbnailing"
-                if "thumbnail" in label
-                else "ingesting"
-            ),
-            current_item=original_filename,
-        )
-
-    registry.update(job_id, state="running", total_steps=total_steps)
-
-    if session_factory is None:
-        from app.db.session import get_session_factory
-
-        session_factory = get_session_factory()
-
-    try:
-        with session_factory.scoped_session() as recovery_session:
-            committed = recovery_session.exec(
-                select(File).where(File.ingestion_key == job_id)
-            ).first()
-            if committed is not None:
-                registry.finish(
-                    job_id,
-                    state="completed",
-                    completion="complete",
-                    model_id=committed.model_id,
-                    file_id=committed.id,
-                    committed_at=committed.uploaded_at,
-                    thumbnail_status=(
-                        "generated" if committed.thumbnail_path else "skipped"
-                    ),
-                    processed=1,
-                    total=1,
-                    succeeded=1,
-                    result={"created": False, "resumed": True},
-                )
-                staged_path.unlink(missing_ok=True)
-                with session_factory.scoped_session() as cleanup_session:
-                    lease = cleanup_session.exec(
-                        select(StagingLease).where(
-                            StagingLease.background_job_id == job_id,
-                            StagingLease.capture_upload_slot_origin_id.is_(None),
-                        )
-                    ).first()
-                    if lease is not None:
-                        cleanup_session.delete(lease)
-                        cleanup_session.commit()
-                return
-        report("hashing")
-        blob_hash = sha256_file(staged_path)
-        logger.info("ingestion_job job_id=%s stage=hashed result=running", job_id)
-
-        if provenance_context is not None:
-            provenance_context = replace(provenance_context, blob_sha256=blob_hash)
-            from app.modules.library.provenance import preflight_existing_artifact
-
-            with session_factory.scoped_session() as session:
-                preflight = preflight_existing_artifact(session, provenance_context)
-            if preflight.status == "reusable":
-                assert preflight.model_id is not None and preflight.file_id is not None
-                # A byte-level duplicate can still carry a newer source
-                # snapshot.  Upsert it before returning the existing Artifact;
-                # this preserves the dedupe invariant without making capture
-                # freshness depend on a new blob write.
-                from app.modules.library.provenance import attach_existing_artifact
-
-                with session_factory.scoped_session() as session:
-                    existing_file = session.get(File, preflight.file_id)
-                    if existing_file is None:
-                        raise RuntimeError("captured_artifact_missing")
-                    attach_existing_artifact(session, existing_file, provenance_context)
-                    session.commit()
-                registry.finish(
-                    job_id,
-                    state="completed",
-                    completion="complete",
-                    model_id=preflight.model_id,
-                    file_id=preflight.file_id,
-                    processed=1,
-                    total=1,
-                    succeeded=1,
-                    deduplicated=1,
-                    result={
-                        "created": False,
-                        "deduplicated": True,
-                        "name": original_filename,
-                    },
-                )
-                staged_path.unlink(missing_ok=True)
-                return
-            if preflight.status == "trashed":
-                raise RuntimeError("captured_artifact_trashed")
-
-        meta, thumb_bytes = strategy.process(staged_path, report)
-        if thumb_bytes is None and strategy.file_type not in (FileType.GCODE,):
-            logger.warning(
-                "ingestion_job job_id=%s stage=thumbnail result=missing", job_id
-            )
-        elif thumb_bytes:
-            logger.info(
-                "ingestion_job job_id=%s stage=thumbnail result=generated", job_id
+    session_factory = session_factory or get_session_factory()
+    with session_factory.scoped_session() as recovery:
+        committed = recovery.exec(
+            select(File).where(File.ingestion_key == ingestion_key)
+        ).first()
+        if committed is not None:
+            assert committed.id is not None
+            return CommitOutcome(
+                model_id=committed.model_id,
+                file_id=committed.id,
+                created=False,
+                deduplicated=False,
+                committed_at=committed.uploaded_at,
+                resumed=True,
             )
 
-        dedup_hash = (
-            source_hash.lower()
-            if strategy.file_type == FileType.GCODE and source_hash
-            else blob_hash
+    report(stage="hashing", label="hashing", step=1, total_steps=2, progress=0)
+    blob_hash = sha256_file(artifact.staged_path)
+
+    if provenance_context is not None:
+        provenance_context = replace(provenance_context, blob_sha256=blob_hash)
+        from app.modules.library.provenance import (
+            attach_existing_artifact,
+            preflight_existing_artifact,
         )
 
-        report("persisting")
-        durable_ids: tuple[int, int] | None = None
-        thumbnail_status = (
-            "fallback_generated"
-            if isinstance(thumb_bytes, FallbackThumbnail)
-            else "generated"
-            if thumb_bytes
-            else "skipped"
-            if strategy.file_type == FileType.GCODE
-            else "failed"
-        )
-        thumbnail_reason = (
-            None
-            if thumb_bytes
-            else "no_embedded_thumbnail"
-            if strategy.file_type == FileType.GCODE
-            else "renderer_no_output"
-        )
-        created = False
         with session_factory.scoped_session() as session:
-            actor = (
-                session.get(User, actor_user_id) if actor_user_id is not None else None
+            preflight = preflight_existing_artifact(session, provenance_context)
+        if preflight.status == "reusable":
+            assert preflight.model_id is not None and preflight.file_id is not None
+            # A byte-level duplicate can still carry a newer source snapshot.
+            # Upsert it before returning the existing Artifact; this keeps the
+            # dedupe invariant without making capture freshness depend on a
+            # new blob write.
+            with session_factory.scoped_session() as session:
+                existing_file = session.get(File, preflight.file_id)
+                if existing_file is None:
+                    raise RuntimeError("captured_artifact_missing")
+                attach_existing_artifact(session, existing_file, provenance_context)
+                session.commit()
+            return CommitOutcome(
+                model_id=preflight.model_id,
+                file_id=preflight.file_id,
+                created=False,
+                deduplicated=True,
+                committed_at=utcnow(),
             )
-            model, created = resolve_or_create_model(
-                session,
-                dedup_hash=dedup_hash,
-                model_name=model_name,
-                source_url=source_url,
-                actor=actor,
-            )
-            assert model.id is not None
+        if preflight.status == "trashed":
+            raise RuntimeError("captured_artifact_trashed")
 
-            _apply_taxonomy(session, model, collection, tags)
-
-            # Resolve where the blob lands: a NAS library (write-back) or vault.
-            dest = resolve_write_target(
-                session,
-                model=model,
-                original_filename=original_filename,
-                collection=collection,
-                target_library_id=target_library_id,
-            )
-
-            _fault_injection_checkpoint("before_commit", job_id)
-            file_row = persist_artifact(
-                session,
-                model=model,
-                staged_path=staged_path,
-                original_filename=original_filename,
-                file_type=strategy.file_type,
-                blob_hash=blob_hash,
-                meta=meta,
-                thumb_bytes=thumb_bytes,
-                overwrite_thumbnail=strategy.overwrite_thumbnail,
-                dest_key_override=dest.dest_key,
-                is_external=dest.is_external,
-                external_library_id=dest.external_library_id,
-                source_mtime=dest.source_mtime,
-                ingestion_key=job_id,
-                provenance_context=provenance_context,
-                session_factory=session_factory,
-            )
-            assert file_row.id is not None
-            durable_ids = (model.id, file_row.id)
-            try:
-                upsert_detected_profiles(session, meta)
-            except Exception:  # noqa: BLE001 - derived data never invalidates Artifact
-                logger.exception(
-                    "ingestion_job job_id=%s derived profiles failed", job_id
-                )
-
-        committed_at = utcnow()
-        assert durable_ids is not None
-        model_id, file_id = durable_ids
-        fingerprint_result = getattr(meta, "fingerprint_result", None)
-        if fingerprint_result is not None:
-            from app.modules.ingestion.extensions import after_commit
-
-            try:
-                fingerprint_status = after_commit(
-                    session_factory, file_id, actor_user_id, fingerprint_result
-                )
-            except Exception:
-                # The Artifact and thumbnail are already durable. A retryable
-                # derivative must never turn that successful ingest into failure.
-                fingerprint_status = "failed"
-                logger.warning(
-                    "ingestion fingerprint publication failed job_id=%s", job_id
-                )
-            registry.update(job_id, fingerprint_status=fingerprint_status)
-        registry.update(
-            job_id,
-            model_id=model_id,
-            file_id=file_id,
-            committed_at=committed_at,
-            thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
-            thumbnail_reason=thumbnail_reason,
-            processed=1,
-            total=1,
-            succeeded=1,
-            deduplicated=0 if created else 1,
+    dedup_hash = (
+        artifact.source_hash.lower()
+        if artifact.file_type == FileType.GCODE and artifact.source_hash
+        else blob_hash
+    )
+    report(stage="ingesting", label="persisting", step=2, total_steps=2, progress=50)
+    with session_factory.scoped_session() as session:
+        actor = session.get(User, actor_user_id) if actor_user_id is not None else None
+        model, created = resolve_or_create_model(
+            session,
+            dedup_hash=dedup_hash,
+            model_name=artifact.model_name,
+            source_url=artifact.source_url,
+            actor=actor,
         )
-        _fault_injection_checkpoint("after_commit", job_id)
-        try:
-            verify_durable_artifact(
-                session_factory,
-                model_id=model_id,
-                file_id=file_id,
-                thumbnail_status=thumbnail_status,
-            )
-        except ThumbnailDurabilityError:
-            thumbnail_status = "failed"
-            thumbnail_reason = "thumbnail_blob_not_durable"
-            verify_durable_artifact(
-                session_factory,
-                model_id=model_id,
-                file_id=file_id,
-                thumbnail_status=thumbnail_status,
-            )
-        _fault_injection_checkpoint("before_terminal", job_id)
-        registry.finish(
-            job_id,
-            state="completed",
-            completion="partial" if thumbnail_status == "failed" else "complete",
-            thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
-            thumbnail_reason=thumbnail_reason,
-            result={"created": created, "name": original_filename},
+        assert model.id is not None
+        _apply_taxonomy(session, model, artifact.collection, artifact.tags)
+        dest = resolve_write_target(
+            session,
+            model=model,
+            original_filename=artifact.original_filename,
+            collection=artifact.collection,
+            target_library_id=artifact.target_library_id,
         )
-        staged_path.unlink(missing_ok=True)
-        with session_factory.scoped_session() as cleanup_session:
-            lease = cleanup_session.exec(
-                select(StagingLease).where(
-                    StagingLease.background_job_id == job_id,
-                    StagingLease.capture_upload_slot_origin_id.is_(None),
-                )
-            ).first()
-            if lease is not None:
-                cleanup_session.delete(lease)
-                cleanup_session.commit()
-
-    except Exception as exc:  # noqa: BLE001 — top-level task boundary
-        logger.exception("ingestion_job job_id=%s stage=pipeline result=failed", job_id)
-        # A fault after commit still produced a useful durable Model. Publish a
-        # partial result so clients can repair optional post-processing instead
-        # of reporting a destructive false failure.
-        if "durable_ids" in locals() and durable_ids is not None:
-            model_id, file_id = durable_ids
-            try:
-                verify_durable_artifact(
-                    session_factory,
-                    model_id=model_id,
-                    file_id=file_id,
-                    thumbnail_status=(
-                        thumbnail_status if thumbnail_status != "failed" else "skipped"
-                    ),
-                )
-            except Exception:  # noqa: BLE001 — durability decides failed vs partial
-                registry.finish(job_id, state="failed", error=str(exc), retryable=True)
-            else:
-                registry.finish(
-                    job_id,
-                    state="completed",
-                    completion="partial",
-                    model_id=model_id,
-                    file_id=file_id,
-                    committed_at=locals().get("committed_at", utcnow()),
-                    thumbnail_status=thumbnail_status,  # type: ignore[arg-type]
-                    thumbnail_reason="post_commit_exception",
-                    error="post_commit_exception",
-                    processed=1,
-                    total=1,
-                    succeeded=1,
-                    result={"created": created},
-                    retryable=True,
-                )
-        else:
-            registry.finish(job_id, state="failed", error=str(exc), retryable=True)
-
-
-def _gcode_strategy() -> IngestionStrategy:
-    def process(
-        path: Path, report: ProgressFn = _noop_progress
-    ) -> tuple[dict[str, Any], bytes | None]:
-        report("parsing_metadata")
-        meta = gcode_parser.parse(path)
-        report("extracting_thumbnail")
-        thumb_bytes = thumbnail.extract(path)
-        return meta, thumb_bytes
-
-    return IngestionStrategy(
-        file_type=FileType.GCODE,
-        overwrite_thumbnail=False,
-        process=process,
-        step_labels=("parsing_metadata", "extracting_thumbnail"),
+        _fault_injection_checkpoint("before_commit", ingestion_key)
+        file_row = persist_artifact(
+            session,
+            model=model,
+            staged_path=artifact.staged_path,
+            original_filename=artifact.original_filename,
+            file_type=artifact.file_type,
+            blob_hash=blob_hash,
+            dest_key_override=dest.dest_key,
+            is_external=dest.is_external,
+            external_library_id=dest.external_library_id,
+            source_mtime=dest.source_mtime,
+            ingestion_key=ingestion_key,
+            provenance_context=provenance_context,
+            session_factory=session_factory,
+        )
+        assert file_row.id is not None
+        model_id, file_id = model.id, file_row.id
+    _fault_injection_checkpoint("after_commit", ingestion_key)
+    verify_durable_artifact(session_factory, model_id=model_id, file_id=file_id)
+    return CommitOutcome(
+        model_id=model_id,
+        file_id=file_id,
+        created=created,
+        deduplicated=not created,
+        committed_at=utcnow(),
     )
 
 
-def _mesh_strategy(file_type: FileType) -> IngestionStrategy:
+def release_job_staging(
+    job_id: str, session_factory: SessionFactory | None = None
+) -> None:
+    """Remove a finished upload Job's own staged file and its lease.
 
-    def process(
-        path: Path, report: ProgressFn = _noop_progress
-    ) -> tuple[dict[str, Any], bytes | None]:
-        from app.modules.ingestion.extensions import extraction_options
-
-        # Single mesh load for geometry, thumbnail and opted-in fingerprints.
-        options = extraction_options(get_session_factory())
-        return mesh_operations.analyze_mesh(
-            path,
-            report=report,
-            file_type=file_type.value,
-            output_format="WEBP",
-            **options,
-        )
-
-    return IngestionStrategy(
-        file_type=file_type,
-        overwrite_thumbnail=True,
-        process=process,
-        step_labels=("loading_mesh", "extracting_geometry", "rendering_thumbnail"),
-    )
+    A capture-slot lease is never released here: its bytes belong to the
+    capture slot until the Pending Import that owns it is settled.
+    """
+    session_factory = session_factory or get_session_factory()
+    with session_factory.scoped_session() as session:
+        leases = session.exec(
+            select(StagingLease).where(
+                StagingLease.job_id == job_id,
+                StagingLease.capture_upload_slot_origin_id.is_(None),  # type: ignore[union-attr]
+            )
+        ).all()
+        for lease in leases:
+            Path(lease.path).unlink(missing_ok=True)
+            session.delete(lease)
+        session.commit()
 
 
-def strategy_for_artifact(file_type: FileType) -> IngestionStrategy:
-    """Select the processing policy shared by ingestion, discovery and repair."""
-    return (
-        _gcode_strategy() if file_type == FileType.GCODE else _mesh_strategy(file_type)
-    )
-
-
-def ingest_orca_gcode(
+def ingest_staged_file(
     *,
     job_id: str,
-    staged_path: Path,
-    original_filename: str,
-    model_name: str,
-    collection: Optional[str],
-    tags: Optional[str],
-    source_hash: Optional[str],
-    actor_user_id: int | None = None,
+    artifact: StagedArtifact,
+    actor_user_id: int | None,
     session_factory: SessionFactory | None = None,
-    source_url: Optional[str] = None,
-    target_library_id: int | None = None,
     provenance_context: ProvenanceContext | None = None,
-) -> None:
-    """Public entry point for G-code ingestion (called from the OrcaSlicer router)."""
-    run_ingestion_pipeline(
-        job_id=job_id,
-        staged_path=staged_path,
-        original_filename=original_filename,
-        model_name=model_name,
-        collection=collection,
-        tags=tags,
-        source_hash=source_hash,
-        strategy=_gcode_strategy(),
-        actor_user_id=actor_user_id,
-        session_factory=session_factory,
-        source_url=source_url,
-        target_library_id=target_library_id,
-        provenance_context=provenance_context,
-    )
+    ingestion_key: str | None = None,
+) -> CommitOutcome | None:
+    """Commit one staged file on behalf of Job ``job_id`` and settle the Job."""
+    from app.modules.work.jobs import jobs
 
-
-def ingest_mesh(
-    *,
-    job_id: str,
-    staged_path: Path,
-    original_filename: str,
-    model_name: str,
-    collection: Optional[str],
-    tags: Optional[str],
-    file_type: FileType,
-    source_hash: Optional[str],
-    actor_user_id: int | None = None,
-    session_factory: SessionFactory | None = None,
-    source_url: Optional[str] = None,
-    target_library_id: int | None = None,
-    provenance_context: ProvenanceContext | None = None,
-) -> None:
-    """Public entry point for mesh ingestion (called from the model upload router)."""
-    run_ingestion_pipeline(
-        job_id=job_id,
-        staged_path=staged_path,
-        original_filename=original_filename,
-        model_name=model_name,
-        collection=collection,
-        tags=tags,
-        source_hash=source_hash,
-        strategy=_mesh_strategy(file_type),
-        actor_user_id=actor_user_id,
-        session_factory=session_factory,
-        source_url=source_url,
-        target_library_id=target_library_id,
-        provenance_context=provenance_context,
+    jobs.update(
+        job_id,
+        state="running",
+        current_item=artifact.original_filename,
+        total=1,
     )
+    try:
+        outcome = commit_staged_artifact(
+            artifact,
+            ingestion_key=ingestion_key or job_id,
+            actor_user_id=actor_user_id,
+            session_factory=session_factory,
+            provenance_context=provenance_context,
+            report=lambda **fields: jobs.update(job_id, **fields),
+        )
+    except Exception as exc:  # noqa: BLE001 - the Job records the failure
+        logger.exception("ingestion commit failed", extra={"job_id": job_id})
+        jobs.finish(job_id, state="failed", error=str(exc), retryable=True)
+        return None
+    _fault_injection_checkpoint("before_terminal", job_id)
+    jobs.finish(
+        job_id,
+        state="completed",
+        completion="complete",
+        model_id=outcome.model_id,
+        file_id=outcome.file_id,
+        committed_at=outcome.committed_at,
+        processed=1,
+        total=1,
+        succeeded=1,
+        deduplicated=1 if outcome.deduplicated else 0,
+        result={
+            "created": outcome.created,
+            "name": artifact.original_filename,
+            **({"resumed": True} if outcome.resumed else {}),
+            **({"deduplicated": True} if outcome.deduplicated else {}),
+        },
+    )
+    release_job_staging(job_id, session_factory)
+    return outcome
 
 
 def add_gcode_revision_to_model(
@@ -1266,10 +997,14 @@ def add_gcode_revision_to_model(
     revision_notes: str | None,
     is_recommended: bool,
 ) -> File:
-    """Attach a staged G-code file as a new revision of an existing model."""
+    """Attach a staged G-code file as a new revision of an existing model.
+
+    Synchronous and cheap: hash, publish, commit. The revision's slicer
+    metadata, detected profiles and thumbnail are derivatives, so the request
+    returns as soon as the bytes are durable.
+    """
     assert model.id is not None
     blob_hash = sha256_file(staged_path)
-    meta, thumb_bytes = _gcode_strategy().process(staged_path, _noop_progress)
 
     # Revisions follow the model: if it lives in a NAS library, write back there.
     dest = resolve_write_target(
@@ -1287,9 +1022,6 @@ def add_gcode_revision_to_model(
         original_filename=original_filename,
         file_type=FileType.GCODE,
         blob_hash=blob_hash,
-        meta=meta,
-        thumb_bytes=thumb_bytes,
-        overwrite_thumbnail=False,
         revision_label=revision_label.strip()
         if revision_label and revision_label.strip()
         else None,
@@ -1304,13 +1036,6 @@ def add_gcode_revision_to_model(
         source_mtime=dest.source_mtime,
     )
     assert file_row.id is not None
-
-    try:
-        upsert_detected_profiles(session, meta)
-    except Exception:  # noqa: BLE001 - derived profile can be repaired independently
-        logger.exception(
-            "gcode revision profile derivation failed", extra={"file_id": file_row.id}
-        )
 
     model.updated_at = utcnow()
     session.add(model)

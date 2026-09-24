@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import Session
 
-from app.bootstrap.dependencies import get_work_wakeup
 from app.core.security import require_user
 from app.db.models import (
     CollectionRole,
@@ -17,8 +16,8 @@ from app.db.models import (
 from app.db.session import get_session
 from app.modules.identity import printer_rbac, rbac
 from app.modules.printing import fleet, materials
+from app.modules.printing.jobs import wake_dispatch
 from app.modules.printing.printer_jobs import reproducibility_payload
-from app.runtime.work_wakeup import WorkNotice, WorkWakeup
 from app.schemas.fleet import (
     ActiveJobResolution,
     BatchCreate,
@@ -96,7 +95,6 @@ async def create_queue_job(
     payload: QueueJobCreate,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    work_wakeup: WorkWakeup = Depends(get_work_wakeup),
 ) -> PrintJobRead:
     if not current_user.is_superuser:
         if payload.strategy != RoutingStrategy.MANUAL or payload.printer_id is None:
@@ -124,9 +122,7 @@ async def create_queue_job(
         if exc.code == "material_mismatch_confirmation_required":
             status_code = 409
         raise HTTPException(status_code=status_code, detail=exc.code) from exc
-    await work_wakeup.notify(
-        WorkNotice(job_id=str(job.id), kind="fleet_dispatch", payload={})
-    )
+    wake_dispatch()
     return _print_job_read(session, job)
 
 
@@ -164,7 +160,6 @@ async def create_batch(
     payload: BatchCreate,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    work_wakeup: WorkWakeup = Depends(get_work_wakeup),
 ) -> PrintBatchRead:
     if not current_user.is_superuser:
         if payload.strategy != RoutingStrategy.MANUAL or payload.printer_id is None:
@@ -192,9 +187,7 @@ async def create_batch(
         if exc.code == "material_mismatch_confirmation_required":
             status_code = 409
         raise HTTPException(status_code=status_code, detail=exc.code) from exc
-    await work_wakeup.notify(
-        WorkNotice(job_id=str(batch.id), kind="fleet_dispatch", payload={})
-    )
+    wake_dispatch()
     return PrintBatchRead(
         **batch.model_dump(),
         jobs=[_print_job_read(session, job) for job in jobs],
@@ -290,16 +283,13 @@ async def retry_queue_job(
     job_id: int,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    work_wakeup: WorkWakeup = Depends(get_work_wakeup),
 ) -> PrintJobRead:
     _require_queue_job_role(session, current_user, job_id, PrinterRole.PRINT)
     try:
         job = fleet.retry_queue_job(session, job_id, current_user)
     except fleet.FleetError as exc:
         raise _queue_error(exc) from exc
-    await work_wakeup.notify(
-        WorkNotice(job_id=str(job.id), kind="fleet_dispatch", payload={})
-    )
+    wake_dispatch()
     return _print_job_read(session, job)
 
 
@@ -309,7 +299,6 @@ async def decide_operator_release(
     payload: OperatorDecision,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    work_wakeup: WorkWakeup = Depends(get_work_wakeup),
 ) -> PrintJobRead:
     _require_queue_job_role(session, current_user, job_id, PrinterRole.PRINT)
     try:
@@ -317,9 +306,7 @@ async def decide_operator_release(
     except fleet.FleetError as exc:
         raise _queue_error(exc) from exc
     if payload.action == "release":
-        await work_wakeup.notify(
-            WorkNotice(job_id=str(job.id), kind="fleet_dispatch", payload={})
-        )
+        wake_dispatch()
     return _print_job_read(session, job)
 
 

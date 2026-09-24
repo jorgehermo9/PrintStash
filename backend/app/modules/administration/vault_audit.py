@@ -14,8 +14,8 @@ import app.modules.backups.backup.verification as backup_verification
 from app.core.logging import get_logger
 from app.core.time import ensure_utc, utcnow
 from app.db.models import (
+    ACTIVE_JOB_STATES,
     SENTINEL_MODEL_HASH,
-    BackgroundJob,
     Collection,
     Document,
     ExternalLibrary,
@@ -23,6 +23,7 @@ from app.db.models import (
     FileType,
     InboxItem,
     InboxItemState,
+    Job,
     Metadata,
     Model,
     OwnedStorageObject,
@@ -37,8 +38,6 @@ from app.db.models import (
 from app.db.scopes import live
 from app.db.session import get_session_factory
 from app.modules.administration import audit
-from app.modules.media import thumbnail_repair
-from app.modules.storage.artifact_content import ArtifactContentError, resolve
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_utils import OwnedBlob, ownership_snapshot
 from app.schemas.maintenance import VaultAuditFindingRead, VaultAuditRunRead
@@ -224,37 +223,35 @@ def request_cancel(session: Session, run_id: int) -> VaultAuditRun | None:
     return row
 
 
-def reconcile_interrupted_runs() -> int:
+def fail_interrupted_run(run_id: int, *, reason: str = "audit_interrupted") -> bool:
+    """Settle one run whose execution was lost mid-way.
+
+    An audit is not resumable part-way (its phases are not checkpoints), so a
+    run found RUNNING by a new attempt of its Job is failed and its slot and
+    capacity claim released; the policy's next due slot runs it again. Only
+    the run's own Job calls this, so work running in another process is never
+    touched.
+    """
+    from app.modules.administration.vault_audit_results import record_terminal
     from app.modules.storage.capacity import CapacityManager
 
     factory = get_session_factory()
     with factory.scoped_session() as session:
-        rows = session.exec(
-            select(VaultAuditRun).where(VaultAuditRun.state.in_(_ACTIVE_STATES))
-        ).all()  # type: ignore[attr-defined]
-        interrupted = len(rows)
-        for row in rows:
+        row = session.get(VaultAuditRun, run_id)
+        if row is None or (row.state not in _ACTIVE_STATES and row.active_slot is None):
+            return False
+        if row.state in _ACTIVE_STATES:
             row.state = VaultAuditRunState.FAILED
-            row.error_code = "audit_interrupted"
+            row.error_code = reason
             row.finished_at = utcnow()
-            from app.modules.administration.vault_audit_results import record_terminal
-
             record_terminal(session, row)
-            session.add(row)
-        claims = session.exec(
-            select(VaultAuditRun).where(col(VaultAuditRun.active_slot).is_not(None))
-        ).all()  # noqa: E711
-        run_ids = [row.id for row in claims]
-        for row in claims:
-            if _auto_repair_active(row):
-                row.current_phase = "completed"
-            row.active_slot = None
-            session.add(row)
+        if _auto_repair_active(row):
+            row.current_phase = "completed"
+        row.active_slot = None
+        session.add(row)
         session.commit()
-    manager = CapacityManager(factory)
-    for run_id in run_ids:
-        manager.release(f"audit:{run_id}")
-    return interrupted
+    CapacityManager(factory).release(f"audit:{run_id}")
+    return True
 
 
 def _add(
@@ -642,9 +639,9 @@ def _check_external(
 def _check_background_jobs(session: Session, run: VaultAuditRun) -> None:
     cutoff = utcnow() - timedelta(hours=1)
     stuck = session.exec(
-        select(BackgroundJob).where(
-            BackgroundJob.state.in_(("pending", "running")),  # type: ignore[attr-defined]
-            BackgroundJob.updated_at < cutoff,
+        select(Job).where(
+            col(Job.state).in_(ACTIVE_JOB_STATES),
+            Job.updated_at < cutoff,
         )
     ).all()
     if _cancelled(session, run):
@@ -1045,28 +1042,28 @@ def _restore_recommended(session: Session, model_id: int) -> bool:
 
 
 def _reparse_metadata(session: Session, file_id: int) -> bool:
-    from app.modules.ingestion.ingestion import strategy_for_artifact
+    """Queue the metadata derivative again; the Job re-derives it off the request."""
+    from app.modules.derivatives import repair
+    from app.modules.derivatives.kinds import METADATA
 
     row = session.get(File, file_id)
-    if (
-        row is None
-        or row.deleted_at is not None
-        or session.exec(select(Metadata).where(Metadata.file_id == file_id)).first()
-        is not None
-    ):
-        return row is not None
-    try:
-        with resolve(row).materialize(authoritative=True) as path:
-            strategy = strategy_for_artifact(row.file_type)
-            values, _thumbnail = strategy.process(path, lambda _label: None)
-    except ArtifactContentError:
+    if row is None or row.deleted_at is not None:
         return False
-    fields = {
-        key: value for key, value in values.items() if key in Metadata.model_fields
-    }
-    session.add(Metadata(file_id=file_id, **fields))
-    session.commit()
-    return True
+    if (
+        session.exec(select(Metadata).where(Metadata.file_id == file_id)).first()
+        is None
+    ):
+        session.add(Metadata(file_id=file_id))
+    return repair.request(session, row, [METADATA])
+
+
+def _regenerate_thumbnail(session: Session, model_id: int) -> bool:
+    """Queue the representative Artifact's thumbnail derivative again."""
+    from app.modules.derivatives import repair
+    from app.modules.derivatives.kinds import THUMBNAIL
+
+    file = repair.representative(session, model_id)
+    return file is not None and repair.request(session, file, [THUMBNAIL])
 
 
 def repair_finding(
@@ -1080,9 +1077,7 @@ def repair_finding(
     details = _details(row)
     ok = False
     if row.repair_action == "regenerate_thumbnail":
-        ok = thumbnail_repair.regenerate_model_thumbnail(
-            session, int(details["model_id"])
-        )
+        ok = _regenerate_thumbnail(session, int(details["model_id"]))
     elif row.repair_action == "restore_recommended_revision":
         ok = _restore_recommended(session, int(details["model_id"]))
     elif row.repair_action == "reparse_metadata":

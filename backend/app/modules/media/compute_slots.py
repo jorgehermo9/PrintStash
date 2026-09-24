@@ -1,4 +1,9 @@
-"""One durable compute budget shared by thumbnails and geometric analysis."""
+"""Native-memory admission shared by the request path and job steps.
+
+Job concurrency belongs to lanes. This permit remains because native work also
+runs on the request path (a semantic search embeds its query) and in
+similarity steps, and all of it shares one host memory budget.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +17,7 @@ from sqlmodel import Session, col, or_, select
 
 from app.core.config import settings
 from app.core.time import utcnow
-from app.db.models import ThumbnailRenderSlot
+from app.db.models import NativeComputeSlot
 
 T = TypeVar("T")
 
@@ -37,18 +42,17 @@ def acquire(
     session: Session,
     token: str,
     *,
-    generation_id: int | None = None,
     lease_seconds: int = 900,
-) -> ThumbnailRenderSlot | None:
+) -> NativeComputeSlot | None:
     if not token or not 1 <= lease_seconds <= 900:
         raise ValueError("invalid_compute_lease")
     limit = max(int(settings.max_render_jobs), 1)
 
     def ensure_slots() -> None:
-        existing = set(session.exec(select(ThumbnailRenderSlot.slot_number)).all())
+        existing = set(session.exec(select(NativeComputeSlot.slot_number)).all())
         for number in range(1, limit + 1):
             if number not in existing:
-                session.add(ThumbnailRenderSlot(slot_number=number))
+                session.add(NativeComputeSlot(slot_number=number))
         try:
             session.commit()
         except IntegrityError:
@@ -57,24 +61,23 @@ def acquire(
     _retry(session, ensure_slots)
     now = utcnow()
     available = or_(
-        col(ThumbnailRenderSlot.lease_token).is_(None),
-        col(ThumbnailRenderSlot.lease_expires_at) < now,
+        col(NativeComputeSlot.lease_token).is_(None),
+        col(NativeComputeSlot.lease_expires_at) < now,
     )
 
     def claim() -> int | None:
         candidates = session.exec(
-            select(ThumbnailRenderSlot.id)
-            .where(col(ThumbnailRenderSlot.slot_number) <= limit, available)
-            .order_by(col(ThumbnailRenderSlot.slot_number))
+            select(NativeComputeSlot.id)
+            .where(col(NativeComputeSlot.slot_number) <= limit, available)
+            .order_by(col(NativeComputeSlot.slot_number))
             .with_for_update(skip_locked=True)
         ).all()
         for candidate_id in candidates:
             changed = session.connection().execute(
-                update(ThumbnailRenderSlot)
-                .where(col(ThumbnailRenderSlot.id) == candidate_id, available)
+                update(NativeComputeSlot)
+                .where(col(NativeComputeSlot.id) == candidate_id, available)
                 .values(
                     lease_token=token,
-                    generation_id=generation_id,
                     lease_expires_at=now + timedelta(seconds=lease_seconds),
                     updated_at=now,
                 )
@@ -86,7 +89,7 @@ def acquire(
         return None
 
     slot_id = _retry(session, claim)
-    return session.get(ThumbnailRenderSlot, slot_id) if slot_id is not None else None
+    return session.get(NativeComputeSlot, slot_id) if slot_id is not None else None
 
 
 def release(session: Session, slot_id: int | None, token: str) -> None:
@@ -96,13 +99,12 @@ def release(session: Session, slot_id: int | None, token: str) -> None:
     _retry(
         session,
         lambda: session.connection().execute(
-            update(ThumbnailRenderSlot)
+            update(NativeComputeSlot)
             .where(
-                col(ThumbnailRenderSlot.id) == slot_id,
-                ThumbnailRenderSlot.lease_token == token,
+                col(NativeComputeSlot.id) == slot_id,
+                NativeComputeSlot.lease_token == token,
             )
             .values(
-                generation_id=None,
                 lease_token=None,
                 lease_expires_at=None,
                 updated_at=utcnow(),

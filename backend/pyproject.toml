@@ -38,6 +38,7 @@ dependencies = [
     "uvicorn[standard]>=0.52,<1",
     "watchfiles>=1.2,<2",
     "pycentauri==0.9.1",
+    "dbos>=2.31,<3",
 ]
 
 [project.optional-dependencies]

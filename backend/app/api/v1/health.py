@@ -280,11 +280,24 @@ def _provider_probe() -> dict:
 
 
 def _jobs_probe() -> dict:
-    # In-memory ingestion registry; informational, so always ``ok``.
-    from app.runtime.jobs import registry
+    """Background Jobs by state and whether any executor is alive to run them.
+
+    ``ok`` turns false when Jobs are waiting but no live executor listens
+    (every worker stopped heartbeating), which is the one state the
+    reconciler cannot repair by itself.
+    """
+    from app.modules.work import executors
+    from app.modules.work.jobs import jobs
 
     try:
-        return {"ok": True, "counts": registry.snapshot_counts()}
+        counts = jobs.snapshot_counts()
+        live = executors.live()
+        waiting = counts.get("queued", 0) + counts.get("interrupted", 0)
+        return {
+            "ok": bool(live) or waiting == 0,
+            "counts": counts,
+            "executors": len(live),
+        }
     except Exception as exc:
         return {"ok": False, "error": exc.__class__.__name__}
 

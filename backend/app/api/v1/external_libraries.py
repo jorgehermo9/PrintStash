@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from croniter import croniter
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
 
@@ -21,7 +21,7 @@ import app.modules.sources.root_binding as source_root_binding
 from app.core.config import settings
 from app.core.http import get_or_404
 from app.core.security import require_superuser
-from app.core.time import ensure_utc, utcnow
+from app.core.time import utcnow
 from app.db.models import (
     Collection,
     ExternalLibrary,
@@ -33,7 +33,7 @@ from app.db.models import (
     StorageConnectionPurpose,
     User,
 )
-from app.db.session import SessionFactory, get_session, get_session_factory
+from app.db.session import get_session
 from app.modules.administration import runtime_config
 from app.modules.sources import external_library
 from app.modules.storage.filesystem import detect_fs_kind
@@ -43,8 +43,9 @@ from app.modules.storage.storage_paths import (
     validate_file_outside_roots,
     validate_path_outside_roots,
 )
-from app.runtime.jobs import registry
-from app.schemas.ingest import IngestResponse
+from app.modules.work import ActiveJobExists, nudge
+from app.modules.work import service as work_service
+from app.schemas.jobs import JobAccepted
 
 router = APIRouter(prefix="/libraries", tags=["external-libraries"])
 
@@ -162,17 +163,15 @@ def _validate_schedule(schedule: str) -> None:
         raise HTTPException(status_code=400, detail="invalid_cron_schedule")
 
 
-def _schedule_watcher_refresh(
-    request: Request, background_tasks: BackgroundTasks
-) -> None:
-    """Reconcile the folder watcher after a config change (best-effort).
+def _schedule_watcher_refresh(request: Request) -> None:
+    """Ask the folder watcher to reconcile after a config change (best-effort).
 
     The watcher only exists once the app lifespan has started; guard for setups
     (e.g. tests) where it isn't attached.
     """
     watcher = getattr(request.app.state, "library_watcher", None)
     if watcher is not None:
-        background_tasks.add_task(watcher.refresh)
+        watcher.request_refresh()
 
 
 def _to_read(lib: ExternalLibrary) -> LibraryRead:
@@ -289,7 +288,6 @@ def _require_source_connection(
 def create_library(
     body: LibraryCreate,
     request: Request,
-    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> LibraryRead:
     _validate_schedule(body.scan_schedule)
@@ -340,7 +338,7 @@ def create_library(
         session.add(lib)
         session.commit()
         session.refresh(lib)
-    _schedule_watcher_refresh(request, background_tasks)
+    _schedule_watcher_refresh(request)
     return _to_read(lib)
 
 
@@ -353,7 +351,6 @@ def update_library(
     library_id: int,
     body: LibraryUpdate,
     request: Request,
-    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> LibraryRead:
     lib = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
@@ -383,7 +380,7 @@ def update_library(
     session.add(lib)
     session.commit()
     session.refresh(lib)
-    _schedule_watcher_refresh(request, background_tasks)
+    _schedule_watcher_refresh(request)
     return _to_read(lib)
 
 
@@ -396,7 +393,6 @@ def enroll_root(
     library_id: int,
     body: LibraryRootEnrollment,
     request: Request,
-    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> LibraryRead:
     lib = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
@@ -411,7 +407,7 @@ def enroll_root(
         source_root_binding.enroll_external_root(session, lib)
     except source_root_binding.ExternalRootBindingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _schedule_watcher_refresh(request, background_tasks)
+    _schedule_watcher_refresh(request)
     return _to_read(lib)
 
 
@@ -427,66 +423,67 @@ def enroll_root(
 def delete_library(
     library_id: int,
     request: Request,
-    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> dict:
     lib = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
     trashed = external_library.purge_library_index(session, library_id)
     session.delete(lib)
     session.commit()
-    _schedule_watcher_refresh(request, background_tasks)
+    _schedule_watcher_refresh(request)
     return {"deleted": True, "files_trashed": trashed}
+
+
+def _queue_scan(
+    session: Session, library_id: int, *, user: User, relative_path: str | None
+) -> JobAccepted:
+    """Record the scan request and its queued Job; coalesce onto a live one.
+
+    A scan already queued or running for this library is the one the caller
+    gets back: a request recorded now is taken by the next scan, so nothing
+    the user asked for is dropped.
+    """
+    external_library.request_scan(session, library_id, relative_path=relative_path)
+    subject = f"library/{library_id}"
+    try:
+        job_id = work_service.request(
+            session,
+            definition=external_library.SCAN_DEFINITION,
+            subject_key=subject,
+            owner_user_id=user.id,
+        )
+        session.commit()
+    except ActiveJobExists as exc:
+        session.rollback()
+        return JobAccepted(job_id=exc.job_id, message="library scan already queued")
+    nudge(external_library.SCAN_DEFINITION)
+    return JobAccepted(job_id=job_id, message="library scan queued")
 
 
 @router.post(
     "/{library_id}/scan",
-    response_model=IngestResponse,
+    response_model=JobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_feature)],
     summary="Trigger a sync scan of the library now",
-    description="Runs in the background; poll GET /ingest/jobs/{job_id} for progress.",
+    description="Runs as a background Job; poll GET /api/v1/jobs/{job_id}.",
 )
 def scan_now(
     library_id: int,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
-    session_factory: SessionFactory = Depends(get_session_factory),
-) -> IngestResponse:
+) -> JobAccepted:
     library = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
     if library.source_kind == LibrarySourceKind.MOUNTED:
         try:
             source_root_binding.assert_root_binding(library)
         except source_root_binding.ExternalRootBindingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if (
-        library.scan_claim_token
-        and library.scan_claim_expires_at
-        # SQLite hands a DateTime column back naive; ``utcnow()`` is aware.
-        # Comparing them directly raised TypeError, which became a 500 on the
-        # common case this branch exists to serve: a second scan request while
-        # one is still running.
-        and ensure_utc(library.scan_claim_expires_at) > utcnow()
-        and library.scan_job_id
-    ):
-        return IngestResponse(
-            job_id=library.scan_job_id,
-            state="pending",
-            message="library scan already queued",
-        )
-    job_id = registry.create(owner_user_id=current_user.id, kind="external_scan")
-    background_tasks.add_task(
-        external_library.scan_library,
-        library_id,
-        job_id=job_id,
-        session_factory=session_factory,
-    )
-    return IngestResponse(job_id=job_id, state="pending", message="library scan queued")
+    return _queue_scan(session, library_id, user=current_user, relative_path=None)
 
 
 @router.post(
     "/{library_id}/scan-path",
-    response_model=IngestResponse,
+    response_model=JobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_feature)],
     summary="Import one folder under a configured library root",
@@ -494,11 +491,9 @@ def scan_now(
 def scan_path(
     library_id: int,
     body: LibraryPathScan,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
-    session_factory: SessionFactory = Depends(get_session_factory),
-) -> IngestResponse:
+) -> JobAccepted:
     lib = get_or_404(session, ExternalLibrary, library_id, "library_not_found")
     if lib.source_kind != LibrarySourceKind.MOUNTED:
         raise HTTPException(status_code=400, detail="remote_path_scan_unsupported")
@@ -512,15 +507,7 @@ def scan_path(
         raise HTTPException(status_code=400, detail="path_outside_library_root")
     if not candidate.is_dir() or not os.access(candidate, os.R_OK):
         raise HTTPException(status_code=400, detail="path_missing_or_unreadable")
-    job_id = registry.create(owner_user_id=current_user.id, kind="external_scan")
-    background_tasks.add_task(
-        external_library.scan_library,
-        library_id,
-        relative_path=body.path,
-        job_id=job_id,
-        session_factory=session_factory,
-    )
-    return IngestResponse(job_id=job_id, state="pending", message="folder scan queued")
+    return _queue_scan(session, library_id, user=current_user, relative_path=body.path)
 
 
 @router.post(

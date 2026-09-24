@@ -158,6 +158,38 @@ class Settings(BaseSettings):
     staging_review_lease_days: int = Field(default=30, gt=0)
     staging_import_lease_hours: int = Field(default=24, gt=0)
     fleet_batch_max_quantity: int = Field(default=100, gt=0)
+
+    # Background work (see docs/architecture/background-work.md). The reconciler
+    # tick is a safety net: hot paths and job completions nudge the one source
+    # that has new work, so the interval only bounds how long a lost nudge waits.
+    process_role: Literal["all", "api", "worker"] = "all"
+    api_runs_jobs: bool = True
+    executor_id: str = ""
+    shared_storage: bool = False
+    jobs_reconcile_interval_seconds: int = Field(default=300, ge=10, le=86400)
+    jobs_reconcile_batch: int = Field(default=500, ge=1, le=10000)
+    jobs_lane_headroom_factor: int = Field(default=2, ge=1, le=100)
+    jobs_max_resubmits: int = Field(default=3, ge=0, le=100)
+    jobs_submit_grace_seconds: int = Field(default=60, ge=1, le=3600)
+    jobs_executor_stale_seconds: int = Field(default=120, ge=10, le=86400)
+    jobs_retention_days: int = Field(default=7, ge=1, le=365)
+    jobs_system_retention_hours: int = Field(default=24, ge=1, le=8760)
+    jobs_retention_per_user: int = Field(default=500, ge=10, le=100000)
+    engine_history_retention_days: int = Field(default=7, ge=1, le=365)
+    derivative_max_attempts: int = Field(default=5, ge=1, le=100)
+    derivative_backoff_seconds: int = Field(default=30, ge=1, le=86400)
+    fence_heartbeat_seconds: int = Field(default=15, ge=1, le=3600)
+    fence_ttl_seconds: int = Field(default=60, ge=3, le=86400)
+    # Lane concurrency. ``derive_native`` 0 derives it from the native budget.
+    jobs_ingest_concurrency: int = Field(default=2, ge=1, le=64)
+    jobs_derive_native_concurrency: int = Field(default=0, ge=0, le=64)
+    jobs_derive_light_concurrency: int = Field(default=4, ge=1, le=64)
+    jobs_similarity_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_network_concurrency: int = Field(default=4, ge=1, le=64)
+    jobs_notify_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_notify_rate_per_minute: int = Field(default=30, ge=1, le=6000)
+    jobs_printing_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_maintenance_concurrency: int = Field(default=1, ge=1, le=16)
     ingest_worker_count: int = Field(default=2, gt=0)
     media_worker_timeout_seconds: int = Field(default=180, gt=0)
     # Best-effort archive ceiling for files recovered from a Bambu printer's
@@ -276,7 +308,6 @@ class Settings(BaseSettings):
     toolpath_output_max_mb: int = Field(default=32, ge=1)
     toolpath_timeout_seconds: int = Field(default=30, ge=1)
     toolpath_memory_max_mb: int = Field(default=512, ge=64)
-    toolpath_max_jobs: int = Field(default=2, ge=1, le=32)
 
     mesh_step_timeout_seconds: int = Field(default=90, gt=0)
 

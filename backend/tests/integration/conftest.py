@@ -36,6 +36,7 @@ from tests.factories.protocols import (
     MakeCaptureSlot,
     MakeCollection,
     MakeCover,
+    MakeDerivative,
     MakeDocument,
     MakeEmbeddingSpace,
     MakeExternalLibrary,
@@ -46,6 +47,7 @@ from tests.factories.protocols import (
     MakeGeometryFingerprint,
     MakeInboxItem,
     MakeIndexGeneration,
+    MakeJob,
     MakeModel,
     MakeMultipartBuild,
     MakeMultipartBuildAttempt,
@@ -71,6 +73,8 @@ from tests.factories.protocols import (
     MakeVaultGeneration,
     MakeVaultMigration,
     MakeVaultMigrationObject,
+    MakeWorkExecutor,
+    MakeWorkFence,
     TagCollection,
     TagFamily,
     TagFile,
@@ -332,8 +336,27 @@ def make_owned_storage_object(db_session: Session) -> MakeOwnedStorageObject:
 
 
 @pytest.fixture
-def make_background_job(db_session: Session) -> Any:
-    return _bound(factories.build_background_job, db_session)
+def make_job(db_session: Session) -> MakeJob:
+    """A Job of a registered definition; terminal states carry ``finished_at``."""
+    return _bound(factories.build_job, db_session)
+
+
+@pytest.fixture
+def make_derivative(db_session: Session) -> MakeDerivative:
+    """A derivative row at the kind's current recipe; ``exhausted`` gives up."""
+    return _bound(factories.build_derivative, db_session)
+
+
+@pytest.fixture
+def make_work_fence(db_session: Session) -> MakeWorkFence:
+    """A fence held by another process, live or ``expired``."""
+    return _bound(factories.build_work_fence, db_session)
+
+
+@pytest.fixture
+def make_work_executor(db_session: Session) -> MakeWorkExecutor:
+    """Another job-running process, heartbeating or ``stale``."""
+    return _bound(factories.build_work_executor, db_session)
 
 
 @pytest.fixture
@@ -480,7 +503,10 @@ __all__ = [
     "make_audit_event",
     "make_audit_finding",
     "make_audit_run",
-    "make_background_job",
+    "make_derivative",
+    "make_job",
+    "make_work_executor",
+    "make_work_fence",
     "make_capture",
     "make_capture_slot",
     "make_collection",

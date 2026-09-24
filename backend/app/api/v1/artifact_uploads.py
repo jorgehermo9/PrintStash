@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal, cast
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     Header,
     HTTPException,
@@ -34,10 +34,11 @@ from app.db.models import (
     User,
 )
 from app.db.scopes import live
-from app.db.session import SessionFactory, get_session, get_session_factory
+from app.db.session import get_session
 from app.modules.administration import audit
 from app.modules.identity import rbac
 from app.modules.ingestion import background as ingest_background
+from app.modules.ingestion import staging_leases
 from app.modules.ingestion.artifact_uploads import (
     ArtifactUploadError,
     ChunkReceipt,
@@ -45,8 +46,10 @@ from app.modules.ingestion.artifact_uploads import (
     SqlArtifactUploadManager,
     UploadRequest,
 )
+from app.modules.ingestion.artifact_uploads import handoff as upload_handoff
 from app.modules.ingestion.artifact_uploads.api_chunks import CHUNK_SIZE, ApiChunkError
-from app.modules.ingestion.artifact_uploads.handoff import run_verified_upload_ingestion
+from app.modules.work import nudge
+from app.modules.work import service as work_service
 from app.schemas.artifact_uploads import (
     ArtifactUploadChunkRead,
     ArtifactUploadCreate,
@@ -60,9 +63,7 @@ from app.schemas.artifact_uploads import (
 )
 
 from .ingest import (
-    _create_staged_job,
     _require_ingest_collection,
-    _require_staging_capacity,
     _validate_target_library,
 )
 
@@ -104,7 +105,7 @@ def _upload_read(
         received_bytes=upload.received_bytes,
         verified_size=upload.verified_size,
         verified_sha256=upload.verified_sha256,
-        job_id=upload.background_job_id,
+        job_id=upload.job_id,
         retryable=upload.retryable,
         error_code=upload.error_code,
         created_at=upload.created_at,
@@ -420,10 +421,8 @@ async def put_artifact_upload_chunk(
 )
 def finalize_artifact_upload(
     session_id: str,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    session_factory: SessionFactory = Depends(get_session_factory),
 ) -> ArtifactUploadRead:
     manager = _manager(session)
     try:
@@ -456,14 +455,9 @@ def finalize_artifact_upload(
     except (ArtifactUploadError, ApiChunkError, NativeMultipartError) as exc:
         raise _translate_error(exc) from exc
     assert current_user.id is not None
-    _require_staging_capacity(
-        session,
-        size=verified.size_bytes,
-        owner_user_id=current_user.id,
-    )
     # This compare-and-set claim closes the small window between verification
     # and job creation. A concurrent finalize loses here before it can create a
-    # second BackgroundJob or lease for the same immutable staged object.
+    # second Job or lease for the same immutable staged object.
     try:
         manager.transition(upload, ArtifactUploadState.INGESTING)
     except ArtifactUploadError as exc:
@@ -482,29 +476,37 @@ def finalize_artifact_upload(
             return _upload_read(manager, current)
         raise _translate_error(exc) from exc
     try:
-        job_id = _create_staged_job(
+        job_id = uuid.uuid4().hex
+        work_service.request(
             session,
-            kind=f"artifact_upload_{upload.purpose}",
-            staged=verified.materialize(),
-            size=verified.size_bytes,
-            sha256=verified.sha256,
+            definition=upload_handoff.DEFINITION,
+            subject_key=upload_handoff.subject_key(upload.id),
             owner_user_id=current_user.id,
-            check_capacity=False,
-            remove_staged_on_failure=False,
+            job_id=job_id,
         )
-    except Exception:
+        staging_leases.create_job_lease(
+            session,
+            job_id=job_id,
+            owner_user_id=current_user.id,
+            path=verified.materialize(),
+            size_bytes=verified.size_bytes,
+            sha256=verified.sha256,
+        )
+        # One commit records the queued Job, its lease and the session's link.
+        manager.transition(upload, ArtifactUploadState.INGESTING, job_id=job_id)
+    except Exception as exc:
+        session.rollback()
         manager.transition(
             upload,
             ArtifactUploadState.FAILED,
             error_code="artifact_upload_ingestion_claim_failed",
             retryable=True,
         )
+        if isinstance(exc, staging_leases.StagingCapacityExceeded):
+            raise HTTPException(
+                status_code=507, detail="staging_capacity_exceeded"
+            ) from exc
         raise
-    manager.transition(
-        upload,
-        ArtifactUploadState.INGESTING,
-        background_job_id=job_id,
-    )
     audit.record(
         session,
         action="artifact_upload.finalize",
@@ -517,13 +519,7 @@ def finalize_artifact_upload(
             "job_id": job_id,
         },
     )
-    background_tasks.add_task(
-        run_verified_upload_ingestion,
-        upload_id=upload.id,
-        job_id=job_id,
-        staged_path=verified.path,
-        session_factory=session_factory,
-    )
+    nudge(upload_handoff.DEFINITION)
     return _upload_read(manager, upload)
 
 

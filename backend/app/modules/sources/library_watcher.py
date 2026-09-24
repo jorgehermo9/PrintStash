@@ -20,7 +20,7 @@ the library falls back to schedule-only.
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 
 from sqlmodel import select
 
@@ -46,14 +46,15 @@ class LibraryWatcher:
         # The root currently being watched per library (to detect path edits).
         self.watched_roots: Dict[int, str] = {}
         self._pending: Dict[int, asyncio.Task] = {}
-        self._scanning: Set[int] = set()
-        self._rescan_requested: Set[int] = set()
         self._supervisor: Optional[asyncio.Task] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._refresh_requested = asyncio.Event()
         self._lock = asyncio.Lock()
 
     # -- lifecycle --
 
     async def start_all(self) -> None:
+        self._loop = asyncio.get_running_loop()
         await self.refresh()
         if self._supervisor is None:
             self._supervisor = asyncio.create_task(
@@ -72,12 +73,30 @@ class LibraryWatcher:
     async def _supervise(self) -> None:
         while True:
             try:
-                await asyncio.sleep(_SUPERVISOR_INTERVAL_S)
+                try:
+                    await asyncio.wait_for(
+                        self._refresh_requested.wait(), _SUPERVISOR_INTERVAL_S
+                    )
+                except TimeoutError:
+                    pass
+                self._refresh_requested.clear()
                 await self.refresh()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("library watcher supervisor tick failed")
+
+    def request_refresh(self) -> None:
+        """Ask the supervisor to reconcile now (callable from any thread).
+
+        A configuration change should not wait for the supervisor's interval,
+        and it must not start its own background task: the supervisor owns
+        every watcher, so it is the one that reconciles them.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(self._refresh_requested.set)
 
     async def refresh(self) -> None:
         """Reconcile running watchers with current library config.
@@ -209,31 +228,27 @@ class LibraryWatcher:
         )
 
     async def _debounced_scan(self, library_id: int) -> None:
-        from app.runtime.maintenance import (
-            begin_mutating_operation,
-            end_mutating_operation,
-        )
+        """After a quiet period, ask for a scan; the scan Job does the work.
 
+        The watcher never scans in-process. It records the request on the
+        library and nudges the scan source, so a burst of changes becomes one
+        Job, a change during a running scan becomes the next Job (the request
+        is recorded after the running scan took the previous one), and the
+        scan runs on whichever process listens to its lane.
+        """
         try:
             await asyncio.sleep(_DEBOUNCE_S)
         except asyncio.CancelledError:
             return
-        if not begin_mutating_operation():
-            return
-        # Don't overlap scans for the same library; remember to rescan after.
-        if library_id in self._scanning:
-            self._rescan_requested.add(library_id)
-            end_mutating_operation()
-            return
-        self._scanning.add(library_id)
         try:
-            await asyncio.to_thread(external_library.scan_library, library_id)
+            await asyncio.to_thread(self._request_scan, library_id)
         except Exception:
-            logger.exception("watched scan failed for library %s", library_id)
-        finally:
-            self._scanning.discard(library_id)
-            end_mutating_operation()
-        # Catch changes that landed while the previous scan was running.
-        if library_id in self._rescan_requested and library_id in self.tasks:
-            self._rescan_requested.discard(library_id)
-            self._schedule_scan(library_id)
+            logger.exception("watched scan request failed for library %s", library_id)
+
+    @staticmethod
+    def _request_scan(library_id: int) -> None:
+        from app.modules.work import nudge
+
+        with get_session_factory().scoped_session() as session:
+            external_library.request_scan(session, library_id)
+        nudge(external_library.SCAN_DEFINITION)

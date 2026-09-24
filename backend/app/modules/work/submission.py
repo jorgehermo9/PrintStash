@@ -1,0 +1,173 @@
+"""Turning Jobs into engine executions, and nudging the reconciler.
+
+Hot paths never submit a specific job. They record intent in the domain (and,
+for request-originated work, a queued Job) in the same transaction as the
+domain change, then call ``nudge``: a request to run one definition's
+reconcile pass soon. If the nudge is lost, the next tick finds the same work;
+nothing is lost with it.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta
+
+from sqlmodel import Session
+
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.core.time import ensure_utc, utcnow
+from app.db.models import (
+    ACTIVE_JOB_STATES,
+    Job,
+    JobState,
+    ReconcileCursor,
+    WorkPriority,
+)
+from app.db.session import get_session_factory
+
+from . import catalog as catalog_module
+from .contracts import Submission, SubmitOutcome
+
+logger = get_logger(__name__)
+
+# Engine priority: lower runs first. Interactive work always overtakes backfill.
+PRIORITY_RANK = {WorkPriority.INTERACTIVE: 1, WorkPriority.BACKFILL: 1000}
+
+
+def execution_id(job_id: str, attempt: int) -> str:
+    """The engine key of one attempt: exactly once per (Job, attempt)."""
+    return f"{job_id}:{attempt}"
+
+
+def dedupe_key(definition: str, subject_key: str) -> str:
+    """At most one active execution per subject, whatever its Job id."""
+    return f"{definition}|{subject_key}"
+
+
+def submit(job_id: str, *, now: datetime | None = None) -> SubmitOutcome | None:
+    """Submit the next attempt of an active Job. ``None`` when nothing to do.
+
+    The attempt number is committed only after the engine accepted it. A crash
+    in between re-derives the same attempt, so the same execution id, and the
+    engine returns the execution it already has.
+    """
+    now = now or utcnow()
+    engine = catalog_module.get_engine()
+    catalog = catalog_module.get_catalog()
+    with get_session_factory().scoped_session() as session:
+        row = session.get(Job, job_id)
+        if row is None or row.state not in ACTIVE_JOB_STATES:
+            return None
+        definition = catalog.definition(row.kind)
+        lane = catalog.lanes[definition.lane]
+        attempt = row.attempts + 1
+        submission = Submission(
+            execution_id=execution_id(row.id, attempt),
+            job_id=row.id,
+            definition=row.kind,
+            subject_key=row.subject_key,
+            lane=lane.name,
+            priority=row.priority,
+            dedupe_key=None
+            if lane.partitioned
+            else dedupe_key(row.kind, row.subject_key),
+            partition_key=definition.partition(row.subject_key)
+            if lane.partitioned and definition.partition is not None
+            else None,
+            attempt=attempt,
+        )
+    outcome = engine.submit(submission)
+    if outcome is SubmitOutcome.DEDUPLICATED:
+        # An older attempt of this subject is still active in the engine. The
+        # reconciler cancels or settles it; this attempt is not recorded.
+        return outcome
+    with get_session_factory().scoped_session() as session:
+        row = session.get(Job, job_id)
+        if row is not None and row.attempts < attempt:
+            row.attempts = attempt
+            if row.state == JobState.INTERRUPTED:
+                row.state = JobState.QUEUED
+            row.updated_at = now
+            session.add(row)
+            session.commit()
+    return outcome
+
+
+def _cursor(session: Session, source: str) -> ReconcileCursor:
+    cursor = session.get(ReconcileCursor, source)
+    if cursor is None:
+        cursor = ReconcileCursor(source=source)
+        session.add(cursor)
+    return cursor
+
+
+def nudge(
+    source: str, *, now: datetime | None = None, delay: float | None = None
+) -> None:
+    """Ask for ``source``'s reconcile pass soon. Never raises into the caller.
+
+    The dirty stamp is written first. A pass is enqueued only when none is
+    already queued; a pass that is running will see the stamp when it tries to
+    release its claim and run again.
+    """
+    if not catalog_module.bound():
+        return
+    now = now or utcnow()
+    try:
+        catalog_module.get_catalog().definition(source)
+        stamp = now + timedelta(seconds=delay) if delay else now
+        with get_session_factory().scoped_session() as session:
+            cursor = _cursor(session, source)
+            if delay is None:
+                cursor.nudged_at = now
+            grace = timedelta(seconds=settings.jobs_submit_grace_seconds)
+            queued = cursor.pass_queued_at is not None and (
+                ensure_utc(cursor.pass_queued_at) > now - grace
+            )
+            if queued and delay is None:
+                session.add(cursor)
+                session.commit()
+                return
+            if delay is None:
+                cursor.pass_queued_at = now
+            session.add(cursor)
+            session.commit()
+        catalog_module.get_engine().submit(
+            Submission(
+                execution_id=f"{catalog_module.RECONCILE_DEFINITION}:{source}:"
+                f"{uuid.uuid4().hex}",
+                job_id="",
+                definition=catalog_module.RECONCILE_DEFINITION,
+                subject_key=source,
+                lane=catalog_module.RECONCILE,
+                priority=WorkPriority.INTERACTIVE,
+                delay_seconds=delay,
+                metadata={"due_at": stamp.isoformat()},
+            )
+        )
+    except Exception:  # noqa: BLE001 - the tick recovers a lost nudge
+        logger.warning("reconciler nudge failed", extra={"source": source})
+
+
+def nudge_after_commit(session: Session, source: str) -> None:
+    """Nudge ``source`` once ``session``'s transaction commits (never before).
+
+    For intent recorded inside a caller's transaction (a transactional
+    outbox): nudging before the commit could run a pass that cannot see the
+    row yet, and nudging after a rollback would be noise.
+    """
+    from sqlalchemy import event
+
+    def _after_commit(_session: Session) -> None:
+        nudge(source)
+
+    event.listen(session, "after_commit", _after_commit, once=True)
+
+
+def nudge_all(*, now: datetime | None = None) -> None:
+    """The tick: nudge every definition. Each pass is cheap when idle."""
+    if not catalog_module.bound():
+        return
+    for name in sorted(catalog_module.get_catalog().definitions):
+        nudge(name, now=now)

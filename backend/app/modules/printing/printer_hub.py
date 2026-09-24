@@ -43,7 +43,6 @@ from app.db.session import SessionFactory, get_session_factory
 from app.modules.administration import runtime_config
 from app.modules.administration.runtime_config import auto_mark_known_good_enabled
 from app.modules.ingestion import ingestion
-from app.modules.media import gcode_parser, thumbnail
 from app.modules.notifications import notifications
 from app.modules.printing import filament as filament_svc
 from app.modules.printing import print_results
@@ -705,6 +704,13 @@ class PrinterHub:
                     NotificationEventType.PRINTER_OFFLINE,
                     printer_id=printer_id,
                 )
+            if status == PrinterStatus.READY and prev_status != PrinterStatus.READY:
+                # A printer just became free: queued fleet work may now route
+                # to it, so the dispatcher should look now, not at its next wait.
+                from app.modules.printing.jobs import DISPATCH_DEFINITION
+                from app.modules.work.submission import nudge_after_commit
+
+                nudge_after_commit(session, DISPATCH_DEFINITION)
             session.commit()
 
     async def _sync_active_job(
@@ -1233,8 +1239,6 @@ class PrinterHub:
         lowered = filename.lower()
         file_type = FileType.THREE_MF if lowered.endswith(".3mf") else FileType.GCODE
         blob_hash = sha256_file(staged)
-        meta = gcode_parser.parse(staged) if file_type == FileType.GCODE else {}
-        thumb_bytes = thumbnail.extract(staged) if file_type == FileType.GCODE else None
         with self._session_factory.session() as session:
             job = session.get(PrintJob, job_id)
             if job is None or job.source != "external":
@@ -1254,9 +1258,6 @@ class PrinterHub:
                 original_filename=filename,
                 file_type=file_type,
                 blob_hash=blob_hash,
-                meta=meta,
-                thumb_bytes=thumb_bytes,
-                overwrite_thumbnail=False,
                 ingestion_key=f"bambu-job-{job_id}",
                 session_factory=self._session_factory,
             )
