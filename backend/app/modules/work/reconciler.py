@@ -262,6 +262,7 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
             session, definition.name, [item.subject_key for item in items], now=now
         )
     cooldown = timedelta(seconds=settings.jobs_resubmit_cooldown_seconds)
+    created = 0
     for item in items:
         last = finished.get(item.subject_key)
         if last is not None:
@@ -271,10 +272,12 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
             if result.cooling_until is None or due < result.cooling_until:
                 result.cooling_until = due
             continue
-        _create_and_submit(definition, item, now=now, result=result)
-    # A batch held back by the cooldown is not a reason to loop straight away:
-    # the same subjects would come back and be held back again.
-    result.full = len(items) >= limit and result.cooling_until is None
+        created += _create_and_submit(definition, item, now=now, result=result)
+    # A full batch continues straight away only when it made progress. The same
+    # subjects would come straight back if it did not: ones held back by the
+    # cooldown, or ones whose Jobs are still queued (the source is ahead of the
+    # engine, and those Jobs' completions nudge the next pass).
+    result.full = len(items) >= limit and created > 0 and result.cooling_until is None
 
 
 def _recently_finished(
@@ -307,7 +310,8 @@ def _recently_finished(
 
 def _create_and_submit(
     definition: JobDefinition, item: WorkItem, *, now: datetime, result: PassResult
-) -> None:
+) -> int:
+    """Create (and submit) the item's Job; 1 when a Job was created."""
     try:
         job_id = jobs.create(
             definition=definition.name,
@@ -317,15 +321,16 @@ def _create_and_submit(
         )
     except ActiveJobExists:
         result.count("already_active")
-        return
+        return 0
     if item.occurrence_at is not None:
         _record_occurrence(definition.name, item.occurrence_at)
     if item.skip_reason is not None:
         jobs.finish(job_id, state=JobState.CANCELLED, error=item.skip_reason)
         result.skipped += 1
         result.count(item.skip_reason)
-        return
+        return 1
     _submit(job_id, result)
+    return 1
 
 
 def _record_occurrence(source: str, occurrence: datetime) -> None:

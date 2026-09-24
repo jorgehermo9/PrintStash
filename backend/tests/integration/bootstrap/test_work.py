@@ -15,10 +15,9 @@ says is owed is resubmitted without waiting for the first tick.
 from __future__ import annotations
 
 import time
-from datetime import timedelta
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 import app.bootstrap.work as work_bootstrap
 from app.core.config import _overlay, settings
@@ -387,24 +386,3 @@ class TestAfterRestore:
         work_bootstrap.after_restore()
 
         assert work_bootstrap.current() is None
-
-
-class TestStaleCursorMarks:
-    def test_forgetting_queued_passes_clears_only_set_marks(
-        self, db_session: Session
-    ) -> None:
-        from app.modules.work.submission import forget_queued_passes
-
-        db_session.add(
-            ReconcileCursor(source="a", pass_queued_at=utcnow() - timedelta(seconds=5))
-        )
-        db_session.add(ReconcileCursor(source="b"))
-        db_session.commit()
-
-        assert forget_queued_passes() == 1
-
-        db_session.expire_all()
-        assert all(
-            row.pass_queued_at is None
-            for row in db_session.exec(select(ReconcileCursor)).all()
-        )

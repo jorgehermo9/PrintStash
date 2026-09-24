@@ -569,9 +569,7 @@ class TestFailed:
 
 
 class TestCounts:
-    def test_counts_jobs_per_definition_state(
-        self, store: JobStore, make_job
-    ) -> None:
+    def test_counts_jobs_per_definition_state(self, store: JobStore, make_job) -> None:
         make_job(kind="library.scan")
         make_job(kind="library.scan", state=JobState.FAILED)
         make_job(kind="library.scan", state=JobState.FAILED)
@@ -582,9 +580,7 @@ class TestCounts:
             "backup.create": {"running": 1},
         }
 
-    def test_snapshot_counts_every_state(
-        self, store: JobStore, make_job
-    ) -> None:
+    def test_snapshot_counts_every_state(self, store: JobStore, make_job) -> None:
         make_job(state=JobState.RUNNING)
         make_job(state=JobState.COMPLETED)
 
