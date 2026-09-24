@@ -630,6 +630,31 @@ class TestEventsSocket:
 
         assert closed.value.code == 1011
 
+    def test_a_client_probing_for_channels_is_disconnected(
+        self, client: TestClient, app, owner: User, monkeypatch
+    ) -> None:
+        # Every request is an authorization query; a refused one must count,
+        # or one socket can issue them without end.
+        from app.api.v1 import jobs as jobs_routes
+
+        checks: list[str] = []
+        monkeypatch.setattr(
+            jobs_routes,
+            "_subscription_allowed",
+            lambda _user, channel: checks.append(channel) or False,
+        )
+        with pytest.raises(WebSocketDisconnect) as closed:
+            with client.websocket_connect(
+                f"/api/v1/events/ws?ticket={_ticket(client, owner)}"
+            ) as ws:
+                ws.receive_json()
+                for model_id in range(jobs_routes._MAX_SUBSCRIPTION_REQUESTS + 5):
+                    ws.send_json({"subscribe": f"model:{model_id}"})
+                ws.receive_json()
+
+        assert closed.value.code == 1008
+        assert len(checks) == jobs_routes._MAX_SUBSCRIPTION_REQUESTS
+
     def test_a_read_only_token_cannot_issue_a_ticket(
         self, client: TestClient, owner: User
     ) -> None:

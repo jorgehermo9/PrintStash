@@ -35,6 +35,10 @@ events_router = APIRouter(prefix="/events", tags=["jobs"])
 
 _MAX_TRACKED = 50
 _MAX_SUBSCRIPTIONS = 64
+# Every subscribe request costs an authorization query, granted or not. A
+# client following Models as a user browses stays far below this; one that
+# exceeds it is probing, and is disconnected.
+_MAX_SUBSCRIPTION_REQUESTS = 256
 
 
 @router.get(
@@ -171,6 +175,7 @@ async def events_ws(websocket: WebSocket) -> None:
     for channel in channels:
         await bus.subscribe(channel, sink)
     await sink({"type": "resync"})
+    requests = 0
     try:
         while True:
             message = await websocket.receive_json()
@@ -178,6 +183,11 @@ async def events_ws(websocket: WebSocket) -> None:
                 continue
             wanted = message.get("subscribe")
             unwanted = message.get("unsubscribe")
+            if isinstance(wanted, str):
+                requests += 1
+                if requests > _MAX_SUBSCRIPTION_REQUESTS:
+                    await websocket.close(code=1008)
+                    return
             if isinstance(wanted, str) and len(channels) < _MAX_SUBSCRIPTIONS:
                 allowed = await asyncio.to_thread(_subscription_allowed, user, wanted)
                 if allowed:
