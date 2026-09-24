@@ -4,7 +4,15 @@ import logging
 
 import pytest
 
-from app.core.logging import SensitiveQueryFilter
+from app.core.logging import SensitiveQueryFilter, get_logger
+
+
+class TestHttpClientLogLevels:
+    def test_routine_requests_do_not_fill_info_logs(self):
+        get_logger("app.core.logging")
+
+        assert logging.getLogger("httpx").level >= logging.WARNING
+        assert logging.getLogger("httpcore").level >= logging.WARNING
 
 
 class TestSensitiveQueryFilter:
@@ -75,3 +83,22 @@ class TestSensitiveQueryFilter:
             logging.Formatter().format(record)
             == "request /download?[redacted] status 307"
         )
+
+
+class TestQueryUrlObjects:
+    def test_redacts_an_http_client_url_object(self):
+        import httpx
+
+        record = logging.LogRecord(
+            "httpx",
+            logging.INFO,
+            "",
+            1,
+            "HTTP Request: %s %s %d",
+            ("GET", httpx.URL("http://local/search?q=private-marker"), 422),
+            None,
+        )
+        SensitiveQueryFilter().filter(record)
+        output = logging.Formatter().format(record)
+        assert "private-marker" not in output
+        assert "http://local/search?[redacted] 422" in output

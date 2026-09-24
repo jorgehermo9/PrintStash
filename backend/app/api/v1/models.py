@@ -31,6 +31,8 @@ from fastapi import (
 from fastapi.responses import FileResponse, Response
 from printstash_core.files import slugify
 from printstash_core.library import RevisionError
+from printstash_core.search.passages import SubjectType
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlmodel import Session, select
 from starlette.background import BackgroundTask
@@ -74,10 +76,14 @@ from app.modules.library import (
     source_covers,
 )
 from app.modules.library.trash import (
+    PurgeConflictError,
+    SourceFileLifecycleError,
     StorageRiskConfirmationRequired,
     hard_delete_expired_models,
     hard_delete_model,
+    restore_source_file,
     soft_delete_model,
+    soft_delete_source_file,
 )
 from app.modules.library.trash import (
     restore_model as trash_restore_model,
@@ -130,8 +136,44 @@ from app.schemas.provenance import (
     ModelSourceCoverRead,
 )
 from app.schemas.saved_views import ModelStarRead
+from app.schemas.search import SearchResponse
 
 router = APIRouter(prefix="/models", tags=["models"])
+
+
+def _model_filters(**values) -> ModelFilters:
+    try:
+        return ModelFilters.model_validate(values)
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="model_filters_invalid") from None
+
+
+@router.get("/{model_id}/similar-text", response_model=SearchResponse)
+def search_using_model(
+    model_id: int,
+    response: Response,
+    limit: int = Query(30, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=512),
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+):
+    from app.bootstrap.optional_features import inference_available
+
+    if not inference_available():
+        raise HTTPException(status_code=503, detail="inference_unavailable")
+    from app.modules.search.retrieval import search
+
+    response.headers["Cache-Control"] = "no-store"
+    return search(
+        session,
+        user,
+        "",
+        source_model_id=model_id,
+        limit=limit,
+        cursor=cursor,
+        types=(SubjectType.MODEL,),
+    )
+
 
 _GCODE_SUFFIXES = {".gcode", ".g", ".gco", ".bgcode"}
 
@@ -220,6 +262,10 @@ def list_models(
     ),
     uploaded_after: Optional[datetime] = Query(None),
     uploaded_before: Optional[datetime] = Query(None),
+    printed_after: datetime | None = Query(None),
+    printed_before: datetime | None = Query(None),
+    print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
+    print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
     family_id: int | None = Query(None, gt=0),
     family_role: VariantRole | None = Query(None),
@@ -233,7 +279,7 @@ def list_models(
         printer_id is not None or printer_presence is not None
     ) and not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="admin_required")
-    filters = ModelFilters(
+    filters = _model_filters(
         collection=collection,
         direct=direct,
         tag=tag or [],
@@ -251,6 +297,10 @@ def list_models(
         storage=storage_filter or [],
         uploaded_after=uploaded_after,
         uploaded_before=uploaded_before,
+        printed_after=printed_after,
+        printed_before=printed_before,
+        print_duration_min_s=print_duration_min_s,
+        print_duration_max_s=print_duration_max_s,
         has_similar_candidates=has_similar_candidates,
         family_id=family_id,
         family_role=family_role,
@@ -290,6 +340,10 @@ def page_models(
     ),
     uploaded_after: Optional[datetime] = Query(None),
     uploaded_before: Optional[datetime] = Query(None),
+    printed_after: datetime | None = Query(None),
+    printed_before: datetime | None = Query(None),
+    print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
+    print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
     family_id: int | None = Query(None, gt=0),
     family_role: VariantRole | None = Query(None),
@@ -304,7 +358,7 @@ def page_models(
         printer_id is not None or printer_presence is not None
     ) and not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="admin_required")
-    filters = ModelFilters(
+    filters = _model_filters(
         collection=collection,
         direct=direct,
         tag=tag or [],
@@ -322,6 +376,10 @@ def page_models(
         storage=storage_filter or [],
         uploaded_after=uploaded_after,
         uploaded_before=uploaded_before,
+        printed_after=printed_after,
+        printed_before=printed_before,
+        print_duration_min_s=print_duration_min_s,
+        print_duration_max_s=print_duration_max_s,
         has_similar_candidates=has_similar_candidates,
         family_id=family_id,
         family_role=family_role,
@@ -364,6 +422,10 @@ def outliner_models(
     ),
     uploaded_after: Optional[datetime] = Query(None),
     uploaded_before: Optional[datetime] = Query(None),
+    printed_after: datetime | None = Query(None),
+    printed_before: datetime | None = Query(None),
+    print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
+    print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
     family_id: int | None = Query(None, gt=0),
     family_role: VariantRole | None = Query(None),
@@ -379,7 +441,7 @@ def outliner_models(
     return models_listing.outliner_items(
         session,
         current_user,
-        filters=ModelFilters(
+        filters=_model_filters(
             tag=tag or [],
             printer_id=printer_id,
             printer_presence=printer_presence,
@@ -394,6 +456,10 @@ def outliner_models(
             storage=storage_filter or [],
             uploaded_after=uploaded_after,
             uploaded_before=uploaded_before,
+            printed_after=printed_after,
+            printed_before=printed_before,
+            print_duration_min_s=print_duration_min_s,
+            print_duration_max_s=print_duration_max_s,
             has_similar_candidates=has_similar_candidates,
             family_id=family_id,
             family_role=family_role,
@@ -424,6 +490,10 @@ def model_facets(
     ),
     uploaded_after: Optional[datetime] = Query(None),
     uploaded_before: Optional[datetime] = Query(None),
+    printed_after: datetime | None = Query(None),
+    printed_before: datetime | None = Query(None),
+    print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
+    print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
     family_id: int | None = Query(None, gt=0),
     family_role: VariantRole | None = Query(None),
@@ -438,7 +508,7 @@ def model_facets(
     return models_facets.facets(
         session,
         current_user,
-        ModelFilters(
+        _model_filters(
             collection=collection,
             direct=direct,
             tag=tag or [],
@@ -456,6 +526,10 @@ def model_facets(
             storage=storage_filter or [],
             uploaded_after=uploaded_after,
             uploaded_before=uploaded_before,
+            printed_after=printed_after,
+            printed_before=printed_before,
+            print_duration_min_s=print_duration_min_s,
+            print_duration_max_s=print_duration_max_s,
             has_similar_candidates=has_similar_candidates,
             family_id=family_id,
             family_role=family_role,
@@ -1408,6 +1482,71 @@ def replace_file_tags(
         current_user=current_user,
         session=session,
     )
+    return _detail_or_404(session, model_id, current_user)
+
+
+def _editable_source_file(
+    session: Session, actor: User, model_id: int, file_id: int
+) -> tuple[Model, File]:
+    model = session.get(Model, model_id)
+    if model is None or model.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="model_not_found")
+    rbac.require_model_collection_role(
+        session, actor, model.collection_id, CollectionRole.EDIT
+    )
+    file_row = session.get(File, file_id)
+    if file_row is None or file_row.model_id != model_id:
+        raise HTTPException(status_code=404, detail="file_not_found")
+    return model, file_row
+
+
+@router.delete(
+    "/{model_id}/files/{file_id}",
+    response_model=ModelRead,
+    dependencies=[Depends(require_auth)],
+    summary="Move one managed source Artifact to trash",
+)
+def trash_source_file(
+    model_id: int,
+    file_id: int,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ModelRead:
+    model, file_row = _editable_source_file(session, current_user, model_id, file_id)
+    if file_row.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="file_not_found")
+    try:
+        soft_delete_source_file(session, model, file_row, current_user)
+    except SourceFileLifecycleError as exc:
+        raise HTTPException(
+            status_code=409 if str(exc) == "linked_source_protected" else 400,
+            detail=str(exc),
+        ) from exc
+    return _detail_or_404(session, model_id, current_user)
+
+
+@router.post(
+    "/{model_id}/files/{file_id}/restore",
+    response_model=ModelRead,
+    dependencies=[Depends(require_auth)],
+    summary="Restore one managed source Artifact from trash",
+)
+def restore_source_file_route(
+    model_id: int,
+    file_id: int,
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ModelRead:
+    model, file_row = _editable_source_file(session, current_user, model_id, file_id)
+    if file_row.deleted_at is None:
+        raise HTTPException(status_code=400, detail="file_not_in_trash")
+    try:
+        restore_source_file(session, model, file_row)
+    except SourceFileLifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PurgeConflictError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="storage_cleanup_blocked") from exc
     return _detail_or_404(session, model_id, current_user)
 
 

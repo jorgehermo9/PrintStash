@@ -46,6 +46,36 @@
   mounts, declared with `VAULT_SHARED_STORAGE=true` (`docker-compose.workers.yml`).
   Realtime notices cross processes over PostgreSQL `NOTIFY`.
 
+- DXF files can be imported as source Artifacts, downloaded with their original
+  bytes, and included in backups. Drawing previews are not yet available.
+- Managed source Artifacts can be moved to trash and restored individually from
+  Model detail. The Model, sibling Artifacts, Revisions and print history remain.
+  Linked Library-source originals stay protected.
+- A PNG version of the PrintStash icon for Unraid and other container dashboards
+  that cannot use SVG icons.
+
+- AI Search adds transactional text indexing for Models, Collections, Multipart
+  Models and Documents, authorized lexical suggestions, hybrid results with match
+  evidence, and local image/geometry search. Image queries support file selection,
+  drag-and-drop and device camera capture. Pinned BGE, CLIP and OpenShape models
+  use one bounded CPU runtime; acquisition and activation require explicit action.
+  AI inference is optional and off by default; library features and ordinary
+  keyword search require no model, inference server or OpenAI account.
+- AI Search settings manage encrypted compatible endpoints, model provenance,
+  capacity estimates and resumable index rebuilds. Serving generations remain
+  available during replacement; float, int8/binary and approved MRL transforms
+  preserve native vectors. SQLite/PostgreSQL derivatives can fall back to portable
+  retrieval and rebuild after restore. Local models warm after restart while
+  lexical search remains available.
+- Separate captions preserve human descriptions and require explicit render
+  consent. Editable print-history filters use actual duration and timezone-aware
+  calendar bounds; optional personal natural-language consent enables parsing and
+  Saved Views. Optional local SPLADE expansion stores bounded weighted terms
+  separately from original text. The AI master disables these inference consumers;
+  query text and images stay out of durable search data and request/error logs.
+- PostgreSQL supports the existing backup API through verified portable snapshots.
+  A dry-run-first SQLite-to-PostgreSQL command preserves encrypted fields, IDs,
+  cyclic library references and native vector bytes without re-embedding.
 - Model Families preserve independent Models and Revisions while recording human
   variant roles, an explicit canonical selection and relative measurements.
   Membership moves and Family restoration are atomic; Model trash reserves its
@@ -68,6 +98,68 @@
 - A process that started while an interrupted restore or Vault migration still
   needed recovery now starts its background work once recovery resolves it,
   instead of queueing work nothing ran until the next restart.
+
+- The Unraid Community Applications catalog has one current PrintStash listing;
+  the old API and frontend templates are marked deprecated for existing users.
+
+- The Unraid template uses the unified image with one persistent appdata mount,
+  a working first-run setup default, and Unraid file-owner defaults.
+
+- Printables captures request each selected file host's browser permission once
+  before downloading, avoiding repeated permission dialogs for multi-file imports.
+- Browser captures accept multi-file selections within the review limit, release
+  unfinished upload slots after transfer failures, and explain capacity errors.
+- Provider connection errors now distinguish missing MyMiniFactory OAuth setup,
+  rejected Cults credentials, provider outages, and invalid provider responses.
+- Routine HTTP client requests no longer fill INFO logs during PrusaLink polling;
+  printer errors and transport warnings remain visible.
+
+- AI Search mutations enforce token write scope, including caption edits, settings,
+  generation management, local model operations and personal preferences.
+
+- Library search keeps typing and Enter in the current library view. A labeled
+  “Search with AI” action opens AI results; result cards no longer show retrieval
+  explanations.
+- Model detail tabs fit their panel without horizontal scrolling. Similar Models
+  keep readable names and reachable comparison actions in narrow panels.
+- The library groups organization actions under “Library tools” and Family filters
+  with the other advanced filters,
+  keeping the initial toolbar focused on uploading and browsing. Active Family
+  filters remain discoverable when opening a saved or shared view.
+
+- AI search recovers bounded name misspellings, finds functional holder metadata,
+  and rejects weak short-query matches before combining retrieval signals.
+- Caption edits and dismissal reserve the SQLite writer before reading, avoiding
+  failed updates when background indexing commits concurrently.
+- Sparse search avoids temporary SQL query-name collisions on Python 3.13 while
+  preserving keyword scores and candidate filtering.
+- The legacy MinIO migration helper pulls its unchanged, digest-pinned release
+  from the official Quay registry.
+
+- AI Search guides setup and preserves keyboard focus between basic and advanced controls. Clearing a query cancels stale navigation; result views support a grid, list and on-demand match details.
+- Deferred search projection commits bounded source notifications with content edits and hides stale evidence until refreshed. Sparse ranking preserves independent SQL identities without excessive nesting.
+
+- Search backfill yields to complete user write requests, including upload staging
+  and cleanup, without holding a database transaction while waiting.
+- AI Search bounds permission checks and Model-card loading to result identities,
+  avoids repeated full top-k sorting during portable vector scans, and keeps
+  periodic SQLite projection-repair transactions short during browsing.
+- Search backfill drains bounded batches between periodic pauses, removing the
+  one-second delay per embedding batch while preserving maintenance and shutdown
+  coordination. Settled active generations stop a burst without inference.
+- Family browsing uses recent changes when relevance scores are unavailable,
+  preserving valid cursors for collapsed cards and the Families list.
+
+- Restoring AI Search backups no longer requires optional vector extensions to
+  inspect unversioned databases. Durable vectors remain searchable through the
+  portable backend while native acceleration is disabled.
+
+- AI Search activation acquires the SQLite writer lock before verification, so
+  concurrent worker commits cannot invalidate the cutover snapshot. Search and
+  ordinary Model results start without the optional Families annotation package.
+
+- Caption text and unsaved edits now clear when the signed-in account changes,
+  including account changes received from another browser tab.
 
 - Browser Pending Imports accept signed-in session cookies while preserving bearer-token precedence and browser-device scope restrictions.
 

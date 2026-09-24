@@ -282,9 +282,47 @@ class Settings(BaseSettings):
     similarity_page_size: int = Field(default=100, ge=1, le=1000)
     similarity_schedule_hours: int = Field(default=0, ge=0, le=168)
     similarity_embeddings_enabled: bool = False
+    embedding_provider: Literal["onnx_cpu", "openai_compatible"] = "onnx_cpu"
+    embedding_local_enabled: bool = False
     embedding_local_model_dir: str = ""
     embedding_model_key: str = ""
     embedding_onnx_threads: int = Field(default=1, ge=1, le=4)
+    embedding_batch_size: int = Field(default=8, ge=1, le=8)
+    embedding_cache_dir: Path = Path("/data/ai-models")
+    embedding_cache_max_bytes: int = Field(
+        default=4294967296, ge=1048576, le=1099511627776
+    )
+    embedding_download_enabled: bool = False
+    embedding_mirror_url: str = ""
+    embedding_endpoint: str = ""
+    embedding_model: str = ""
+    embedding_revision: str = "configured-v1"
+    embedding_model_repo: str | None = None
+    embedding_native_dimension: int = Field(default=384, ge=1, le=4096)
+    embedding_api_key: SecretStr = SecretStr("")
+    embedding_headers: dict[str, SecretStr] = Field(default_factory=dict)
+    embedding_timeout_seconds: float = Field(default=15, gt=0, le=120)
+    embedding_max_input_characters: int = Field(default=16384, ge=128, le=16384)
+    chat_endpoint: str = ""
+    chat_model: str = ""
+    chat_revision: str = "configured-v1"
+    chat_api_key: SecretStr = SecretStr("")
+    chat_headers: dict[str, SecretStr] = Field(default_factory=dict)
+    chat_timeout_seconds: float = Field(default=15, gt=0, le=120)
+    chat_prefer_responses: bool = False
+    chat_supports_images: bool = False
+    search_native_vectors_enabled: bool = False
+    ai_search_enabled: bool = False
+    ai_search_lexical_backend: Literal["auto", "ranked_like"] = "auto"
+    ai_search_captions_enabled: bool = False
+    ai_search_nl_filters_enabled: bool = False
+    ai_search_send_rendered_images: bool = False
+    ai_search_send_query_images: bool = False
+    ai_search_query_timeout_seconds: float = Field(default=3, ge=0.05, le=30)
+    ai_search_semantic_floor: float = Field(default=0.35, ge=-1, le=1)
+    ai_search_lexical_weight: float = Field(default=1, gt=0, le=10)
+    ai_search_semantic_weight: float = Field(default=1, gt=0, le=10)
+    ai_search_rrf_k: int = Field(default=60, ge=1, le=1000)
 
     # For large 3MF files, prefer the slicer-embedded preview before handing the
     # archive to trimesh, whose XML loader is the dominant memory cost. When on

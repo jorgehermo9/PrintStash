@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
+import { aCaption } from "../../src/test-support/captions";
+import { searchPreferences, searchStatus } from "../../src/test-support/search";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type { SubjectCaption } from "../../src/types/captions";
+import type { SearchStatus } from "../../src/types/search";
 
 const now = "2026-06-04T00:24:22.000000";
 
@@ -1148,6 +1152,36 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     });
     return;
   }
+  if (url.pathname === "/api/v1/search/status" && req.method === "GET") {
+    sendJson(res, {
+      enabled: false,
+      semantic_ready: false,
+      legs: ["lexical"],
+      generations: [],
+      degraded: [],
+      backlog: false,
+      remote_hosts: [],
+    } satisfies SearchStatus);
+    return;
+  }
+  if (url.pathname === "/api/v1/subjects/model/1/caption" && req.method === "GET") {
+    sendJson(res, {
+      state: null,
+      phase: null,
+      text: "",
+      version_token: null,
+      can_edit: true,
+      can_generate: false,
+      unavailable_reason: "caption_disabled",
+      model: null,
+      model_revision: null,
+      recipe: null,
+      edited_by: null,
+      updated_at: null,
+      error_code: null,
+    } satisfies SubjectCaption);
+    return;
+  }
   if (url.pathname === "/api/v1/models/1") {
     sendJson(res, model);
     return;
@@ -1785,6 +1819,30 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
       published_at: "2026-07-14T10:00:00Z",
       checked_at: "2026-07-14T11:00:00Z",
     });
+    return;
+  }
+  if (url.pathname === "/api/v1/search/status" && req.method === "GET") {
+    sendJson(res, searchStatus());
+    return;
+  }
+  if (url.pathname === "/api/v1/search/preferences" && req.method === "GET") {
+    sendJson(res, searchPreferences());
+    return;
+  }
+  if (
+    /^\/api\/v1\/subjects\/(model|multipart_model)\/\d+\/caption$/.test(url.pathname) &&
+    req.method === "GET"
+  ) {
+    sendJson(
+      res,
+      aCaption({
+        state: null,
+        phase: null,
+        text: "",
+        can_generate: false,
+        unavailable_reason: "caption_disabled",
+      }),
+    );
     return;
   }
   if (url.pathname === "/api/v1/libraries") {

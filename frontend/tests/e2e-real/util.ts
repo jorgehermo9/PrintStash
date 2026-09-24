@@ -1,4 +1,7 @@
 import { expect, type APIResponse, type Page, type Response } from "@playwright/test";
+import { execFile } from "node:child_process";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
 
 /** The new backup, as the finished `backup.create` Job reports it. */
 export interface CreatedBackup {
@@ -59,6 +62,42 @@ export async function createBackupViaApi(page: Page): Promise<CreatedBackup> {
   return backupFromAccepted(page, await page.request.post("/api/v1/backups"));
 }
 
+/** Seed time-expired bytes in this suite's disposable database, never the live library. */
+export async function seedExpiredStaging(): Promise<{ itemId: number; path: string }> {
+  const backend = resolve("../backend");
+  const root = resolve(process.env.PLAYWRIGHT_REAL_DATA_DIR ?? "tests/e2e-real/.data");
+  const { stdout } = await promisify(execFile)(
+    resolve(backend, ".venv/bin/python"),
+    ["-m", "tests.fakes.storage_cleanup_seed"],
+    {
+      cwd: backend,
+      env: {
+        ...process.env,
+        VAULT_DB_URL: `sqlite:///${root}/test.sqlite`,
+        VAULT_DATA_DIR: resolve(root, "files"),
+        VAULT_THUMB_DIR: resolve(root, "thumbs"),
+        VAULT_STAGING_DIR: resolve(root, "staging"),
+        VAULT_BACKUP_DIR: resolve(root, "backups"),
+      },
+    },
+  );
+  return JSON.parse(stdout);
+}
+
+/** Reveal the library's secondary commands through its visible toolbar. */
+export async function openLibraryTools(page: Page): Promise<void> {
+  if (await page.getByRole("region", { name: "Library tools", exact: true }).isVisible()) return;
+  const trigger = page.getByRole("button", { name: "Library tools", exact: true });
+  const more = page.getByRole("main").getByRole("button", { name: "More", exact: true });
+  await expect(trigger.or(more).first()).toBeVisible();
+  if (!(await trigger.isVisible())) {
+    await more.click();
+    await page.getByRole("menuitem", { name: "Library tools", exact: true }).click();
+  } else if ((await trigger.getAttribute("aria-expanded")) === "false") {
+    await trigger.click();
+  }
+}
+
 // The backend dedupes files by content hash, so the bytes must be unique per
 // model — embed the name so each upload creates a distinct model.
 export function gcodeFor(name: string): string {
@@ -116,7 +155,7 @@ function stlFor(name: string): string {
 }
 
 export function modelCard(page: Page, name: string) {
-  return page.locator('a[href^="/models/"]').filter({ hasText: name });
+  return page.getByRole("main").locator('a[href^="/models/"]').filter({ hasText: name });
 }
 
 // Share/Edit details/Delete model live behind the "Model actions" dropdown on
@@ -140,6 +179,7 @@ export async function createCollectionViaVault(
   parent?: string,
 ): Promise<void> {
   await page.goto(parent ? `/?c=${encodeURIComponent(parent)}` : "/");
+  await openLibraryTools(page);
   await page.getByRole("button", { name: "New collection" }).click();
   const input = page.getByPlaceholder(parent ? /New subcollection in/ : "Collection name...");
   await input.fill(name);
@@ -180,7 +220,7 @@ export async function uploadModel(page: Page, name: string, opts: UploadOpts = {
     );
   }
   if (mesh) {
-    await page.locator('input[accept=".stl,.3mf,.obj,.step,.stp"]').setInputFiles(
+    await page.locator('input[accept=".stl,.3mf,.obj,.step,.stp,.dxf"]').setInputFiles(
       opts.meshFile ?? {
         name: `${name}.stl`,
         mimeType: "model/stl",
@@ -223,4 +263,12 @@ export async function uploadModel(page: Page, name: string, opts: UploadOpts = {
 
 export function uploadGcodeModel(page: Page, name: string): Promise<void> {
   return uploadModel(page, name, { gcode: true });
+}
+
+/** Reveal advanced controls while preserving the collection navigation. */
+export async function openFilters(page: Page) {
+  const button = page
+    .getByRole("button", { name: "Filters", exact: true })
+    .filter({ visible: true });
+  if ((await button.getAttribute("aria-expanded")) !== "true") await button.click();
 }

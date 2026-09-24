@@ -1,6 +1,8 @@
 "use client";
 
+import { SubjectCaption } from "@/components/subject-caption";
 import { ModelFamilyMembership } from "@/components/families/model-membership";
+import { ModelSearchAction } from "@/components/model-search-action";
 
 import { currentLocale } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
@@ -657,6 +659,7 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                   }
                   contentClassName="w-48 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
                 >
+                  <ModelSearchAction modelId={model.id} onSelect={() => setActionsOpen(false)} />
                   <button
                     type="button"
                     role="menuitem"
@@ -741,8 +744,13 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                 className="max-w-full max-h-full object-contain"
               />
             ) : (
-              <div className="flex items-center justify-center text-on-surface-variant">
+              <div className="flex flex-col items-center justify-center gap-2 text-on-surface-variant">
                 <FileText className="h-20 w-20 opacity-20" />
+                {sourceFiles.some((file) => file.file_type === "dxf") && (
+                  <span>
+                    {uiText("DXF preview is not supported yet. Download the original file below.")}
+                  </span>
+                )}
               </div>
             )}
 
@@ -899,48 +907,53 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
               }))}
               active={activeTab}
               onChange={setRequestedTab}
-              indicatorInset={8}
-              className="shrink-0 border-b border-outline-variant bg-surface-container-lowest px-2 overflow-x-auto scrollbar-none [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
-              tabClassName="flex-1 px-2 py-3 font-mono text-2xs uppercase tracking-wider whitespace-nowrap transition-colors text-on-surface-variant hover:text-on-surface"
-              activeTabClassName="text-primary"
+              showIndicator={false}
+              className="grid shrink-0 grid-cols-4 gap-1 border-b border-outline-variant bg-surface-container-lowest p-2"
+              tabClassName="min-w-0 rounded-md px-2 py-3 text-xs font-medium transition-colors duration-press text-on-surface-variant hover:bg-muted hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              activeTabClassName="bg-accent text-accent-foreground"
             />
             <div
               key={activeTab}
               className="animate-panel-in flex-1 overflow-y-auto p-4 md:p-6 space-y-6 md:space-y-8 [scrollbar-width:thin] [scrollbar-color:var(--outline-variant)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-outline-variant [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb:hover]:bg-primary/50"
             >
               {activeTab === "overview" && (
-                <OverviewTab
-                  model={model}
-                  editing={editing}
-                  editor={{
-                    collection: editCollection,
-                    setCollection: setEditCollection,
-                    catOpen,
-                    setCatOpen,
-                    collections,
-                    description: editDescription,
-                    setDescription: setEditDescription,
-                    sourceUrl: editSourceUrl,
-                    setSourceUrl: setEditSourceUrl,
-                    tagInput,
-                    setTagInput,
-                    tags: editTags,
-                    setTags: setEditTags,
-                    toggleTag: editToggleTag,
-                    createTag: editCreateTag,
-                    deleteTag: editDeleteTag,
-                    filteredTags: editFilteredTags,
-                    canCreate: editCanCreate,
-                  }}
-                  recommendedFile={recommendedGcode}
-                  hasGcode={hasGcode}
-                  revisionSaving={revisionUpdater.saving}
-                  onSend={requestSend}
-                  canSend={canViewPrinters}
-                  onCompare={() => setRequestedTab("revisions")}
-                  onMark={(file, patch) => void revisionUpdater.update(file, patch)}
-                  onAddRevision={requestAddRevision}
-                />
+                <div className="space-y-4">
+                  <OverviewTab
+                    model={model}
+                    editing={editing}
+                    editor={{
+                      collection: editCollection,
+                      setCollection: setEditCollection,
+                      catOpen,
+                      setCatOpen,
+                      collections,
+                      description: editDescription,
+                      setDescription: setEditDescription,
+                      sourceUrl: editSourceUrl,
+                      setSourceUrl: setEditSourceUrl,
+                      tagInput,
+                      setTagInput,
+                      tags: editTags,
+                      setTags: setEditTags,
+                      toggleTag: editToggleTag,
+                      createTag: editCreateTag,
+                      deleteTag: editDeleteTag,
+                      filteredTags: editFilteredTags,
+                      canCreate: editCanCreate,
+                    }}
+                    recommendedFile={recommendedGcode}
+                    hasGcode={hasGcode}
+                    revisionSaving={revisionUpdater.saving}
+                    onSend={requestSend}
+                    canSend={canViewPrinters}
+                    onCompare={() => setRequestedTab("revisions")}
+                    onMark={(file, patch) => void revisionUpdater.update(file, patch)}
+                    onAddRevision={requestAddRevision}
+                  />
+                  {!editing && auth.isAuthenticated && (
+                    <SubjectCaption key={model.id} type="model" id={model.id} />
+                  )}
+                </div>
               )}
 
               {activeTab === "settings" && (
@@ -970,6 +983,7 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                 <FilesTab
                   modelId={model.id}
                   sourceFiles={sourceFiles}
+                  trashedSourceFiles={model.trashed_source_files ?? []}
                   canEdit={canEditModel}
                   onModel={setModel}
                 />

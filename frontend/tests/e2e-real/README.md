@@ -58,6 +58,9 @@ destination, disables local backup creation, purges an uploaded Model, restores
 the remote archive, and verifies the downloaded Artifact bytes exactly. It is
 part of `pnpm test:e2e:critical`, not the ordinary serial real-backend suite, so
 state from another scenario cannot make recovery pass accidentally.
+Its shared-provider form case opens the storage migration disclosure before
+choosing Nextcloud, then verifies credential retention and linked-target protection
+when editing the remote connection.
 
 `helpers.ts` seeds the first admin via `/setup` once and injects a real JWT into
 the browser, so tests boot authenticated. The suite runs serially on one DB, so
@@ -123,7 +126,7 @@ downloads identical bytes through the linked Artifact. This is transport evidenc
 not hosted-account certification. Run `pnpm exec playwright test -c
 playwright.storage-presets.config.ts`.
 
-Storage insights: reads real capacity evidence, persists a measurement, and confirms receipt-verified expired staging cleanup.
+Storage insights: reads real capacity evidence, persists a measurement, and confirms cleanup of a receipt-verified expired staging fixture in the disposable suite database. The file must remain until the confirmation is accepted.
 
 Native S3 browser delivery has a dedicated fixture and config:
 `pnpm exec playwright test --config playwright.delivery.config.ts` (also included
@@ -136,3 +139,5 @@ Only the test certificate's trust check is relaxed; browser CORS remains enabled
 - `artifact-cache.spec.ts`: persist cache limits in Settings, explicitly clear idle cache files, then reset to environment defaults.
 
 - `migration/vault-migration.spec.ts` (isolated `playwright.migration.config.ts`): real backup, preflight, online delta ingestion, API restart, recovery/resume, explicit cutover, byte-exact Artifact downloads, Full audit and JSON report. Source cleanup remains disabled during grace. Included in `pnpm test:e2e:real`.
+
+Search clarity: the AI-search flow verifies that Enter preserves the live library filter, explicit AI search opens results, and retrieval explanations stay hidden. Library workflows reveal secondary commands through Library tools.

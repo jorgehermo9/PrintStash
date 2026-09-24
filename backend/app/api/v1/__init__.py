@@ -11,7 +11,6 @@ from app.api.v1 import (
     config,
     documents,
     external_libraries,
-    families,
     filaments,
     files,
     fleet,
@@ -38,7 +37,11 @@ from app.api.v1 import (
     vault_migration,
     work,
 )
-from app.bootstrap.optional_features import install_optional_routes
+from app.bootstrap.optional_features import (
+    install_family_routes,
+    install_optional_routes,
+    install_search_routes,
+)
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
@@ -58,12 +61,13 @@ api_router.include_router(work.router)
 api_router.include_router(inbox.router)
 api_router.include_router(maintenance.router)
 api_router.include_router(models.router)
-api_router.include_router(families.router)
+install_family_routes(api_router)
 
 install_optional_routes(api_router)
 api_router.include_router(multipart_models.router)
 api_router.include_router(multipart_builds.router)
 api_router.include_router(saved_views.router)
+install_search_routes(api_router)
 api_router.include_router(files.router)
 api_router.include_router(filaments.router)
 api_router.include_router(printer_profiles.router)

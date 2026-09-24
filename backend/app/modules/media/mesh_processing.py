@@ -438,6 +438,16 @@ def step_memory_budget_bytes() -> int | None:
     return _step_memory_budget_bytes()
 
 
+def native_memory_budget_bytes() -> int:
+    """The render-step RSS policy, applied to one native worker process.
+
+    Bounded even when automatic geometry RAM caps are disabled on a platform
+    where cgroup or host memory cannot be detected. Embedding and search-view
+    workers are killed past it.
+    """
+    return min(step_memory_budget_bytes() or 1024**3, 2 * 1024**3)
+
+
 def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):
     """Tessellate unknown-complexity STEP in a monitored child process (#72)."""
 

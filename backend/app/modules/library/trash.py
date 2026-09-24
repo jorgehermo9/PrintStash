@@ -47,6 +47,7 @@ from app.db.models import (
     VaultAuditFinding,
     VaultAuditFindingState,
 )
+from app.db.projections import content_changed
 from app.db.scopes import live, trashed
 from app.db.session import get_session_factory
 from app.modules.library import part_options
@@ -76,6 +77,44 @@ _COLLECTION_IMAGE_RE = re.compile(
 
 class PurgeConflictError(UnsafeStorageDeleteError):
     """The resource changed or was restored before its purge claim landed."""
+
+
+class SourceFileLifecycleError(ValueError):
+    """A file cannot use the managed source Artifact lifecycle."""
+
+
+def _require_managed_source(file_row: File) -> None:
+    if file_row.file_type == FileType.GCODE:
+        raise SourceFileLifecycleError("source_file_required")
+    if file_row.is_external:
+        raise SourceFileLifecycleError("linked_source_protected")
+
+
+def soft_delete_source_file(
+    session: Session, model: Model, file_row: File, actor: User
+) -> None:
+    """Trash one managed source without changing the Model or its Revisions."""
+    _require_managed_source(file_row)
+    now = utcnow()
+    file_row.deleted_at = now
+    file_row.deleted_by = actor.id
+    if model.thumbnail_file_id == file_row.id:
+        model.thumbnail_file_id = None
+        model.thumbnail_path = None
+    model.updated_at = now
+    session.add(file_row)
+    session.add(model)
+    content_changed(session, "model", [model.id])
+    session.commit()
+
+
+def restore_source_file(session: Session, model: Model, file_row: File) -> None:
+    """Restore a source while keeping purge ownership and tombstone guards."""
+    _require_managed_source(file_row)
+    restore_resource(session, file_row, commit=False)
+    model.updated_at = utcnow()
+    session.add(model)
+    session.commit()
 
 
 class StorageRiskConfirmationRequired(UnsafeStorageDeleteError):
@@ -193,6 +232,7 @@ def soft_delete_model(session: Session, model: Model) -> None:
     model.updated_at = utcnow()
     _record_model_tombstones(session, model)
     session.add(model)
+    content_changed(session, "model", [model.id])
     session.commit()
 
 
@@ -203,11 +243,14 @@ def soft_delete_models(session: Session, models: Iterable[Model]) -> None:
     persisted atomically.
     """
     now = utcnow()
+    changed_ids = []
     for model in models:
         model.deleted_at = now
         model.updated_at = now
         _record_model_tombstones(session, model)
         session.add(model)
+        changed_ids.append(model.id)
+    content_changed(session, "model", changed_ids)
 
 
 def record_source_tombstone(session: Session, file_row: File, reason: str) -> None:
@@ -299,6 +342,10 @@ def restore_resource(session: Session, resource, *, commit: bool = True) -> None
     if hasattr(resource, "updated_at"):
         resource.updated_at = utcnow()
     session.add(resource)
+    if isinstance(resource, File):
+        content_changed(session, "model", [resource.model_id])
+    elif isinstance(resource, (Model, Collection, Document)):
+        content_changed(session, type(resource).__name__.lower(), [resource.id])
     if commit:
         session.commit()
 
@@ -473,6 +520,7 @@ def hard_delete_file(
         )
     )
     session.delete(file_row)
+    content_changed(session, "model", [file_row.model_id])
 
 
 @guarded_destructive_operation
@@ -525,6 +573,7 @@ def hard_delete_document(
                 allow_unverified=confirm_storage_risk,
             )
     session.delete(document)
+    content_changed(session, "document", [document.id])
 
 
 def restore_document(session: Session, document: Document) -> None:
@@ -565,6 +614,7 @@ def hard_delete_collection(
 
     purge_collection_references(session, int(collection.id))
     session.delete(collection)
+    content_changed(session, "collection", [collection.id])
 
 
 @guarded_destructive_operation
@@ -675,6 +725,7 @@ def hard_delete_model(
     # this manual DELETE already removed -> StaleDataError on commit (purging any
     # *tagged* model, including the expired-trash cron, would 500).
     session.delete(model)
+    content_changed(session, "model", [model.id])
 
 
 def hard_delete_expired_models(

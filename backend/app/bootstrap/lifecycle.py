@@ -66,6 +66,23 @@ async def _close_outbound_clients() -> None:
         await close_http_client()
     finally:
         try:
+            from app.bootstrap.optional_features import inference_available
+
+            if inference_available():
+                from app.modules.inference.query import close_queries
+                from app.modules.inference.transport import (
+                    close_client as close_inference_client,
+                )
+                from app.modules.inference.worker_pool import pool as model_workers
+                from app.runtime.model_acquisition import close as close_model_downloads
+
+                await asyncio.to_thread(close_model_downloads)
+                await asyncio.to_thread(close_queries)
+                await asyncio.to_thread(model_workers.close)
+                await asyncio.to_thread(close_inference_client)
+        except Exception:
+            logger.error("failed to close inference transport")
+        try:
             await close_provider_transport()
         except Exception as exc:
             # A provider pool is best-effort shutdown work.  Do not prevent the
@@ -308,6 +325,40 @@ def prepare_process(*, owner: bool) -> PreparedProcess:
     )
 
 
+SearchBindings = tuple[object, object]
+
+
+def bind_search() -> SearchBindings:
+    """Bind library search and its projection when inference is installed.
+
+    Every process that changes the library binds the projection, so each
+    change records what search must re-project; the ``search.*`` Jobs do the
+    projecting and indexing. Returns what was bound before, for
+    ``restore_search``.
+    """
+    from app.bootstrap.optional_features import inference_available
+    from app.db.content_search import bind_content_search
+    from app.db.projections import bind_content_projection
+
+    previous = (bind_content_search(None), bind_content_projection(None))
+    if inference_available():
+        from app.modules.search.lexical_query import LibrarySearch
+        from app.modules.search.projection import LibraryProjection
+
+        bind_content_search(LibrarySearch())
+        bind_content_projection(LibraryProjection())
+    return previous
+
+
+def restore_search(previous: SearchBindings) -> None:
+    from app.db.content_search import bind_content_search
+    from app.db.projections import bind_content_projection
+
+    search, projection = previous
+    bind_content_search(search)  # type: ignore[arg-type]
+    bind_content_projection(projection)  # type: ignore[arg-type]
+
+
 def _start_work(prepared: PreparedProcess, *, publisher) -> None:
     """Start background work unless an interrupted restore still governs.
 
@@ -339,6 +390,7 @@ async def lifespan(app: FastAPI):
     logger.info("starting %s v%s", settings.app_name, settings.app_version)
     _app_info.info({"version": settings.app_version, "name": settings.app_name})
     prepared = prepare_process(owner=True)
+    previous_search = bind_search()
     printer_provider_registry = build_provider_registry()
     app.state.printer_provider_registry = printer_provider_registry
     provider_builder = partial(get_provider_client, registry=printer_provider_registry)
@@ -370,6 +422,7 @@ async def lifespan(app: FastAPI):
     from app.bootstrap.work import stop as stop_work
     from app.modules.storage.materializer_runtime import bind_materializer
 
+    restore_search(previous_search)
     bind_materializer(None)
     logger.info("shutting down printer hub")
     await watcher.stop_all()

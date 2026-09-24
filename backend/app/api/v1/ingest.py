@@ -249,15 +249,18 @@ async def ingest_orca(
     response_model=JobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_auth)],
-    summary="Ingest a source mesh file (STL, 3MF, OBJ, STEP)",
+    summary="Ingest a source file (STL, 3MF, OBJ, STEP, DXF)",
     description=(
-        "Multipart upload of a source mesh. The file is staged and committed as "
+        "Multipart upload of a source file. The file is staged and committed as "
         "an Artifact by a background Job; geometry and a rendered thumbnail follow "
-        "as derivatives. Returns a job_id you can poll via GET /api/v1/jobs/{job_id}."
+        "as derivatives where supported. Returns a job_id you can poll via "
+        "GET /api/v1/jobs/{job_id}."
     ),
 )
 async def ingest_model(
-    file: UploadFile = UploadFileParam(..., description="The .stl, .3mf, or .obj file"),
+    file: UploadFile = UploadFileParam(
+        ..., description="A .stl, .3mf, .obj, .step, .stp, or .dxf file"
+    ),
     model_name: Optional[str] = Form(None, description="Display name for the model"),
     collection: Optional[str] = Form(
         None, description="Optional collection, e.g. 'Functional/Brackets'"

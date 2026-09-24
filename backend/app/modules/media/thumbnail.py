@@ -25,7 +25,7 @@ class ThumbnailValidationError(ValueError):
     """A decodable candidate failed the canonical thumbnail contract."""
 
 
-def to_webp(data: bytes, *, normalize: bool = True) -> bytes:
+def to_webp(data: bytes, *, normalize: bool = True, width: int | None = None) -> bytes:
     """Re-encode image bytes (PNG from slicers/rasteriser) as lossless WebP.
 
     Single conversion seam for every thumbnail write. Lossless keeps the
@@ -46,7 +46,9 @@ def to_webp(data: bytes, *, normalize: bool = True) -> bytes:
                 if img.width * img.height > _MAX_IMAGE_PIXELS:
                     raise ValueError("thumbnail_too_large")
                 img.load()
-                width = int(settings.model_thumbnail_width)
+                width = int(settings.model_thumbnail_width) if width is None else width
+                if type(width) is not int or not 320 <= width <= 1280:
+                    raise ValueError("thumbnail_width_invalid")
                 height = round(width * 3 / 4)
                 source_had_alpha = "A" in img.getbands()
                 source_is_webp = img.format == "WEBP"

@@ -7,16 +7,87 @@
  * a notification channel, and the trash purge. Each is asserted after a reload or against
  * the artefact it produced, because "the toast appeared" is not evidence anything saved.
  */
+import { existsSync } from "node:fs";
+
 import { test, expect } from "./helpers";
 import {
   backupFromAccepted,
   clickModelAction,
   createBackupViaApi,
   modelCard,
+  seedExpiredStaging,
   uploadGcodeModel,
 } from "./util";
 
 test.describe("settings", () => {
+  test("guides AI setup across screen sizes", async ({ page }, testInfo) => {
+    for (const theme of ["light", "dark"]) {
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto("/settings?section=ai-search");
+        await expect(
+          page.getByRole("heading", { name: "Where should AI Search run?" }),
+        ).toBeVisible();
+        await page.evaluate(
+          (dark) => document.documentElement.classList.toggle("dark", dark),
+          theme === "dark",
+        );
+        await expect(page.getByRole("combobox")).toHaveCount(0);
+        await page.screenshot({
+          path: testInfo.outputPath(`ai-${theme}-${width}.png`),
+          fullPage: true,
+          animations: "disabled",
+        });
+        await page.getByRole("button", { name: "Use this machine" }).click();
+        await expect(page.getByRole("button", { name: "Change location" })).toBeVisible();
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
+        ).toBeLessThanOrEqual(0);
+        await page.getByRole("button", { name: "Change location" }).click();
+        await page.getByRole("button", { name: "Connect another server" }).click();
+        await expect(page.getByRole("form", { name: "Inference server" })).toBeVisible();
+        await page.getByRole("button", { name: "Advanced AI controls" }).click();
+        await expect(
+          page.getByRole("checkbox", { name: "Enable AI Search", exact: true }),
+        ).toBeVisible();
+        await page.getByRole("button", { name: "Back to guided setup" }).click();
+        await expect(
+          page.getByRole("heading", { name: "Where should AI Search run?" }),
+        ).toBeVisible();
+      }
+    }
+  });
+
+  test("returns from advanced AI controls without searching the page", async ({
+    page,
+  }, testInfo) => {
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/settings?section=ai-search");
+      await page.getByRole("button", { name: "Connect another server" }).click();
+      await page.getByRole("button", { name: "Advanced AI controls" }).click();
+      await page
+        .getByRole("checkbox", { name: "Enable AI Search", exact: true })
+        .scrollIntoViewIfNeeded();
+      const back = page.getByRole("button", { name: "Back to guided setup" });
+      await expect(back).toBeInViewport();
+      await expect(back).toBeFocused();
+      await page.screenshot({
+        path: testInfo.outputPath(`advanced-${width}.png`),
+        animations: "disabled",
+      });
+      await page.keyboard.press("Enter");
+      await expect(
+        page.getByRole("heading", { name: "Where should AI Search run?" }),
+      ).toBeInViewport();
+      await expect(page.getByRole("button", { name: "Advanced AI controls" })).toBeFocused();
+      await page.screenshot({
+        path: testInfo.outputPath(`guided-return-${width}.png`),
+        animations: "disabled",
+      });
+    }
+  });
+
   test("create and revoke an API key", async ({ page }) => {
     const keyName = `e2e-key-${Date.now()}`;
     await page.goto("/settings");
@@ -532,25 +603,36 @@ test.describe("settings", () => {
   });
 
   test("requires explicit cleanup from storage insights", async ({ page }) => {
-    await page.goto("/settings");
-    await page.getByRole("button", { name: "Storage", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Storage insights" })).toBeVisible();
-    const [measurement] = await Promise.all([
-      page.waitForResponse(
-        (response) =>
-          response.url().endsWith("/api/v1/storage/inventory/sample") &&
-          response.request().method() === "POST",
-      ),
-      page.getByRole("button", { name: "Refresh measurement" }).click(),
-    ]);
-    expect(measurement.status()).toBe(200);
-    await expect(page.getByText(/Provider measurement:.*Capacity evidence is known/)).toBeVisible();
-    await page.getByRole("button", { name: "Clean up expired staging" }).click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("Uncertain files are retained");
-    await dialog.getByRole("button", { name: "Clean up", exact: true }).click();
-    await expect(
-      page.getByRole("status").filter({ hasText: "expired leases cleared" }),
-    ).toBeVisible();
+    const staged = await seedExpiredStaging();
+    try {
+      await page.goto("/settings?section=storage");
+      await expect(page.getByRole("heading", { name: "Storage insights" })).toBeVisible();
+      const [measurement] = await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.url().endsWith("/api/v1/storage/inventory/sample") &&
+            response.request().method() === "POST",
+        ),
+        page.getByRole("button", { name: "Refresh measurement" }).click(),
+      ]);
+      expect(measurement.status()).toBe(200);
+      await expect(
+        page.getByText(/Provider measurement:.*Capacity evidence is known/),
+      ).toBeVisible();
+      expect(existsSync(staged.path)).toBe(true);
+      await page.getByRole("button", { name: "Clean up expired staging", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("Uncertain files are retained");
+      // Opening the confirmation must not remove bytes.
+      expect(existsSync(staged.path)).toBe(true);
+      await dialog.getByRole("button", { name: "Clean up", exact: true }).click();
+      await expect(
+        page.getByRole("status").filter({ hasText: "expired leases cleared" }),
+      ).toBeVisible();
+      await expect.poll(() => existsSync(staged.path)).toBe(false);
+    } finally {
+      const dismissed = await page.request.delete(`/api/v1/inbox/${staged.itemId}`);
+      expect(dismissed.ok()).toBe(true);
+    }
   });
 });

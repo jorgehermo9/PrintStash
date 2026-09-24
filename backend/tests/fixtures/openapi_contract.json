@@ -120,6 +120,72 @@
         "title": "ApiKeyRead",
         "type": "object"
       },
+      "ArchiveEntryRead": {
+        "properties": {
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "file_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Type"
+          },
+          "is_image": {
+            "default": false,
+            "title": "Is Image",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entry_id",
+          "name",
+          "size_bytes"
+        ],
+        "title": "ArchiveEntryRead",
+        "type": "object"
+      },
+      "ArchiveManifest": {
+        "description": "Returned after staging an archive; entries are selectable for import.",
+        "properties": {
+          "archive_id": {
+            "title": "Archive Id",
+            "type": "string"
+          },
+          "archive_name": {
+            "title": "Archive Name",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ArchiveEntryRead"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "archive_id",
+          "archive_name",
+          "entries"
+        ],
+        "title": "ArchiveManifest",
+        "type": "object"
+      },
       "ArchiveSelectRequest": {
         "description": "Body for POST /ingest/archive/{archive_id}/select.",
         "properties": {
@@ -1467,6 +1533,21 @@
         "title": "Body_import_library_archive_api_v1_models_library_import_post",
         "type": "object"
       },
+      "Body_ingest_archive_api_v1_ingest_archive_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "description": "The .zip archive",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_ingest_archive_api_v1_ingest_archive_post",
+        "type": "object"
+      },
       "Body_ingest_model_api_v1_ingest_model_post": {
         "properties": {
           "collection": {
@@ -1483,7 +1564,7 @@
           },
           "file": {
             "contentMediaType": "application/octet-stream",
-            "description": "The .stl, .3mf, or .obj file",
+            "description": "A .stl, .3mf, .obj, .step, .stp, or .dxf file",
             "title": "File",
             "type": "string"
           },
@@ -1498,6 +1579,18 @@
             ],
             "description": "Display name for the model",
             "title": "Model Name"
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sha256 for dedup",
+            "title": "Source Hash"
           },
           "tags": {
             "anyOf": [
@@ -2489,19 +2582,6 @@
         "title": "CacheSettingsRead",
         "type": "object"
       },
-      "CancelQueued": {
-        "properties": {
-          "definition": {
-            "title": "Definition",
-            "type": "string"
-          }
-        },
-        "required": [
-          "definition"
-        ],
-        "title": "CancelQueued",
-        "type": "object"
-      },
       "CandidateSelection": {
         "additionalProperties": false,
         "properties": {
@@ -2536,6 +2616,195 @@
           }
         },
         "title": "CandidateSelection",
+        "type": "object"
+      },
+      "CaptionPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "edit",
+              "dismiss",
+              "reset",
+              "generate"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "version_token": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Token"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "CaptionPatch",
+        "type": "object"
+      },
+      "CaptionRead": {
+        "properties": {
+          "can_edit": {
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "can_generate": {
+            "title": "Can Generate",
+            "type": "boolean"
+          },
+          "edited_by": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited By"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "model_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Revision"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "running",
+                  "ready",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "recipe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "generated",
+                  "edited",
+                  "dismissed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Token"
+          }
+        },
+        "required": [
+          "can_edit",
+          "can_generate"
+        ],
+        "title": "CaptionRead",
         "type": "object"
       },
       "CaptureFieldDraft": {
@@ -3625,167 +3894,6 @@
         "title": "DecisionRequest",
         "type": "object"
       },
-      "DefinitionRead": {
-        "properties": {
-          "completed": {
-            "title": "Completed",
-            "type": "integer"
-          },
-          "derivative_kinds": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Derivative Kinds",
-            "type": "array"
-          },
-          "failed": {
-            "title": "Failed",
-            "type": "integer"
-          },
-          "interrupted": {
-            "title": "Interrupted",
-            "type": "integer"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          },
-          "lane": {
-            "title": "Lane",
-            "type": "string"
-          },
-          "last_finished_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Finished At"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "next_due_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Due At"
-          },
-          "queued": {
-            "title": "Queued",
-            "type": "integer"
-          },
-          "running": {
-            "title": "Running",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "name",
-          "label",
-          "lane",
-          "queued",
-          "running",
-          "interrupted",
-          "failed",
-          "completed"
-        ],
-        "title": "DefinitionRead",
-        "type": "object"
-      },
-      "DerivativeRead": {
-        "description": "One derivative kind of one Artifact at the current recipe.\n\n``pending`` means no attempt exists yet at the current recipe; every value\nthe derivative would supply is unknown until it is ``ready``.",
-        "properties": {
-          "attempts": {
-            "default": 0,
-            "title": "Attempts",
-            "type": "integer"
-          },
-          "failure_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Failure Reason"
-          },
-          "kind": {
-            "title": "Kind",
-            "type": "string"
-          },
-          "recipe_version": {
-            "title": "Recipe Version",
-            "type": "integer"
-          },
-          "retryable": {
-            "default": false,
-            "title": "Retryable",
-            "type": "boolean"
-          },
-          "state": {
-            "enum": [
-              "pending",
-              "queued",
-              "running",
-              "ready",
-              "skipped",
-              "failed",
-              "cancelled"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          }
-        },
-        "required": [
-          "kind",
-          "recipe_version",
-          "state"
-        ],
-        "title": "DerivativeRead",
-        "type": "object"
-      },
-      "DerivativeRegenerate": {
-        "description": "``missing`` fills gaps; ``all`` re-derives every Artifact of the kind.",
-        "properties": {
-          "mode": {
-            "default": "missing",
-            "enum": [
-              "missing",
-              "all"
-            ],
-            "title": "Mode",
-            "type": "string"
-          }
-        },
-        "title": "DerivativeRegenerate",
-        "type": "object"
-      },
       "DocumentCreate": {
         "additionalProperties": false,
         "description": "Create a markdown document. Binary docs come in via the upload endpoint.",
@@ -4066,57 +4174,267 @@
         "title": "DocumentUpdate",
         "type": "object"
       },
-      "ExecutorRead": {
+      "DownloadRead": {
         "properties": {
-          "app_version": {
-            "title": "App Version",
-            "type": "string"
-          },
-          "executor_id": {
-            "title": "Executor Id",
-            "type": "string"
-          },
-          "heartbeat_at": {
-            "format": "date-time",
-            "title": "Heartbeat At",
-            "type": "string"
-          },
-          "hostname": {
-            "title": "Hostname",
-            "type": "string"
-          },
-          "lanes": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Lanes",
-            "type": "array"
-          },
-          "role": {
-            "title": "Role",
-            "type": "string"
-          },
-          "stale": {
-            "title": "Stale",
-            "type": "boolean"
-          },
-          "started_at": {
-            "format": "date-time",
-            "title": "Started At",
+          "job_id": {
+            "title": "Job Id",
             "type": "string"
           }
         },
         "required": [
-          "executor_id",
-          "role",
-          "hostname",
-          "app_version",
-          "lanes",
-          "started_at",
-          "heartbeat_at",
-          "stale"
+          "job_id"
         ],
-        "title": "ExecutorRead",
+        "title": "DownloadRead",
+        "type": "object"
+      },
+      "EndpointProposal": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "default": "",
+            "format": "password",
+            "maxLength": 8192,
+            "title": "Api Key",
+            "type": "string",
+            "writeOnly": true
+          },
+          "base_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "headers": {
+            "additionalProperties": {
+              "format": "password",
+              "type": "string",
+              "writeOnly": true
+            },
+            "maxProperties": 16,
+            "title": "Headers",
+            "type": "object"
+          },
+          "inherit_credentials_from_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inherit Credentials From Id"
+          },
+          "kind": {
+            "default": "embedding",
+            "enum": [
+              "embedding",
+              "chat"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "max_input_characters": {
+            "default": 16384,
+            "maximum": 16384.0,
+            "minimum": 128.0,
+            "title": "Max Input Characters",
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "model_repo": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Repo"
+          },
+          "native_dimension": {
+            "anyOf": [
+              {
+                "maximum": 4096.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Dimension"
+          },
+          "prefer_responses": {
+            "default": false,
+            "title": "Prefer Responses",
+            "type": "boolean"
+          },
+          "revision": {
+            "default": "configured-v1",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Revision",
+            "type": "string"
+          },
+          "supports_images": {
+            "default": false,
+            "title": "Supports Images",
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "default": 15,
+            "exclusiveMinimum": 0.0,
+            "maximum": 120.0,
+            "title": "Timeout Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "base_url",
+          "model"
+        ],
+        "title": "EndpointProposal",
+        "type": "object"
+      },
+      "EndpointRead": {
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "config_hash": {
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "dialect": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect"
+          },
+          "guarantee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guarantee"
+          },
+          "has_credentials": {
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "header_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Header Names",
+            "type": "array"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "max_input_characters": {
+            "title": "Max Input Characters",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "model_repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Repo"
+          },
+          "mrl_dimensions": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Mrl Dimensions",
+            "type": "array"
+          },
+          "native_dimension": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Dimension"
+          },
+          "prefer_responses": {
+            "title": "Prefer Responses",
+            "type": "boolean"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "supports_images": {
+            "title": "Supports Images",
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "title": "Timeout Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "host",
+          "base_url",
+          "model",
+          "revision",
+          "model_repo",
+          "mrl_dimensions",
+          "config_hash",
+          "native_dimension",
+          "supports_images",
+          "dialect",
+          "guarantee",
+          "has_credentials",
+          "header_names",
+          "timeout_seconds",
+          "max_input_characters",
+          "prefer_responses"
+        ],
+        "title": "EndpointRead",
         "type": "object"
       },
       "ExternalLibraryCollectionMode": {
@@ -5843,7 +6161,8 @@
           "3mf",
           "gcode",
           "obj",
-          "step"
+          "step",
+          "dxf"
         ],
         "title": "FileType",
         "type": "string"
@@ -6051,6 +6370,406 @@
         "title": "GcApprovalRequest",
         "type": "object"
       },
+      "GenerationAction": {
+        "additionalProperties": false,
+        "properties": {
+          "version_token": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Version Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version_token"
+        ],
+        "title": "GenerationAction",
+        "type": "object"
+      },
+      "GenerationEstimate": {
+        "properties": {
+          "budget_bytes": {
+            "title": "Budget Bytes",
+            "type": "integer"
+          },
+          "estimated_bytes": {
+            "title": "Estimated Bytes",
+            "type": "integer"
+          },
+          "estimated_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Seconds"
+          },
+          "existing_bytes": {
+            "title": "Existing Bytes",
+            "type": "integer"
+          },
+          "fits_budget": {
+            "title": "Fits Budget",
+            "type": "boolean"
+          },
+          "passages": {
+            "title": "Passages",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "passages",
+          "estimated_bytes",
+          "existing_bytes",
+          "budget_bytes",
+          "fits_budget",
+          "estimated_seconds"
+        ],
+        "title": "GenerationEstimate",
+        "type": "object"
+      },
+      "GenerationProposal": {
+        "additionalProperties": false,
+        "properties": {
+          "aggregation": {
+            "default": "mean",
+            "enum": [
+              "mean",
+              "max"
+            ],
+            "title": "Aggregation",
+            "type": "string"
+          },
+          "auto_activate": {
+            "default": true,
+            "title": "Auto Activate",
+            "type": "boolean"
+          },
+          "document_prefix": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Prefix"
+          },
+          "endpoint_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Id"
+          },
+          "index_backend": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "numpy",
+              "sqlite_vec",
+              "pgvector"
+            ],
+            "title": "Index Backend",
+            "type": "string"
+          },
+          "index_dimension": {
+            "anyOf": [
+              {
+                "maximum": 4096.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Dimension"
+          },
+          "local_model_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Model Id"
+          },
+          "passage_recipe_version": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passage Recipe Version"
+          },
+          "profile": {
+            "default": "semantic_text",
+            "enum": [
+              "semantic_text",
+              "thumbnail",
+              "multiview",
+              "point_cloud"
+            ],
+            "title": "Profile",
+            "type": "string"
+          },
+          "quantization": {
+            "default": "float32",
+            "enum": [
+              "float32",
+              "int8",
+              "binary"
+            ],
+            "title": "Quantization",
+            "type": "string"
+          },
+          "query_prefix": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Prefix"
+          }
+        },
+        "title": "GenerationProposal",
+        "type": "object"
+      },
+      "GenerationRead": {
+        "properties": {
+          "config_hash": {
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "copied": {
+            "title": "Copied",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "effective_backend": {
+            "title": "Effective Backend",
+            "type": "string"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "integer"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "estimated_bytes": {
+            "title": "Estimated Bytes",
+            "type": "integer"
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Seconds"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "index_backend": {
+            "title": "Index Backend",
+            "type": "string"
+          },
+          "index_dimension": {
+            "title": "Index Dimension",
+            "type": "integer"
+          },
+          "index_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Error"
+          },
+          "index_state": {
+            "title": "Index State",
+            "type": "string"
+          },
+          "indexed": {
+            "title": "Indexed",
+            "type": "integer"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "modality": {
+            "title": "Modality",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "native_dimension": {
+            "title": "Native Dimension",
+            "type": "integer"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "quantization": {
+            "title": "Quantization",
+            "type": "string"
+          },
+          "quarantined": {
+            "title": "Quarantined",
+            "type": "integer"
+          },
+          "retain_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retain Until"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "truncated_count": {
+            "title": "Truncated Count",
+            "type": "integer"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "version_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Token"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "phase",
+          "version_token",
+          "modality",
+          "profile",
+          "model",
+          "config_hash",
+          "native_dimension",
+          "index_dimension",
+          "quantization",
+          "index_backend",
+          "effective_backend",
+          "index_state",
+          "index_error",
+          "error_code",
+          "processed",
+          "copied",
+          "truncated_count",
+          "eligible",
+          "indexed",
+          "quarantined",
+          "estimated_bytes",
+          "job_id",
+          "verified_at",
+          "retain_until",
+          "created_at",
+          "last_activity_at",
+          "eta_seconds"
+        ],
+        "title": "GenerationRead",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -6081,6 +6800,29 @@
           }
         },
         "title": "HomeAxes",
+        "type": "object"
+      },
+      "ImportFailedItem": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "reason"
+        ],
+        "title": "ImportFailedItem",
         "type": "object"
       },
       "ImportedPrintJobRead": {
@@ -6285,6 +7027,17 @@
             "title": "Attempt Count",
             "type": "integer"
           },
+          "background_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Job Id"
+          },
           "completed_at": {
             "anyOf": [
               {
@@ -6337,17 +7090,6 @@
           "id": {
             "title": "Id",
             "type": "integer"
-          },
-          "job_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Job Id"
           },
           "manifest": {
             "anyOf": [
@@ -6629,6 +7371,442 @@
         "title": "InboxSourceKind",
         "type": "string"
       },
+      "InferenceModelRead": {
+        "properties": {
+          "curated": {
+            "title": "Curated",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "installed": {
+            "title": "Installed",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "License"
+          },
+          "modality": {
+            "title": "Modality",
+            "type": "string"
+          },
+          "mrl_dimensions": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Mrl Dimensions",
+            "type": "array"
+          },
+          "native_dimension": {
+            "title": "Native Dimension",
+            "type": "integer"
+          },
+          "referenced": {
+            "title": "Referenced",
+            "type": "boolean"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "runtime_available": {
+            "title": "Runtime Available",
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "revision",
+          "repository",
+          "languages",
+          "license",
+          "modality",
+          "native_dimension",
+          "size_bytes",
+          "installed",
+          "curated",
+          "referenced",
+          "runtime_available"
+        ],
+        "title": "InferenceModelRead",
+        "type": "object"
+      },
+      "IngestJobStatus": {
+        "properties": {
+          "committed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed At"
+          },
+          "completion": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion"
+          },
+          "current_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Item"
+          },
+          "deduplicated": {
+            "default": 0,
+            "title": "Deduplicated",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "failed_items": {
+            "items": {
+              "$ref": "#/components/schemas/ImportFailedItem"
+            },
+            "title": "Failed Items",
+            "type": "array"
+          },
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
+          "fingerprint_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "ready",
+                  "partial",
+                  "unsupported",
+                  "failed",
+                  "stale",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint Status"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "ingest",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "processed": {
+            "default": 0,
+            "title": "Processed",
+            "type": "integer"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "skipped": {
+            "default": 0,
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "enum": [
+                  "resolving",
+                  "downloading",
+                  "inspecting",
+                  "extracting",
+                  "hashing",
+                  "ingesting",
+                  "thumbnailing",
+                  "completed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "succeeded": {
+            "default": 0,
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "thumbnail_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Reason"
+          },
+          "thumbnail_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "generated",
+                  "fallback_generated",
+                  "skipped",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Status"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "total_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Steps"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "job_id",
+          "state"
+        ],
+        "title": "IngestJobStatus",
+        "type": "object"
+      },
+      "IngestResponse": {
+        "description": "Returned immediately from POST /ingest/orca.",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "message": {
+            "default": "ingestion queued",
+            "title": "Message",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "state"
+        ],
+        "title": "IngestResponse",
+        "type": "object"
+      },
       "InventoryBucket": {
         "properties": {
           "category": {
@@ -6689,61 +7867,6 @@
         "title": "InventoryReport",
         "type": "object"
       },
-      "JobAccepted": {
-        "description": "Returned by every endpoint that accepts background work.",
-        "properties": {
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          },
-          "message": {
-            "default": "queued",
-            "title": "Message",
-            "type": "string"
-          },
-          "state": {
-            "default": "queued",
-            "enum": [
-              "queued",
-              "running",
-              "interrupted",
-              "completed",
-              "failed",
-              "cancelled"
-            ],
-            "title": "State",
-            "type": "string"
-          }
-        },
-        "required": [
-          "job_id"
-        ],
-        "title": "JobAccepted",
-        "type": "object"
-      },
-      "JobFailedItem": {
-        "properties": {
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "reason": {
-            "title": "Reason",
-            "type": "string"
-          },
-          "retryable": {
-            "default": false,
-            "title": "Retryable",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "name",
-          "reason"
-        ],
-        "title": "JobFailedItem",
-        "type": "object"
-      },
       "JobPriority": {
         "enum": [
           "low",
@@ -6752,371 +7875,6 @@
         ],
         "title": "JobPriority",
         "type": "string"
-      },
-      "JobStatus": {
-        "description": "One background Job: what it is doing, and what it did.\n\n``kind`` is the job definition. Counts and ``failed_items`` are filled by\ndefinitions that process several items (an archive, a collection); a\nsingle-item job reports ``processed``/``total`` of 1. Nothing here is ever\nread back as the job's input.",
-        "properties": {
-          "attempts": {
-            "default": 0,
-            "title": "Attempts",
-            "type": "integer"
-          },
-          "committed_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Committed At"
-          },
-          "completion": {
-            "anyOf": [
-              {
-                "enum": [
-                  "complete",
-                  "partial"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completion"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "current_item": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Item"
-          },
-          "deduplicated": {
-            "default": 0,
-            "title": "Deduplicated",
-            "type": "integer"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "failed": {
-            "default": 0,
-            "title": "Failed",
-            "type": "integer"
-          },
-          "failed_items": {
-            "items": {
-              "$ref": "#/components/schemas/JobFailedItem"
-            },
-            "title": "Failed Items",
-            "type": "array"
-          },
-          "file_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File Id"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          },
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          },
-          "kind": {
-            "title": "Kind",
-            "type": "string"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "model_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Id"
-          },
-          "priority": {
-            "default": "interactive",
-            "enum": [
-              "interactive",
-              "backfill"
-            ],
-            "title": "Priority",
-            "type": "string"
-          },
-          "processed": {
-            "default": 0,
-            "title": "Processed",
-            "type": "integer"
-          },
-          "progress": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Progress"
-          },
-          "resubmits": {
-            "default": 0,
-            "title": "Resubmits",
-            "type": "integer"
-          },
-          "result": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Result"
-          },
-          "retryable": {
-            "default": false,
-            "title": "Retryable",
-            "type": "boolean"
-          },
-          "skipped": {
-            "default": 0,
-            "title": "Skipped",
-            "type": "integer"
-          },
-          "stage": {
-            "anyOf": [
-              {
-                "enum": [
-                  "resolving",
-                  "downloading",
-                  "inspecting",
-                  "extracting",
-                  "hashing",
-                  "ingesting",
-                  "completed"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stage"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "state": {
-            "enum": [
-              "queued",
-              "running",
-              "interrupted",
-              "completed",
-              "failed",
-              "cancelled"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "step": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Step"
-          },
-          "succeeded": {
-            "default": 0,
-            "title": "Succeeded",
-            "type": "integer"
-          },
-          "total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total"
-          },
-          "total_steps": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Steps"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          }
-        },
-        "required": [
-          "job_id",
-          "kind",
-          "state"
-        ],
-        "title": "JobStatus",
-        "type": "object"
-      },
-      "LaneRead": {
-        "properties": {
-          "concurrency": {
-            "title": "Concurrency",
-            "type": "integer"
-          },
-          "default_concurrency": {
-            "title": "Default Concurrency",
-            "type": "integer"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "overridden": {
-            "title": "Overridden",
-            "type": "boolean"
-          },
-          "partitioned": {
-            "title": "Partitioned",
-            "type": "boolean"
-          },
-          "queued": {
-            "title": "Queued",
-            "type": "integer"
-          },
-          "running": {
-            "title": "Running",
-            "type": "integer"
-          },
-          "scope": {
-            "enum": [
-              "worker",
-              "global"
-            ],
-            "title": "Scope",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "concurrency",
-          "default_concurrency",
-          "overridden",
-          "scope",
-          "partitioned",
-          "queued",
-          "running"
-        ],
-        "title": "LaneRead",
-        "type": "object"
-      },
-      "LaneUpdate": {
-        "properties": {
-          "concurrency": {
-            "anyOf": [
-              {
-                "maximum": 64.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Concurrency"
-          }
-        },
-        "title": "LaneUpdate",
-        "type": "object"
       },
       "LegacyInboxManifestRead": {
         "additionalProperties": true,
@@ -9442,6 +10200,290 @@
         "title": "ModelFamilyRead",
         "type": "object"
       },
+      "ModelFilters": {
+        "additionalProperties": false,
+        "description": "Canonical additive filter contract shared by browse, facets, and views.",
+        "properties": {
+          "browse": {
+            "default": "models",
+            "enum": [
+              "models",
+              "families_collapsed"
+            ],
+            "title": "Browse",
+            "type": "string"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "direct": {
+            "default": false,
+            "title": "Direct",
+            "type": "boolean"
+          },
+          "family_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family Id"
+          },
+          "family_role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "canonical",
+                  "identical",
+                  "rescaled",
+                  "mirrored",
+                  "repaired",
+                  "print_variant"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family Role"
+          },
+          "favorites": {
+            "default": false,
+            "title": "Favorites",
+            "type": "boolean"
+          },
+          "file_type": {
+            "items": {
+              "$ref": "#/components/schemas/FileType"
+            },
+            "title": "File Type",
+            "type": "array"
+          },
+          "has_similar_candidates": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Similar Candidates"
+          },
+          "in_family": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Family"
+          },
+          "material_type": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Material Type",
+            "type": "array"
+          },
+          "print_duration_max_s": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exclusive actual PrintJob duration: under three hours is 10800.",
+            "title": "Print Duration Max S"
+          },
+          "print_duration_min_s": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inclusive actual PrintJob duration; null durations do not match.",
+            "title": "Print Duration Min S"
+          },
+          "print_outcome": {
+            "items": {
+              "$ref": "#/components/schemas/PrintJobState"
+            },
+            "title": "Print Outcome",
+            "type": "array"
+          },
+          "printed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printed"
+          },
+          "printed_after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inclusive finished_at lower bound; UTC when no offset is supplied.",
+            "title": "Printed After"
+          },
+          "printed_before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exclusive finished_at upper bound.",
+            "title": "Printed Before"
+          },
+          "printer_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printer Id"
+          },
+          "printer_model": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Printer Model",
+            "type": "array"
+          },
+          "printer_presence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "any",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printer Presence"
+          },
+          "q": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q"
+          },
+          "revision_status": {
+            "items": {
+              "$ref": "#/components/schemas/FileRevisionStatus"
+            },
+            "title": "Revision Status",
+            "type": "array"
+          },
+          "slicer_name": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Slicer Name",
+            "type": "array"
+          },
+          "storage": {
+            "items": {
+              "enum": [
+                "vault",
+                "external"
+              ],
+              "type": "string"
+            },
+            "title": "Storage",
+            "type": "array"
+          },
+          "tag": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Tag",
+            "type": "array"
+          },
+          "uploaded_after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uploaded After"
+          },
+          "uploaded_before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uploaded Before"
+          }
+        },
+        "title": "ModelFilters",
+        "type": "object"
+      },
       "ModelListItem": {
         "properties": {
           "collection": {
@@ -10145,6 +11187,14 @@
             ],
             "title": "Thumbnail Url"
           },
+          "trashed_source_files": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TrashedSourceFileRead"
+            },
+            "title": "Trashed Source Files",
+            "type": "array"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -10180,6 +11230,7 @@
       },
       "ModelSort": {
         "enum": [
+          "relevance",
           "date-desc",
           "date-asc",
           "name-asc",
@@ -10349,6 +11400,24 @@
           }
         },
         "title": "ModelUpdate",
+        "type": "object"
+      },
+      "ModelValidationRead": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "ready"
+        ],
+        "title": "ModelValidationRead",
         "type": "object"
       },
       "MoonrakerConfigRead": {
@@ -11239,6 +12308,71 @@
           "name"
         ],
         "title": "OutlinerModelRead",
+        "type": "object"
+      },
+      "ParseSearchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "maxLength": 512,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ParseSearchRequest",
+        "type": "object"
+      },
+      "ParsedSearch": {
+        "properties": {
+          "filters": {
+            "$ref": "#/components/schemas/ModelFilters"
+          },
+          "parsed": {
+            "default": false,
+            "title": "Parsed",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "residual_query": {
+            "title": "Residual Query",
+            "type": "string"
+          },
+          "sort": {
+            "default": "relevance",
+            "enum": [
+              "relevance",
+              "date-desc",
+              "date-asc",
+              "name-asc",
+              "name-desc",
+              "printed-desc"
+            ],
+            "title": "Sort",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "residual_query",
+          "timezone"
+        ],
+        "title": "ParsedSearch",
         "type": "object"
       },
       "PlanRequest": {
@@ -14628,6 +15762,34 @@
             "title": "Material Type",
             "type": "array"
           },
+          "print_duration_max_s": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exclusive actual PrintJob duration: under three hours is 10800.",
+            "title": "Print Duration Max S"
+          },
+          "print_duration_min_s": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inclusive actual PrintJob duration; null durations do not match.",
+            "title": "Print Duration Min S"
+          },
           "print_outcome": {
             "items": {
               "$ref": "#/components/schemas/PrintJobState"
@@ -14645,6 +15807,32 @@
               }
             ],
             "title": "Printed"
+          },
+          "printed_after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inclusive finished_at lower bound; UTC when no offset is supplied.",
+            "title": "Printed After"
+          },
+          "printed_before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exclusive finished_at upper bound.",
+            "title": "Printed Before"
           },
           "printer_id": {
             "anyOf": [
@@ -14684,7 +15872,7 @@
           "q": {
             "anyOf": [
               {
-                "maxLength": 255,
+                "maxLength": 512,
                 "type": "string"
               },
               {
@@ -14707,6 +15895,16 @@
             "maxItems": 64,
             "title": "Slicer Name",
             "type": "array"
+          },
+          "sort": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSort"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "storage": {
             "items": {
@@ -14819,6 +16017,121 @@
         "title": "SavedViewUpdate",
         "type": "object"
       },
+      "SearchEvidence": {
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "leg": {
+            "default": "lexical",
+            "title": "Leg",
+            "type": "string"
+          },
+          "ranges": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Ranges",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "text"
+        ],
+        "title": "SearchEvidence",
+        "type": "object"
+      },
+      "SearchPreferencesPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "nl_filters_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nl Filters Enabled"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "title": "SearchPreferencesPatch",
+        "type": "object"
+      },
+      "SearchPreferencesRead": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "effective_timezone": {
+            "title": "Effective Timezone",
+            "type": "string"
+          },
+          "endpoint_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Host"
+          },
+          "nl_filters_enabled": {
+            "default": false,
+            "title": "Nl Filters Enabled",
+            "type": "boolean"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "effective_timezone",
+          "available"
+        ],
+        "title": "SearchPreferencesRead",
+        "type": "object"
+      },
       "SearchRequest": {
         "additionalProperties": false,
         "properties": {
@@ -14870,6 +16183,355 @@
           }
         },
         "title": "SearchRequest",
+        "type": "object"
+      },
+      "SearchResponse": {
+        "properties": {
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded",
+            "type": "array"
+          },
+          "generations": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Generations",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "leg_errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Leg Errors",
+            "type": "object"
+          },
+          "legs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "lexical_backend": {
+            "enum": [
+              "fts5",
+              "postgres_bm25",
+              "ranked_like"
+            ],
+            "title": "Lexical Backend",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "outcome": {
+            "default": "no_results",
+            "enum": [
+              "results",
+              "no_results",
+              "no_strong_matches"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "semantic_ready": {
+            "default": false,
+            "title": "Semantic Ready",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "lexical_backend"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
+      },
+      "SearchResult": {
+        "properties": {
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/SearchEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "href": {
+            "title": "Href",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelListItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "integer"
+          },
+          "subject_type": {
+            "$ref": "#/components/schemas/SubjectType"
+          }
+        },
+        "required": [
+          "subject_type",
+          "subject_id",
+          "name",
+          "href",
+          "evidence"
+        ],
+        "title": "SearchResult",
+        "type": "object"
+      },
+      "SearchSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "captions_enabled": {
+            "title": "Captions Enabled",
+            "type": "boolean"
+          },
+          "chat_endpoint_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Endpoint Id"
+          },
+          "download_enabled": {
+            "title": "Download Enabled",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "lexical_backend": {
+            "enum": [
+              "auto",
+              "ranked_like"
+            ],
+            "title": "Lexical Backend",
+            "type": "string"
+          },
+          "lexical_weight": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 10.0,
+            "title": "Lexical Weight",
+            "type": "number"
+          },
+          "local_models_enabled": {
+            "title": "Local Models Enabled",
+            "type": "boolean"
+          },
+          "max_index_bytes": {
+            "default": 2147483648,
+            "maximum": 1099511627776.0,
+            "minimum": 1048576.0,
+            "title": "Max Index Bytes",
+            "type": "integer"
+          },
+          "nl_filters_enabled": {
+            "title": "Nl Filters Enabled",
+            "type": "boolean"
+          },
+          "query_timeout_seconds": {
+            "maximum": 30.0,
+            "minimum": 0.05,
+            "title": "Query Timeout Seconds",
+            "type": "number"
+          },
+          "rollback_retention_hours": {
+            "default": 24,
+            "maximum": 720.0,
+            "minimum": 1.0,
+            "title": "Rollback Retention Hours",
+            "type": "integer"
+          },
+          "rrf_k": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rrf K",
+            "type": "integer"
+          },
+          "semantic_floor": {
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Semantic Floor",
+            "type": "number"
+          },
+          "semantic_floors": {
+            "maxProperties": 64,
+            "patternProperties": {
+              "^[0-9a-f]{64}$": {
+                "maximum": 1.0,
+                "minimum": -1.0,
+                "type": "number"
+              }
+            },
+            "title": "Semantic Floors",
+            "type": "object"
+          },
+          "semantic_weight": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 10.0,
+            "title": "Semantic Weight",
+            "type": "number"
+          },
+          "send_query_images": {
+            "title": "Send Query Images",
+            "type": "boolean"
+          },
+          "send_rendered_images": {
+            "title": "Send Rendered Images",
+            "type": "boolean"
+          },
+          "sparse_expansion_enabled": {
+            "default": false,
+            "title": "Sparse Expansion Enabled",
+            "type": "boolean"
+          },
+          "sparse_model_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sparse Model Id"
+          },
+          "timezone": {
+            "default": "UTC",
+            "description": "Instance calendar timezone; personal preference takes precedence.",
+            "maxLength": 128,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "title": "SearchSettings",
+        "type": "object"
+      },
+      "SearchSettingsRead": {
+        "properties": {
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/EndpointRead"
+            },
+            "title": "Endpoints",
+            "type": "array"
+          },
+          "environment_endpoints": {
+            "items": {
+              "enum": [
+                "embedding",
+                "chat"
+              ],
+              "type": "string"
+            },
+            "title": "Environment Endpoints",
+            "type": "array"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SearchSettings"
+          }
+        },
+        "required": [
+          "settings",
+          "endpoints"
+        ],
+        "title": "SearchSettingsRead",
+        "type": "object"
+      },
+      "SearchStatus": {
+        "properties": {
+          "backlog": {
+            "default": false,
+            "title": "Backlog",
+            "type": "boolean"
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "generations": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Generations",
+            "type": "array"
+          },
+          "legs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "remote_hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Remote Hosts",
+            "type": "array"
+          },
+          "semantic_ready": {
+            "title": "Semantic Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "semantic_ready",
+          "legs",
+          "generations"
+        ],
+        "title": "SearchStatus",
         "type": "object"
       },
       "SendToPrinter": {
@@ -16823,6 +18485,16 @@
         "title": "StorageUsageRead",
         "type": "object"
       },
+      "SubjectType": {
+        "enum": [
+          "model",
+          "collection",
+          "multipart_model",
+          "document"
+        ],
+        "title": "SubjectType",
+        "type": "string"
+      },
       "TagCreate": {
         "additionalProperties": false,
         "properties": {
@@ -17090,6 +18762,24 @@
           "deleted_at"
         ],
         "title": "TrashedModelRead",
+        "type": "object"
+      },
+      "TrashedSourceFileRead": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "original_filename"
+        ],
+        "title": "TrashedSourceFileRead",
         "type": "object"
       },
       "UrlIngestRequest": {
@@ -18485,51 +20175,6 @@
         ],
         "title": "VolumeEvidence",
         "type": "object"
-      },
-      "WorkOverview": {
-        "properties": {
-          "definitions": {
-            "items": {
-              "$ref": "#/components/schemas/DefinitionRead"
-            },
-            "title": "Definitions",
-            "type": "array"
-          },
-          "executors": {
-            "items": {
-              "$ref": "#/components/schemas/ExecutorRead"
-            },
-            "title": "Executors",
-            "type": "array"
-          },
-          "failed_derivatives": {
-            "title": "Failed Derivatives",
-            "type": "integer"
-          },
-          "failed_jobs": {
-            "items": {
-              "$ref": "#/components/schemas/JobStatus"
-            },
-            "title": "Failed Jobs",
-            "type": "array"
-          },
-          "lanes": {
-            "items": {
-              "$ref": "#/components/schemas/LaneRead"
-            },
-            "title": "Lanes",
-            "type": "array"
-          }
-        },
-        "required": [
-          "lanes",
-          "definitions",
-          "executors",
-          "failed_jobs",
-          "failed_derivatives"
-        ],
-        "title": "WorkOverview",
-        "type": "object"
       }
     },
     "securitySchemes": {
@@ -19135,196 +20780,6 @@
         "summary": "Reset User Password",
         "tags": [
           "admin"
-        ]
-      }
-    },
-    "/api/v1/admin/work": {
-      "get": {
-        "operationId": "overview_api_v1_admin_work_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkOverview"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Background work overview",
-        "tags": [
-          "jobs"
-        ]
-      }
-    },
-    "/api/v1/admin/work/cancel-queued": {
-      "post": {
-        "operationId": "cancel_queued_api_v1_admin_work_cancel_queued_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CancelQueued"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Cancel Queued Api V1 Admin Work Cancel Queued Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Cancel every queued Job of one definition",
-        "tags": [
-          "jobs"
-        ]
-      }
-    },
-    "/api/v1/admin/work/derivatives/{kind}/regenerate": {
-      "post": {
-        "operationId": "regenerate_api_v1_admin_work_derivatives__kind__regenerate_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "kind",
-            "required": true,
-            "schema": {
-              "title": "Kind",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DerivativeRegenerate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Regenerate Api V1 Admin Work Derivatives  Kind  Regenerate Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Re-derive one derivative kind across the library",
-        "tags": [
-          "jobs"
-        ]
-      }
-    },
-    "/api/v1/admin/work/lanes/{lane}": {
-      "put": {
-        "operationId": "update_lane_api_v1_admin_work_lanes__lane__put",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "lane",
-            "required": true,
-            "schema": {
-              "title": "Lane",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LaneUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkOverview"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Set (or reset) a lane's concurrency at runtime",
-        "tags": [
-          "jobs"
         ]
       }
     },
@@ -20365,14 +21820,16 @@
         ]
       },
       "post": {
-        "description": "Queues a full backup (database + all stored files) as a background Job and returns it. Poll GET /api/v1/jobs/{job_id}; the backup metadata lands in the Job's result, and a refused backup (no destination, unsupported database) ends the Job failed with its reason.",
+        "description": "Creates a full backup (database + all stored files) as a tar.gz archive. Runs synchronously — large vaults may take a while. Returns the backup metadata.",
         "operationId": "create_backup_api_v1_backups_post",
         "responses": {
           "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "additionalProperties": true,
+                  "title": "Response Create Backup Api V1 Backups Post",
+                  "type": "object"
                 }
               }
             },
@@ -20697,7 +22154,6 @@
     },
     "/api/v1/backups/runs/destinations/{result_id}/retry": {
       "post": {
-        "description": "Queues a Job that republishes the exact archive to this destination from verified surviving bytes. Poll GET /api/v1/jobs/{job_id}; the destination as it now stands is the Job's result, and a refused retry ends the Job failed with its reason.",
         "operationId": "retry_backup_destination_api_v1_backups_runs_destinations__result_id__retry_post",
         "parameters": [
           {
@@ -20711,11 +22167,13 @@
           }
         ],
         "responses": {
-          "202": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "additionalProperties": true,
+                  "title": "Response Retry Backup Destination Api V1 Backups Runs Destinations  Result Id  Retry Post",
+                  "type": "object"
                 }
               }
             },
@@ -22160,6 +23618,511 @@
         ]
       }
     },
+    "/api/v1/config/ai-search": {
+      "get": {
+        "operationId": "read_settings_api_v1_config_ai_search_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Settings",
+        "tags": [
+          "config"
+        ]
+      },
+      "put": {
+        "operationId": "update_settings_api_v1_config_ai_search_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update Settings",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/endpoints": {
+      "post": {
+        "operationId": "create_endpoint_api_v1_config_ai_search_endpoints_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Endpoint",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/endpoints/from-environment/{kind}": {
+      "post": {
+        "operationId": "import_environment_endpoint_api_v1_config_ai_search_endpoints_from_environment__kind__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "embedding",
+                "chat"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Import Environment Endpoint",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/generations": {
+      "get": {
+        "operationId": "read_generations_api_v1_config_ai_search_generations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GenerationRead"
+                  },
+                  "title": "Response Read Generations Api V1 Config Ai Search Generations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Generations",
+        "tags": [
+          "config"
+        ]
+      },
+      "post": {
+        "operationId": "propose_generation_api_v1_config_ai_search_generations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Propose Generation",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/generations/estimate": {
+      "post": {
+        "operationId": "estimate_generation_api_v1_config_ai_search_generations_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationEstimate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Estimate Generation",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/generations/{generation_id}": {
+      "get": {
+        "operationId": "read_generation_api_v1_config_ai_search_generations__generation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Generation",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/generations/{generation_id}/activate": {
+      "post": {
+        "operationId": "activate_generation_api_v1_config_ai_search_generations__generation_id__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Activate Generation",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/generations/{generation_id}/cancel": {
+      "post": {
+        "operationId": "cancel_generation_api_v1_config_ai_search_generations__generation_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel Generation",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/ai-search/generations/{generation_id}/retry": {
+      "post": {
+        "operationId": "retry_generation_api_v1_config_ai_search_generations__generation_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Retry Generation",
+        "tags": [
+          "config"
+        ]
+      }
+    },
     "/api/v1/config/artifact-cache": {
       "delete": {
         "operationId": "reset_cache_api_v1_config_artifact_cache_delete",
@@ -23135,34 +25098,6 @@
         "summary": "Restore Trashed Document",
         "tags": [
           "documents"
-        ]
-      }
-    },
-    "/api/v1/events/ticket": {
-      "post": {
-        "operationId": "create_events_ticket_api_v1_events_ticket_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Events Ticket Api V1 Events Ticket Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Issue a one-use ticket for the events WebSocket",
-        "tags": [
-          "jobs"
         ]
       }
     },
@@ -25173,78 +27108,19 @@
         ]
       }
     },
-    "/api/v1/files/{file_id}/derivatives": {
-      "get": {
-        "description": "Every derivative kind that applies to the Artifact (metadata, thumbnail, toolpath) with its state. `pending` means no attempt exists yet at the current recipe, so every value the kind supplies is still unknown.",
-        "operationId": "list_file_derivatives_api_v1_files__file_id__derivatives_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "file_id",
-            "required": true,
-            "schema": {
-              "title": "File Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/DerivativeRead"
-                  },
-                  "title": "Response List File Derivatives Api V1 Files  File Id  Derivatives Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Derivative states of one Artifact at the current recipes",
-        "tags": [
-          "files"
-        ]
-      }
-    },
-    "/api/v1/files/{file_id}/derivatives/{kind}/retry": {
+    "/api/v1/files/thumbnails/rebuild": {
       "post": {
-        "operationId": "retry_file_derivative_api_v1_files__file_id__derivatives__kind__retry_post",
+        "description": "Walks non-soft-deleted models and tries to render a thumbnail from the newest mesh file (STL/3MF/OBJ). By default only missing thumbnails are rebuilt; pass force=true to refresh existing thumbnails after renderer improvements without re-uploading. Runs in the background: poll GET /ingest/jobs/{job_id}; the final per-model summary lands in the job's `result` field.",
+        "operationId": "rebuild_missing_thumbnails_api_v1_files_thumbnails_rebuild_post",
         "parameters": [
           {
-            "in": "path",
-            "name": "file_id",
-            "required": true,
+            "in": "query",
+            "name": "force",
+            "required": false,
             "schema": {
-              "title": "File Id",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "path",
-            "name": "kind",
-            "required": true,
-            "schema": {
-              "title": "Kind",
-              "type": "string"
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
             }
           }
         ],
@@ -25253,11 +27129,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/DerivativeRead"
-                  },
-                  "title": "Response Retry File Derivative Api V1 Files  File Id  Derivatives  Kind  Retry Post",
-                  "type": "array"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -25279,7 +27151,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Retry one failed or cancelled derivative of an Artifact",
+        "summary": "Regenerate mesh thumbnails for existing models",
         "tags": [
           "files"
         ]
@@ -25626,7 +27498,6 @@
     },
     "/api/v1/files/{file_id}/toolpath": {
       "get": {
-        "description": "ASCII G-code is served from the Artifact itself. Binary G-code (.bgcode) is served from its toolpath derivative; while that is still being derived the response is 202 with the derivative's state, and a failed conversion answers 422 with its reason.",
         "operationId": "get_toolpath_api_v1_files__file_id__toolpath_get",
         "parameters": [
           {
@@ -25664,7 +27535,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Bounded ASCII toolpath of a G-code Artifact",
+        "summary": "Bounded ASCII toolpath from the original Artifact",
         "tags": [
           "files"
         ]
@@ -27183,6 +29054,47 @@
         ]
       }
     },
+    "/api/v1/inbox/{item_id}/capture-upload": {
+      "delete": {
+        "description": "Release an unfinished capture's exact slot leases after extension failure.",
+        "operationId": "cancel_capture_upload_api_v1_inbox__item_id__capture_upload_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel Capture Upload",
+        "tags": [
+          "pending imports"
+        ]
+      }
+    },
     "/api/v1/inbox/{item_id}/capture-upload-finalize": {
       "post": {
         "operationId": "finalize_capture_upload_api_v1_inbox__item_id__capture_upload_finalize_post",
@@ -27381,26 +29293,136 @@
         ]
       }
     },
-    "/api/v1/ingest/archive/inspect": {
-      "post": {
-        "description": "The archive is staged under a lease owned by the returned Job, which inspects it (zip-slip/zip-bomb guarded) and ends with an archive manifest. Select entries with POST /ingest/archive/{archive_id}/select, where archive_id is the manifest's archive_id (the Job id).",
-        "operationId": "inspect_archive_background_api_v1_ingest_archive_inspect_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_inspect_archive_background_api_v1_ingest_archive_inspect_post"
-              }
-            }
-          },
-          "required": true
-        },
+    "/api/v1/inference/models": {
+      "get": {
+        "operationId": "list_models_api_v1_inference_models_get",
         "responses": {
-          "202": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "items": {
+                    "$ref": "#/components/schemas/InferenceModelRead"
+                  },
+                  "title": "Response List Models Api V1 Inference Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Models",
+        "tags": [
+          "inference"
+        ]
+      }
+    },
+    "/api/v1/inference/models/downloads/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_download_api_v1_inference_models_downloads__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel Download",
+        "tags": [
+          "inference"
+        ]
+      }
+    },
+    "/api/v1/inference/models/{identity}": {
+      "delete": {
+        "operationId": "delete_model_api_v1_inference_models__identity__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete Model",
+        "tags": [
+          "inference"
+        ]
+      }
+    },
+    "/api/v1/inference/models/{identity}/validate": {
+      "post": {
+        "operationId": "validate_model_api_v1_inference_models__identity__validate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelValidationRead"
                 }
               }
             },
@@ -27422,7 +29444,147 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Stage a ZIP archive and list its importable entries in the background",
+        "summary": "Validate Model",
+        "tags": [
+          "inference"
+        ]
+      }
+    },
+    "/api/v1/inference/models/{key}/download": {
+      "post": {
+        "operationId": "download_model_api_v1_inference_models__key__download_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Download Model",
+        "tags": [
+          "inference"
+        ]
+      }
+    },
+    "/api/v1/ingest/archive": {
+      "post": {
+        "description": "Upload a .zip; it is staged and inspected (zip-slip/zip-bomb guarded) and the importable 3D entries are returned for selective import via POST /ingest/archive/{archive_id}/select.",
+        "operationId": "ingest_archive_api_v1_ingest_archive_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_ingest_archive_api_v1_ingest_archive_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveManifest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Stage a .zip archive and return its importable entries",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/api/v1/ingest/archive/inspect": {
+      "post": {
+        "operationId": "inspect_archive_background_api_v1_ingest_archive_inspect_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_inspect_archive_background_api_v1_ingest_archive_inspect_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Stage and inspect a ZIP archive in the background",
         "tags": [
           "ingest"
         ]
@@ -27430,7 +29592,7 @@
     },
     "/api/v1/ingest/archive/{archive_id}/select": {
       "post": {
-        "description": "Hands the inspected archive to a new Job that extracts the chosen entries and ingests each 3D file as its own Model, grouped under an auto-created Collection named after the archive.",
+        "description": "Extract the chosen entries from a previously staged archive and ingest each 3D file as its own Model, grouped under an auto-created Collection named after the archive.",
         "operationId": "select_archive_entries_api_v1_ingest_archive__archive_id__select_post",
         "parameters": [
           {
@@ -27458,7 +29620,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -27480,7 +29642,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Import selected entries from an inspected archive",
+        "summary": "Import selected entries from a staged archive",
         "tags": [
           "ingest"
         ]
@@ -27488,7 +29650,7 @@
     },
     "/api/v1/ingest/collection/{collection_token}/select": {
       "post": {
-        "description": "Imports the chosen members of a previously resolved collection (see the collection_manifest job result) into the target collection.",
+        "description": "Import the chosen members of a previously resolved collection (see the collection_manifest job result) into the target collection.",
         "operationId": "select_collection_members_api_v1_ingest_collection__collection_token__select_post",
         "parameters": [
           {
@@ -27516,7 +29678,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -27544,26 +29706,46 @@
         ]
       }
     },
-    "/api/v1/ingest/model": {
-      "post": {
-        "description": "Multipart upload of a source mesh. The file is staged and committed as an Artifact by a background Job; geometry and a rendered thumbnail follow as derivatives. Returns a job_id you can poll via GET /api/v1/jobs/{job_id}.",
-        "operationId": "ingest_model_api_v1_ingest_model_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_ingest_model_api_v1_ingest_model_post"
-              }
+    "/api/v1/ingest/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_v1_ingest_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "terminal_limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Terminal Limit",
+              "type": "integer"
             }
           },
-          "required": true
-        },
+          {
+            "in": "query",
+            "name": "tracked_job_id",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tracked Job Id",
+              "type": "array"
+            }
+          }
+        ],
         "responses": {
-          "202": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "items": {
+                    "$ref": "#/components/schemas/IngestJobStatus"
+                  },
+                  "title": "Response List Jobs Api V1 Ingest Jobs Get",
+                  "type": "array"
                 }
               }
             },
@@ -27585,7 +29767,101 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Ingest a source mesh file (STL, 3MF, OBJ, STEP)",
+        "summary": "List reconnectable ingestion jobs for the current user",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/api/v1/ingest/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_api_v1_ingest_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestJobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get the status of an ingestion job",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/api/v1/ingest/model": {
+      "post": {
+        "description": "Multipart upload of a source file. The file is staged and processed asynchronously: hashed, geometry and thumbnail extracted where supported, deduplicated, and persisted. Returns a job_id you can poll via GET /ingest/jobs/{job_id}.",
+        "operationId": "ingest_model_api_v1_ingest_model_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_ingest_model_api_v1_ingest_model_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Ingest a source file (STL, 3MF, OBJ, STEP, DXF)",
         "tags": [
           "ingest"
         ]
@@ -27593,7 +29869,7 @@
     },
     "/api/v1/ingest/orca": {
       "post": {
-        "description": "Multipart upload from the OrcaSlicer post-processing hook. The G-code is staged and committed as an Artifact by a background Job; its slicer metadata and thumbnail follow as derivatives. Returns a job_id you can poll via GET /api/v1/jobs/{job_id}.",
+        "description": "Multipart upload from the OrcaSlicer post-processing hook. The G-code is staged immediately and processed asynchronously: hashed, parsed for slicer metadata, thumbnail-extracted, deduplicated, and persisted. Returns a job_id you can poll via GET /ingest/jobs/{job_id}.",
         "operationId": "ingest_orca_api_v1_ingest_orca_post",
         "requestBody": {
           "content": {
@@ -27610,7 +29886,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -27640,7 +29916,7 @@
     },
     "/api/v1/ingest/url": {
       "post": {
-        "description": "Records the URL for a background Job that downloads it server-side (SSRF-guarded). A direct mesh/G-code URL is imported; a .zip, a multi-file model page or a collection in review mode ends the Job with a manifest whose token (the Job id) selects what to import.",
+        "description": "Download a user-supplied URL server-side (SSRF-guarded) and ingest it. A direct mesh/G-code URL is imported immediately; a .zip resolves to an archive manifest (job result) for selective import via POST /ingest/archive/{archive_id}/select.",
         "operationId": "ingest_url_api_v1_ingest_url_post",
         "requestBody": {
           "content": {
@@ -27657,7 +29933,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -27679,7 +29955,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Import a model from a direct file, a model page, a collection or a .zip URL",
+        "summary": "Import a model from a direct file or .zip URL",
         "tags": [
           "ingest"
         ]
@@ -27687,7 +29963,7 @@
     },
     "/api/v1/ingest/url/files/{files_token}/select": {
       "post": {
-        "description": "Downloads only the chosen files from a previously listed model page (see the model_files_manifest job result) and ingests each as its own Model.",
+        "description": "Download only the chosen files from a previously listed model page (see the model_files_manifest job result) and ingest each as its own Model.",
         "operationId": "select_model_files_api_v1_ingest_url_files__files_token__select_post",
         "parameters": [
           {
@@ -27715,7 +29991,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -27740,238 +30016,6 @@
         "summary": "Import selected files from a multi-file model page",
         "tags": [
           "ingest"
-        ]
-      }
-    },
-    "/api/v1/jobs": {
-      "get": {
-        "operationId": "list_jobs_api_v1_jobs_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "terminal_limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "maximum": 100,
-              "minimum": 0,
-              "title": "Terminal Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tracked_job_id",
-            "required": false,
-            "schema": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "title": "Tracked Job Id",
-              "type": "array"
-            }
-          },
-          {
-            "in": "query",
-            "name": "kind",
-            "required": false,
-            "schema": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "title": "Kind",
-              "type": "array"
-            }
-          },
-          {
-            "in": "query",
-            "name": "include_system",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Include System",
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/JobStatus"
-                  },
-                  "title": "Response List Jobs Api V1 Jobs Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "List active and recent Jobs",
-        "tags": [
-          "jobs"
-        ]
-      }
-    },
-    "/api/v1/jobs/{job_id}": {
-      "get": {
-        "operationId": "get_job_api_v1_jobs__job_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "job_id",
-            "required": true,
-            "schema": {
-              "title": "Job Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Get one Job",
-        "tags": [
-          "jobs"
-        ]
-      }
-    },
-    "/api/v1/jobs/{job_id}/cancel": {
-      "post": {
-        "description": "Cancelling withdraws the intent behind the Job (a staged upload is released, a derivative is marked cancelled) before stopping its execution, so the reconciler does not bring it back.",
-        "operationId": "cancel_job_api_v1_jobs__job_id__cancel_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "job_id",
-            "required": true,
-            "schema": {
-              "title": "Job Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Cancel a queued or running Job",
-        "tags": [
-          "jobs"
-        ]
-      }
-    },
-    "/api/v1/jobs/{job_id}/retry": {
-      "post": {
-        "operationId": "retry_job_api_v1_jobs__job_id__retry_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "job_id",
-            "required": true,
-            "schema": {
-              "title": "Job Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Retry a failed or cancelled Job",
-        "tags": [
-          "jobs"
         ]
       }
     },
@@ -28305,7 +30349,7 @@
     },
     "/api/v1/libraries/{library_id}/scan": {
       "post": {
-        "description": "Runs as a background Job; poll GET /api/v1/jobs/{job_id}.",
+        "description": "Runs in the background; poll GET /ingest/jobs/{job_id} for progress.",
         "operationId": "scan_now_api_v1_libraries__library_id__scan_post",
         "parameters": [
           {
@@ -28323,7 +30367,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -28380,7 +30424,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -29167,6 +31211,76 @@
           },
           {
             "in": "query",
+            "name": "printed_after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "printed_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_min_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Min S"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_max_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Max S"
+            }
+          },
+          {
+            "in": "query",
             "name": "has_similar_candidates",
             "required": false,
             "schema": {
@@ -29839,6 +31953,76 @@
           },
           {
             "in": "query",
+            "name": "printed_after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "printed_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_min_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Min S"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_max_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Max S"
+            }
+          },
+          {
+            "in": "query",
             "name": "has_similar_candidates",
             "required": false,
             "schema": {
@@ -30010,7 +32194,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAccepted"
+                  "$ref": "#/components/schemas/IngestResponse"
                 }
               }
             },
@@ -30292,6 +32476,76 @@
                 }
               ],
               "title": "Uploaded Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "printed_after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "printed_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_min_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Min S"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_max_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Max S"
             }
           },
           {
@@ -30713,6 +32967,76 @@
                 }
               ],
               "title": "Uploaded Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "printed_after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "printed_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printed Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_min_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Min S"
+            }
+          },
+          {
+            "in": "query",
+            "name": "print_duration_max_s",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Duration Max S"
             }
           },
           {
@@ -31253,6 +33577,118 @@
           }
         ],
         "summary": "Compare actual print outcomes for Model Artifacts",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}/files/{file_id}": {
+      "delete": {
+        "operationId": "trash_source_file_api_v1_models__model_id__files__file_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Move one managed source Artifact to trash",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}/files/{file_id}/restore": {
+      "post": {
+        "operationId": "restore_source_file_route_api_v1_models__model_id__files__file_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Restore one managed source Artifact from trash",
         "tags": [
           "models"
         ]
@@ -32338,6 +34774,82 @@
         "summary": "Model Similar",
         "tags": [
           "similarity"
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}/similar-text": {
+      "get": {
+        "operationId": "search_using_model_api_v1_models__model_id__similar_text_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Search Using Model",
+        "tags": [
+          "models"
         ]
       }
     },
@@ -36162,6 +38674,841 @@
         ]
       }
     },
+    "/api/v1/search": {
+      "get": {
+        "operationId": "search_library_api_v1_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 512,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "default": "hybrid",
+              "enum": [
+                "lexical",
+                "hybrid"
+              ],
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "types[]",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/SubjectType"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Types[]"
+            }
+          },
+          {
+            "in": "query",
+            "name": "legs[]",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "lexical",
+                      "semantic_text",
+                      "thumbnail",
+                      "multiview",
+                      "point_cloud"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Legs[]"
+            }
+          },
+          {
+            "in": "query",
+            "name": "instant",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Instant",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Canonical ModelFilters JSON; q is supplied separately. Restricts results to Models.",
+            "in": "query",
+            "name": "filters",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Canonical ModelFilters JSON; q is supplied separately. Restricts results to Models.",
+              "title": "Filters"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ModelSort",
+              "default": "relevance"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Search Library",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/generations": {
+      "get": {
+        "operationId": "read_generations_api_v1_search_generations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GenerationRead"
+                  },
+                  "title": "Response Read Generations Api V1 Search Generations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Generations",
+        "tags": [
+          "search"
+        ]
+      },
+      "post": {
+        "operationId": "propose_generation_api_v1_search_generations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Propose Generation",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/generations/estimate": {
+      "post": {
+        "operationId": "estimate_generation_api_v1_search_generations_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationEstimate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Estimate Generation",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/generations/{generation_id}": {
+      "get": {
+        "operationId": "read_generation_api_v1_search_generations__generation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Generation",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/generations/{generation_id}/activate": {
+      "post": {
+        "operationId": "activate_generation_api_v1_search_generations__generation_id__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Activate Generation",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/generations/{generation_id}/cancel": {
+      "post": {
+        "operationId": "cancel_generation_api_v1_search_generations__generation_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel Generation",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/generations/{generation_id}/retry": {
+      "post": {
+        "operationId": "retry_generation_api_v1_search_generations__generation_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "generation_id",
+            "required": true,
+            "schema": {
+              "title": "Generation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Retry Generation",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/image": {
+      "post": {
+        "operationId": "search_image_api_v1_search_image_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 8388608,
+                "type": "string"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 8388608,
+                "type": "string"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 8388608,
+                "type": "string"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "image": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "image"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Search Image",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/parse": {
+      "post": {
+        "operationId": "parse_search_api_v1_search_parse_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParseSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParsedSearch"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Parse Search",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/preferences": {
+      "get": {
+        "operationId": "read_preferences_api_v1_search_preferences_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPreferencesRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Preferences",
+        "tags": [
+          "search"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_preferences_api_v1_search_preferences_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchPreferencesPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPreferencesRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Patch Preferences",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/settings": {
+      "get": {
+        "operationId": "read_settings_api_v1_search_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Settings",
+        "tags": [
+          "search"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_settings_api_v1_search_settings_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSettingsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Patch Settings",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/api/v1/search/status": {
+      "get": {
+        "operationId": "search_status_api_v1_search_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Search Status",
+        "tags": [
+          "search"
+        ]
+      }
+    },
     "/api/v1/setup": {
       "post": {
         "operationId": "complete_setup_api_v1_setup_post",
@@ -38159,6 +41506,53 @@
         ]
       }
     },
+    "/api/v1/storage/migrations/{run_id}/advance": {
+      "post": {
+        "operationId": "advance_api_v1_storage_migrations__run_id__advance_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationRunRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Advance",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
     "/api/v1/storage/migrations/{run_id}/cleanup": {
       "post": {
         "operationId": "cleanup_api_v1_storage_migrations__run_id__cleanup_post",
@@ -38820,6 +42214,126 @@
         "summary": "Declare Failure Domain",
         "tags": [
           "storage"
+        ]
+      }
+    },
+    "/api/v1/subjects/{subject_type}/{subject_id}/caption": {
+      "get": {
+        "operationId": "read_caption_api_v1_subjects__subject_type___subject_id__caption_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subject_type",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SubjectType"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Subject Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptionRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Read Caption",
+        "tags": [
+          "search"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_caption_api_v1_subjects__subject_type___subject_id__caption_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subject_type",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SubjectType"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Subject Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptionPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptionRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Patch Caption",
+        "tags": [
+          "search"
         ]
       }
     },

@@ -116,3 +116,15 @@ class TestWebpNormalization:
         encoded = source.getvalue()
 
         assert to_webp(encoded) == encoded
+
+
+class TestInvalidThumbnailInput:
+    def test_invalid_base64_has_no_embedded_preview(self, tmp_path):
+        path = tmp_path / "invalid.gcode"
+        path.write_text("; thumbnail begin 16x16 4\n; !!!!\n; thumbnail end\n")
+        assert extract(path) is None
+
+    def test_unterminated_line_has_no_embedded_preview(self, tmp_path):
+        path = tmp_path / "truncated.gcode"
+        path.write_text("; thumbnail begin 16x16 4")
+        assert extract(path) is None

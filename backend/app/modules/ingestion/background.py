@@ -34,7 +34,7 @@ from app.schemas.ingest import (
 logger = get_logger(__name__)
 
 GCODE_SUFFIXES = {".gcode", ".g", ".gco", ".bgcode"}
-MESH_SUFFIXES = {".stl", ".3mf", ".obj", ".step", ".stp"}
+MESH_SUFFIXES = {".stl", ".3mf", ".obj", ".step", ".stp", ".dxf"}
 
 
 def collection_target(parent: Optional[str], title: str) -> str:

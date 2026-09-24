@@ -17,7 +17,7 @@ HTTP endpoint or persisted archive format.
 | `backups` | Snapshot creation, catalogue, verification, replicas and journaled restore | `backup.creation`, `backup.catalogue`, `backup.verification`, `backup.adoption`, `backup.deletion`, `backup.restore`, `backup.recovery`, `backup_runs`, `retry_commands`, `backup_schedule` |
 | `printing` | Printers, provider adapters, fleet scheduling, materials and print history | `dispatch`, `costing`, `printer_provider`, `printer_hub`, `fleet`, `materials`, `printer_files`, `printer_jobs`, `print_results`, `multipart_builds` |
 | `similarity` | Versioned geometric evidence, indexed retrieval, durable analysis runs and explicit review | `fingerprints`, `retrieval`, `processing`, `candidates`, `review`, `composition` |
-| `inference` | Local native embedding contracts, immutable index generations and authorized semantic queries | `local`, `manifest`, `store`, `search` |
+| `inference` | Shared provider contracts, model identity and inference runtimes | `local`, `manifest`, `onnx_cpu` |
 | `media` | Mesh processing, thumbnail rendering and publication, source covers and toolpath conversion | `mesh_operations`, `thumbnail_engine`, `thumbnail_publication`, `toolpath`, `source_cover_processing` |
 | `derivatives` | What each Artifact owes (metadata, thumbnail, toolpath), found by anti-join and produced by Jobs | `kinds`, `records`, `source`, `producers`, `repair`, `jobs` |
 | `work` | The engine-agnostic background work model: Jobs, definitions, sources, the reconciler, fences and realtime notices | `contracts`, `catalog`, `jobs`, `sources`, `reconciler`, `submission`, `runner`, `service`, `fences`, `executors`, `events` |
@@ -26,6 +26,7 @@ HTTP endpoint or persisted archive format.
 | `administration` | Dynamic OSS settings, setup, audit and operational inspection | `runtime_config`, `setup_bootstrap`, `audit`, `vault_audit`, `release_check` |
 | `runtime` | Process coordination: maintenance admission, the job engines and event transports | `maintenance`, `engine.dbos_engine`, `engine.inline`, `realtime` |
 | `db` | Session factories, SQL schema and metadata registration | `session`, `scopes`, `models`, `publication`, `transactions` |
+| `search` | Authorized passage projection, lexical retrieval, immutable embedding spaces and vector generations (AI Search in progress) | `sources`, `passages`, `projection`, `retrieval`, `vector_store` |
 
 The table identifies interfaces, not permission to reach through an operation
 into its implementation. A function prefixed `_` belongs to its owner. Public

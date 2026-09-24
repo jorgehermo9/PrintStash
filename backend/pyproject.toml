@@ -39,6 +39,7 @@ dependencies = [
     "watchfiles>=1.2,<2",
     "pycentauri==0.9.1",
     "dbos>=2.31,<3",
+    "jsonschema>=4.26,<5",
 ]
 
 [project.optional-dependencies]
@@ -51,16 +52,18 @@ step = [
     "cadquery-ocp-novtk==7.9.3.1.1",
 ]
 full = [
+    "sqlite-vec==0.1.6",
+    "onnx>=1.22,<2",
     "onnxruntime>=1.30,<2",
     "tokenizers>=0.23,<0.24",
     "asyncssh>=2.21,<3",
     "cascadio>=0.1.1,<0.2",
     "cadquery-ocp-novtk==7.9.3.1.1",
-    "opendal==0.47.8",
+    "opendal==0.47.9",
 ]
 storage-opendal = [
     "asyncssh>=2.21,<3",
-    "opendal==0.47.8",
+    "opendal==0.47.9",
 ]
 dev = [
     # Builds tiny licensed ONNX contract fixtures; never downloads model weights.
@@ -94,6 +97,12 @@ dev = [
     "WsgiDAV>=4.3,<5",
     "cheroot>=11,<12",
     "ty>=0.0.1",
+]
+ai = [
+    "sqlite-vec==0.1.6",
+    "onnx>=1.22,<2",
+    "onnxruntime>=1.30,<2",
+    "tokenizers>=0.23,<0.24",
 ]
 
 [tool.pytest.ini_options]

@@ -21,6 +21,7 @@ test.describe("Vault migration", () => {
     await uploadGcodeModel(page, baselineName);
     const backup = await createBackupViaApi(page);
     await page.goto("/settings?section=storage");
+    await expect(page.getByRole("region", { name: "Move Vault storage" })).toBeVisible();
     const panel = page.getByRole("region", { name: "Move Vault storage" });
     await panel.getByLabel("Models directory", { exact: true }).fill(data);
     await panel.getByLabel("Thumbnail directory", { exact: true }).fill(thumbs);
@@ -73,6 +74,7 @@ test.describe("Vault migration", () => {
     await expect.poll(healthy, { timeout: 30_000, intervals: [50, 100, 250] }).toBe(false);
     await expect.poll(healthy, { timeout: 60_000, intervals: [100, 250, 500] }).toBe(true);
     await page.goto("/settings?section=storage");
+    await expect(page.getByRole("region", { name: "Move Vault storage" })).toBeVisible();
     await panel.getByRole("button", { name: "Recover migration" }).click();
     await panel.getByRole("button", { name: "Resume copy" }).click();
     await expect(panel.getByRole("button", { name: "Switch Vault storage" })).toBeVisible();

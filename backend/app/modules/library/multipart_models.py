@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Iterable
 
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 import app.modules.library.model_views.projections as models_projections
 from app.core.errors import ErrorKind, OperationError
@@ -30,6 +30,7 @@ from app.db.models import (
     Tag,
     User,
 )
+from app.db.projections import content_changed
 from app.db.scopes import live
 from app.modules.identity import rbac
 from app.schemas.documents import DocumentListItem
@@ -149,6 +150,7 @@ def member_read(
     model_id: int,
     counts: dict[int, tuple[int, int]],
     choice: MultipartModelChoice | None = None,
+    live_source_ids: set[int] | None = None,
 ) -> MultipartMemberRead:
     """Return full metadata only when the caller can read a live Model."""
     if model is None or model.deleted_at is not None:
@@ -162,6 +164,19 @@ def member_read(
         return MultipartMemberRead(
             id=model_id,
             choice_id=choice.id if choice is not None else None,
+            available=False,
+        )
+    if (
+        choice is not None
+        and choice.source_file_id is not None
+        and live_source_ids is not None
+        and choice.source_file_id not in live_source_ids
+    ):
+        # Keep the grouping reference so restoring its pinned Artifact makes
+        # the choice available again, but never present a trashed file as usable.
+        return MultipartMemberRead(
+            id=model_id,
+            choice_id=choice.id,
             available=False,
         )
     source_count, gcode_count = counts[model_id]
@@ -199,6 +214,18 @@ def _parts(
     ids = [int(choice.model_id) for choice in choices]
     models = _readable_models(session, user, ids)
     counts = _file_counts(session, ids)
+    pinned_ids = {
+        choice.source_file_id for choice in choices if choice.source_file_id is not None
+    }
+    live_source_ids = (
+        set(
+            session.exec(
+                select(File.id).where(col(File.id).in_(pinned_ids), live(File))
+            ).all()
+        )
+        if pinned_ids
+        else set()
+    )
     by_part: dict[int, list[MultipartMemberRead]] = defaultdict(list)
     for choice in choices:
         by_part[int(choice.multipart_part_id)].append(
@@ -209,6 +236,7 @@ def _parts(
                 model_id=choice.model_id,
                 counts=counts,
                 choice=choice,
+                live_source_ids=live_source_ids,
             )
         )
     result = [
@@ -663,6 +691,7 @@ def save_in_transaction(
     aggregate.updated_at = utcnow()
     session.add(aggregate)
     session.flush()
+    content_changed(session, "multipart_model", [aggregate.id])
     return aggregate
 
 
@@ -717,6 +746,7 @@ def replace_parts(
 def delete_aggregate(session: Session, aggregate: MultipartModel) -> None:
     """Delete only grouping rows; Models and their files remain untouched."""
     session.delete(aggregate)
+    content_changed(session, "multipart_model", [aggregate.id])
     session.commit()
 
 

@@ -15,7 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlmodel import Session
 from starlette.background import BackgroundTask
 
@@ -480,7 +480,11 @@ def delete_backup(backup_id: str, source_ref: str | None = None) -> dict:
         "files. It is strongly recommended to create a fresh backup first."
     ),
 )
-def restore_backup(backup_id: str, source_ref: str | None = None) -> dict:
+def restore_backup(backup_id: str, source_ref: str | None = None, session: Session = Depends(get_session)) -> dict:
+    # Authorization has completed. Release its read transaction before the
+    # restore coordinator locks/replaces PostgreSQL tables; keeping that same
+    # request's users-table lock until response teardown would deadlock restore.
+    session.rollback()
     try:
         result = (
             backup_restore.restore_backup(backup_id)

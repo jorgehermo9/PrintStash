@@ -40,6 +40,7 @@ from app.db.models import (
     StorageObjectState,
     User,
 )
+from app.db.projections import content_changed
 from app.db.scopes import live
 from app.db.session import SessionFactory, get_session_factory
 from app.modules.identity import rbac
@@ -269,6 +270,7 @@ def _apply_taxonomy(
             if overwrite_collection or model.collection_id is None:
                 model.collection_id = cat.id
             session.add(model)
+            content_changed(session, "model", [model.id])
             session.commit()
 
     tag_names = taxonomy.parse_tag_input(tags_raw)
@@ -284,6 +286,7 @@ def _apply_taxonomy(
             if tag.id not in existing_ids:
                 session.add(ModelTagLink(model_id=model.id, tag_id=tag.id))
         session.add(model)
+        content_changed(session, "model", [model.id])
         session.commit()
 
 
@@ -314,6 +317,7 @@ def resolve_or_create_model(
         )
         session.add(model)
         try:
+            content_changed(session, "model", (row.id for row in (model,)))
             session.commit()
         except IntegrityError:
             # Another upload of the same bytes won the race between the SELECT
@@ -339,6 +343,7 @@ def resolve_or_create_model(
     existing.deleted_by = None
     existing.updated_at = utcnow()
     session.add(existing)
+    content_changed(session, "model", [existing.id])
     session.commit()
     session.refresh(existing)
     return existing, False
@@ -588,6 +593,7 @@ def persist_artifact(
                         color_hex=requirement.get("color_hex"),
                     )
                 )
+        content_changed(session, "model", [model_id])
         # A driver may acknowledge a committed transaction as an exception
         # (for example, a connection loss after COMMIT). From here onward the
         # blob must be preserved until a fresh session resolves the outcome.
@@ -1075,6 +1081,7 @@ def add_gcode_revision_to_model(
 
     model.updated_at = utcnow()
     session.add(model)
+    content_changed(session, "model", [model.id])
     session.commit()
     session.refresh(file_row)
     return file_row

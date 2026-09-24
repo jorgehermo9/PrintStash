@@ -321,3 +321,8 @@ def _set_chunk_size(monkeypatch, n: int) -> None:
     from app.core.config import _overlay
 
     monkeypatch.setitem(_overlay, "mesh_render_face_chunk_size", n)
+
+
+class TestFailedPreview:
+    def test_empty_geometry_has_no_preview(self):
+        assert mesh_render.render_mesh_thumbnail(None, "empty.stl") is None
