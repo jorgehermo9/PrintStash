@@ -118,6 +118,45 @@ class TestIndexSource:
 
         assert [item.subject_key for item in items] == ["search/index"]
 
+    def test_a_passage_projected_after_the_build_is_indexed(
+        self,
+        db_session: Session,
+        generation_setup,
+        healthy_embeddings,
+        work_engine,
+        make_search_projection_request,
+        make_model,
+    ) -> None:
+        # An active, settled generation is not done for good: every passage
+        # projected later is owed its vector in it.
+        actor, endpoint = generation_setup
+        proposal = generations.prepare(
+            db_session,
+            actor,
+            GenerationProposal(
+                endpoint_id=endpoint.id, index_backend="numpy", auto_activate=True
+            ),
+        )
+        db_session.commit()
+        nudge(jobs.GENERATION_DEFINITION)
+        work_engine.drain()
+        make_search_projection_request(ContentSource("model", make_model().id))
+
+        nudge(jobs.PROJECT_DEFINITION)
+        work_engine.drain()
+
+        db_session.expire_all()
+        generation = db_session.get(IndexGeneration, proposal.id)
+        assert generation is not None and generation.state == "active"
+        space = generations.contract(db_session, generation)
+        assert db_session.exec(generations.eligible(db_session, space)).first()
+        assert (
+            db_session.exec(
+                generations.missing(db_session, proposal.id, space).limit(1)
+            ).first()
+            is None
+        )
+
     def test_nothing_is_pending_while_search_is_off(
         self, db_session: Session, generation_setup
     ) -> None:

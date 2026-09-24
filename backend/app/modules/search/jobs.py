@@ -204,7 +204,9 @@ class IndexSource:
     """Pending while an active generation has work or a retired one awaits pruning.
 
     A building generation is its own ``search.generation`` Job, but the unit
-    serves whichever generation is due; this keeps active ones current.
+    serves whichever generation is due; this keeps active ones current. A
+    settled generation is not done for good: a passage projected after its
+    build is owed a vector in it too.
     """
 
     def pending(self, session: Session, *, now: datetime, limit: int) -> list[WorkItem]:
@@ -220,6 +222,8 @@ class IndexSource:
             )
             .limit(1)
         ).first()
+        if behind is None:
+            behind = self._owed_passage(session)
         prunable = session.exec(
             select(IndexGeneration.id)
             .where(
@@ -232,6 +236,37 @@ class IndexSource:
         if behind is None and prunable is None:
             return []
         return [WorkItem(subject_key="search/index")]
+
+    @staticmethod
+    def _owed_passage(session: Session) -> int | None:
+        """A settled generation missing a vector it can index now, if any.
+
+        Uses the unit's own work query, so a quarantined passage, or one
+        waiting out its retry, is not reported as owed (which would start a
+        Job that finds nothing, over and over).
+        """
+        from app.modules.search import generations, visual_sources
+        from app.modules.search.indexing import pending as owed_inputs
+
+        settled = session.exec(
+            select(IndexGeneration).where(
+                col(IndexGeneration.id).in_(_generation_work(session)),
+                IndexGeneration.state == "active",
+                IndexGeneration.phase == "ready",
+            )
+        ).all()
+        for generation in settled:
+            space = generations.contract(session, generation)
+            if space.profile in visual_sources.PROFILES:
+                # Views index files, not passages: owed while one lacks its vector.
+                owed = session.exec(
+                    generations.missing(session, generation.id, space).limit(1)
+                ).first()
+            else:
+                owed = owed_inputs(session, generation)
+            if owed:
+                return generation.id
+        return None
 
     def next_due(self, session: Session, *, now: datetime) -> datetime | None:
         later = session.exec(
