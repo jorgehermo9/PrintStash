@@ -19,19 +19,15 @@ engine keeps its state in a different place on each (a sibling file, or the
 from __future__ import annotations
 
 import json
-import os
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, make_url
 
-from app.db.url import normalize_database_url
-from tests.containers import postgres_url
+from tests.e2e._processes import fresh_postgres_database, vault_environment
 from tests.paths import BACKEND_DIR
 
 _ROLE = "tests.fakes.job_engine_process"
@@ -39,36 +35,12 @@ _ROLE = "tests.fakes.job_engine_process"
 
 @pytest.fixture(params=["sqlite", "postgresql"])
 def vault_env(request, tmp_path: Path) -> dict[str, str]:
-    if request.param == "postgresql":
-        server = make_url(normalize_database_url(postgres_url()))
-        name = f"job_engine_{uuid4().hex[:12]}"
-        admin = create_engine(server, isolation_level="AUTOCOMMIT")
-        with admin.connect() as connection:
-            connection.exec_driver_sql(f'CREATE DATABASE "{name}"')
-        admin.dispose()
-        db_url = server.set(database=name).render_as_string(hide_password=False)
-    else:
-        db_url = f"sqlite:///{tmp_path / 'vault.sqlite'}"
-    environment = {
-        **os.environ,
-        "PYTHONPATH": str(BACKEND_DIR),
-        "VAULT_DB_URL": db_url,
-        "VAULT_SETUP_MODE": "trusted_network",
-        "VAULT_SETUP_ALLOWED_HOSTS": "testserver",
-        "VAULT_SECRETS_KEY": "job-engine-e2e-key",
-        "VAULT_SECRETS_KEY_FILE": str(tmp_path / "secrets-key"),
-        # A dead executor is recognised after one stale window, and the tick
-        # finds it on the next pass: keep both short so recovery is quick.
-        "VAULT_JOBS_EXECUTOR_STALE_SECONDS": "10",
-        "VAULT_JOBS_RECONCILE_INTERVAL_SECONDS": "10",
-        "VAULT_FENCE_HEARTBEAT_SECONDS": "2",
-    }
-    for key in ("DATA_DIR", "THUMB_DIR", "STAGING_DIR", "BACKUP_DIR"):
-        directory = tmp_path / key.lower()
-        directory.mkdir()
-        environment[f"VAULT_{key}"] = str(directory)
-    environment["VAULT_ARTIFACT_CACHE_ROOT"] = str(tmp_path / "cache")
-    return environment
+    db_url = (
+        fresh_postgres_database("job_engine")
+        if request.param == "postgresql"
+        else f"sqlite:///{tmp_path / 'vault.sqlite'}"
+    )
+    return vault_environment(tmp_path, db_url)
 
 
 def _stall(environment: dict[str, str], marker: Path) -> tuple[subprocess.Popen, int]:
