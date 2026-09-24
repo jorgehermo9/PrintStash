@@ -115,7 +115,7 @@ def record_event(
     eligible = threshold != "off" and (not regression or regression_rank >= rank)
     # Durable evidence is never rate-limited. Delay deliveries to preserve every
     # new regression while spacing external sends across policy runs.
-    before_ids = {id(row) for row in session.new}
+    deliveries = []
     if eligible:
         categories = sorted(
             {
@@ -125,7 +125,7 @@ def record_event(
                 ).all()
             }
         )
-        enqueue_storage_event(
+        deliveries = enqueue_storage_event(
             session,
             event_type,
             run_id=run.id,
@@ -143,13 +143,6 @@ def record_event(
             ),
             categories=categories,
         )
-        from app.db.models import NotificationDelivery
-
-        deliveries = [
-            row
-            for row in session.new
-            if id(row) not in before_ids and isinstance(row, NotificationDelivery)
-        ]
         if policy and deliveries:
             due = (
                 max(

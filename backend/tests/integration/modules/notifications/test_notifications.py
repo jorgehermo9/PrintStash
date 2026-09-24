@@ -927,7 +927,8 @@ class TestEnqueueStorageEvent:
     """Audit outcomes reach the channels subscribed to them, and leave promptly."""
 
     def _enqueue(self, session, event=NotificationEventType.STORAGE_REGRESSION, **kw):
-        return notifications.enqueue_storage_event(
+        """How many deliveries it added (the rows it returns)."""
+        added = notifications.enqueue_storage_event(
             session,
             event,
             run_id=7,
@@ -936,6 +937,8 @@ class TestEnqueueStorageEvent:
             duration_s=-1,
             **kw,
         )
+        assert all(row in session.new for row in added)
+        return len(added)
 
     def test_a_storage_event_is_delivered_once_its_transaction_commits(
         self, db_session

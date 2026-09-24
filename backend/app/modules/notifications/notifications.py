@@ -960,12 +960,16 @@ def enqueue_storage_event(
     channel_ids: list[int] | None = None,
     duration_s: float = 0,
     categories: list[str] | None = None,
-) -> int:
-    """Enqueue a storage-only context; caller owns the event/outbox transaction."""
+) -> list[NotificationDelivery]:
+    """Enqueue a storage-only context; caller owns the event/outbox transaction.
+
+    Returns the deliveries it added, so a caller can space them (an audit's
+    notification cooldown) without guessing which pending rows are its own.
+    """
     if not event_type.value.startswith("storage_"):
         raise ValueError("storage_event_required")
     if not notifications_enabled(session):
-        return 0
+        return []
     context = {
         "event": event_type.value,
         "audit_run_id": run_id,
@@ -989,16 +993,17 @@ def enqueue_storage_event(
         if _channel_subscribes(row, event_type, None)
         and (not channel_ids or row.id in channel_ids)
     ]
-    for channel in matching:
-        session.add(
-            NotificationDelivery(
-                channel_id=channel.id,
-                event_type=event_type,
-                context_json=json.dumps(context),
-            )
+    deliveries = [
+        NotificationDelivery(
+            channel_id=channel.id,
+            event_type=event_type,
+            context_json=json.dumps(context),
         )
-    if matching:
+        for channel in matching
+    ]
+    session.add_all(deliveries)
+    if deliveries:
         from app.modules.work.submission import nudge_after_commit
 
         nudge_after_commit(session, DELIVER_DEFINITION)
-    return len(matching)
+    return deliveries

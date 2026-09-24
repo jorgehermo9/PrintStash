@@ -147,6 +147,63 @@ class TestVaultAuditPolicyControls:
             in delivery.context_json
         )
 
+    def test_the_cooldown_spaces_deliveries_the_session_already_flushed(
+        self,
+        db_session,
+        monkeypatch,
+        make_user,
+        make_audit_policy,
+        make_audit_run,
+        make_audit_finding,
+        make_system_config,
+        make_notification_channel,
+    ):
+        # Regression: the cooldown found its deliveries by what was still
+        # pending in the session (and by object id), so a flush, or a flushed
+        # object's address reused by a new delivery, skipped it silently.
+        import json
+
+        from app.core.time import utcnow
+        from app.db.models import NotificationDelivery, VaultAuditSeverity
+        from app.modules.administration import vault_audit_results
+        from app.modules.administration.vault_audit_results import record_success
+
+        enqueue = vault_audit_results.enqueue_storage_event
+
+        def enqueue_then_flush(session, *args, **kwargs):
+            created = enqueue(session, *args, **kwargs)
+            session.flush()
+            return created
+
+        monkeypatch.setattr(
+            vault_audit_results, "enqueue_storage_event", enqueue_then_flush
+        )
+        make_system_config(notifications_enabled=True)
+        channel = make_notification_channel(events=["storage_regression"])
+        user = make_user()
+        make_audit_policy(
+            user,
+            notification_threshold="critical",
+            notification_channels_json=json.dumps([channel.id]),
+            notification_cooldown_minutes=60,
+        )
+        for identifier in ("one", "two"):
+            run = make_audit_run(user, finished_at=utcnow())
+            make_audit_finding(
+                run,
+                code="blob_missing",
+                resource_identifier=identifier,
+                severity=VaultAuditSeverity.CRITICAL,
+            )
+            record_success(db_session, run)
+            db_session.commit()
+
+        rows = db_session.exec(
+            select(NotificationDelivery).order_by(NotificationDelivery.id)
+        ).all()
+        assert len(rows) == 2
+        assert rows[1].next_retry_at - rows[0].next_retry_at >= timedelta(minutes=60)
+
     def test_notification_policy_filters_regressions(
         self,
         db_session,
