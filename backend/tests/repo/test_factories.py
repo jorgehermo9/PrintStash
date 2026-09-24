@@ -708,14 +708,14 @@ class TestSimilarityFactories:
         with pytest.raises(OperationError, match="similarity_run_active"):
             runs.start(db_session, actor)
 
-    def test_completed_run_is_not_claimed(self, db_session):
-        from app.modules.similarity.runs import claim
+    def test_completed_run_cannot_be_taken(self, db_session):
+        from app.modules.similarity.runs import take
 
-        factories.build_similarity_run(
+        run = factories.build_similarity_run(
             db_session, factories.build_user(db_session), active=False
         )
 
-        assert claim(db_session) is None
+        assert take(db_session, run.id, "attempt-1") is None
 
     def test_observations_keep_ordered_model_lineage(self, db_session):
         from app.modules.similarity.candidates import project
