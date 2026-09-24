@@ -116,12 +116,13 @@ def _configure_context(
         connection.commit()
     kwargs = {
         "include_object": lambda obj, name, kind, reflected, compare_to: not (kind == "table" and name in derived),
-        "include_name": lambda name, kind, parents: not (kind == "table" and name in derived),
+        "include_name": lambda name, kind, parents: (
+            not (kind == "table" and name in derived) and _include_name(name, kind, parents)
+        ),
         "target_metadata": target_metadata,
         "compare_type": True,
         "compare_server_default": True,
         "render_item": _render_item,
-        "include_name": _include_name,
         "process_revision_directives": _process_revision_directives,
         "render_as_batch": (
             connection.dialect.name == "sqlite"
