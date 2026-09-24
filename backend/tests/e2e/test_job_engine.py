@@ -9,9 +9,13 @@ processes, on the durable engine, and kill one mid-step:
   completion;
 - a process of the next application version starts on a vault whose previous
   version died mid-step; it cancels the old version's execution immediately
-  and reruns the work on its own code.
+  and reruns the work on its own code;
+- a restore discards the engine's state mid-derivative; the next process
+  rebuilds the owed work from the vault alone;
+- the next build bumps a thumbnail recipe; every Artifact is re-derived in
+  the background while its current thumbnail stays visible.
 
-Both run on SQLite and on PostgreSQL, the two supported databases, because the
+All run on SQLite and on PostgreSQL, the two supported databases, because the
 engine keeps its state in a different place on each (a sibling file, or the
 ``dbos`` schema of the application database).
 """
@@ -26,7 +30,10 @@ import time
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, make_url, text
 
+from app.db.url import normalize_database_url
+from app.runtime.engine.dbos_engine import system_database_url
 from tests.containers import fresh_postgres_database
 from tests.e2e._processes import vault_environment
 from tests.paths import BACKEND_DIR
@@ -69,9 +76,10 @@ def _kill(process: subprocess.Popen) -> None:
     process.wait(timeout=30)
 
 
-def _converge(environment: dict[str, str], file_id: int) -> dict[str, str]:
+def _run(environment: dict[str, str], *role: str) -> dict:
+    """Run one role to completion; its outcome, once every derivative is ready."""
     result = subprocess.run(
-        [sys.executable, "-m", _ROLE, "converge", str(file_id)],
+        [sys.executable, "-m", _ROLE, *role],
         cwd=BACKEND_DIR,
         env=environment,
         capture_output=True,
@@ -87,7 +95,29 @@ def _converge(environment: dict[str, str], file_id: int) -> dict[str, str]:
         outcome,
         (result.stdout + result.stderr)[-6000:],
     )
-    return outcome["states"]
+    return outcome
+
+
+def _converge(environment: dict[str, str], file_id: int) -> dict[str, str]:
+    return _run(environment, "converge", str(file_id))["states"]
+
+
+def _discard_engine_state(environment: dict[str, str]) -> None:
+    """What a restore does: the engine's state goes, the vault's stays."""
+    db_url = environment["VAULT_DB_URL"]
+    url, schema = system_database_url(db_url)
+    if schema is None:
+        sibling = Path(make_url(url).database or "")
+        assert sibling.exists(), "the engine never wrote its state"
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(f"{sibling}{suffix}").unlink(missing_ok=True)
+        return
+    engine = create_engine(normalize_database_url(db_url))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    finally:
+        engine.dispose()
 
 
 class TestCrashRecovery:
@@ -122,3 +152,44 @@ class TestCrashRecovery:
         states = _converge(new, file_id)
 
         assert states == {"metadata": "ready", "thumbnail": "ready"}
+
+
+class TestEngineStateLoss:
+    @pytest.mark.critical
+    def test_work_converges_after_the_engine_state_is_discarded(
+        self, vault_env: dict[str, str], tmp_path: Path
+    ) -> None:
+        # A restore discards the engine's state; everything it knew about the
+        # interrupted derivative is gone, and only the vault says it is owed.
+        process, file_id = _stall(vault_env, tmp_path / "running")
+        _kill(process)
+        _discard_engine_state(vault_env)
+
+        states = _converge(vault_env, file_id)
+
+        assert states == {"metadata": "ready", "thumbnail": "ready"}
+
+
+@pytest.fixture
+def rederived(vault_env: dict[str, str]) -> dict:
+    uploaded = _run(vault_env, "upload")
+    outcome = _run(vault_env, "rederive", str(uploaded["file_id"]))
+    return {"before": uploaded, "after": outcome}
+
+
+class TestRecipeBump:
+    def test_the_next_build_rederives_the_changed_kind(self, rederived: dict) -> None:
+        before, after = rederived["before"]["recipes"], rederived["after"]["recipes"]
+
+        assert after["thumbnail"] == before["thumbnail"] + 1
+
+    def test_the_old_thumbnail_stays_visible_while_rederiving(
+        self, rederived: dict
+    ) -> None:
+        old = rederived["before"]["thumbnail"]
+
+        assert old is not None
+        assert rederived["after"]["shown_while_deriving"] == [old]
+
+    def test_the_new_thumbnail_replaces_it(self, rederived: dict) -> None:
+        assert rederived["after"]["thumbnail"] is not None

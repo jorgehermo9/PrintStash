@@ -9,6 +9,8 @@ process here is a real child on real DBOS:
   come up afterwards run it to convergence;
 - the API's own client hears each change of its Job, although a worker made
   it, because workers publish over NOTIFY and the API delivers locally;
+- the reconciler tick every worker schedules runs once per occurrence across
+  the deployment, not once per process;
 - a worker stops cleanly on SIGTERM and takes itself off the executor list.
 """
 
@@ -106,6 +108,23 @@ def _workers(environment: dict[str, str]) -> list[str]:
         engine.dispose()
 
 
+def _tick_occurrences(environment: dict[str, str]) -> list[int]:
+    """The reconcile interval each recorded tick fell in."""
+    interval_ms = int(environment["VAULT_JOBS_RECONCILE_INTERVAL_SECONDS"]) * 1000
+    engine = create_engine(normalize_database_url(environment["VAULT_DB_URL"]))
+    try:
+        with engine.connect() as connection:
+            created = connection.execute(
+                text(
+                    "SELECT created_at FROM dbos.workflow_status "
+                    "WHERE name = 'printstash.tick'"
+                )
+            ).scalars()
+            return [int(value) // interval_ms for value in created]
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture
 def converged(split_vault: dict[str, str], start_worker) -> dict:
     api = _start_api(split_vault)
@@ -131,6 +150,16 @@ class TestSplitTopology:
 
         assert states[-1] == "completed"
         assert all(notice["type"] == "job" for notice in converged["notices"])
+
+    def test_each_tick_runs_once_across_every_process(self, converged: dict) -> None:
+        # Every process that runs jobs schedules the reconciler tick. Two ticks
+        # inside one interval would mean an occurrence ran once per process.
+        deadline = time.monotonic() + 90
+        while len(occurrences := _tick_occurrences(converged["env"])) < 3:
+            assert time.monotonic() < deadline, f"ticks recorded: {occurrences}"
+            time.sleep(1)
+
+        assert len(occurrences) == len(set(occurrences)), occurrences
 
     def test_a_worker_leaves_cleanly_on_sigterm(self, converged: dict) -> None:
         assert _workers(converged["env"]).count("worker") == 2
