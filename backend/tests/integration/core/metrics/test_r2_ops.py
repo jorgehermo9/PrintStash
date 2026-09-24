@@ -1,36 +1,20 @@
-"""R2 operations hardening: richer health, scan restart cleanup, metrics."""
+"""R2 operations hardening: the Prometheus metrics endpoint.
+
+The health-endpoint tests that used to live here moved to
+tests/integration/api/v1/test_health.py, the mirror of the module they defend;
+the scan-restart cleanup became the scan source's repair of a stranded
+library, tested beside it in tests/integration/modules/sources/external_library/.
+"""
 
 from __future__ import annotations
-
-import json
-from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.core.config import _overlay
-from app.core.time import utcnow
-from app.db.models import (
-    ExternalLibrary,
-    ExternalLibraryScanStatus,
-    FileType,
-)
-from app.modules.sources import external_library
-from app.runtime.jobs import JobRegistry
+from app.db.models import FileType, JobState
+from app.modules.work.jobs import jobs
 from tests.factories import build_file, build_model, build_print_job
-
-# --- Item 1: richer /health output --------------------------------------------
-
-
-# The two health-endpoint tests that used to live here (component presence, and the
-# external-library status counts) moved to tests/integration/api/v1/test_health.py, the
-# mirror of the module they defend.
-
-
-# --- Item 2: background-scan restart cleanup ----------------------------------
-
-
-# --- Item 3: Prometheus metrics -----------------------------------------------
 
 
 class TestMetricsEndpoint:
@@ -41,17 +25,26 @@ class TestMetricsEndpoint:
         assert "printstash_app_info" in resp.text
         assert "printstash_http_request_duration_seconds" in resp.text
 
-    def test_metrics_counts_terminal_ingestion_jobs(self, client: TestClient) -> None:
-        reg = JobRegistry()
-        job_id = reg.create()
-        reg.update(job_id, state="completed")
+    def test_metrics_counts_terminal_jobs_by_definition(
+        self, client: TestClient
+    ) -> None:
+        job_id = jobs.create(
+            definition="ingest.upload", subject_key="metrics/1", owner_user_id=None
+        )
+        jobs.finish(job_id, state=JobState.COMPLETED)
 
         body = client.get("/metrics").text
-        assert (
-            'printstash_ingestion_jobs_total{kind="ingest",result="complete"}' in body
+
+        assert 'printstash_jobs_total{kind="ingest.upload",result="complete"}' in body
+
+    def test_metrics_reports_jobs_by_state(self, client: TestClient) -> None:
+        jobs.create(
+            definition="ingest.upload", subject_key="metrics/2", owner_user_id=None
         )
-        assert "printstash_ingestion_job_duration_seconds" in body
-        assert "printstash_ingestion_stuck_jobs" in body
+
+        body = client.get("/metrics").text
+
+        assert 'printstash_job_depth{state="queued"} 1.0' in body
 
     def test_metrics_exposes_the_fleet_scheduler_state(
         self,
@@ -99,80 +92,3 @@ class TestMetricsEndpoint:
             )
         finally:
             _overlay.pop("metrics_token", None)
-
-
-class TestResetOrphanedScans:
-    def test_reset_orphaned_scans_recovers_stranded_library(
-        self, db_session: Session, monkeypatch
-    ) -> None:
-        now = datetime(2026, 1, 1, 12, 0, 30, tzinfo=UTC)
-        monkeypatch.setattr(external_library, "utcnow", lambda: now)
-        lib = ExternalLibrary(
-            name="nas",
-            root_path="/mnt/nas",
-            enabled=True,
-            scan_schedule="* * * * *",
-            last_scanned_at=None,
-            last_scan_status=ExternalLibraryScanStatus.RUNNING,
-        )
-        db_session.add(lib)
-        db_session.commit()
-        db_session.refresh(lib)
-
-        # While stranded RUNNING, the scheduler skips it.
-        assert lib.id not in external_library.libraries_due_for_scan(db_session)
-
-        reset = external_library.reset_orphaned_scans(db_session)
-        assert reset == 1
-
-        db_session.refresh(lib)
-        assert lib.last_scan_status == ExternalLibraryScanStatus.ERROR
-        assert json.loads(lib.last_scan_summary)["error"] == "interrupted by restart"
-
-        # Loop-breaker (issue #24): the reset stamps last_scanned_at, so a scan that
-        # crashed the process is NOT immediately due again on the next tick — it
-        # waits for the schedule instead of crash-looping the container.
-        assert lib.last_scanned_at is not None
-        assert lib.id not in external_library.libraries_due_for_scan(db_session)
-
-        # Once the schedule has elapsed, it becomes eligible again as normal.
-        lib.last_scanned_at = now - timedelta(minutes=2)
-        db_session.add(lib)
-        db_session.commit()
-        assert lib.id in external_library.libraries_due_for_scan(db_session)
-
-    def test_reset_orphaned_scans_noop_without_running(
-        self, db_session: Session
-    ) -> None:
-        db_session.add(
-            ExternalLibrary(
-                name="nas",
-                root_path="/mnt/nas",
-                last_scan_status=ExternalLibraryScanStatus.OK,
-            )
-        )
-        db_session.commit()
-        assert external_library.reset_orphaned_scans(db_session) == 0
-
-    def test_reset_orphaned_scans_releases_the_abandoned_claim(
-        self, db_session: Session
-    ) -> None:
-        library = ExternalLibrary(
-            name="claimed-nas",
-            root_path="/mnt/claimed-nas",
-            enabled=True,
-            scan_schedule="* * * * *",
-            last_scan_status=ExternalLibraryScanStatus.RUNNING,
-            scan_claim_token="abandoned-claim",
-            scan_claim_expires_at=utcnow() + timedelta(minutes=30),
-            scan_job_id="dead-worker-job",
-        )
-        db_session.add(library)
-        db_session.commit()
-
-        external_library.reset_orphaned_scans(db_session)
-
-        db_session.refresh(library)
-        assert library.scan_claim_token is None
-        assert library.scan_claim_expires_at is None
-        assert library.scan_job_id is None

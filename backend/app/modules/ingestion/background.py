@@ -363,7 +363,12 @@ def inspect_uploaded_archive(
             result={"kind": "archive_manifest", **manifest.model_dump()},
         )
     except importer.ImportError_ as exc:
+        # The archive is refused on its content; no retry can accept it, so the
+        # staged bytes are released now rather than at lease expiry.
         registry.update(job_id, state="failed", error=str(exc), retryable=False)
+        from .ingestion import release_job_staging
+
+        release_job_staging(job_id)
 
 
 def run_archive_selection(

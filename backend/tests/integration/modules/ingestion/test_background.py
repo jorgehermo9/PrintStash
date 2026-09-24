@@ -1,8 +1,14 @@
-"""Import handlers report durable progress and preserve staged review manifests."""
+"""Import handlers report durable progress and preserve staged review manifests.
+
+Each handler runs as the step of an ``ingest.*`` Job, against the
+``IngestRequest`` that Job owns; a review manifest is written back onto that
+request, so any process can serve the later selection.
+"""
 
 from __future__ import annotations
 
 import io
+import json
 import uuid as _uuid
 import zipfile
 from pathlib import Path
@@ -12,40 +18,34 @@ import pytest
 from sqlmodel import Session
 
 import app.modules.ingestion.background as ingest_background
-from app.core.config import _overlay
-from app.db.models import User
+from app.db.models import IngestRequest, User
 from app.db.session import get_session_factory
 from app.modules.ingestion import import_resolvers, importer
 from app.modules.ingestion.importer import ImportError_
-from app.runtime.jobs import registry
+from app.modules.work.jobs import jobs
 from tests._env import use_local_storage
 from tests.factories import (
     build_user,
 )
+from tests.factories.protocols import MakeIngestRequest
 
 
 @pytest.fixture
 def owner(db_session: Session) -> User:
-    """The user this module's background jobs belong to.
+    """The user this module's Jobs belong to.
 
-    `background_jobs.owner_user_id` is a foreign key, so a job owned by a user id
-    that does not exist is refused — exactly as it is in production. These tests are
-    about listing, redaction and progress rather than about users, so the owner is a
-    fixture and the tests name it rather than hardcoding an id.
+    `jobs.owner_user_id` is a foreign key, so a job owned by a user id that does
+    not exist is refused — exactly as it is in production. These tests are about
+    progress and manifests rather than about users, so the owner is a fixture and
+    the tests name it rather than hardcoding an id.
     """
     return build_user(db_session, "import-owner")
 
 
-class TestMakerworldCookie:
-    def test_makerworld_cookie_is_ignored(self) -> None:
-        _overlay["makerworld_cookie"] = ""
-        assert ingest_background._makerworld_cookie("  session=abc  ") is None
-        assert ingest_background._makerworld_cookie(None) is None
-        assert ingest_background._makerworld_cookie("   ") is None
-
-        _overlay["makerworld_cookie"] = "instance=cookie"
-        assert ingest_background._makerworld_cookie(None) is None
-        assert ingest_background._makerworld_cookie("override") is None
+@pytest.fixture
+def job_id(owner: User, make_ingest_request: MakeIngestRequest) -> str:
+    """The Job an accepted request created; the handler runs as its step."""
+    return make_ingest_request(owner).job_id
 
 
 class TestCollectionTarget:
@@ -128,7 +128,7 @@ class TestStageMembers:
             page_url="https://crash.test/model", title="Crashy", source_id="3"
         )
 
-        async def fake_resolve(url: str, *, makerworld_cookie=None):
+        async def fake_resolve(url: str):
             if url == "https://bad.test/model":
                 raise importer.ImportError_("member_resolve_failed")
             if url == "https://crash.test/model":
@@ -148,9 +148,7 @@ class TestStageMembers:
                 side_effect=fake_download_and_collect,
             ),
         ):
-            groups = await ingest_background._stage_members(
-                [good, bad, crashy], makerworld_cookie=None
-            )
+            groups = await ingest_background._stage_members([good, bad, crashy])
 
         by_title = {g.title: g for g in groups}
         assert by_title["Good"].error is None
@@ -173,21 +171,18 @@ class TestStageMembers:
                 ingest_background, "_download_and_collect", AsyncMock(return_value=[])
             ),
         ):
-            groups = await ingest_background._stage_members(
-                [empty], makerworld_cookie=None
-            )
+            groups = await ingest_background._stage_members([empty])
         assert groups[0].error == "no_importable_files"
 
 
 class TestHandleCollectionUrl:
     @pytest.mark.asyncio
     async def test_handle_collection_url_review_stages_manifest(
-        self, owner: User, tmp_path: Path
+        self, owner: User, tmp_path: Path, job_id: str
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://printables.com/collections/9", review=True)
         members = [
             import_resolvers.CollectionMember(
@@ -205,7 +200,7 @@ class TestHandleCollectionUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "completed"
         assert status.result["kind"] == "collection_manifest"
@@ -214,12 +209,11 @@ class TestHandleCollectionUrl:
 
     @pytest.mark.asyncio
     async def test_handle_collection_url_auto_imports_members(
-        self, owner: User, tmp_path: Path
+        self, owner: User, tmp_path: Path, job_id: str
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://printables.com/collections/9", review=False)
         members = [
             import_resolvers.CollectionMember(
@@ -256,7 +250,7 @@ class TestHandleCollectionUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "completed"
         assert status.succeeded == 1
@@ -268,11 +262,11 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://printables.com/collections/9")
         with (
             patch.object(
@@ -288,7 +282,7 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "collection_resolve_failed"
@@ -298,11 +292,11 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/model.stl")
         with (
             patch.object(import_resolvers, "classify_collection", return_value=None),
@@ -324,7 +318,7 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "download_failed"
@@ -334,11 +328,11 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/model.stl")
         with (
             patch.object(import_resolvers, "classify_collection", return_value=None),
@@ -360,7 +354,7 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "network blew up"
@@ -370,6 +364,7 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.core.config import settings
@@ -377,7 +372,6 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.html"
         staged.write_bytes(b"<html>not a model</html>")
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://example.com/some-page")
 
         async def fake_download(url: str):
@@ -399,7 +393,7 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "url_not_a_direct_file"
@@ -410,6 +404,7 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.core.config import settings
@@ -417,7 +412,6 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.zip"
         staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/bundle.zip")
 
         async def fake_download(url: str):
@@ -439,7 +433,7 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "completed"
         assert status.result["kind"] == "archive_manifest"
@@ -449,11 +443,11 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.schemas.ingest import UrlIngestRequest
 
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://www.printables.com/model/123-x")
         files = [
             import_resolvers.ModelFile(file_id="1", name="a.stl", file_type="stl"),
@@ -474,7 +468,7 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "completed"
         assert status.result["kind"] == "model_files_manifest"
@@ -486,6 +480,7 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.core.config import settings
@@ -493,7 +488,6 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.zip"
         staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/bundle.zip")
 
         async def fake_download(url: str):
@@ -520,7 +514,7 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "archive_zip_bomb"
@@ -531,6 +525,7 @@ class TestImportFromUrl:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
         from app.core.config import settings
@@ -538,7 +533,6 @@ class TestImportFromUrl:
 
         staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.stl"
         staged.write_bytes(_cube_stl_bytes())
-        job_id = registry.create(owner_user_id=owner.id)
         req = UrlIngestRequest(url="https://cdn.test/cube.stl")
 
         async def fake_download(url: str):
@@ -560,74 +554,86 @@ class TestImportFromUrl:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "completed", status.error
         assert status.model_id is not None
 
 
 class TestInspectUploadedArchive:
-    @pytest.mark.asyncio
-    async def test_inspect_uploaded_archive_reports_import_error(
-        self, owner: User, tmp_path: Path
+    def test_records_the_archive_manifest_on_the_request(
+        self, db_session: Session, owner: User, tmp_path: Path, job_id: str
     ) -> None:
         use_local_storage(tmp_path)
-        staged = tmp_path / "staged.zip"
-        staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=owner.id)
+        staged = _leased_archive(db_session, owner, job_id)
+
+        ingest_background.inspect_uploaded_archive(
+            job_id=job_id, staged=staged, original_filename="staged.zip"
+        )
+
+        db_session.expire_all()
+        request = db_session.get(IngestRequest, job_id)
+        assert request is not None
+        manifest = json.loads(request.manifest_json)
+        assert (manifest["kind"], [e["name"] for e in manifest["entries"]]) == (
+            "archive",
+            ["cube.stl"],
+        )
+
+    def test_fails_the_job_on_a_refused_archive(
+        self, db_session: Session, owner: User, tmp_path: Path, job_id: str
+    ) -> None:
+        use_local_storage(tmp_path)
+        staged = _leased_archive(db_session, owner, job_id)
 
         with patch.object(
-            importer,
-            "inspect_archive",
-            side_effect=ImportError_("archive_zip_bomb"),
+            importer, "inspect_archive", side_effect=ImportError_("archive_zip_bomb")
         ):
-            await ingest_background.inspect_uploaded_archive(
-                job_id=job_id,
-                staged=staged,
-                original_filename="staged.zip",
-                actor_user_id=owner.id,
+            ingest_background.inspect_uploaded_archive(
+                job_id=job_id, staged=staged, original_filename="staged.zip"
             )
 
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
-        assert status.state == "failed"
-        assert status.error == "archive_zip_bomb"
+        assert (status.state, status.error) == ("failed", "archive_zip_bomb")
+
+    def test_releases_the_staged_archive_it_refused(
+        self, db_session: Session, owner: User, tmp_path: Path, job_id: str
+    ) -> None:
+        use_local_storage(tmp_path)
+        staged = _leased_archive(db_session, owner, job_id)
+
+        with patch.object(
+            importer, "inspect_archive", side_effect=ImportError_("archive_zip_bomb")
+        ):
+            ingest_background.inspect_uploaded_archive(
+                job_id=job_id, staged=staged, original_filename="staged.zip"
+            )
+
         assert not staged.exists()
 
-    @pytest.mark.asyncio
-    async def test_inspect_uploaded_archive_reports_unexpected_error(
-        self,
-        owner: User,
-        tmp_path: Path,
+    def test_leaves_an_unexpected_failure_to_the_job_runner(
+        self, db_session: Session, owner: User, tmp_path: Path, job_id: str
     ) -> None:
         use_local_storage(tmp_path)
-        staged = tmp_path / "staged2.zip"
-        staged.write_bytes(_zip_bytes())
-        job_id = registry.create(owner_user_id=owner.id)
+        staged = _leased_archive(db_session, owner, job_id)
 
-        with patch.object(
-            importer, "inspect_archive", side_effect=RuntimeError("boom")
-        ):
-            await ingest_background.inspect_uploaded_archive(
-                job_id=job_id,
-                staged=staged,
-                original_filename="staged2.zip",
-                actor_user_id=owner.id,
-            )
+        with patch.object(importer, "inspect_archive", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError, match="boom"):
+                ingest_background.inspect_uploaded_archive(
+                    job_id=job_id, staged=staged, original_filename="staged.zip"
+                )
 
-        status = registry.get(job_id)
-        assert status is not None
-        assert status.state == "failed"
-        assert status.error == "boom"
+        # Kept for the retry the runner's failure makes possible.
+        assert staged.exists()
 
 
 class TestRunFileSelectionImport:
     @pytest.mark.asyncio
     async def test_run_file_selection_import_reports_import_error(
-        self, owner: User, tmp_path: Path
+        self, owner: User, tmp_path: Path, job_id: str
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=owner.id)
         with patch.object(
             import_resolvers,
             "resolve_selected_download",
@@ -642,7 +648,7 @@ class TestRunFileSelectionImport:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "printables_resolve_failed"
@@ -652,9 +658,9 @@ class TestRunFileSelectionImport:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=owner.id)
         with (
             patch.object(
                 import_resolvers,
@@ -674,7 +680,7 @@ class TestRunFileSelectionImport:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "no_importable_files"
@@ -684,9 +690,9 @@ class TestRunFileSelectionImport:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=owner.id)
         with patch.object(
             import_resolvers,
             "resolve_selected_download",
@@ -701,7 +707,7 @@ class TestRunFileSelectionImport:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "boom"
@@ -713,9 +719,9 @@ class TestRunCollectionMemberImport:
         self,
         owner: User,
         tmp_path: Path,
+        job_id: str,
     ) -> None:
         use_local_storage(tmp_path)
-        job_id = registry.create(owner_user_id=owner.id)
         with patch.object(
             ingest_background,
             "_stage_members",
@@ -729,10 +735,33 @@ class TestRunCollectionMemberImport:
                 actor_user_id=owner.id,
                 session_factory=get_session_factory(),
             )
-        status = registry.get(job_id)
+        status = jobs.get(job_id)
         assert status is not None
         assert status.state == "failed"
         assert status.error == "boom"
+
+
+def _leased_archive(session: Session, owner: User, job_id: str) -> Path:
+    """An uploaded ZIP in staging, owned by ``job_id`` the way the route leaves it."""
+    import hashlib
+
+    from app.core.config import settings
+    from app.modules.ingestion import staging_leases
+
+    staged = settings.incoming_dir / f"{_uuid.uuid4().hex}.zip"
+    content = _zip_bytes()
+    staged.write_bytes(content)
+    staging_leases.create_job_lease(
+        session,
+        job_id=job_id,
+        owner_user_id=owner.id,
+        path=staged,
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        check_capacity=False,
+    )
+    session.commit()
+    return staged
 
 
 def _cube_stl_bytes() -> bytes:

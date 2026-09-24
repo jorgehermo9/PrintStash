@@ -26,7 +26,6 @@ from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import Session, select
@@ -37,13 +36,13 @@ from app.core.config import _overlay
 from app.core.errors import ErrorKind, OperationError
 from app.core.time import utcnow
 from app.db.models import (
-    BackgroundJob,
     CaptureUploadSlot,
     CaptureUploadSlotState,
     InboxItem,
     InboxItemResult,
     InboxItemResultState,
     InboxItemState,
+    Job,
     ModelProvenanceSource,
     ModelSourceCover,
     StagingLease,
@@ -60,8 +59,10 @@ from app.modules.storage.storage_backend.contracts import (
 )
 from app.modules.storage.storage_deletion import process_storage_delete_intents
 from app.modules.storage.storage_ownership import provider_ref_for_backend
+from app.modules.work.jobs import jobs
+from app.runtime.engine.inline import InlineJobEngine
 from app.schemas.inbox import CaptureUploadSlotsCreate, InboxImportRequest
-from tests.factories import build_model, build_user
+from tests.factories import build_job, build_model, build_user
 
 
 @pytest.fixture(autouse=True)
@@ -473,11 +474,8 @@ class TestUploadCaptureSlot:
             ).id
             == slots[0].id
         )
-        first = BackgroundJob(id="slot-job-one", owner_user_id=owner.id)
-        second = BackgroundJob(id="slot-job-two", owner_user_id=owner.id)
-        db_session.add(first)
-        db_session.add(second)
-        db_session.flush()
+        first = build_job(db_session, kind="inbox.import", owner=owner)
+        second = build_job(db_session, kind="inbox.import", owner=owner)
         inbox.staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=first.id
         )
@@ -485,7 +483,7 @@ class TestUploadCaptureSlot:
             db_session, inbox_item_id=row.id, job_id=second.id
         )
         leases = db_session.exec(
-            select(StagingLease).where(StagingLease.background_job_id == second.id)
+            select(StagingLease).where(StagingLease.job_id == second.id)
         ).all()
         assert len(leases) == 2
         assert {lease.capture_upload_slot_origin_id for lease in leases} == {
@@ -901,14 +899,6 @@ def _make_item(db_session: Session, owner: User, **overrides) -> InboxItem:
     return row
 
 
-class _BackgroundTaskRecorder:
-    def __init__(self) -> None:
-        self.tasks: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
-
-    def add_task(self, function: object, *args: object, **kwargs: object) -> None:
-        self.tasks.append((function, args, kwargs))
-
-
 class TestImportItem:
     @pytest.mark.parametrize("requested", [["missing"], ["ok", "missing"]])
     def test_import_route_rejects_invalid_v2_selection_before_scheduling(
@@ -936,23 +926,19 @@ class TestImportItem:
             ),
         )
         assert row.id is not None
-        background = _BackgroundTaskRecorder()
-        jobs_before = db_session.exec(select(BackgroundJob)).all()
+        jobs_before = db_session.exec(select(Job)).all()
 
         with pytest.raises(OperationError) as exc_info:
             inbox_api.import_item(
                 row.id,
                 InboxImportRequest(selected_ids=requested),
-                cast(BackgroundTasks, background),
                 current_user=owner,
                 session=db_session,
-                session_factory=get_session_factory(),
             )
 
         assert exc_info.value.kind is ErrorKind.UNPROCESSABLE
         assert exc_info.value.detail == "file_selection_invalid"
-        assert background.tasks == []
-        assert db_session.exec(select(BackgroundJob)).all() == jobs_before
+        assert db_session.exec(select(Job)).all() == jobs_before
 
 
 class TestRetry:
@@ -973,10 +959,8 @@ class TestRetry:
         )
         row.state = InboxItemState.FAILED
         row.retryable = True
-        job = BackgroundJob(id="slot-retry-after-transfer-job", owner_user_id=owner.id)
-        db_session.add(job)
-        db_session.flush()
-        row.background_job_id = job.id
+        job = build_job(db_session, kind="inbox.import", owner=owner)
+        row.job_id = job.id
         inbox.staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=job.id
         )
@@ -990,11 +974,11 @@ class TestRetry:
                 StagingLease.capture_upload_slot_id == slots[0].id
             )
         ).one()
-        assert lease.background_job_id is None
+        assert lease.job_id is None
         assert lease.capture_upload_slot_origin_id is None
 
-    def test_retry_partial_schedules_failed_selection_only(
-        self, client: TestClient, db_session: Session, monkeypatch
+    def test_retry_partial_queues_an_import_of_the_failed_selection_only(
+        self, client: TestClient, db_session: Session
     ) -> None:
         owner = build_user(db_session, "retry-partial-api", superuser=True)
         row = _make_item(
@@ -1016,23 +1000,24 @@ class TestRetry:
         )
         db_session.add(result)
         db_session.commit()
-        calls: list[tuple[int, list[str]]] = []
-
-        async def fake_run_import(
-            item_id: int, selected_ids: list[str], _factory
-        ) -> None:
-            calls.append((item_id, selected_ids))
-
-        monkeypatch.setattr(inbox, "run_import", fake_run_import)
         headers = {
             "Authorization": f"Bearer {create_access_token(owner.id, owner.username, scope='write')}"
         }
 
         response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
 
-        assert response.status_code == 200
-        assert response.json()["state"] == "review"
-        assert calls == [(row.id, ["bad"])]
+        assert response.status_code == 200, response.text
+        db_session.expire_all()
+        retried = db_session.get(InboxItem, row.id)
+        assert retried is not None and retried.job_id is not None
+        status = jobs.get(retried.job_id)
+        assert (
+            status.state if status else None,
+            inbox.selected_ids(retried.manifest_json),
+        ) == (
+            "queued",
+            ["bad"],
+        )
 
     def test_retry_route_rejects_invalid_v2_selection_before_scheduling(
         self,
@@ -1059,25 +1044,21 @@ class TestRetry:
             ),
         )
         assert row.id is not None
-        background = _BackgroundTaskRecorder()
-        jobs_before = db_session.exec(select(BackgroundJob)).all()
+        jobs_before = db_session.exec(select(Job)).all()
 
         with pytest.raises(OperationError) as exc_info:
-            inbox_api.retry_item(
-                row.id,
-                cast(BackgroundTasks, background),
-                current_user=owner,
-                session=db_session,
-                session_factory=get_session_factory(),
-            )
+            inbox_api.retry_item(row.id, current_user=owner, session=db_session)
 
         assert exc_info.value.kind is ErrorKind.UNPROCESSABLE
         assert exc_info.value.detail == "file_selection_invalid"
-        assert background.tasks == []
-        assert db_session.exec(select(BackgroundJob)).all() == jobs_before
+        assert db_session.exec(select(Job)).all() == jobs_before
 
-    def test_retry_item_schedules_resolve_when_returned_to_captured(
-        self, client: TestClient, db_session: Session, monkeypatch
+    def test_retry_item_resolves_again_when_returned_to_captured(
+        self,
+        client: TestClient,
+        db_session: Session,
+        monkeypatch,
+        work_engine: InlineJobEngine,
     ) -> None:
         headers = _headers(db_session, "retry-success", admin=True)
         owner = build_user(db_session, "retry-success-owner", superuser=True)
@@ -1091,13 +1072,21 @@ class TestRetry:
         calls: list[int] = []
 
         async def fake_resolve(item_id: int) -> None:
+            # A resolve always moves the item on from CAPTURED, as the real one
+            # does; otherwise the resolve source would find it pending again.
             calls.append(item_id)
+            with get_session_factory().scoped_session() as session:
+                item = session.get(InboxItem, item_id)
+                assert item is not None
+                item.state = InboxItemState.REVIEW
+                session.add(item)
+                session.commit()
 
         monkeypatch.setattr(inbox, "resolve", fake_resolve)
 
         response = client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers)
+        work_engine.drain()
 
-        assert response.status_code == 200
         assert response.json()["state"] == "captured"
         assert calls == [row.id]
 

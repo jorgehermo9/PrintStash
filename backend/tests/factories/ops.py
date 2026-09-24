@@ -35,6 +35,8 @@ from app.db.models import (
     ExternalLibraryObservation,
     FilamentProfile,
     File,
+    IngestRequest,
+    IngestRequestKind,
     Job,
     JobState,
     LibrarySourceKind,
@@ -267,6 +269,40 @@ def build_job(
             owner_user_id=owner.id if owner is not None else None,
             **overrides,
         ),
+    )
+
+
+def build_ingest_request(
+    session: Session,
+    owner: User,
+    *,
+    kind: IngestRequestKind = IngestRequestKind.URL,
+    state: JobState = JobState.QUEUED,
+    **overrides: Any,
+) -> IngestRequest:
+    """An accepted ingest request with the queued Job that owns it.
+
+    A request is the intent of exactly one ``ingest.*`` Job: its primary key is
+    the Job's id and the Job's subject names it. A request without that Job, or
+    a Job of the wrong definition, is a shape no route produces and one the
+    reconciler would fail as an orphan.
+    """
+    from app.modules.ingestion.requests import DEFINITIONS, subject_key
+
+    reject_aliases(overrides, {"owner_user_id": "owner"})
+    job_id = f"ingest-{nth('ingest_request')}"
+    build_job(
+        session,
+        kind=DEFINITIONS[kind],
+        state=state,
+        owner=owner,
+        subject=subject_key(job_id),
+        id=job_id,
+    )
+    overrides.setdefault("selection_json", "{}")
+    return save(
+        session,
+        IngestRequest(job_id=job_id, kind=kind, owner_user_id=owner.id, **overrides),
     )
 
 

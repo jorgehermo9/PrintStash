@@ -20,7 +20,6 @@ from app.core.errors import ErrorKind, OperationError
 from app.core.time import utcnow
 from app.db.models import (
     ArtifactProvenanceLink,
-    BackgroundJob,
     CaptureUploadSlot,
     Collection,
     File,
@@ -31,6 +30,7 @@ from app.db.models import (
     InboxItemResultState,
     InboxItemState,
     InboxSourceKind,
+    Job,
     Model,
     ModelProvenanceSource,
     StagingLease,
@@ -39,7 +39,9 @@ from app.db.models import (
 )
 from app.db.session import get_session_factory
 from app.modules.ingestion import import_resolvers, importer, inbox, staging_leases
-from app.runtime.jobs import registry
+from app.modules.work.jobs import jobs
+from app.modules.work.submission import nudge
+from app.runtime.engine.inline import InlineJobEngine
 from app.schemas.inbox import CaptureUploadSlotsCreate, InboxItemUpdate
 from tests.factories import build_collection, build_file, build_model, build_user
 
@@ -114,7 +116,7 @@ class TestBeginImport:
             raise staging_leases.StagingLeaseError("injected")
 
         monkeypatch.setattr(staging_leases, "transfer_inbox_to_job", fail_transfer)
-        assert inbox._begin_import(item.id, [], get_session_factory()) is None
+        assert inbox.begin_import(db_session, item, []) is None
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, item.id)
@@ -122,7 +124,7 @@ class TestBeginImport:
             assert fresh.state == InboxItemState.FAILED
             assert fresh.error_code == "staging_expired"
             assert fresh.retryable is False
-            assert not session.exec(select(BackgroundJob)).all()
+            assert not session.exec(select(Job)).all()
             retained = session.get(StagingLease, original[0])
             assert retained is not None
             assert (retained.inbox_item_id, retained.path) == original[1:3]
@@ -235,15 +237,36 @@ class TestValidateImportSelection:
 
 
 class TestReconcileInterruptedItems:
-    def test_reconcile_marks_resolving_items_failed(self, db_session: Session) -> None:
+    def test_returns_an_interrupted_resolve_to_the_resolve_source(
+        self, db_session: Session
+    ) -> None:
         owner = _make_user(db_session, "reconcile-resolving")
         row = _make_item(db_session, owner, state=InboxItemState.RESOLVING)
-        count = inbox.reconcile_interrupted_items()
-        assert count >= 1
+
+        inbox.reconcile_interrupted_items()
+
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
-            assert fresh.state == InboxItemState.FAILED
-            assert fresh.error_code == "import_interrupted"
+            assert fresh.state == InboxItemState.CAPTURED
+
+    def test_leaves_an_item_whose_job_is_still_active(
+        self, db_session: Session
+    ) -> None:
+        owner = _make_user(db_session, "reconcile-active-job")
+        job_id = jobs.create(
+            definition=inbox.IMPORT_DEFINITION,
+            subject_key="inbox_item/active",
+            owner_user_id=owner.id,
+        )
+        row = _make_item(
+            db_session, owner, state=InboxItemState.IMPORTING, job_id=job_id
+        )
+
+        inbox.reconcile_interrupted_items()
+
+        with get_session_factory().scoped_session() as session:
+            fresh = session.get(InboxItem, row.id)
+            assert fresh.state == InboxItemState.IMPORTING
 
     def test_reconcile_completes_importing_item_with_finished_job(
         self,
@@ -251,10 +274,14 @@ class TestReconcileInterruptedItems:
         db_session: Session,
     ) -> None:
         owner = _make_user(db_session, "reconcile-importing-ok")
-        job_id = registry.create(owner_user_id=owner.id)
-        registry.update(job_id, state="completed", model_id=imported_model.id)
+        job_id = jobs.create(
+            definition=inbox.IMPORT_DEFINITION,
+            subject_key=f"inbox_item/test-{owner.id}",
+            owner_user_id=owner.id,
+        )
+        jobs.update(job_id, state="completed", model_id=imported_model.id)
         row = _make_item(
-            db_session, owner, state=InboxItemState.IMPORTING, background_job_id=job_id
+            db_session, owner, state=InboxItemState.IMPORTING, job_id=job_id
         )
 
         inbox.reconcile_interrupted_items()
@@ -370,8 +397,12 @@ class TestReconcileInterruptedItems:
                 kwargs["provenance_source_id"]
             ),
         )
-        job_id = registry.create(owner_user_id=owner.id)
-        registry.update(
+        job_id = jobs.create(
+            definition=inbox.IMPORT_DEFINITION,
+            subject_key=f"inbox_item/test-{owner.id}",
+            owner_user_id=owner.id,
+        )
+        jobs.update(
             job_id,
             state="completed",
             model_id=model.id,
@@ -390,7 +421,7 @@ class TestReconcileInterruptedItems:
         row = db_session.get(InboxItem, row.id)
         assert row is not None
         row.state = InboxItemState.IMPORTING
-        row.background_job_id = job_id
+        row.job_id = job_id
         staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=job_id
         )
@@ -403,7 +434,7 @@ class TestReconcileInterruptedItems:
             transferred = session.exec(
                 select(StagingLease).where(
                     StagingLease.capture_upload_slot_origin_id.in_(slot_ids),
-                    StagingLease.background_job_id == job_id,
+                    StagingLease.job_id == job_id,
                     StagingLease.capture_upload_slot_id.is_(None),
                 )
             ).all()
@@ -441,7 +472,7 @@ class TestReconcileInterruptedItems:
             )
             assert (
                 session.exec(
-                    select(StagingLease).where(StagingLease.background_job_id == job_id)
+                    select(StagingLease).where(StagingLease.job_id == job_id)
                 ).all()
                 == []
             )
@@ -532,9 +563,13 @@ class TestReconcileInterruptedItems:
             retryable=False,
         )
         db_session.add_all([link, result])
-        job_id = registry.create(owner_user_id=owner.id)
+        job_id = jobs.create(
+            definition=inbox.IMPORT_DEFINITION,
+            subject_key=f"inbox_item/test-{owner.id}",
+            owner_user_id=owner.id,
+        )
         row.state = InboxItemState.COMPLETED
-        row.background_job_id = job_id
+        row.job_id = job_id
         row.resulting_model_id = model.id
         row.completion = InboxItemCompletion.COMPLETE
         row.retryable = True
@@ -592,7 +627,7 @@ class TestReconcileInterruptedItems:
             )
             assert (
                 session.exec(
-                    select(StagingLease).where(StagingLease.background_job_id == job_id)
+                    select(StagingLease).where(StagingLease.job_id == job_id)
                 ).all()
                 == []
             )
@@ -634,13 +669,17 @@ class TestReconcileInterruptedItems:
         db_session: Session,
     ) -> None:
         owner = _make_user(db_session, "reconcile-v2-no-results")
-        job_id = registry.create(owner_user_id=owner.id)
-        registry.update(job_id, state="completed", model_id=imported_model.id)
+        job_id = jobs.create(
+            definition=inbox.IMPORT_DEFINITION,
+            subject_key=f"inbox_item/test-{owner.id}",
+            owner_user_id=owner.id,
+        )
+        jobs.update(job_id, state="completed", model_id=imported_model.id)
         row = _make_item(
             db_session,
             owner,
             state=InboxItemState.IMPORTING,
-            background_job_id=job_id,
+            job_id=job_id,
             manifest_json=json.dumps(
                 {
                     "schema_version": 2,
@@ -666,9 +705,7 @@ class TestReconcileInterruptedItems:
         db_session: Session,
     ) -> None:
         owner = _make_user(db_session, "reconcile-importing-fail")
-        row = _make_item(
-            db_session, owner, state=InboxItemState.IMPORTING, background_job_id=None
-        )
+        row = _make_item(db_session, owner, state=InboxItemState.IMPORTING, job_id=None)
 
         inbox.reconcile_interrupted_items()
 
@@ -1131,25 +1168,108 @@ class TestResolve:
             assert fresh.retryable is True
 
 
-class TestRunImport:
-    @pytest.mark.asyncio
-    async def test_run_import_ignores_item_not_in_review(
+def _import_through_job(
+    session: Session, engine: InlineJobEngine, item_id: int, selected: list[str]
+) -> str | None:
+    """Accept an import the way the route does, then run the Job it queued."""
+    row = session.get(InboxItem, item_id)
+    assert row is not None
+    job_id = inbox.begin_import(session, row, selected)
+    nudge(inbox.IMPORT_DEFINITION)
+    engine.drain()
+    session.expire_all()
+    return job_id
+
+
+class TestBeginImportThroughJob:
+    def test_queues_an_import_job_for_a_reviewed_item(
+        self, db_session: Session, work_engine: InlineJobEngine
+    ) -> None:
+        owner = _make_user(db_session, "begin-import-queued")
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.REVIEW,
+            manifest_json=json.dumps({"kind": "direct"}),
+        )
+
+        job_id = inbox.begin_import(db_session, row, [])
+
+        status = jobs.get(job_id or "")
+        assert status is not None
+        assert (status.kind, status.state) == (inbox.IMPORT_DEFINITION, "queued")
+
+    def test_moves_the_item_to_importing_under_its_job(
         self, db_session: Session
     ) -> None:
+        owner = _make_user(db_session, "begin-import-importing")
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.REVIEW,
+            manifest_json=json.dumps({"kind": "direct"}),
+        )
+
+        job_id = inbox.begin_import(db_session, row, [])
+
+        db_session.refresh(row)
+        assert (row.state, row.job_id) == (InboxItemState.IMPORTING, job_id)
+
+    def test_refuses_an_item_that_is_not_in_review(self, db_session: Session) -> None:
         owner = _make_user(db_session, "run-import-wrong-state")
         row = _make_item(db_session, owner, state=InboxItemState.CAPTURED)
-        await inbox.run_import(row.id, [], get_session_factory())
-        with get_session_factory().scoped_session() as session:
-            fresh = session.get(InboxItem, row.id)
-            assert fresh.state == InboxItemState.CAPTURED
 
-    @pytest.mark.asyncio
-    async def test_records_the_resulting_model_when_a_direct_import_completes(
+        with pytest.raises(OperationError) as exc:
+            inbox.begin_import(db_session, row, [])
+
+        assert exc.value.kind is ErrorKind.CONFLICT
+
+    def test_requires_access_to_the_target_collection(
+        self, db_session: Session
+    ) -> None:
+        owner = _make_user(db_session, "run-import-no-access", admin=False)
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.REVIEW,
+            target_collection_id=None,
+            manifest_json=json.dumps({"kind": "direct"}),
+        )
+
+        with pytest.raises(OperationError) as exc:
+            inbox.begin_import(db_session, row, [])
+
+        assert exc.value.kind is ErrorKind.FORBIDDEN
+
+
+class TestRunImportJob:
+    def test_cancels_a_job_whose_item_moved_on(
+        self, db_session: Session, work_engine: InlineJobEngine
+    ) -> None:
+        owner = _make_user(db_session, "run-import-moved-on")
+        row = _make_item(
+            db_session,
+            owner,
+            state=InboxItemState.REVIEW,
+            manifest_json=json.dumps({"kind": "direct"}),
+        )
+        job_id = inbox.begin_import(db_session, row, [])
+        row.state = InboxItemState.DISMISSED
+        db_session.add(row)
+        db_session.commit()
+
+        inbox.run_import_job(row.id, job_id or "")
+
+        status = jobs.get(job_id or "")
+        assert status is not None and status.state == "cancelled"
+
+    def test_records_the_resulting_model_when_a_direct_import_completes(
         self,
         imported_model: Model,
         db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "run-import-direct")
         row = _make_item(
@@ -1168,11 +1288,11 @@ class TestRunImport:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
@@ -1180,9 +1300,8 @@ class TestRunImport:
             assert fresh.resulting_model_id == imported_model.id
             assert fresh.completed_at is not None
 
-    @pytest.mark.asyncio
-    async def test_fails_retryably_when_an_archive_item_has_no_staging_key(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    def test_fails_retryably_when_an_archive_item_has_no_staging_key(
+        self, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         owner = _make_user(db_session, "run-import-archive-missing")
         row = _make_item(
@@ -1195,20 +1314,20 @@ class TestRunImport:
             staging_key=None,
         )
 
-        await inbox.run_import(row.id, ["a.stl"], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, ["a.stl"])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.FAILED
             assert fresh.retryable is True
 
-    @pytest.mark.asyncio
-    async def test_run_import_archive_completes(
+    def test_run_import_archive_completes(
         self,
         imported_model: Model,
         db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "run-import-archive-ok")
         _overlay["staging_dir"] = tmp_path / "staging"
@@ -1234,11 +1353,11 @@ class TestRunImport:
         )
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
-        await inbox.run_import(row.id, ["a.stl"], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, ["a.stl"])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
@@ -1247,13 +1366,13 @@ class TestRunImport:
             assert fresh.staging_key is None
         assert not staged_archive.exists()
 
-    @pytest.mark.asyncio
-    async def test_releases_staging_after_importing_a_browser_file_copy(
+    def test_releases_staging_after_importing_a_browser_file_copy(
         self,
         imported_model: Model,
         db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "run-import-browser-file")
         _overlay["staging_dir"] = tmp_path / "staging"
@@ -1278,11 +1397,11 @@ class TestRunImport:
             assert copied.read_bytes() == b"browser-owned-package"
             assert name == "widget.3mf"
             copied.unlink()
-            registry.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
@@ -1291,13 +1410,13 @@ class TestRunImport:
             assert fresh.staging_key is None
         assert not staged.exists()
 
-    @pytest.mark.asyncio
-    async def test_run_import_model_files_completes(
+    def test_run_import_model_files_completes(
         self,
         imported_model: Model,
         db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "run-import-model-files")
         row = _make_item(
@@ -1338,24 +1457,24 @@ class TestRunImport:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
             assert fresh.resulting_model_id == imported_model.id
 
-    @pytest.mark.asyncio
-    async def test_run_import_collection_completes(
+    def test_run_import_collection_completes(
         self,
         imported_model: Model,
         db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "run-import-collection")
         row = _make_item(
@@ -1381,20 +1500,23 @@ class TestRunImport:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.COMPLETED
             assert fresh.resulting_model_id == imported_model.id
 
-    @pytest.mark.asyncio
-    async def test_run_import_job_not_completed_marks_failed(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_run_import_job_not_completed_marks_failed(
+        self,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "run-import-job-failed")
         row = _make_item(
@@ -1413,11 +1535,11 @@ class TestRunImport:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="failed", error="ingest_exploded")
+            jobs.update(job_id, state="failed", error="ingest_exploded")
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
@@ -1425,9 +1547,11 @@ class TestRunImport:
             assert fresh.error_code == "ingest_exploded"
             assert fresh.retryable is True
 
-    @pytest.mark.asyncio
-    async def test_run_import_exception_marks_failed(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    def test_run_import_exception_marks_failed(
+        self,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "run-import-boom")
         row = _make_item(
@@ -1442,29 +1566,12 @@ class TestRunImport:
 
         monkeypatch.setattr(inbox, "_download_assets", boom)
 
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)
             assert fresh.state == InboxItemState.FAILED
             assert fresh.retryable is True
-
-    @pytest.mark.asyncio
-    async def test_run_import_requires_target_collection_access(
-        self,
-        db_session: Session,
-    ) -> None:
-        owner = _make_user(db_session, "run-import-no-access", admin=False)
-        row = _make_item(
-            db_session,
-            owner,
-            state=InboxItemState.REVIEW,
-            target_collection_id=None,
-            manifest_json=json.dumps({"kind": "direct"}),
-        )
-        with pytest.raises(OperationError) as exc:
-            await inbox.run_import(row.id, [], get_session_factory())
-        assert exc.value.kind is ErrorKind.FORBIDDEN
 
 
 class TestRetry:
@@ -1542,13 +1649,13 @@ class TestRetry:
         updated = inbox.retry(db_session, row)
         assert updated.state == InboxItemState.CAPTURED
 
-    @pytest.mark.asyncio
-    async def test_legacy_browser_file_failure_retry_then_success_returns_lease_to_review(
+    def test_legacy_browser_file_failure_retry_then_success_returns_lease_to_review(
         self,
         imported_model: Model,
         db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        work_engine: InlineJobEngine,
     ) -> None:
         owner = _make_user(db_session, "legacy-browser-retry")
         _overlay["staging_dir"] = tmp_path / "staging"
@@ -1583,16 +1690,16 @@ class TestRetry:
                 RuntimeError("first import failed")
             ),
         )
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         db_session.expire_all()
         failed = db_session.get(InboxItem, row.id)
         assert failed is not None
         assert failed.state == InboxItemState.FAILED
-        assert failed.background_job_id is not None
-        job_id = failed.background_job_id
+        assert failed.job_id is not None
+        job_id = failed.job_id
         lease = db_session.exec(
-            select(StagingLease).where(StagingLease.background_job_id == job_id)
+            select(StagingLease).where(StagingLease.job_id == job_id)
         ).one()
         assert lease.inbox_item_id is None
 
@@ -1602,13 +1709,13 @@ class TestRetry:
             select(StagingLease).where(StagingLease.id == lease.id)
         ).one()
         assert returned.inbox_item_id == row.id
-        assert returned.background_job_id is None
+        assert returned.job_id is None
 
         def complete_import(*, job_id: str, **_kwargs) -> None:
-            registry.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.update(job_id, state="completed", model_id=imported_model.id)
 
         monkeypatch.setattr(inbox.importer, "import_assets", complete_import)
-        await inbox.run_import(row.id, [], get_session_factory())
+        _import_through_job(db_session, work_engine, row.id, [])
 
         with get_session_factory().scoped_session() as session:
             fresh = session.get(InboxItem, row.id)

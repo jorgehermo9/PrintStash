@@ -41,6 +41,8 @@ from app.db.models import (
     InboxItemState,
     InboxSourceKind,
     IndexGeneration,
+    IngestRequest,
+    IngestRequestKind,
     Job,
     JobState,
     Model,
@@ -364,6 +366,17 @@ class MakeJob(Protocol):
     ) -> Job: ...
 
 
+class MakeIngestRequest(Protocol):
+    def __call__(
+        self,
+        owner: User,
+        *,
+        kind: IngestRequestKind = ...,
+        state: JobState = ...,
+        **overrides: Any,
+    ) -> IngestRequest: ...
+
+
 class MakeDerivative(Protocol):
     def __call__(
         self,
@@ -477,6 +490,7 @@ __all__ = [
     "MakeShareLink",
     "MakeUser",
     "MakeJob",
+    "MakeIngestRequest",
     "MakeDerivative",
     "MakeWorkFence",
     "MakeWorkExecutor",

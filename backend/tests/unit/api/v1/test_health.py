@@ -261,25 +261,54 @@ class TestProviderProbe:
 
 
 class TestJobsProbe:
-    def test_reports_the_registrys_job_counts(
+    def test_reports_the_job_store_counts(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import app.runtime.jobs as jobs_mod
+        from app.modules.work import executors
+        from app.modules.work.jobs import jobs
 
-        counts = {"pending": 1, "running": 2, "total": 3}
-        monkeypatch.setattr(jobs_mod.registry, "snapshot_counts", lambda: counts)
+        counts = {"queued": 1, "running": 2, "total": 3}
+        monkeypatch.setattr(jobs, "snapshot_counts", lambda: counts)
+        monkeypatch.setattr(executors, "live", lambda: [object()])
 
-        assert health_mod._jobs_probe() == {"ok": True, "counts": counts}
+        assert health_mod._jobs_probe() == {
+            "ok": True,
+            "counts": counts,
+            "executors": 1,
+        }
 
-    def test_reports_the_exception_class_when_the_registry_fails(
+    def test_is_healthy_without_executors_while_nothing_waits(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import app.runtime.jobs as jobs_mod
+        from app.modules.work import executors
+        from app.modules.work.jobs import jobs
+
+        monkeypatch.setattr(jobs, "snapshot_counts", lambda: {"running": 0, "total": 0})
+        monkeypatch.setattr(executors, "live", lambda: [])
+
+        assert health_mod._jobs_probe()["ok"] is True
+
+    @pytest.mark.parametrize("waiting", ["queued", "interrupted"])
+    def test_is_unhealthy_when_jobs_wait_with_no_live_executor(
+        self, monkeypatch: pytest.MonkeyPatch, waiting: str
+    ) -> None:
+        from app.modules.work import executors
+        from app.modules.work.jobs import jobs
+
+        monkeypatch.setattr(jobs, "snapshot_counts", lambda: {waiting: 2, "total": 2})
+        monkeypatch.setattr(executors, "live", lambda: [])
+
+        assert health_mod._jobs_probe()["ok"] is False
+
+    def test_reports_the_exception_class_when_the_job_store_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.work.jobs import jobs
 
         def broken():
-            raise RuntimeError("registry broken")
+            raise RuntimeError("job store broken")
 
-        monkeypatch.setattr(jobs_mod.registry, "snapshot_counts", broken)
+        monkeypatch.setattr(jobs, "snapshot_counts", broken)
 
         out = health_mod._jobs_probe()
 

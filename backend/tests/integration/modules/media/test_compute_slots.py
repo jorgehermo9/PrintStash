@@ -1,4 +1,4 @@
-"""Render permits survive SQLite contention without admitting extra native work."""
+"""Native compute permits survive SQLite contention without admitting extra work."""
 
 import pytest
 from sqlalchemy import text
@@ -6,7 +6,7 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
 from app.core.config import _overlay
-from app.db.models import ThumbnailRenderSlot
+from app.db.models import NativeComputeSlot
 from app.db.session import get_session_factory
 from app.modules.media import compute_slots
 
@@ -21,7 +21,7 @@ def locked_permit(threaded_hub_db, monkeypatch):
         compute_slots.release(session, permit.id, "initial")
         session.commit()
     with factory.scoped_session() as blocker:
-        blocker.execute(text("UPDATE thumbnail_render_slots SET lease_token = 'held'"))
+        blocker.execute(text("UPDATE native_compute_slots SET lease_token = 'held'"))
         yield blocker
         blocker.rollback()
 
@@ -37,7 +37,7 @@ class TestAcquire:
 
             assert permit is not None
             assert permit.lease_token == "recovered"
-            assert len(session.exec(select(ThumbnailRenderSlot)).all()) == 1
+            assert len(session.exec(select(NativeComputeSlot)).all()) == 1
 
     def test_bounds_persistent_sqlite_lock(self, locked_permit, monkeypatch):
         monkeypatch.setattr(compute_slots.time, "sleep", lambda _: None)
@@ -48,7 +48,7 @@ class TestAcquire:
 
         locked_permit.rollback()
         with get_session_factory().scoped_session() as session:
-            assert session.exec(select(ThumbnailRenderSlot)).one().lease_token is None
+            assert session.exec(select(NativeComputeSlot)).one().lease_token is None
 
     @pytest.mark.parametrize(
         "token,seconds",
@@ -62,7 +62,7 @@ class TestAcquire:
         with pytest.raises(ValueError, match="invalid_compute_lease"):
             compute_slots.acquire(db_session, token, lease_seconds=seconds)
 
-        assert db_session.exec(select(ThumbnailRenderSlot)).all() == []
+        assert db_session.exec(select(NativeComputeSlot)).all() == []
 
 
 class TestRetry:

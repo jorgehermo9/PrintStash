@@ -37,9 +37,13 @@ from app.core.metrics import (
     record_artifact_upload_event,
     record_capture_operation,
     record_fleet_dispatch,
-    record_ingestion_terminal,
+    record_job_terminal,
+    record_reconcile_pass,
+    record_resubmit,
+    record_step,
     registry,
-    set_ingestion_stuck_jobs,
+    set_lane_depth,
+    set_stuck_jobs,
 )
 from app.db.session import SessionFactory
 from app.modules.ingestion import import_resolvers
@@ -238,50 +242,155 @@ class TestObserveRequest:
         metrics.observe_request("GET", "/api/v1/models", 200, 0.25)
 
 
-class TestRecordIngestionTerminal:
-    def test_records_a_terminal_job_with_both_of_its_labels(self) -> None:
-        record_ingestion_terminal("upload", "completed", 1.5)
+class _BrokenMetric:
+    """A metric whose registry is gone: every use raises."""
 
-        assert 'kind="upload"' in _exposition()
+    def labels(self, **_kwargs: object):
+        raise RuntimeError("registry unavailable")
 
-    def test_records_a_negative_duration_as_zero(self) -> None:
-        record_ingestion_terminal("upload", "failed", -1.0)
+    def set(self, _value: object) -> None:
+        raise RuntimeError("registry unavailable")
 
-        assert 'result="failed"' in _exposition()
+
+class TestRecordJobTerminal:
+    def test_counts_a_terminal_job_by_definition(self) -> None:
+        before = _sample(
+            "printstash_jobs_total", {"kind": "derive.mesh", "result": "completed"}
+        )
+
+        record_job_terminal("derive.mesh", "completed", 1.5)
+
+        after = _sample(
+            "printstash_jobs_total", {"kind": "derive.mesh", "result": "completed"}
+        )
+        assert after == before + 1
+
+    def test_observes_a_negative_duration_as_zero(self) -> None:
+        labels = {"kind": "ingest.upload", "result": "failed"}
+        before = _sample("printstash_job_duration_seconds_sum", labels)
+
+        record_job_terminal("ingest.upload", "failed", -1.0)
+
+        assert _sample("printstash_job_duration_seconds_sum", labels) == before
 
     def test_swallows_its_own_failure_rather_than_failing_the_job(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class _Broken:
-            def labels(self, **_kwargs: object):
-                raise RuntimeError("registry unavailable")
+        monkeypatch.setattr(metrics, "jobs_terminal", _BrokenMetric())
 
-        monkeypatch.setattr(metrics, "ingestion_jobs", _Broken())
-
-        record_ingestion_terminal("upload", "completed", 1.5)
+        assert record_job_terminal("ingest.upload", "completed", 1.5) is None
 
 
-class TestSetIngestionStuckJobs:
+class TestSetStuckJobs:
     def test_reports_the_stuck_job_count(self) -> None:
-        set_ingestion_stuck_jobs(3)
+        set_stuck_jobs(3)
 
-        assert "ingestion_stuck_jobs 3.0" in _exposition()
+        assert _sample("printstash_stuck_jobs", {}) == 3.0
 
     def test_reports_a_negative_count_as_zero(self) -> None:
-        set_ingestion_stuck_jobs(-1)
+        set_stuck_jobs(-1)
 
         # A negative "stuck jobs" reading would fire or silence an alert on a
         # value that cannot exist.
-        assert "ingestion_stuck_jobs 0.0" in _exposition()
+        assert _sample("printstash_stuck_jobs", {}) == 0.0
 
     def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        class _Broken:
-            def set(self, _value: object) -> None:
-                raise RuntimeError("registry unavailable")
+        monkeypatch.setattr(metrics, "stuck_jobs", _BrokenMetric())
 
-        monkeypatch.setattr(metrics, "ingestion_stuck_jobs", _Broken())
+        assert set_stuck_jobs(3) is None
 
-        set_ingestion_stuck_jobs(3)
+
+class TestSetLaneDepth:
+    def test_reports_queued_executions_of_a_lane(self) -> None:
+        set_lane_depth("derive.light", queued=4, running=1)
+
+        assert (
+            _sample("printstash_lane_depth", {"lane": "derive.light", "state": "queued"})
+            == 4.0
+        )
+
+    def test_reports_running_executions_of_a_lane(self) -> None:
+        set_lane_depth("derive.light", queued=4, running=1)
+
+        assert (
+            _sample(
+                "printstash_lane_depth", {"lane": "derive.light", "state": "running"}
+            )
+            == 1.0
+        )
+
+    def test_reports_a_negative_depth_as_zero(self) -> None:
+        set_lane_depth("network", queued=-2, running=0)
+
+        assert (
+            _sample("printstash_lane_depth", {"lane": "network", "state": "queued"})
+            == 0.0
+        )
+
+    def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(metrics, "lane_depth", _BrokenMetric())
+
+        assert set_lane_depth("network", queued=1, running=1) is None
+
+
+class TestRecordStep:
+    def test_observes_a_step_attempt(self) -> None:
+        labels = {"kind": "derive.mesh", "step": "derive", "result": "ok"}
+        before = _sample("printstash_job_step_duration_seconds_count", labels)
+
+        record_step("derive.mesh", "derive", "ok", 0.5)
+
+        assert (
+            _sample("printstash_job_step_duration_seconds_count", labels) == before + 1
+        )
+
+    def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(metrics, "step_duration", _BrokenMetric())
+
+        assert record_step("derive.mesh", "derive", "ok", 0.5) is None
+
+
+class TestRecordResubmit:
+    def test_counts_a_resubmitted_execution(self) -> None:
+        before = _sample("printstash_job_resubmits_total", {"kind": "backup.create"})
+
+        record_resubmit("backup.create")
+
+        assert (
+            _sample("printstash_job_resubmits_total", {"kind": "backup.create"})
+            == before + 1
+        )
+
+    def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(metrics, "job_resubmits", _BrokenMetric())
+
+        assert record_resubmit("backup.create") is None
+
+
+class TestRecordReconcilePass:
+    def test_counts_each_outcome_of_a_pass(self) -> None:
+        labels = {"source": "derive.gcode", "outcome": "submitted"}
+        before = _sample("printstash_reconcile_outcomes_total", labels)
+
+        record_reconcile_pass("derive.gcode", 0.1, {"submitted": 3})
+
+        assert _sample("printstash_reconcile_outcomes_total", labels) == before + 3
+
+    def test_publishes_no_series_for_an_outcome_that_never_happened(self) -> None:
+        record_reconcile_pass("notify.retention", 0.1, {"deferred": 0})
+
+        assert (
+            registry.get_sample_value(
+                "printstash_reconcile_outcomes_total",
+                {"source": "notify.retention", "outcome": "deferred"},
+            )
+            is None
+        )
+
+    def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(metrics, "reconcile_pass_duration", _BrokenMetric())
+
+        assert record_reconcile_pass("derive.gcode", 0.1, {"submitted": 1}) is None
 
 
 class TestRecordFleetDispatch:

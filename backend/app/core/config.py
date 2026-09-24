@@ -170,6 +170,10 @@ class Settings(BaseSettings):
     jobs_reconcile_batch: int = Field(default=500, ge=1, le=10000)
     jobs_lane_headroom_factor: int = Field(default=2, ge=1, le=100)
     jobs_max_resubmits: int = Field(default=3, ge=0, le=100)
+    # A subject a source reports again within this window of its last Job
+    # finishing waits the window out: a source that keeps reporting work its
+    # Job already handled must not turn into a busy loop.
+    jobs_resubmit_cooldown_seconds: int = Field(default=30, ge=0, le=3600)
     jobs_submit_grace_seconds: int = Field(default=60, ge=1, le=3600)
     jobs_executor_stale_seconds: int = Field(default=120, ge=10, le=86400)
     jobs_retention_days: int = Field(default=7, ge=1, le=365)

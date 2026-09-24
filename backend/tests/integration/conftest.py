@@ -47,6 +47,7 @@ from tests.factories.protocols import (
     MakeGeometryFingerprint,
     MakeInboxItem,
     MakeIndexGeneration,
+    MakeIngestRequest,
     MakeJob,
     MakeModel,
     MakeMultipartBuild,
@@ -342,6 +343,12 @@ def make_job(db_session: Session) -> MakeJob:
 
 
 @pytest.fixture
+def make_ingest_request(db_session: Session) -> MakeIngestRequest:
+    """An accepted ingest request together with the queued Job that owns it."""
+    return _bound(factories.build_ingest_request, db_session)
+
+
+@pytest.fixture
 def make_derivative(db_session: Session) -> MakeDerivative:
     """A derivative row at the kind's current recipe; ``exhausted`` gives up."""
     return _bound(factories.build_derivative, db_session)
@@ -504,6 +511,7 @@ __all__ = [
     "make_audit_finding",
     "make_audit_run",
     "make_derivative",
+    "make_ingest_request",
     "make_job",
     "make_work_executor",
     "make_work_fence",

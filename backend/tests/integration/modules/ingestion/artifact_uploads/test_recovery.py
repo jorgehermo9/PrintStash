@@ -9,7 +9,7 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from app.core.time import utcnow
-from app.db.models import ArtifactUploadState
+from app.db.models import ArtifactUploadState, JobState
 from app.db.session import SQLiteSessionFactory
 from app.modules.ingestion.artifact_uploads import reconcile_artifact_uploads
 from tests._env import use_local_storage
@@ -102,22 +102,22 @@ class TestReconcileArtifactUploads:
         self,
         db_session: Session,
         make_user,
-        make_background_job,
+        make_job,
         make_artifact_upload,
         tmp_path,
     ) -> None:
         use_local_storage(tmp_path)
         owner = make_user("interrupted-upload-owner")
-        job = make_background_job(
-            kind="artifact_upload_model",
-            state="failed",
+        job = make_job(
+            kind="ingest.artifact_upload",
+            state=JobState.FAILED,
             owner=owner,
             status_json='{"retryable":true}',
         )
         upload = make_artifact_upload(
             owner,
             state=ArtifactUploadState.INGESTING,
-            background_job_id=job.id,
+            job_id=job.id,
         )
 
         result = reconcile_artifact_uploads(SQLiteSessionFactory(db_session.get_bind()))
@@ -132,21 +132,21 @@ class TestReconcileArtifactUploads:
         self,
         db_session: Session,
         make_user,
-        make_background_job,
+        make_job,
         make_artifact_upload,
         tmp_path,
     ) -> None:
         use_local_storage(tmp_path)
         owner = make_user("completed-upload-owner")
-        job = make_background_job(
-            kind="artifact_upload_model",
-            state="completed",
+        job = make_job(
+            kind="ingest.artifact_upload",
+            state=JobState.COMPLETED,
             owner=owner,
         )
         upload = make_artifact_upload(
             owner,
             state=ArtifactUploadState.INGESTING,
-            background_job_id=job.id,
+            job_id=job.id,
         )
         directory = settings.incoming_dir / "artifact-uploads" / upload.id
         directory.mkdir(parents=True)

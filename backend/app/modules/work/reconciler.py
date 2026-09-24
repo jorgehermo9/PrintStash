@@ -28,8 +28,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 
-from sqlalchemy import or_, update
-from sqlmodel import col, select
+from sqlalchemy import func, or_, update
+from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -41,7 +41,7 @@ from app.db.session import get_session_factory
 from . import catalog as catalog_module
 from . import executors
 from .contracts import EngineEvidence, EngineStatus, JobDefinition, WorkItem
-from .jobs import ActiveJobExists, jobs
+from .jobs import TERMINAL_STATES, ActiveJobExists, jobs
 from .submission import execution_id, nudge, submit
 
 logger = get_logger(__name__)
@@ -117,6 +117,8 @@ class PassResult:
     completed: int = 0
     skipped: int = 0
     full: bool = False
+    # The earliest moment a subject held back by the resubmit cooldown is due.
+    cooling_until: datetime | None = None
     outcomes: dict[str, int] = field(default_factory=dict)
 
     def count(self, outcome: str) -> None:
@@ -256,9 +258,45 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
         return
     with get_session_factory().scoped_session() as session:
         items: Sequence[WorkItem] = source.pending(session, now=now, limit=limit)
-    result.full = len(items) >= limit
+        finished = _recently_finished(
+            session, definition.name, [item.subject_key for item in items], now=now
+        )
+    cooldown = timedelta(seconds=settings.jobs_resubmit_cooldown_seconds)
     for item in items:
+        last = finished.get(item.subject_key)
+        if last is not None:
+            due = last + cooldown
+            result.deferred += 1
+            result.count("cooling_down")
+            if result.cooling_until is None or due < result.cooling_until:
+                result.cooling_until = due
+            continue
         _create_and_submit(definition, item, now=now, result=result)
+    # A batch held back by the cooldown is not a reason to loop straight away:
+    # the same subjects would come back and be held back again.
+    result.full = len(items) >= limit and result.cooling_until is None
+
+
+def _recently_finished(
+    session: Session, definition: str, subject_keys: list[str], *, now: datetime
+) -> dict[str, datetime]:
+    """When each of ``subject_keys`` last had a Job of ``definition`` finish,
+    for those that did within the resubmit cooldown."""
+    window = settings.jobs_resubmit_cooldown_seconds
+    if not subject_keys or window <= 0:
+        return {}
+    since = now - timedelta(seconds=window)
+    rows = session.exec(
+        select(Job.subject_key, func.max(Job.finished_at))
+        .where(
+            col(Job.kind) == definition,
+            col(Job.subject_key).in_(subject_keys),
+            col(Job.state).in_([state.value for state in TERMINAL_STATES]),
+            col(Job.finished_at) > since,
+        )
+        .group_by(col(Job.subject_key))
+    ).all()
+    return {subject: ensure_utc(at) for subject, at in rows if at is not None}
 
 
 def _create_and_submit(
@@ -405,7 +443,7 @@ def run_pass(source: str, *, holder: str | None = None) -> PassResult:
     except Exception:
         _force_release(source, holder)
         raise
-    _schedule_next(definition)
+    _schedule_next(definition, also=total.cooling_until)
     record_reconcile_pass(
         source,
         time.monotonic() - started_clock,
@@ -429,17 +467,27 @@ def _merge(total: PassResult, result: PassResult) -> None:
     total.completed += result.completed
     total.skipped += result.skipped
     total.full = result.full
+    if result.cooling_until is not None and (
+        total.cooling_until is None or result.cooling_until < total.cooling_until
+    ):
+        total.cooling_until = result.cooling_until
     for key, value in result.outcomes.items():
         total.outcomes[key] = total.outcomes.get(key, 0) + value
 
 
-def _schedule_next(definition: JobDefinition) -> None:
-    """Ask for a delayed pass at the source's next due time, if it has one."""
+def _schedule_next(definition: JobDefinition, *, also: datetime | None = None) -> None:
+    """Ask for a delayed pass at the source's next due time, if it has one.
+
+    ``also`` is a due time the pass itself found (a subject cooling down); the
+    earlier of the two wins.
+    """
     if definition.source is None:
         return
     now = utcnow()
     with get_session_factory().scoped_session() as session:
         due = definition.source.next_due(session, now=now)
+    if also is not None and (due is None or ensure_utc(also) < ensure_utc(due)):
+        due = also
     if due is None:
         return
     delay = (ensure_utc(due) - now).total_seconds()
