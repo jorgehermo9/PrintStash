@@ -121,3 +121,31 @@ class TestMain:
             "stop",
         ]
         assert set(handlers) == {signal.SIGTERM, signal.SIGINT}
+
+    def test_leaves_the_search_bindings_as_it_found_them(self, monkeypatch) -> None:
+        # Library search reads whichever provider is bound; a worker that
+        # returned with its own still bound would change every later search.
+        from app.bootstrap import lifecycle, work
+        from app.db import content_search, projections
+        from app.runtime import realtime
+
+        _overlay["process_role"] = "worker"
+        before = (content_search._search, projections._projection)
+
+        class Stopped:
+            def set(self) -> None: ...
+
+            def wait(self) -> bool:
+                return True
+
+        monkeypatch.setattr(work, "validate_topology", lambda: None)
+        monkeypatch.setattr(worker, "wait_for_schema", lambda: None)
+        monkeypatch.setattr(lifecycle, "prepare_process", lambda *, owner: None)
+        monkeypatch.setattr(realtime, "build_event_bus", lambda *, listen: None)
+        monkeypatch.setattr(worker.signal, "signal", lambda *_args: None)
+        monkeypatch.setattr(work, "start", lambda *, publisher: None)
+        monkeypatch.setattr(work, "stop", lambda: None)
+        monkeypatch.setattr(worker.threading, "Event", Stopped)
+
+        assert worker.main() == 0
+        assert (content_search._search, projections._projection) == before

@@ -48,7 +48,12 @@ def main() -> int:
     if settings.process_role != "worker":
         raise SystemExit("python -m app.worker requires VAULT_PROCESS_ROLE=worker")
     from app.bootstrap import work
-    from app.bootstrap.lifecycle import bind_search, prepare_process
+    from app.bootstrap.lifecycle import (
+        bind_search,
+        close_inference,
+        prepare_process,
+        restore_search,
+    )
     from app.runtime.realtime import build_event_bus
 
     work.validate_topology()
@@ -56,7 +61,7 @@ def main() -> int:
     prepare_process(owner=False)
     # A worker changes the library too (ingest commits), so what search must
     # re-project is recorded here as well.
-    bind_search()
+    previous_search = bind_search()
     stop = threading.Event()
 
     def _signal(signum, _frame) -> None:
@@ -72,9 +77,8 @@ def main() -> int:
         try:
             work.stop()
         finally:
-            from app.bootstrap.lifecycle import close_inference
-
             close_inference()
+            restore_search(previous_search)
     return 0
 
 
