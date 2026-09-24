@@ -152,12 +152,17 @@ class TestScanLibrary:
             assert model.collection_rel.path == "nas-dump"
 
     def test_scan_indexes_but_skips_over_cap_mesh(
-        self, tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+        work_engine,
     ) -> None:
         """A pathological dense file must avoid Trimesh without losing its preview.
 
-        The scan indexes it in place and the bounded STL fallback provides geometry
-        and a thumbnail, so the scan completes without an OOM or a partial result.
+        The scan indexes it in place; its derivative Job's bounded STL fallback
+        then provides geometry and a thumbnail, so neither the scan nor the
+        derivation hits an OOM or leaves a partial result.
         """
         trimesh = pytest.importorskip("trimesh")
 
@@ -181,6 +186,8 @@ class TestScanLibrary:
         assert lib.last_scan_status == ExternalLibraryScanStatus.OK
         # Indexed in place; the over-cap mesh was never loaded through Trimesh, but
         # the streaming fallback still publishes geometry and a thumbnail.
+        work_engine.drain()
+        db_session.expire_all()
         files = external_files(db_session)
         assert len(files) == 1
         md = db_session.exec(

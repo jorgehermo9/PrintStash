@@ -280,14 +280,15 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
 def _recently_finished(
     session: Session, definition: str, subject_keys: list[str], *, now: datetime
 ) -> dict[str, datetime]:
-    """When each of ``subject_keys`` last had a Job of ``definition`` finish,
-    for those that did within the resubmit cooldown."""
+    """Subjects of ``subject_keys`` whose Jobs of ``definition`` already
+    finished ``jobs_resubmit_burst`` times within the cooldown window, with
+    when the latest one finished."""
     window = settings.jobs_resubmit_cooldown_seconds
     if not subject_keys or window <= 0:
         return {}
     since = now - timedelta(seconds=window)
     rows = session.exec(
-        select(Job.subject_key, func.max(Job.finished_at))
+        select(Job.subject_key, func.max(Job.finished_at), func.count(col(Job.id)))
         .where(
             col(Job.kind) == definition,
             col(Job.subject_key).in_(subject_keys),
@@ -296,7 +297,12 @@ def _recently_finished(
         )
         .group_by(col(Job.subject_key))
     ).all()
-    return {subject: ensure_utc(at) for subject, at in rows if at is not None}
+    burst = settings.jobs_resubmit_burst
+    return {
+        subject: ensure_utc(at)
+        for subject, at, count in rows
+        if at is not None and count >= burst
+    }
 
 
 def _create_and_submit(

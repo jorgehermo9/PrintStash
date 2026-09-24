@@ -43,7 +43,6 @@ from app.db.models import (
     ExternalLibraryWatchMode,
     File,
     LibrarySourceKind,
-    Metadata,
     Model,
 )
 from app.db.scopes import live
@@ -186,6 +185,7 @@ def _content_changed(session: Session, file_row: File) -> None:
 
     records.invalidate(session, file_row, list(recipes_for(file_row)))
     session.commit()
+    session.refresh(file_row)
     nudge_for(file_row)
 
 
@@ -296,6 +296,16 @@ def _walk_pinned(root: Path, expected: dict[str, object]) -> _PinnedSnapshot:
         raise
 
 
+def _descriptor_path(fd: int) -> Path:
+    """A path that reopens exactly the pinned descriptor ``fd``.
+
+    ``/proc/self/fd`` on Linux; ``/dev/fd`` elsewhere (macOS), where opening
+    it duplicates the same open file.
+    """
+    proc = Path(f"/proc/self/fd/{fd}")
+    return proc if proc.parent.is_dir() else Path(f"/dev/fd/{fd}")
+
+
 @contextmanager
 def _open_pinned_file(entry: _PinnedFile):
     fd = os.open(
@@ -314,7 +324,7 @@ def _open_pinned_file(entry: _PinnedFile):
         ):
             raise ExternalRootBindingError("mismatch", "external_file_changed")
         current = dict(_PINNED_READ_PATHS.get() or {})
-        current[entry.path] = Path(f"/proc/self/fd/{fd}")
+        current[entry.path] = _descriptor_path(fd)
         token = _PINNED_READ_PATHS.set(current)
         try:
             yield
@@ -432,13 +442,8 @@ def _reindex_changed(
     file_row.source_verified_at = utcnow()
     file_row.uploaded_at = utcnow()
     session.add(file_row)
-    if (
-        session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).first()
-        is None
-    ):
-        session.add(Metadata(file_id=file_row.id))
-    session.commit()
-    session.refresh(file_row)
+    # One commit: a new signature is only ever confirmed together with the
+    # invalidation of what was derived from the old bytes.
     _content_changed(session, file_row)
     return True
 

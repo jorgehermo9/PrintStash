@@ -30,20 +30,23 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.db.models import (
+    ExternalLibrary,
     ExternalLibraryCollectionMode,
     File,
+    FileType,
     Model,
     OwnedStorageObject,
     StorageDeleteIntent,
 )
 from app.modules.ingestion.ingestion import (
+    StagedArtifact,
     add_gcode_revision_to_model,
-    ingest_orca_gcode,
+    ingest_staged_file,
 )
 from app.modules.sources import external_library
-from app.runtime.jobs import registry
+from app.modules.work.jobs import jobs
 from tests._env import use_local_storage
-from tests.factories import build_external_library
+from tests.factories import build_external_library, build_job
 from tests.integration.modules.sources.external_library._helpers import (
     FIXTURE_GCODE,
     drop_gcode,
@@ -52,6 +55,32 @@ from tests.integration.modules.sources.external_library._helpers import (
     gcode_bytes,
     stage,
 )
+
+
+def _upload(
+    session: Session,
+    staged: Path,
+    *,
+    filename: str,
+    name: str,
+    collection: str | None = None,
+    library: ExternalLibrary | None = None,
+) -> str:
+    """Commit one staged G-code upload the way its ``ingest.upload`` Job does."""
+    job = build_job(session, kind="ingest.upload")
+    ingest_staged_file(
+        job_id=job.id,
+        artifact=StagedArtifact(
+            staged_path=staged,
+            original_filename=filename,
+            model_name=name,
+            file_type=FileType.GCODE,
+            collection=collection,
+            target_library_id=library.id if library is not None else None,
+        ),
+        actor_user_id=None,
+    )
+    return job.id
 
 
 class TestIngestIntoExternalLibrary:
@@ -74,15 +103,13 @@ class TestIngestIntoExternalLibrary:
             Path(_overlay["staging_dir"]) / "_incoming" / f"{uuid.uuid4().hex}.gcode"
         )
         shutil.copy(FIXTURE_GCODE, staged)
-        ingest_orca_gcode(
-            job_id="job-wb",
-            staged_path=staged,
-            original_filename="written.gcode",
-            model_name="Written Model",
+        _upload(
+            db_session,
+            staged,
+            filename="written.gcode",
+            name="Written Model",
             collection="cool/widgets",
-            tags=None,
-            source_hash=None,
-            target_library_id=lib.id,
+            library=lib,
         )
 
         f = db_session.exec(select(File).where(File.is_external == True)).first()  # noqa: E712
@@ -194,16 +221,7 @@ class TestIngestIntoExternalLibrary:
         )
 
         staged = stage("part.gcode", gcode_bytes("upload"))
-        ingest_orca_gcode(
-            job_id="job-collision",
-            staged_path=staged,
-            original_filename="part.gcode",
-            model_name="Part",
-            collection=None,
-            tags=None,
-            source_hash=None,
-            target_library_id=lib.id,
-        )
+        _upload(db_session, staged, filename="part.gcode", name="Part", library=lib)
 
         # Original bytes untouched.
         assert precious.read_bytes() == b"; HAND-PLACED USER FILE - do not touch\n"
@@ -225,15 +243,8 @@ class TestIngestIntoExternalLibrary:
             Path(_overlay["staging_dir"]) / "_incoming" / f"{uuid.uuid4().hex}.gcode"
         )
         shutil.copy(FIXTURE_GCODE, staged)
-        ingest_orca_gcode(
-            job_id="job-vault",
-            staged_path=staged,
-            original_filename="vaulted.gcode",
-            model_name="Vaulted",
-            collection=None,
-            tags=None,
-            source_hash=None,
-            target_library_id=lib.id,
+        _upload(
+            db_session, staged, filename="vaulted.gcode", name="Vaulted", library=lib
         )
 
         f = db_session.exec(
@@ -262,19 +273,16 @@ class TestIngestIntoExternalLibrary:
         )
 
         staged = stage("part.gcode", gcode_bytes("escape"))
-        job_id = registry.create()
-        ingest_orca_gcode(
-            job_id=job_id,
-            staged_path=staged,
-            original_filename="part.gcode",
-            model_name="Part",
+        job_id = _upload(
+            db_session,
+            staged,
+            filename="part.gcode",
+            name="Part",
             collection="escaped",
-            tags=None,
-            source_hash=None,
-            target_library_id=lib.id,
+            library=lib,
         )
 
-        job = registry.get(job_id)
+        job = jobs.get(job_id)
         assert job is not None
         assert job.state == "failed"
         assert job.error == "external_library_symlink_escape"

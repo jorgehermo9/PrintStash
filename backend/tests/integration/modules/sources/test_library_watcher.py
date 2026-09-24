@@ -319,15 +319,23 @@ class TestStopWatcher:
         asyncio.run(_run())
 
 
+def _record_requests(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record the scans the watcher asks the scan owner for, without scanning."""
+    requested: list[int] = []
+
+    def request_scan(_session: Session, library_id: int, **_kwargs: object) -> None:
+        requested.append(library_id)
+
+    monkeypatch.setattr(lw.external_library, "request_scan", request_scan)
+    return requested
+
+
 class TestDebouncedScan:
     def test_debounced_scan_coalesces_a_burst_of_events(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        calls: list[int] = []
-        monkeypatch.setattr(
-            lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id)
-        )
+        calls = _record_requests(monkeypatch)
 
         watcher = lw.LibraryWatcher()
 
@@ -340,51 +348,36 @@ class TestDebouncedScan:
             await asyncio.sleep(0.2)  # past the 0.05s debounce
 
         asyncio.run(_run())
-        assert calls == [7]  # only one scan for the whole burst
+        assert calls == [7]  # only one request for the whole burst
 
-    def test_debounced_scan_requeues_when_a_change_lands_mid_scan(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_records_a_change_that_lands_while_a_scan_runs(
+        self, tmp_path: Path, threaded_hub_db: None
     ) -> None:
-        calls: list[int] = []
+        from app.db.session import get_session_factory
 
-        def _slow_scan(lib_id: int) -> None:
-            calls.append(lib_id)
-
-        monkeypatch.setattr(lw.external_library, "scan_library", _slow_scan)
-
+        with get_session_factory().scoped_session() as session:
+            library = build_external_library(
+                session, tmp_path / "nas", name="nas", scanning=True
+            )
+            library_id = library.id
+        assert library_id is not None
         watcher = lw.LibraryWatcher()
-        watcher.tasks[9] = (
-            None  # present so the requeue branch's "in self.tasks" check passes
-        )
 
         async def _run() -> None:
-            # First scan in flight (marked "scanning") ...
-            watcher._scanning.add(9)  # noqa: SLF001
-            watcher._schedule_scan(9)  # noqa: SLF001
-            await asyncio.sleep(
-                0.1
-            )  # debounce elapses; _debounced_scan sees "already scanning"
-            assert 9 in watcher._rescan_requested  # noqa: SLF001
-            assert calls == []  # scan was deferred, not run, while "scanning"
-
-            watcher._scanning.discard(9)  # noqa: SLF001
-            # Nothing re-triggers automatically here (that happens at the end of a
-            # real scan's finally block) — simulate that completion explicitly.
-            watcher._rescan_requested.discard(9)  # noqa: SLF001
-            watcher._schedule_scan(9)  # noqa: SLF001
-            await asyncio.sleep(0.1)
-            assert calls == [9]
+            watcher._schedule_scan(library_id)  # noqa: SLF001
+            await asyncio.sleep(0.2)
 
         asyncio.run(_run())
+
+        # The running scan already took its request; this one is the next scan's.
+        with get_session_factory().scoped_session() as session:
+            refreshed = session.get(ExternalLibrary, library_id)
+            assert refreshed is not None and refreshed.scan_requested_at is not None
 
     def test_real_file_create_triggers_a_scheduled_scan(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls: list[int] = []
-        monkeypatch.setattr(
-            lw.external_library, "scan_library", lambda lib_id: calls.append(lib_id)
-        )
+        calls = _record_requests(monkeypatch)
 
         watcher = lw.LibraryWatcher()
 
