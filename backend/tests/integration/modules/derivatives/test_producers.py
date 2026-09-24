@@ -174,26 +174,28 @@ class TestDeriveMesh:
         assert all(row.failure_reason == "invalid_source" for row in rows.values())
         assert all(row.next_attempt_at is not None for row in rows.values())
 
-    def test_hands_geometry_fingerprints_to_similarity(self, stored) -> None:
+    # The binding is process-wide: monkeypatch restores whatever the process
+    # had bound, so later tests still get the similarity extension.
+    def test_hands_geometry_fingerprints_to_similarity(
+        self, stored, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         artifact = stored("cube.stl", content.binary_stl())
         similarity = FingerprintSink()
-        extensions.bind_derivatives(similarity)
-        try:
-            producers.derive_mesh(artifact.id)
-        finally:
-            extensions.bind_derivatives(None)
+        monkeypatch.setattr(extensions, "_derivatives", similarity)
+
+        producers.derive_mesh(artifact.id)
 
         assert similarity.received == [artifact.id]
 
-    def test_a_similarity_failure_does_not_fail_the_geometry(self, stored) -> None:
+    def test_a_similarity_failure_does_not_fail_the_geometry(
+        self, stored, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Fingerprints are evidence similarity can re-derive; the geometry the
         # load produced is still good.
         artifact = stored("cube.stl", content.binary_stl())
-        extensions.bind_derivatives(FingerprintSink(broken=True))
-        try:
-            outcome = producers.derive_mesh(artifact.id)
-        finally:
-            extensions.bind_derivatives(None)
+        monkeypatch.setattr(extensions, "_derivatives", FingerprintSink(broken=True))
+
+        outcome = producers.derive_mesh(artifact.id)
 
         assert outcome.kinds == {METADATA: "ready", THUMBNAIL: "ready"}
 
