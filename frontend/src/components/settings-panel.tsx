@@ -28,6 +28,7 @@ import {
   FolderTree,
   HardDrive,
   HeartPulse,
+  Activity,
   Info,
   Images,
   KeyRound,
@@ -71,6 +72,7 @@ import { SpoolmanConnectCard } from "@/components/spoolman-connect-card";
 import { OidcSettingsCard } from "@/components/oidc-settings-card";
 import { SimilaritySettingsPanel } from "@/components/similarity-settings-panel";
 import { MaintenancePanel } from "@/components/maintenance-panel";
+import { BackgroundWorkPanel } from "@/components/background-work-panel";
 import { BrandMark } from "@/components/brand-mark";
 import {
   createApiKey,
@@ -190,6 +192,7 @@ type SettingsSection =
   | "remote-storage"
   | "imports"
   | "maintenance"
+  | "work"
   | "libraries"
   | "notifications"
   | "sso"
@@ -211,6 +214,7 @@ const SETTINGS_SECTIONS: {
   { id: "remote-storage", labelKey: "settings.remoteStorage", icon: Cloud },
   { id: "imports", labelKey: "settings.imports", icon: Download },
   { id: "maintenance", labelKey: "settings.maintenance", icon: HeartPulse },
+  { id: "work", labelKey: "settings.backgroundWork", icon: Activity },
   { id: "libraries", labelKey: "settings.libraries", icon: FolderSync },
   { id: "notifications", labelKey: "settings.notifications", icon: Bell },
   { id: "sso", labelKey: "settings.sso", icon: ShieldCheck },
@@ -552,7 +556,7 @@ export function SettingsPanel() {
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const visibleSettingsSections = SETTINGS_SECTIONS.filter(
-    (section) => !["sso", "maintenance"].includes(section.id) || user?.is_superuser,
+    (section) => !["sso", "maintenance", "work"].includes(section.id) || user?.is_superuser,
   );
 
   function changeSection(section: SettingsSection) {
@@ -3402,6 +3406,8 @@ export function SettingsPanel() {
                 <SimilaritySettingsPanel />
               </>
             )}
+
+            {activeSection === "work" && user?.is_superuser && <BackgroundWorkPanel />}
 
             {activeSection === "libraries" && (
               <div className="space-y-6 animate-panel-in">

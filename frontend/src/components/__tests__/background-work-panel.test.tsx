@@ -1,0 +1,255 @@
+/**
+ * Settings → Background work, the administrator's view of every Job-running
+ * process.
+ *
+ * The destructive actions are the ones that matter: cancelling a definition's
+ * queue withdraws work other users asked for, and regenerating a derivative
+ * kind re-renders the whole library. Both ask first. A lane override is sent
+ * as the number typed, and a reset sends `null` explicitly, because omitting
+ * the field would leave the override in place. A Job change reported on the
+ * events socket refreshes the page, since a worker in another process moved it.
+ */
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { BackgroundWorkPanel, type BackgroundWorkApi } from "@/components/background-work-panel";
+import { setEventSocketFactory, type EventSocket } from "@/lib/events";
+import { aJob, aWorkOverview } from "@/test-support/factories";
+import { renderApp } from "@/test-support/render";
+import type { JobStatus, WorkOverview } from "@/types";
+
+class FakeSocket implements EventSocket {
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  send = vi.fn<(data: string) => void>();
+  close = vi.fn<() => void>();
+}
+
+let socket: FakeSocket;
+
+function stubApi(overview: WorkOverview = aWorkOverview(), over: Partial<BackgroundWorkApi> = {}) {
+  return {
+    overview: vi.fn<BackgroundWorkApi["overview"]>().mockResolvedValue(overview),
+    setLane: vi.fn<BackgroundWorkApi["setLane"]>().mockResolvedValue(overview),
+    cancelQueued: vi.fn<BackgroundWorkApi["cancelQueued"]>().mockResolvedValue({ cancelled: 2 }),
+    regenerate: vi
+      .fn<BackgroundWorkApi["regenerate"]>()
+      .mockImplementation(async (kind, mode) => ({ kind, mode })),
+    retry: vi
+      .fn<BackgroundWorkApi["retry"]>()
+      .mockImplementation(async (jobId): Promise<JobStatus> => aJob({ job_id: jobId })),
+    ...over,
+  } satisfies BackgroundWorkApi;
+}
+
+function renderPanel(api: BackgroundWorkApi) {
+  return renderApp(<BackgroundWorkPanel api={api} />);
+}
+
+/** An overview with a queue to cancel and a failure to retry. */
+function busyOverview(): WorkOverview {
+  const base = aWorkOverview();
+  return {
+    ...base,
+    definitions: [{ ...base.definitions[0], queued: 4, running: 1, failed: 1 }],
+    failed_jobs: [
+      aJob({
+        job_id: "failed-1",
+        kind: "derive.mesh",
+        label: "Mesh derivatives",
+        state: "failed",
+        error: "backup_blob_missing",
+        retryable: true,
+      }),
+    ],
+    failed_derivatives: 3,
+  };
+}
+
+beforeEach(() => {
+  socket = new FakeSocket();
+  setEventSocketFactory(async () => socket);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("BackgroundWorkPanel", () => {
+  it("shows the whole state of background work", async () => {
+    renderPanel(stubApi());
+
+    expect(await screen.findByLabelText("Concurrency for derive.native")).toHaveValue(1);
+    expect(screen.getByText("Mesh derivatives")).toBeVisible();
+    expect(screen.getByText("host")).toBeVisible();
+    expect(screen.getByText("Healthy")).toBeVisible();
+    expect(screen.getByText("No recent failures.")).toBeVisible();
+  });
+
+  it("flags a process that stopped heartbeating", async () => {
+    const overview = aWorkOverview();
+    overview.executors = [{ ...overview.executors[0], stale: true }];
+
+    renderPanel(stubApi(overview));
+
+    expect(await screen.findByText("Not responding")).toBeVisible();
+  });
+
+  it("reports an overview it cannot load", async () => {
+    renderPanel(
+      stubApi(aWorkOverview(), {
+        overview: vi.fn<BackgroundWorkApi["overview"]>().mockRejectedValue(new Error("offline")),
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toBeVisible();
+  });
+
+  describe("lanes", () => {
+    it("sets a lane's concurrency to the number typed", async () => {
+      const user = userEvent.setup();
+      const api = stubApi();
+      renderPanel(api);
+      const input = await screen.findByLabelText("Concurrency for derive.native");
+
+      await user.clear(input);
+      await user.type(input, "3");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => expect(api.setLane).toHaveBeenCalledWith("derive.native", 3));
+    });
+
+    it("returns an overridden lane to its default", async () => {
+      const user = userEvent.setup();
+      const overview = aWorkOverview();
+      overview.lanes = [{ ...overview.lanes[0], concurrency: 4, overridden: true }];
+      const api = stubApi(overview);
+      renderPanel(api);
+
+      await user.click(await screen.findByRole("button", { name: "Reset" }));
+
+      await waitFor(() => expect(api.setLane).toHaveBeenCalledWith("derive.native", null));
+    });
+
+    it.each([
+      { label: "zero", value: "0" },
+      { label: "more than 64", value: "65" },
+      { label: "a fraction", value: "1.5" },
+    ])("refuses $label", async ({ value }) => {
+      const user = userEvent.setup();
+      renderPanel(stubApi());
+      const input = await screen.findByLabelText("Concurrency for derive.native");
+
+      await user.clear(input);
+      await user.type(input, value);
+
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    });
+  });
+
+  describe("queues", () => {
+    it("cancels a definition's queued Jobs only after confirmation", async () => {
+      const user = userEvent.setup();
+      const api = stubApi(busyOverview());
+      renderPanel(api);
+
+      await user.click(await screen.findByRole("button", { name: "Cancel queued" }));
+      expect(api.cancelQueued).not.toHaveBeenCalled();
+      const dialog = await screen.findByRole("dialog");
+      await user.click(within(dialog).getByRole("button", { name: "Cancel queued" }));
+
+      await waitFor(() => expect(api.cancelQueued).toHaveBeenCalledWith("derive.mesh"));
+    });
+
+    it("offers no cancel for a definition with nothing queued", async () => {
+      renderPanel(stubApi());
+
+      await screen.findByText("Mesh derivatives");
+
+      expect(screen.queryByRole("button", { name: "Cancel queued" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("derivatives", () => {
+    it("derives only what is missing without asking", async () => {
+      const user = userEvent.setup();
+      const api = stubApi();
+      renderPanel(api);
+
+      const row = (await screen.findAllByText("thumbnail"))[0].closest("li")!;
+      await user.click(within(row).getByRole("button", { name: "Derive missing" }));
+
+      await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith("thumbnail", "missing"));
+    });
+
+    it("regenerates every Artifact only after confirmation", async () => {
+      const user = userEvent.setup();
+      const api = stubApi();
+      renderPanel(api);
+
+      const row = (await screen.findAllByText("thumbnail"))[0].closest("li")!;
+      await user.click(within(row).getByRole("button", { name: "Regenerate all" }));
+      expect(api.regenerate).not.toHaveBeenCalled();
+      await user.click(
+        within(await screen.findByRole("dialog")).getByRole("button", { name: "Regenerate" }),
+      );
+
+      await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith("thumbnail", "all"));
+    });
+  });
+
+  describe("failures", () => {
+    it("explains why a Job failed", async () => {
+      renderPanel(stubApi(busyOverview()));
+
+      expect(
+        await screen.findByText(
+          "A file needed for the backup is missing. Check the storage and try again.",
+        ),
+      ).toBeVisible();
+    });
+
+    it("retries a failed Job", async () => {
+      const user = userEvent.setup();
+      const api = stubApi(busyOverview());
+      renderPanel(api);
+
+      await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+      await waitFor(() => expect(api.retry).toHaveBeenCalledWith("failed-1"));
+    });
+
+    it("counts failed derivatives across the library", async () => {
+      renderPanel(stubApi(busyOverview()));
+
+      expect(await screen.findByText(/3 derivatives failed across the library/)).toBeVisible();
+    });
+  });
+
+  describe("freshness", () => {
+    it("refreshes when a Job changes on the server", async () => {
+      const api = stubApi();
+      renderPanel(api);
+      await screen.findByText("Mesh derivatives");
+      await waitFor(() => expect(socket.onmessage).not.toBeNull());
+
+      socket.onmessage?.({
+        data: JSON.stringify({ type: "job", job_id: "j", kind: "derive.mesh", state: "completed" }),
+      });
+
+      await waitFor(() => expect(api.overview).toHaveBeenCalledTimes(2));
+    });
+
+    it("stops listening when it leaves the page", async () => {
+      const { unmount } = renderPanel(stubApi());
+      await screen.findByText("Mesh derivatives");
+      await waitFor(() => expect(socket.onmessage).not.toBeNull());
+
+      unmount();
+
+      expect(socket.close).toHaveBeenCalled();
+    });
+  });
+});

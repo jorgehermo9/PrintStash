@@ -36,7 +36,7 @@ test.describe("Family preview independence", () => {
         await expect
           .poll(async () => {
             const job: { state: string; model_id: number | null } = await (
-              await page.request.get(`${API}/api/v1/ingest/jobs/${job_id}`)
+              await page.request.get(`${API}/api/v1/jobs/${job_id}`)
             ).json();
             modelId = job.model_id ?? 0;
             return job.state;
@@ -134,7 +134,7 @@ test.describe("Family preview independence", () => {
         await expect
           .poll(async () => {
             const job: { state: string; model_id: number | null } = await (
-              await page.request.get(`${API}/api/v1/ingest/jobs/${job_id}`)
+              await page.request.get(`${API}/api/v1/jobs/${job_id}`)
             ).json();
             modelId = job.model_id ?? 0;
             return job.state;

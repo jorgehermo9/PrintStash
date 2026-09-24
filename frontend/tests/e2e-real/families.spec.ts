@@ -277,10 +277,10 @@ test.describe("Manual Model Families", () => {
         });
         expect(upload.status()).toBe(202);
         const { job_id }: { job_id: string } = await upload.json();
-        let result = { model_id: 0, file_id: 0, state: "pending" };
+        let result = { model_id: 0, file_id: 0, state: "queued" };
         await expect
           .poll(async () => {
-            result = await (await page.request.get(`${API}/api/v1/ingest/jobs/${job_id}`)).json();
+            result = await (await page.request.get(`${API}/api/v1/jobs/${job_id}`)).json();
             return result.state;
           })
           .toBe("completed");
@@ -367,7 +367,7 @@ test.describe("Manual Model Families", () => {
         await expect
           .poll(async () => {
             const status: { state: string; model_id: number | null } = await (
-              await page.request.get(`${API}/api/v1/ingest/jobs/${job.job_id}`)
+              await page.request.get(`${API}/api/v1/jobs/${job.job_id}`)
             ).json();
             modelId = status.model_id ?? 0;
             return status.state;

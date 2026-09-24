@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 
 const now = "2026-06-04T00:24:22.000000";
 
@@ -215,6 +217,90 @@ const state = {
   // SAFETY: The mutable mock state is limited to the API's GC lifecycle values.
   gcPlanState: null as null | "preview" | "quarantined" | "aborted" | "completed",
 };
+
+/** A unified install: one process running every lane, one failed derivative. */
+function workOverview() {
+  return {
+    lanes: [
+      {
+        name: "derive.native",
+        concurrency: 2,
+        default_concurrency: 1,
+        overridden: true,
+        scope: "worker",
+        partitioned: false,
+        queued: 4,
+        running: 2,
+      },
+      {
+        name: "ingest",
+        concurrency: 2,
+        default_concurrency: 2,
+        overridden: false,
+        scope: "worker",
+        partitioned: false,
+        queued: 0,
+        running: 0,
+      },
+    ],
+    definitions: [
+      {
+        name: "derive.mesh",
+        label: "Mesh previews and geometry",
+        lane: "derive.native",
+        queued: 4,
+        running: 2,
+        interrupted: 0,
+        failed: 1,
+        completed: 120,
+        derivative_kinds: ["metadata", "thumbnail"],
+        next_due_at: null,
+        last_finished_at: now,
+      },
+      {
+        name: "library.scan",
+        label: "Library scans",
+        lane: "maintenance",
+        queued: 0,
+        running: 0,
+        interrupted: 0,
+        failed: 0,
+        completed: 3,
+        derivative_kinds: [],
+        next_due_at: "2026-06-04T01:00:00.000000",
+        last_finished_at: now,
+      },
+    ],
+    executors: [
+      {
+        executor_id: "all-mock-host-1",
+        role: "all",
+        hostname: "mock-host",
+        app_version: "0.13.0",
+        lanes: ["derive.native", "ingest", "maintenance"],
+        started_at: now,
+        heartbeat_at: now,
+        stale: false,
+      },
+    ],
+    failed_jobs: [
+      {
+        job_id: "failed-mesh-1",
+        kind: "derive.mesh",
+        state: "failed",
+        label: "Mesh previews and geometry",
+        model_id: null,
+        file_id: 7,
+        error: "render_failed",
+        retryable: true,
+        started_at: now,
+        finished_at: now,
+        updated_at: now,
+      },
+    ],
+    failed_derivatives: 1,
+  };
+}
 
 function artifactUploadStatus(uploadState: "created" | "uploading" | "ingesting") {
   return {
@@ -1496,28 +1582,40 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
   if (req.method === "POST" && url.pathname === "/api/v1/ingest/orca") {
     drainRequest(req, () => {
       state.ingestJobQueued = true;
-      sendJson(res, { job_id: "gcode-job-1", state: "pending", message: "ingestion queued" }, 202);
+      sendJson(res, { job_id: "gcode-job-1", state: "queued", message: "ingestion queued" }, 202);
     });
     return;
   }
-  if (req.method === "POST" && url.pathname === "/api/v1/files/thumbnails/rebuild") {
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/admin/work/derivatives/thumbnail/regenerate"
+  ) {
     drainRequest(req, () => {
       state.thumbnailRebuildQueued = true;
-      sendJson(
-        res,
-        { job_id: "thumbnail-job-1", state: "pending", message: "thumbnail rebuild queued" },
-        202,
-      );
+      sendJson(res, { kind: "thumbnail", mode: "all" }, 202);
     });
     return;
   }
-  if (url.pathname === "/api/v1/ingest/jobs") {
+  if (req.method === "POST" && url.pathname === "/api/v1/events/ticket") {
+    drainRequest(req, () => sendJson(res, { ticket: "mock-events-ticket", expires_in: 30 }));
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/v1/admin/work/cancel-queued") {
+    drainRequest(req, () => sendJson(res, { cancelled: 4 }));
+    return;
+  }
+  if (url.pathname === "/api/v1/admin/work") {
+    sendJson(res, workOverview());
+    return;
+  }
+  if (url.pathname === "/api/v1/jobs") {
     sendJson(
       res,
       state.ingestJobQueued
         ? [
             {
               job_id: "gcode-job-1",
+              kind: "ingest.orca",
               state: "completed",
               stage: "completed",
               completion: "complete",
@@ -1532,8 +1630,6 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
               file_id: 2,
               error: null,
               retryable: false,
-              thumbnail_status: "skipped",
-              thumbnail_reason: "not_mesh",
               committed_at: now,
               started_at: now,
               finished_at: now,
@@ -1545,7 +1641,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  if (url.pathname === "/api/v1/ingest/jobs/gcode-job-1") {
+  if (url.pathname === "/api/v1/jobs/gcode-job-1") {
     sendJson(res, {
       job_id: "gcode-job-1",
       state: "completed",
@@ -1697,15 +1793,11 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
   }
   if (req.method === "POST" && url.pathname === "/api/v1/libraries/1/scan") {
     drainRequest(req, () => {
-      sendJson(
-        res,
-        { job_id: "scan-job-1", state: "pending", message: "library scan queued" },
-        202,
-      );
+      sendJson(res, { job_id: "scan-job-1", state: "queued", message: "library scan queued" }, 202);
     });
     return;
   }
-  if (url.pathname === "/api/v1/ingest/jobs/scan-job-1") {
+  if (url.pathname === "/api/v1/jobs/scan-job-1") {
     sendJson(res, {
       job_id: "scan-job-1",
       state: "completed",
@@ -1771,8 +1863,54 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
   sendJson(res, { detail: "not_found", path: url.pathname }, 404);
 }
 
+/** One unmasked server-to-client text frame (RFC 6455 §5.2), payload under 126 bytes. */
+function textFrame(text: string): Buffer {
+  const payload = Buffer.from(text);
+  return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
+}
+
+/**
+ * Accept the events socket the way the real server does: complete the
+ * handshake and send the `resync` every new connection starts with. Nothing
+ * else is sent; the mock backend has no background work to report.
+ */
+function acceptEventsSocket(req: IncomingMessage, socket: Duplex): void {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const key = req.headers["sec-websocket-key"];
+  if (url.pathname !== "/api/v1/events/ws" || !key) {
+    socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+    return;
+  }
+  const accept = createHash("sha1")
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest("base64");
+  socket.write(
+    "HTTP/1.1 101 Switching Protocols\r\n" +
+      "Upgrade: websocket\r\n" +
+      "Connection: Upgrade\r\n" +
+      `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+  );
+  socket.write(textFrame(JSON.stringify({ type: "resync" })));
+  // Client frames (subscriptions, the close handshake) need no answer here.
+  socket.on("data", () => {});
+  socket.on("error", () => socket.destroy());
+}
+
 export async function startMockApi(port: number): Promise<Server> {
   const server = createServer(handle);
+  const sockets = new Set<Duplex>();
+  server.on("upgrade", (req, socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    acceptEventsSocket(req, socket);
+  });
+  // `server.close` waits for upgraded sockets, which the page keeps open.
+  server.on("close", () => sockets.forEach((socket) => socket.destroy()));
+  const close = server.close.bind(server);
+  server.close = (callback) => {
+    sockets.forEach((socket) => socket.destroy());
+    return close(callback);
+  };
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve());

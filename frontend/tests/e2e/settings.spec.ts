@@ -182,7 +182,7 @@ test.describe("settings route", () => {
     await Promise.all([
       page.waitForResponse(
         (response) =>
-          response.url().includes("/api/v1/files/thumbnails/rebuild?force=true") &&
+          response.url().includes("/api/v1/admin/work/derivatives/thumbnail/regenerate") &&
           response.request().method() === "POST",
       ),
       page.getByRole("button", { name: "Recreate all images" }).click(),
@@ -198,5 +198,31 @@ test.describe("settings route", () => {
       "href",
       "https://github.com/xiao-villamor/PrintStash/releases/tag/v0.10.1",
     );
+  });
+
+  test("background work cancels a queue only after confirmation", async ({ page }) => {
+    await page.goto("/settings?section=work");
+
+    await expect(page.getByLabel("Concurrency for derive.native")).toHaveValue("2");
+    // Listed once as a Job kind and once as the kind of a recent failure.
+    await expect(page.getByText("Mesh previews and geometry")).toHaveCount(2);
+    await expect(page.getByText("mock-host")).toBeVisible();
+    await expect(
+      page.getByText("1 derivatives failed across the library", { exact: false }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Cancel queued" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Mesh previews and geometry");
+    await Promise.all([
+      page.waitForRequest(
+        (request) =>
+          request.url().endsWith("/api/v1/admin/work/cancel-queued") &&
+          request.method() === "POST" &&
+          request.postData() === JSON.stringify({ definition: "derive.mesh" }),
+      ),
+      dialog.getByRole("button", { name: "Cancel queued" }).click(),
+    ]);
+    await expect(page.getByText("4 queued Jobs cancelled")).toBeVisible();
   });
 });
