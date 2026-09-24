@@ -33,7 +33,7 @@ are running.
 
 - `VAULT_JWT_SECRET` does not have to be set: the shipped placeholder is public,
   so the API replaces it with a generated secret on first boot. Set your own to
-  manage the value, and note that `docker-compose.prod.yml` requires it. Empty,
+  manage the value; do so for any internet-facing installation. Empty,
   whitespace-only, and whitespace-disguised placeholder values are also replaced
   with a generated secret.
 - Prefer a reverse proxy with TLS if the UI is reachable outside your LAN.

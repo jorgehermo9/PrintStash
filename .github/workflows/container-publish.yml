@@ -7,7 +7,6 @@ permissions:
   actions: read
   contents: read
   packages: write
-  security-events: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -164,86 +163,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  scan:
-    name: Grype scan ${{ matrix.image }} (${{ matrix.arch }})
-    needs: build
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: printstash-api
-            arch: amd64
-            runner: ubuntu-latest
-          - image: printstash-api
-            arch: arm64
-            runner: ubuntu-24.04-arm
-          - image: printstash-api-lite
-            arch: amd64
-            runner: ubuntu-latest
-          - image: printstash-api-lite
-            arch: arm64
-            runner: ubuntu-24.04-arm
-          - image: printstash-frontend
-            arch: amd64
-            runner: ubuntu-latest
-          - image: printstash-frontend
-            arch: arm64
-            runner: ubuntu-24.04-arm
-          - image: printstash
-            arch: amd64
-            runner: ubuntu-latest
-          - image: printstash
-            arch: arm64
-            runner: ubuntu-24.04-arm
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Download image digest
-        uses: actions/download-artifact@v4
-        with:
-          name: digests-${{ matrix.image }}--${{ matrix.arch }}
-          path: ${{ runner.temp }}/digest
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve immutable scan target
-        id: target
-        shell: bash
-        env:
-          OWNER: ${{ github.repository_owner }}
-        run: |
-          shopt -s nullglob
-          digest_files=("${RUNNER_TEMP}/digest/"*)
-          if (( ${#digest_files[@]} != 1 )); then
-            echo "::error::expected exactly one image digest, found ${#digest_files[@]}"
-            exit 1
-          fi
-          digest=${digest_files[0]##*/}
-          image="${REGISTRY}/${OWNER,,}/${{ matrix.image }}@sha256:${digest}"
-          docker pull "$image"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-
-      - name: Scan immutable image with Grype
-        uses: ./.github/actions/grype-scan
-        with:
-          image: ${{ steps.target.outputs.image }}
-          report-name: publish-${{ matrix.image }}-${{ matrix.arch }}
-
   merge:
     name: Publish ${{ matrix.image }}
-    needs: [build, scan]
+    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

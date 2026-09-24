@@ -42,6 +42,36 @@ This guide covers supported self-hosted upgrades. SQLite plus local filesystem
 storage remains the default. Always upgrade from a fresh backup and retain the
 previous application image until validation is complete.
 
+## Unreleased: fewer Compose files
+
+The repository root now has two Compose files. `docker-compose.yml` runs
+PrintStash as **one container** (web UI + full API, image
+`ghcr.io/xiao-villamor/printstash`); `docker-compose.advanced.yml` is the old
+two-container stack with every setting wired. If you downloaded a Compose file
+with `curl` into your own directory, nothing changes until you replace it.
+
+If you run PrintStash **from a git checkout**, check which file you used before
+pulling:
+
+| You used | Use now |
+| --- | --- |
+| `docker-compose.simple.yml` | `docker-compose.yml` (one container; plain `docker compose up -d --remove-orphans`) |
+| `docker-compose.yml` (plain `docker compose`) | `docker-compose.advanced.yml` — the old default moved here. **Add `-f docker-compose.advanced.yml` to every command**, or the new `docker-compose.yml` starts without your `.env` settings (PostgreSQL, S3, SSO, secrets) |
+| `docker-compose.light.yml` | `docker-compose.yml`, or `docker-compose.advanced.yml` with the `printstash-api-lite` image to keep the smaller image or your `.env` values |
+| `docker-compose.prod.yml` | `docker-compose.advanced.yml` with a `.env` that sets `VAULT_JWT_SECRET`, `VAULT_SETUP_MODE=disabled` and `VAULT_SESSION_COOKIE_SECURE=true`; bind the port to `127.0.0.1` as its comment shows |
+| `docker-compose.build.yml` / `docker-compose.light.build.yml` | Uncomment the `build:` blocks in `docker-compose.advanced.yml` |
+| `docker-compose.unified.yml` | `docker-compose.yml` (same content) |
+| `docker-compose.migrate-minio.yml` | `deploy/minio-migration/compose.yml` together with `docker-compose.advanced.yml` |
+
+Every file keeps the same volume keys, so data is found as long as the Compose
+project name (normally the directory name) stays the same. Stop the old stack
+with `docker compose -f <old file> down` (never `down -v`) before starting the
+new one. Moving from two containers to the single container, run
+`docker compose up -d --remove-orphans` so the old `frontend` and `api` containers
+release port 3000. Custom settings move from `services.api.environment` and
+`services.frontend.environment` to `services.printstash.environment`, and logs
+come from `docker compose logs printstash`.
+
 ## 0.13.0 notes
 
 Start with the [0.13.0 release and migration guide](./docs/0.13.0-release-guide.md)
@@ -206,20 +236,11 @@ docker compose ps
 curl -fsS http://localhost:3000/api/v1/health
 ```
 
-For the lite deployment:
+For the advanced deployment, add `-f docker-compose.advanced.yml` to each
+command. If building locally, uncomment its `build:` blocks and run:
 
 ```bash
-docker compose -f docker-compose.light.yml pull
-docker compose -f docker-compose.light.yml up -d --wait
-```
-
-If building locally:
-
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.build.yml \
-  up -d --build --wait
+docker compose -f docker-compose.advanced.yml up -d --build --wait
 ```
 
 Published release images are:

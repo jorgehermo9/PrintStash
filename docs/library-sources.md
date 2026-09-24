@@ -134,11 +134,11 @@ objects, not linked source bytes.
 ## Mounted Source Template
 
 Mount the NAS share on the Docker host, then bind the stable host path into only
-the `api` service:
+the `printstash` service (`api` in `docker-compose.advanced.yml`):
 
 ```yaml
 services:
-  api:
+  printstash:
     volumes:
       - /mnt/printstash-library:/mnt/library:rw
 ```
@@ -149,7 +149,7 @@ you may remount it `:ro` unless write-back is required. Before adding it, verify
 the mapping from inside the running API:
 
 ```bash
-docker compose exec api sh -c 'test -r /mnt/library && find /mnt/library -maxdepth 1 -type f | head'
+docker compose exec printstash sh -c 'test -r /mnt/library && find /mnt/library -maxdepth 1 -type f | head'
 ```
 
 Do not map a library source over `/data/files`, `/data/thumbs`, `/data/backups`,

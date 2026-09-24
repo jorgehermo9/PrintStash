@@ -41,8 +41,10 @@ var; prefix is `VAULT_` (e.g. `VAULT_DB_URL`, `VAULT_DATA_DIR`). Add new
 settings there with a safe local-first default; document user-facing ones in
 the in-repository README/docs. If the public site also needs an update, identify
 the separate `printstash-landing` change without widening scope implicitly.
-Compose files: `docker-compose.yml` (build),
-`docker-compose.light.yml` (prebuilt GHCR image), `.prod`, `.test`.
+Compose files: `docker-compose.yml` (default, minimal, single-container unified image),
+`docker-compose.advanced.yml` (every setting wired, postgres/s3 profiles,
+commented `build:` blocks); maintainer stacks live under `deploy/`. A new
+user-facing setting goes into the advanced file and `docs/deployment.md`.
 
 ## Migration checklist
 

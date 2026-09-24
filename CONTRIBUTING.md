@@ -101,9 +101,8 @@ tests absent verified neither the dialect-sensitive SQL nor the upgrade path.
 
 `affected` stores only local dependency metadata in the ignored `.testmondata`
 file. Treat it as a tight edit/test loop, not a substitute for `full`. Generic
-S3 tests use SeaweedFS; MinIO is intentionally limited to the legacy
-MinIO-to-SeaweedFS migration check, which pull requests run only when that
-migration surface changes.
+S3 tests use SeaweedFS. The legacy MinIO-to-SeaweedFS migration helper can be
+rehearsed manually with `./scripts/test_minio_migration.sh` when needed.
 
 The manual **Tooling experiments** GitHub workflow runs the same lanes on a
 hosted runner without adding experimental work to normal pull-request CI.

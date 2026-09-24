@@ -6,7 +6,7 @@
 #
 # Start with:
 #   docker compose -p printstash-manual \
-#     -f docker-compose.manual-test.yml \
+#     -f deploy/manual-testing/compose.yml \
 #     --env-file deploy/manual-testing/.env up --wait --build
 name: printstash-manual
 
@@ -14,7 +14,7 @@ services:
   frontend:
     image: printstash-manual-frontend:${PRINTSTASH_IMAGE_TAG:-candidate}
     build:
-      context: ./frontend
+      context: ../../frontend
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
@@ -36,7 +36,7 @@ services:
   api:
     image: printstash-manual-api:${PRINTSTASH_IMAGE_TAG:-candidate}
     build:
-      context: ./backend
+      context: ../../backend
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
@@ -89,7 +89,7 @@ services:
       - printstash_manual_staging:/data/staging
       - printstash_manual_backups:/data/backups
       - printstash_manual_db:/data/db
-      - ${MANUAL_EXTERNAL_LIBRARY_PATH:-./deploy/manual-testing/external-library}:/manual-external
+      - ${MANUAL_EXTERNAL_LIBRARY_PATH:-./external-library}:/manual-external
     depends_on:
       printstash-db:
         condition: service_healthy
@@ -241,7 +241,7 @@ services:
       <<: *authentik-environment
     volumes:
       - printstash_manual_authentik_media:/media
-      - ./deploy/manual-testing/authentik/blueprints/printstash.yaml:/blueprints/printstash-manual.yaml:ro
+      - ./authentik/blueprints/printstash.yaml:/blueprints/printstash-manual.yaml:ro
     depends_on:
       authentik-db:
         condition: service_healthy
@@ -258,7 +258,7 @@ services:
 
   mock-moonraker:
     build:
-      context: .
+      context: ../..
       dockerfile: deploy/manual-testing/emulators/Dockerfile
     restart: unless-stopped
     profiles: [emulators]
@@ -276,7 +276,7 @@ services:
 
   mock-octoprint:
     build:
-      context: .
+      context: ../..
       dockerfile: deploy/manual-testing/emulators/Dockerfile
     restart: unless-stopped
     profiles: [emulators]
@@ -294,7 +294,7 @@ services:
 
   mock-prusalink:
     build:
-      context: .
+      context: ../..
       dockerfile: deploy/manual-testing/emulators/Dockerfile
     restart: unless-stopped
     profiles: [emulators]

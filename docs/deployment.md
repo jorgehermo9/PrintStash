@@ -1,9 +1,10 @@
 # Deployment and optional settings
 
-For a new local installation, use [docker-compose.simple.yml](../docker-compose.simple.yml).
-It starts the light API and web UI with SQLite and local storage. The short file
-uses the images' built-in defaults; you only add settings you need. The light API
-omits browser automation and STEP tessellation.
+For a new installation, use [docker-compose.yml](../docker-compose.yml). It runs
+PrintStash as one container — web UI and full API, with SQLite and local
+storage. The short file uses the image's built-in defaults; you only add
+settings you need. For every setting, PostgreSQL or S3, see
+[Advanced deployment](#advanced-deployment-every-setting-postgresql-and-s3).
 
 ## Install
 
@@ -11,7 +12,7 @@ Install Docker with the Compose plugin, then:
 
 ```bash
 mkdir -p printstash && cd printstash
-curl -fsSL https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/docker-compose.simple.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -20,30 +21,14 @@ The first person to complete registration owns the installation.
 There is no default account. The API generates a new token on each start until
 setup is complete. Database migrations run automatically at startup.
 
-All commands below assume you saved the simple file as `docker-compose.yml`.
-From a repository checkout, keep its original name and use
-`docker compose -f docker-compose.simple.yml` instead of `docker compose`.
+From a repository checkout, `docker compose up -d` in the repository root uses
+the same file. The commands below work in either place.
 
-## One-container image
+The container runs nginx and the API side by side. `PUID`/`PGID`, automatic
+migrations and the Settings restart button work through the API entrypoint. If
+either process exits, the container exits and Compose restarts it.
 
-The optional [unified Compose file](../docker-compose.unified.yml) runs the full
-API and nginx web UI in one container, with SQLite and local storage:
-
-```bash
-docker compose -f docker-compose.unified.yml up -d
-```
-
-Open `http://localhost:3000`. It uses
-`ghcr.io/xiao-villamor/printstash:latest`, once published, and retains the same
-five volume names as the other local Compose files. To switch an existing local
-installation, back up first, stop the old stack without removing its volumes,
-keep the same Compose project name, and carry over custom settings and mounts.
-Do not run both stacks against the same data.
-
-Put both API settings and `NGINX_CLIENT_MAX_BODY_SIZE` under
-`services.printstash.environment`. `PUID`/`PGID`, automatic migrations and the
-Settings restart button work through the existing API entrypoint. If either
-service exits, the container exits and Compose restarts the application.
+## Images from a fork or a local build
 
 To use an image published from your fork, set these optional values in `.env`:
 
@@ -58,39 +43,16 @@ that checkout; no published PrintStash base image is required):
 
 ```bash
 docker buildx bake -f docker-bake.hcl unified --load
-PRINTSTASH_IMAGE=printstash PRINTSTASH_VERSION=local docker compose -f docker-compose.unified.yml up -d
+PRINTSTASH_IMAGE=printstash PRINTSTASH_VERSION=local docker compose up -d
 ```
 
 The existing **GHCR Release Images** workflow publishes native AMD64 and ARM64
 images on release tags after CI passes. Run **Manual Docker Images** on the
 default branch to publish `latest`. Both use the repository owner's GHCR namespace
-and the built-in `GITHUB_TOKEN`; a separate registry password is unnecessary. Each architecture
-runs the container tests before its digest is promoted to shared release tags.
-Pull-request CI builds and tests without publishing.
-
-### Container vulnerability reports
-
-Grype scans every AMD64 and ARM64 image during pull-request and main-branch CI.
-Publishing scans the immutable per-architecture digest before that digest can be
-promoted into a multi-platform tag. A scanner, registry or vulnerability-database
-failure stops the job; vulnerability matches remain report-only so an unfixed
-upstream package does not silently make releases impossible.
-
-Open the workflow run's **Artifacts** section and download the artifact named
-`grype-ci-<image>-<architecture>` or
-`grype-publish-<image>-<architecture>`. Each bundle is retained for 90 days and
-contains:
-
-- `summary.md` — severity totals and the number of matches with a known fix;
-- `report.txt` — the complete human-readable Grype table;
-- `report.json` — structured findings for automation and deeper triage;
-- `report.sarif` — the report submitted to **Security → Code scanning** on
-  trusted runs when code scanning is enabled for the repository. An unavailable
-  Security-tab integration does not discard or block the downloadable reports.
-
-Reports are snapshots against the vulnerability database available when the
-workflow ran. Re-run CI when you need a current assessment of an unchanged
-image.
+and the built-in `GITHUB_TOKEN`; a separate registry password is unnecessary.
+Pull-request CI validates the application without building container images.
+The release workflow builds both architectures and runs the unified-image smoke
+test before promoting their digests to shared tags.
 
 On a fork, enable Actions before running the manual workflow. After the first
 publish, open the `printstash` package's settings and change visibility to
@@ -141,42 +103,38 @@ Without them, the connection endpoint returns `provider_not_configured` and
 cannot start authorization. Cults uses the credentials entered by each user
 and does not use these MyMiniFactory settings.
 
-Add API settings under `services.api.environment` in your downloaded file.
+Add settings under `services.printstash.environment` in your downloaded file.
 Keep `VAULT_RESTART_ENABLED: "true"`, which lets Settings restart the supervised
 API. For example, to retain remembered logins for seven days:
 
 ```yaml
 services:
-  api:
+  printstash:
     environment:
       VAULT_RESTART_ENABLED: "true"
       VAULT_REMEMBER_ME_DAYS: "7"
 ```
 
-This is a fragment to merge into the existing `api` service, **not a replacement
-for the whole file**. Keep its image, volumes, and health check. Quote environment
+This is a fragment to merge into the existing `printstash` service, **not a
+replacement for the whole file**. Keep its image and volumes. Quote environment
 values, especially booleans and numbers. After editing, apply the change:
 
 ```bash
 docker compose up -d
 ```
 
-Alternatively, save a fragment as `docker-compose.override.yml` beside the
-downloaded `docker-compose.yml`; Compose loads it automatically. When using the
-original filename in a Git checkout, select both files explicitly:
-
-```bash
-docker compose -f docker-compose.simple.yml -f docker-compose.override.yml up -d
-```
+Alternatively, save a fragment as `docker-compose.override.yml` beside
+`docker-compose.yml`; Compose loads it automatically with `docker compose up -d`.
 
 A `.env` file supplies values for `${VARIABLE}` expressions in Compose. It does
-**not** automatically pass every variable to the API. The simple file only
-interpolates `PRINTSTASH_VERSION` and `PRINTSTASH_HTTP_PORT`. For another setting,
-add it to `api.environment`, either directly as above or by reference:
+**not** automatically pass every variable to the API. The default `docker-compose.yml` only
+interpolates `PRINTSTASH_IMAGE`, `PRINTSTASH_VERSION` and `PRINTSTASH_HTTP_PORT`.
+For another setting, add it to `printstash.environment`, either directly as above
+or by reference:
 
 ```yaml
 services:
-  api:
+  printstash:
     environment:
       VAULT_SETUP_ALLOWED_HOSTS: ${VAULT_SETUP_ALLOWED_HOSTS:-}
 ```
@@ -187,12 +145,13 @@ environment just to get started.
 
 ## Port and image version
 
-These are the only optional variables already wired into the simple file:
+These are the only optional variables already wired into the default `docker-compose.yml`:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PRINTSTASH_HTTP_PORT` | `3000` | Web port on the Docker host. |
-| `PRINTSTASH_VERSION` | `latest` | Image tag, shared by the API and frontend. |
+| `PRINTSTASH_VERSION` | `latest` | Image tag. |
+| `PRINTSTASH_IMAGE` | `ghcr.io/xiao-villamor/printstash` | Image name, for a fork or a local build. |
 
 For example, put this in `.env` beside the downloaded Compose file:
 
@@ -202,12 +161,12 @@ PRINTSTASH_HTTP_PORT=8080
 
 Run `docker compose up -d` and open `http://<server-ip>:8080`.
 To pin a release, add `PRINTSTASH_VERSION=<published-image-tag>` using a tag from
-[Releases](https://github.com/xiao-villamor/PrintStash/releases). Use the same tag
-for both images; update it deliberately when upgrading.
+[Releases](https://github.com/xiao-villamor/PrintStash/releases); update it
+deliberately when upgrading.
 
 ## Data and host folders
 
-The simple file persists all application state in named Docker volumes:
+The default `docker-compose.yml` persists all application state in named Docker volumes:
 
 | Volume | Container path | Contents |
 | --- | --- | --- |
@@ -221,12 +180,12 @@ Docker prefixes these names with the Compose project name, normally the director
 name. Keep that directory/project name when updating so the app finds its data.
 `docker compose down` preserves volumes; **`docker compose down -v` deletes them**.
 
-For host folders, replace the API's `volumes` list with bind mounts and add the
-host owner's numeric IDs to its existing `environment` mapping:
+For host folders, replace the service's `volumes` list with bind mounts and add
+the host owner's numeric IDs to its existing `environment` mapping:
 
 ```yaml
 services:
-  api:
+  printstash:
     environment:
       VAULT_RESTART_ENABLED: "true"
       PUID: "1000"
@@ -245,41 +204,41 @@ before running migrations as the unprivileged user. Replacing named volumes with
 empty host folders does not move existing data: back up and migrate it first.
 
 To index an existing library folder, add a mount such as
-`/path/to/library:/library:ro` to the API's existing volume list, then add
+`/path/to/library:/library:ro` to the service's existing volume list, then add
 `/library` as a Library source in the app. Remove `:ro` only if you want the app
 to write into that folder.
 
 ## Upload limits
 
 The default per-file limit is 512 MiB. If you change it, set both the API limit
-and the frontend's whole-request limit. Allow at least 16 MiB of multipart
-headroom. For 1 GiB uploads:
+and nginx's whole-request limit. Allow at least 16 MiB of multipart headroom.
+For 1 GiB uploads:
 
 ```yaml
 services:
-  frontend:
+  printstash:
     environment:
       NGINX_CLIENT_MAX_BODY_SIZE: "1040m"
-  api:
-    environment:
       VAULT_MAX_UPLOAD_MB: "1024"
 ```
 
-Use `NGINX_CLIENT_MAX_BODY_SIZE` on the frontend, not on the API. An external
-reverse proxy must also allow the larger request body. In the simple file,
-`VAULT_MAX_REQUEST_MB` alone has no effect; that interpolation belongs to the
-older Compose files.
+In `docker-compose.advanced.yml`, `NGINX_CLIENT_MAX_BODY_SIZE` belongs to the
+`frontend` service instead. An external reverse proxy must also allow the larger
+request body. In the default `docker-compose.yml`,
+`VAULT_MAX_REQUEST_MB` alone has no effect; that interpolation belongs to
+`docker-compose.advanced.yml`.
 
 ## API settings reference
 
-Add only the settings you need under `services.api.environment`.
+Add only the settings you need under `services.printstash.environment` (or
+`services.api.environment` in `docker-compose.advanced.yml`).
 These defaults apply when the setting is omitted.
 
 ### Login and sessions
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VAULT_SETUP_MODE` | `disabled` in the API; `trusted_network` in local Compose | Enables browser registration only for an unconfigured installation. Production Compose defaults to disabled. |
+| `VAULT_SETUP_MODE` | `disabled` in the API; `trusted_network` in Compose | Enables browser registration only for an unconfigured installation. Set `disabled` for an internet-facing installation. |
 | `VAULT_SETUP_ALLOWED_HOSTS` | Empty | Extra comma-separated hostnames allowed for initial registration. Localhost, private addresses, `.local`, `.localhost`, and `.home.arpa` are already allowed. |
 | `VAULT_JWT_SECRET` | Generated and stored in the database | Manage your own signing secret; generate with `openssl rand -hex 32`. |
 | `VAULT_SECRETS_KEY` | Generated key file in `/data/db` | External key for stored credentials. Preserve it with backups; changing it requires a planned key migration. |
@@ -310,7 +269,7 @@ on the API for your provider:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VAULT_MAX_UPLOAD_MB` | `512` | Per-file upload cap; also adjust the frontend as above. |
+| `VAULT_MAX_UPLOAD_MB` | `512` | Per-file upload cap; also adjust `NGINX_CLIENT_MAX_BODY_SIZE` as above. |
 | `VAULT_PORTABLE_MANIFEST_MAX_MB` | `128` | Portable archive manifest cap. |
 | `VAULT_STAGING_MAX_PENDING` | `32` | Pending staging capacity. |
 | `VAULT_STAGING_MAX_ACTIVE_PER_USER` | `4` | Concurrent active staging operations per user. |
@@ -321,7 +280,15 @@ on the API for your provider:
 | `VAULT_SQLITE_SYNCHRONOUS` | `NORMAL` | SQLite durability mode. |
 | `VAULT_LOG_LEVEL` | `INFO` | API logging level. |
 | `VAULT_BACKUP_RETENTION_DAYS` | `30` | Local backup retention in days. |
-| `VAULT_RESTART_ENABLED` | `true` in simple Compose | Enables supervised restart from Settings; the app default outside Compose is `false`. |
+| `VAULT_RESTART_ENABLED` | `true` in Compose | Enables supervised restart from Settings; the app default outside Compose is `false`. |
+
+### Background work
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VAULT_PROCESS_ROLE` | `all` | `all` runs HTTP and every background Job; `api` is the one HTTP process of a deployment with [workers](#background-work-and-workers). |
+| `VAULT_API_RUNS_JOBS` | `true` | With `api`, whether the API also runs Jobs; `false` leaves them to the workers. |
+| `VAULT_SHARED_STORAGE` | `false` | Declares that every process mounts the same volumes; required with workers. |
 
 Storage paths already match the persistent mounts. Leave `VAULT_DATA_DIR`,
 `VAULT_THUMB_DIR`, `VAULT_DB_URL`, `VAULT_STAGING_DIR`, and `VAULT_BACKUP_DIR` at
@@ -330,15 +297,18 @@ persistent volume can lose state on container replacement.
 
 For remote storage, see [Storage providers](./storage-providers.md).
 The full image includes the optional storage dependencies. PostgreSQL/S3 services
-are not required for a local installation. For more environment settings, see
-[.env.example](../.env.example); the application defaults are defined in
+are not required for a local installation. Every setting above is already wired,
+with its default, in [docker-compose.advanced.yml](../docker-compose.advanced.yml)
+(see [below](#advanced-deployment-every-setting-postgresql-and-s3)). For more
+environment settings, see [.env.example](../.env.example); the application
+defaults are defined in
 [Settings](../backend/app/core/config.py).
 
 ## HTTPS and reverse proxies
 
-Use the simple deployment on a trusted network. For remote access, put it behind
-your TLS reverse proxy and access controls. Edit the frontend port mapping in the
-base file to bind it to localhost:
+Use the default deployment on a trusted network. For remote access, put it behind
+your TLS reverse proxy and access controls. Edit the port mapping in
+`docker-compose.yml` to bind it to localhost:
 
 ```yaml
 ports:
@@ -347,13 +317,15 @@ ports:
 
 Replace the existing mapping; adding another port through an override may leave
 the original public binding in place. Add `VAULT_SESSION_COOKIE_SECURE: "true"`
-to the API for HTTPS. The API has no host port; the frontend proxies API requests
-and WebSockets. If configuring `FORWARDED_ALLOW_IPS` on the API, trust only your
+for HTTPS. Only the web port is published; nginx inside the container proxies API
+requests and WebSockets. If configuring `FORWARDED_ALLOW_IPS`, trust only your
 controlled proxy peers; see [Known limitations](./known-limitations.md).
 
-The standalone [production Compose](../docker-compose.prod.yml) includes a
-localhost binding and log rotation, and requires an explicitly configured
-`VAULT_JWT_SECRET`. See [Security](../SECURITY.md).
+For an internet-facing installation, also set your own `VAULT_JWT_SECRET`
+(`openssl rand -hex 32`) and `VAULT_SETUP_MODE: "disabled"` once setup is
+complete. [docker-compose.advanced.yml](../docker-compose.advanced.yml) has all of
+these wired, rotates container logs, and shows the localhost binding in a
+comment. See [Security](../SECURITY.md).
 
 ## Stop, update, and troubleshoot
 
@@ -362,7 +334,7 @@ Run these in the install directory:
 ```bash
 # Status and logs
 docker compose ps
-docker compose logs --tail=100 api
+docker compose logs --tail=100 printstash
 
 # Stop while preserving data
 docker compose down
@@ -374,50 +346,80 @@ docker compose pull && docker compose up -d
 Read [UPGRADE.md](../UPGRADE.md) and make a backup before updating. Check health
 at `http://localhost:3000/api/v1/health` (use your chosen host/port).
 
+## Advanced deployment: every setting, PostgreSQL and S3
+
+[docker-compose.advanced.yml](../docker-compose.advanced.yml) is the reference
+deployment. It runs the web UI and API as separate containers (the API image can
+be swapped for the smaller `printstash-api-lite`), wires every setting on this page to a `${VARIABLE}` with its default, rotates
+container logs, and has opt-in PostgreSQL and SeaweedFS (S3) services. Put your
+values in a `.env` file next to it (start from [.env.example](../.env.example)):
+
+```bash
+docker compose -f docker-compose.advanced.yml up -d
+# Optional services, internal-only:
+docker compose -f docker-compose.advanced.yml --profile postgres --profile s3 up -d
+```
+
+Include `-f docker-compose.advanced.yml` in every later Compose command, or save
+it as `docker-compose.yml` in its own install directory. To build from a checkout
+instead of pulling images, uncomment its two `build:` blocks and add `--build`.
+
+Existing installations keep their data when switching between
+`docker-compose.yml` and `docker-compose.advanced.yml`: both use the same five
+local volume keys. Back up first, stop the old stack without removing volumes,
+keep the same Compose project name, and carry over custom settings and mounts.
+Do not run two stacks against the same data. Moving from PostgreSQL or remote
+primary storage requires a separate data migration; switching files is not one.
+
 ## Background work and workers
 
-Imports, previews, metadata, backups, scans and notifications run as background
-Jobs. By default the API process runs them itself, which is right for almost
-every home installation. Settings → Background work shows what is running and
-lets an administrator change how many Jobs of each kind run at once.
+Imports, previews, metadata, backups, scans, search indexing and notifications
+run as background Jobs. By default the API process runs them itself
+(`VAULT_PROCESS_ROLE=all`), which is right for almost every installation, and
+what both Compose files do without any setting. Settings → Background work
+shows what is running and lets an administrator change how many Jobs of each
+kind run at once.
 
 | Topology | How | Requires |
 | --- | --- | --- |
-| One process (default) | Any Compose file; `VAULT_PROCESS_ROLE=all` | SQLite or PostgreSQL |
-| API plus workers | API with `VAULT_PROCESS_ROLE=api`; add `worker` containers | PostgreSQL and one shared volume |
-| API without jobs | `docker-compose.workers.yml` (`VAULT_API_RUNS_JOBS=false`) | PostgreSQL and one shared volume |
+| One process (default) | Either Compose file, unchanged | SQLite or PostgreSQL |
+| API plus workers | Advanced file, `--profile workers` | PostgreSQL and shared volumes |
+| API without jobs | The same, with `VAULT_API_RUNS_JOBS=false` | PostgreSQL and shared volumes |
+
+To add workers, edit `VAULT_DB_URL` in `docker-compose.advanced.yml` to the
+PostgreSQL URL (both the API and the workers read it), then set in `.env`:
+
+```bash
+VAULT_PROCESS_ROLE=api
+VAULT_SHARED_STORAGE=true
+# Optional: leave all background work to the workers.
+VAULT_API_RUNS_JOBS=false
+# How many worker containers to run (default 2).
+PRINTSTASH_WORKERS=2
+```
+
+```bash
+docker compose -f docker-compose.advanced.yml --profile postgres --profile workers up -d
+```
 
 A worker runs the API image with `VAULT_PROCESS_ROLE=worker` and the command
 `/app/.venv/bin/python -m app.worker`. It serves no HTTP, never migrates (it
-waits for the API to), and stops cleanly on `SIGTERM`. Every process must mount
-the same `files`, `thumbs`, `staging` and `backups` volumes at the same paths and
-set `VAULT_SHARED_STORAGE=true`; uploads are staged on local disk and the worker
-that commits one reads what the API staged. Startup refuses a split topology on
-SQLite or without that declaration. Keep exactly one API container per vault.
+waits for the API to), and stops cleanly on `SIGTERM`. Every process mounts the
+same `files`, `thumbs`, `staging` and `backups` volumes; uploads are staged on
+local disk and the worker that commits one reads what the API staged. A worker
+refuses to start on SQLite or without `VAULT_SHARED_STORAGE=true`, saying why.
+Keep exactly one API container per vault.
 
 The engine keeps its own state beside the vault database (SQLite) or in the
 `dbos` schema (PostgreSQL). It is disposable, not part of a backup, and rebuilt
 after a restore. Tuning settings are listed in
 [Background work](architecture/background-work.md#configuration).
 
-## Which Compose file should I use?
+## Other Compose files
 
 | File | Purpose |
 | --- | --- |
-| **`docker-compose.simple.yml`** | **Recommended for a new local install.** Light API image, two services, minimal configuration. |
-| `docker-compose.unified.yml` | Full API and web UI in one container, with native AMD64/ARM64 images. |
-| `docker-compose.yml` | Existing configurable deployment with opt-in PostgreSQL and S3 profiles. |
-| `docker-compose.light.yml` | Smaller API image without browser automation or STEP tessellation; exposes advanced variables. |
-| `docker-compose.prod.yml` | Standalone configuration for a TLS reverse proxy, with localhost binding and log rotation. |
-| `docker-compose.workers.yml` | Split deployment: PostgreSQL, an API that runs no background work, and `worker` replicas on shared volumes. See [Background work](#background-work-and-workers). |
-| `docker-compose.build.yml` | Source-build overlay for the original `docker-compose.yml`. |
-| `docker-compose.light.build.yml` | Source-build overlay for the light file. |
-| `docker-compose.manual-test.yml` | Maintainer testing stack. |
-| `docker-compose.migrate-minio.yml` | Migration helper for existing MinIO installations. |
-
-Existing installations can keep their current file. Do not start two stacks
-against the same data. If switching to the simple file, back up first, stop the
-old stack without removing volumes, keep the same Compose project name, and
-carry over your custom mounts and settings. The simple file retains the five
-local volume keys used by the existing stacks. Moving from PostgreSQL or remote
-primary storage requires a separate data migration; copying this file is not one.
+| **`docker-compose.yml`** | **Recommended.** One container with web UI and full API, SQLite, no configuration. |
+| `docker-compose.advanced.yml` | Every setting wired; separate web UI and API containers; opt-in PostgreSQL, S3 and [workers](#background-work-and-workers). |
+| `deploy/manual-testing/compose.yml` | Maintainer release-testing stack. |
+| `deploy/minio-migration/compose.yml` | One-release helper for old bundled MinIO data; see [MinIO migration](./minio-migration.md). |

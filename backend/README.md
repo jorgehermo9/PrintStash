@@ -121,7 +121,8 @@ shared business contracts and dependency rules.
 From the repo root:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+# Uncomment the two `build:` blocks in docker-compose.advanced.yml first.
+docker compose -f docker-compose.advanced.yml up --build
 ```
 
 The compose file mounts named volumes under `/data/` so your files and DB

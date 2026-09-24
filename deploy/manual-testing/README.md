@@ -19,7 +19,7 @@ POSIX shell are required on the host. Copy the test-only values once:
 
 ```sh
 cp deploy/manual-testing/.env.example deploy/manual-testing/.env
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env config
 ```
 
@@ -44,7 +44,7 @@ before changing mode (or use a separately copied checkout/project):
 
 ```sh
 # First follow the PostgreSQL+S3 or SQLite backup export below.
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env down -v --remove-orphans
 ```
 
@@ -55,7 +55,7 @@ with the `identity` profile, then prove the application and OIDC provider are
 actually ready (Compose health alone does not prove blueprint reconciliation):
 
 ```sh
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env --profile identity \
   up --wait --build
 ./deploy/manual-testing/bin/wait-ready.sh deploy/manual-testing/.env
@@ -69,7 +69,7 @@ over values in `.env`. Do not include `--profile identity` in this mode:
 ```sh
 VAULT_DB_URL=sqlite:////data/db/printstash.sqlite \
 VAULT_OIDC_ENABLED=false \
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env \
   up --wait --build
 VAULT_OIDC_ENABLED=false ./deploy/manual-testing/bin/wait-ready.sh \
@@ -92,7 +92,7 @@ mounted library (it is not the PostgreSQL+S3 or SQLite+S3 backup mode):
 VAULT_DB_URL=sqlite:////data/db/printstash.sqlite \
 VAULT_STORAGE_BACKEND=local \
 VAULT_OIDC_ENABLED=false \
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env \
   up --wait --build
 VAULT_OIDC_ENABLED=false ./deploy/manual-testing/bin/wait-ready.sh \
@@ -114,7 +114,7 @@ Add the `emulators` profile to either mode. They are built from the checked-in
 core testkit, so no package installation occurs at container startup:
 
 ```sh
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env --profile identity --profile emulators \
   up --wait --build
 ```
@@ -302,7 +302,7 @@ uploads, previews, S3 downloads, trash/restore, search, collections, tags,
 documents, auth, Spoolman, and each emulator. Inspect logs before sign-off:
 
 ```sh
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env logs --tail=200 api frontend seaweedfs spoolman
 ```
 
@@ -349,7 +349,7 @@ deterministic:
 set -a; . deploy/manual-testing/.env; set +a
 mkdir -p deploy/manual-testing/evidence/pre-upgrade
 docker volume inspect printstash-manual_printstash_manual_seaweedfs
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env exec -T printstash-db \
   pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom \
   > deploy/manual-testing/evidence/pre-upgrade/printstash.dump
@@ -366,19 +366,19 @@ Stop API/frontend first, restore the object volume, recreate the PostgreSQL
 database, and restore the dump:
 
 ```sh
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env stop api frontend
 docker run --rm \
   -v printstash-manual_printstash_manual_seaweedfs:/to \
   -v "$PWD/deploy/manual-testing/evidence/pre-upgrade:/from:ro" alpine:3.20 \
   sh -c 'find /to -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar xzf /from/seaweedfs.tgz -C /to'
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env exec -T printstash-db \
   psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 \
   -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$POSTGRES_DB' AND pid <> pg_backend_pid();" \
   -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\";" \
   -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\";"
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env exec -T printstash-db \
   pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner \
   < deploy/manual-testing/evidence/pre-upgrade/printstash.dump
@@ -397,14 +397,14 @@ docker pull ghcr.io/xiao-villamor/printstash-frontend:$PREVIOUS_VERSION
 docker tag ghcr.io/xiao-villamor/printstash-api:$PREVIOUS_VERSION printstash-manual-api:previous
 docker tag ghcr.io/xiao-villamor/printstash-frontend:$PREVIOUS_VERSION printstash-manual-frontend:previous
 PRINTSTASH_IMAGE_TAG=previous docker compose -p printstash-manual \
-  -f docker-compose.manual-test.yml --env-file deploy/manual-testing/.env \
+  -f deploy/manual-testing/compose.yml --env-file deploy/manual-testing/.env \
   --profile identity up --wait --no-build
 ./deploy/manual-testing/bin/wait-ready.sh deploy/manual-testing/.env
 # Seed a marker and exercise the old release. Capture this exact paired
 # PostgreSQL+S3 checkpoint before switching image tags.
 mkdir -p deploy/manual-testing/evidence/pre-upgrade
 set -a; . deploy/manual-testing/.env; set +a
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env exec -T printstash-db \
   pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom \
   > deploy/manual-testing/evidence/pre-upgrade/printstash.dump
@@ -412,7 +412,7 @@ docker run --rm -v printstash-manual_printstash_manual_seaweedfs:/from:ro \
   -v "$PWD/deploy/manual-testing/evidence/pre-upgrade:/to" alpine:3.20 \
   sh -c 'tar czf /to/seaweedfs.tgz -C /from .'
 PRINTSTASH_IMAGE_TAG=candidate docker compose -p printstash-manual \
-  -f docker-compose.manual-test.yml --env-file deploy/manual-testing/.env \
+  -f deploy/manual-testing/compose.yml --env-file deploy/manual-testing/.env \
   --profile identity up --wait --build
 ./deploy/manual-testing/bin/wait-ready.sh deploy/manual-testing/.env
 ```
@@ -437,7 +437,7 @@ is an explicit safety checkpoint:
 EVIDENCE_BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/printstash-manual-evidence.XXXXXX")"
 cp -a deploy/manual-testing/evidence/. "$EVIDENCE_BACKUP_DIR/"
 echo "Release evidence copied to $EVIDENCE_BACKUP_DIR; verify it before reset."
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env down
 ```
 
@@ -445,7 +445,7 @@ Only after confirming those exports are outside Docker volumes, reset this
 disposable project:
 
 ```sh
-docker compose -p printstash-manual -f docker-compose.manual-test.yml \
+docker compose -p printstash-manual -f deploy/manual-testing/compose.yml \
   --env-file deploy/manual-testing/.env down -v --remove-orphans
 ```
 

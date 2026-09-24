@@ -34,7 +34,7 @@ delegate.
 ## Commands
 - Backend: fast loop `cd backend && ./scripts/test.sh fast -q` · full gate `./scripts/test.sh full -q` · coverage gate `./scripts/test.sh coverage` · lint `uv run ruff check app/ tests/` · run `uv run uvicorn app.main:app --reload` · migrate `uv run alembic upgrade head`
 - Frontend: `cd frontend && pnpm dev|test|coverage|lint|format|typecheck` — oxlint + oxfmt + TypeScript 7 (no ESLint, no prettier)
-- Full stack: `docker compose -f docker-compose.light.yml up` (prebuilt image — src edits need vite dev server).
+- Full stack: `docker compose up` (prebuilt image — src edits need vite dev server).
 - Local dev gotcha: `:3000` serves the **prebuilt** image, not HMR. Run the vite
   dev server on a spare port to see `frontend/src` edits at all.
 

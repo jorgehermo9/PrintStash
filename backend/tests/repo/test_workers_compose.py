@@ -1,11 +1,12 @@
-"""The split deployment: an API that runs no jobs, plus worker replicas.
+"""The advanced Compose file's optional workers: a split deployment, opted into.
 
-`docker-compose.workers.yml` is the only stack where several processes share a
-vault, so what the application refuses at startup (``validate_topology``) must
-already be true of the file: PostgreSQL, one set of volumes every process
-mounts at the same paths, and that sharing declared. The worker must never run
-HTTP or migrate, and the API must not also run jobs, or the stack is a
-different topology than the one it documents.
+Without the profile the advanced file is one API that runs its own background
+work, like the default file. ``--profile workers`` adds worker containers that
+share the API's settings and volumes exactly, because what the application
+refuses at startup (``validate_topology``: PostgreSQL, one set of volumes
+every process mounts, that sharing declared) must be something the file can
+express by setting the documented variables, never by editing two services.
+A worker never serves HTTP or migrates.
 """
 
 from __future__ import annotations
@@ -19,103 +20,102 @@ import pytest
 
 from tests.paths import REPO_ROOT
 
-COMPOSE = REPO_ROOT / "docker-compose.workers.yml"
-REQUIRED = {"POSTGRES_PASSWORD": "compose-test", "VAULT_JWT_SECRET": "compose-test"}
+COMPOSE = REPO_ROOT / "docker-compose.advanced.yml"
+SPLIT = {
+    "VAULT_PROCESS_ROLE": "api",
+    "VAULT_API_RUNS_JOBS": "false",
+    "VAULT_SHARED_STORAGE": "true",
+}
 
 
-def _render(**environment: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            "/dev/null",
-            "-f",
-            str(COMPOSE),
-            "config",
-            "--format",
-            "json",
-        ],
+def _render(*profiles: str, **environment: str) -> dict[str, Any]:
+    arguments = [
+        "docker",
+        "compose",
+        "--env-file",
+        "/dev/null",
+        "-f",
+        str(COMPOSE),
+    ]
+    for profile in profiles:
+        arguments += ["--profile", profile]
+    rendered = subprocess.run(
+        [*arguments, "config", "--format", "json"],
         env={"PATH": os.environ["PATH"], **environment},
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
     )
+    assert rendered.returncode == 0, rendered.stderr
+    return json.loads(rendered.stdout)
 
 
 @pytest.fixture(scope="module")
-def config() -> dict[str, Any]:
-    rendered = _render(**REQUIRED)
-    assert rendered.returncode == 0, rendered.stderr
-    return json.loads(rendered.stdout)
+def split() -> dict[str, Any]:
+    return _render("postgres", "workers", **SPLIT)["services"]
 
 
 def _mounts(service: dict[str, Any]) -> set[tuple[str, str]]:
     return {(volume["source"], volume["target"]) for volume in service["volumes"]}
 
 
-class TestWorkersCompose:
-    def test_runs_an_api_that_runs_no_jobs(self, config: dict[str, Any]) -> None:
-        environment = config["services"]["api"]["environment"]
+class TestWithoutWorkers:
+    def test_the_api_runs_every_job_itself(self) -> None:
+        environment = _render()["services"]["api"]["environment"]
 
         assert (
             environment["VAULT_PROCESS_ROLE"],
             environment["VAULT_API_RUNS_JOBS"],
-        ) == (
-            "api",
-            "false",
-        )
+        ) == ("all", "true")
 
-    def test_runs_workers_as_worker_processes(self, config: dict[str, Any]) -> None:
-        worker = config["services"]["worker"]
+    def test_no_worker_starts(self) -> None:
+        assert "worker" not in _render()["services"]
+
+
+class TestWithWorkers:
+    def test_runs_workers_as_worker_processes(self, split: dict[str, Any]) -> None:
+        worker = split["worker"]
 
         assert worker["environment"]["VAULT_PROCESS_ROLE"] == "worker"
         assert worker["command"][-2:] == ["-m", "app.worker"]
         assert "ports" not in worker
 
-    def test_runs_more_than_one_worker(self, config: dict[str, Any]) -> None:
-        assert config["services"]["worker"]["deploy"]["replicas"] >= 2
+    def test_runs_two_workers_by_default(self, split: dict[str, Any]) -> None:
+        assert split["worker"]["deploy"]["replicas"] == 2
 
-    @pytest.mark.parametrize("service", ["api", "worker"])
-    def test_every_process_uses_postgres(
-        self, config: dict[str, Any], service: str
+    def test_accepts_a_worker_count(self) -> None:
+        services = _render("workers", PRINTSTASH_WORKERS="4")["services"]
+
+        assert services["worker"]["deploy"]["replicas"] == 4
+
+    def test_the_api_takes_the_documented_split_settings(
+        self, split: dict[str, Any]
     ) -> None:
-        url = config["services"][service]["environment"]["VAULT_DB_URL"]
+        environment = split["api"]["environment"]
 
-        assert url.startswith("postgresql://") and "@postgres:5432/" in url
+        assert {key: environment[key] for key in SPLIT} == SPLIT
 
-    @pytest.mark.parametrize("service", ["api", "worker"])
-    def test_every_process_declares_the_shared_volume(
-        self, config: dict[str, Any], service: str
-    ) -> None:
-        assert (
-            config["services"][service]["environment"]["VAULT_SHARED_STORAGE"] == "true"
-        )
+    def test_a_worker_reads_every_api_setting(self, split: dict[str, Any]) -> None:
+        # One database URL, one set of paths and secrets: a worker configured
+        # apart from its API would run work against another vault.
+        api = dict(split["api"]["environment"])
+        worker = dict(split["worker"]["environment"])
+        api.pop("VAULT_PROCESS_ROLE")
+        worker.pop("VAULT_PROCESS_ROLE")
+
+        assert worker == api
 
     def test_every_process_mounts_the_same_volumes(
-        self, config: dict[str, Any]
+        self, split: dict[str, Any]
     ) -> None:
         # A worker committing an upload reads the bytes the API staged.
-        api = _mounts(config["services"]["api"])
+        api = _mounts(split["api"])
 
-        assert api == _mounts(config["services"]["worker"])
+        assert api == _mounts(split["worker"])
         assert any(target == "/data/staging" for _, target in api)
 
-    def test_the_processes_agree_on_every_path(self, config: dict[str, Any]) -> None:
-        paths = (
-            "VAULT_DATA_DIR",
-            "VAULT_THUMB_DIR",
-            "VAULT_STAGING_DIR",
-            "VAULT_BACKUP_DIR",
-        )
-        api = config["services"]["api"]["environment"]
-        worker = config["services"]["worker"]["environment"]
-
-        assert {key: api[key] for key in paths} == {key: worker[key] for key in paths}
-
-    @pytest.mark.parametrize("missing", sorted(REQUIRED))
-    def test_refuses_to_render_without_a_secret(self, missing: str) -> None:
-        environment = {key: value for key, value in REQUIRED.items() if key != missing}
-
-        assert _render(**environment).returncode != 0
+    def test_a_worker_starts_after_the_api_migrated(
+        self, split: dict[str, Any]
+    ) -> None:
+        assert split["worker"]["depends_on"]["api"]["condition"] == "service_healthy"

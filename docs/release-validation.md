@@ -4,7 +4,7 @@ Run these checks before tagging a release. For the full hands-on browser sweep
 of every UI workflow, see [`manual-testing.md`](./manual-testing.md).
 
 For a reproducible environment built from the current checkout, use
-[`docker-compose.manual-test.yml`](../docker-compose.manual-test.yml). It runs
+[`deploy/manual-testing/compose.yml`](../deploy/manual-testing/compose.yml). It runs
 PrintStash on PostgreSQL and S3-compatible storage alongside Spoolman, with
 optional Authentik OIDC and printer-emulator profiles. Set
 `VAULT_OIDC_ENABLED=false` whenever the identity profile is omitted. Setup,
@@ -118,8 +118,6 @@ a real SeaweedFS that the suite starts as containers, so Docker must be running.
   byte verification, trash, rejected unconfirmed purge, then the explicit confirmed
   outcome. Assert remote absence only when the provider proved and used safe atomic
   quarantine; otherwise assert `blocked` with the exact bytes retained.
-- Run `./scripts/test_minio_migration.sh`; it verifies normal, Unicode, and
-  multipart objects twice with downloaded-content comparison.
 - Run the read-only LibrarySource contracts in the same provider containers:
   native S3 continuation-token pages against SeaweedFS, bounded directory
   cursor traversal against Nextcloud WebDAV and OpenSSH SFTP, stable
@@ -189,10 +187,10 @@ The publish workflows build both images for `linux/amd64` and `linux/arm64`.
 The lite image must be at least 700 MiB smaller than full and may not start more
 than 10% slower at the median.
 
-CI also builds a loadable full ARM64 API image and tessellates the checked-in
-valid STEP fixture under QEMU. Record native Raspberry Pi/ARM hardware and 1 GB
-measurements separately; the emulated smoke proves wheel/import/runtime wiring,
-not real-device performance.
+For ARM64 runtime validation, load the full API image on an ARM64 host and
+tessellate `backend/tests/fixtures/cascadio_material.stp` before release. Record
+native Raspberry Pi/ARM hardware and 1 GB measurements separately; the fixture
+smoke checks wheel/import/runtime wiring, not real-device performance.
 
 Current intentional lint warnings:
 

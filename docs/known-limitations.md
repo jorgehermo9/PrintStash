@@ -115,9 +115,8 @@ manufacturing platform.
 - Images are published for `linux/amd64` and `linux/arm64` (Raspberry Pi 4/5,
   ARM NAS, Apple-silicon VMs). Cascadio 0.1.1 provides OpenCASCADE wheels for
   both targets, so the full image can preview and thumbnail STEP/STP files on
-  either architecture. CI now tessellates a real STEP fixture in an ARM64 image
-  under QEMU. Native Raspberry Pi and representative 1 GB hardware validation
-  are still outstanding, so this is runtime compatibility evidence rather than
+  either architecture. Native Raspberry Pi and representative 1 GB hardware
+  validation are still outstanding, so the published architecture list is not
   a physical-device performance claim.
 - STEP tessellation runs in a disposable child process. Its resident-memory
   ceiling uses the existing cgroup-aware mesh memory budget and it has a 90 s

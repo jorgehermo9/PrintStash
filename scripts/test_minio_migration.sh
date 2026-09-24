@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if docker compose -f "$repo_root/docker-compose.yml" config --services | grep -qx minio; then
+if docker compose -f "$repo_root/docker-compose.advanced.yml" config --services | grep -qx minio; then
   echo "MinIO must not be present in the normal Compose stack" >&2
   exit 1
 fi
@@ -17,8 +17,8 @@ export SEAWEEDFS_MIGRATION_TARGET_BUCKET=migration-target
 compose=(
   docker compose
   --project-directory "$repo_root"
-  -f "$repo_root/docker-compose.yml"
-  -f "$repo_root/docker-compose.migrate-minio.yml"
+  -f "$repo_root/docker-compose.advanced.yml"
+  -f "$repo_root/deploy/minio-migration/compose.yml"
   --profile s3
   --profile minio-migration
 )

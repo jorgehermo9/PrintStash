@@ -141,5 +141,5 @@ not visible unless it is also mounted inside the container.
 - **WebUI shows a 502:** the single container supervises both nginx and the API.
   Check its logs and health status; no `api` network alias is needed.
 
-The [unified Compose file](../docker-compose.unified.yml) is an alternative for
+The default [Compose file](../docker-compose.yml) is an alternative for
 Docker Compose Manager. It uses the same image and first-run settings.

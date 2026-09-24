@@ -34,7 +34,7 @@ sweep). This file is the ordered checklist that ties it together.
 - [ ] Upgrade check: previous-release DB → `uv run alembic upgrade head` →
       app boots (self-hosters upgrade from old releases; CI has a
       migration-upgrade job, but run it locally for schema-heavy releases).
-- [ ] Compose smoke: `docker compose -f docker-compose.light.yml up` →
+- [ ] Compose smoke: `docker compose up` →
       `/api/v1/health` returns the new version.
 - [ ] If the release touches a provider: add a Hardware Validation Log row in
       `docs/provider-support.md` from a real smoke test, or carry the

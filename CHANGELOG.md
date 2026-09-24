@@ -2,7 +2,22 @@
 
 ## Unreleased
 
+**Running from a git checkout? The old `docker-compose.yml` is now
+`docker-compose.advanced.yml`; `docker-compose.yml` now runs the single-container
+image. See UPGRADE.md before pulling.**
+
 ### Changed
+
+- Nine Compose files became two in the repository root: `docker-compose.yml`
+  starts PrintStash as one container (web UI and full API) with no
+  configuration, and `docker-compose.advanced.yml` wires every setting with its
+  default, plus optional PostgreSQL, S3 and background workers. The light,
+  production and build-from-source variants are folded into the advanced file;
+  maintainer stacks moved under `deploy/`.
+
+- CI no longer runs the eight per-image Docker build and Grype jobs or the
+  legacy MinIO-to-SeaweedFS migration job. Container publishing no longer runs
+  Grype scans; release builds and the legacy migration helper remain available.
 
 - **Background work runs on a durable engine.** Imports, previews, metadata,
   backups, scans, notifications, fleet dispatch, audits and migrations are Jobs
@@ -41,10 +56,12 @@
   work, and recent failures to retry; administrators can derive missing or
   regenerate every thumbnail or metadata output. Each source Artifact shows what
   is still being prepared and offers a retry for a failure.
-- Split deployments: an API that runs no jobs (`VAULT_API_RUNS_JOBS=false`) with
-  `python -m app.worker` replicas, on PostgreSQL with one volume every process
-  mounts, declared with `VAULT_SHARED_STORAGE=true` (`docker-compose.workers.yml`).
-  Realtime notices cross processes over PostgreSQL `NOTIFY`.
+- Optional workers: `docker-compose.advanced.yml --profile workers` adds
+  `python -m app.worker` containers beside the API, on PostgreSQL with the
+  API's volumes, declared with `VAULT_SHARED_STORAGE=true`; with
+  `VAULT_API_RUNS_JOBS=false` the API leaves every Job to them. Realtime notices
+  cross processes over PostgreSQL `NOTIFY`. Both Compose files keep running
+  everything in one process by default.
 
 - DXF files can be imported as source Artifacts, downloaded with their original
   bytes, and included in backups. Drawing previews are not yet available.

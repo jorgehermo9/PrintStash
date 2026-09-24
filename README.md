@@ -36,15 +36,15 @@ Model. Run it on your own server with SQLite and local disk to get started.
 > [!WARNING]
 > **Run PrintStash on a trusted self-hosted network.** For remote access, use
 > a reverse proxy with TLS and your own access controls. The
-> [production Compose file](./docker-compose.prod.yml) keeps the API internal
-> and requires your own signing secret. See [Security](#security).
+> [HTTPS and reverse proxy guide](./docs/deployment.md#https-and-reverse-proxies)
+> lists the settings to change. See [Security](#security).
 
 Install Docker with the Compose plugin, then download the
-[**simple Compose file**](./docker-compose.simple.yml) and start PrintStash:
+[**Compose file**](./docker-compose.yml) and start PrintStash:
 
 ```bash
 mkdir -p printstash && cd printstash
-curl -fsSL https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/docker-compose.simple.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -53,26 +53,25 @@ Open **[http://localhost:3000](http://localhost:3000)** (or
 
 1. **Create your administrator account.** There is no default username or
    password. In v0.13.0, the wizard asks for the setup token from
-   `docker compose logs api`; look for the line containing `setup token`.
+   `docker compose logs printstash`; look for the line containing `setup token`.
    Source builds from `main` use the new [browser registration flow](./docs/first-run.md)
    without a console token. Keep access restricted until setup is complete.
 2. **Add your first files.** Upload a Model, or connect an existing folder under
    **Settings → Library sources** and run its first scan. Folder paths must be
-   accessible inside the API container; see the [mounting guide](./docs/deployment.md#data-and-host-folders).
+   accessible inside the container; see the [mounting guide](./docs/deployment.md#data-and-host-folders).
 3. **Explore the Model.** Inspect its preview, open a file in your slicer, and
    add G-code as a Revision. Connect a printer when you want to send a print.
 
-The simple deployment uses the full prebuilt images, SQLite, and persistent
-Docker volumes. No `.env`, build step, PostgreSQL, or S3 service is needed.
+It runs one container (web UI and full API) with SQLite and persistent Docker
+volumes. No `.env`, build step, PostgreSQL, or S3 service is needed.
 Images support `linux/amd64` and `linux/arm64`. Start with 1 GB RAM; 2 GB or
 more helps with large meshes.
 
-**From a Git checkout**, use `docker compose -f docker-compose.simple.yml up -d`
-and include `-f docker-compose.simple.yml` in subsequent Compose commands.
+**From a Git checkout**, run `docker compose up -d` in the repository root.
 
-For a single container containing the full API and web UI, use
-[docker-compose.unified.yml](./docker-compose.unified.yml). Build and publishing
-instructions are in the [deployment guide](./docs/deployment.md#one-container-image).
+Need PostgreSQL, S3, SSO or every setting in one place? Use
+[docker-compose.advanced.yml](./docker-compose.advanced.yml), which wires every
+option with its default.
 
 For ports, version pinning, host folders, upload limits, SSO, HTTPS, updates,
 and the purpose of the other Compose files, see
@@ -352,8 +351,8 @@ Not sure where to start? See
 Read [SECURITY.md](./SECURITY.md) before reporting vulnerabilities.
 PrintStash is designed for trusted self-hosted networks; do not expose it
 directly to the public internet without a reverse proxy, TLS, and your own
-access controls. The production compose (`docker-compose.prod.yml`) binds only
-the frontend to `127.0.0.1`; copy-pasteable Caddy / Traefik / nginx examples are
+access controls. The [reverse proxy guide](./docs/deployment.md#https-and-reverse-proxies)
+shows how to bind the frontend to `127.0.0.1`; copy-pasteable Caddy / Traefik / nginx examples are
 in [Reverse proxy with TLS](https://www.printstash.org/docs/getting-started/installation/#reverse-proxy-with-tls).
 
 ## License

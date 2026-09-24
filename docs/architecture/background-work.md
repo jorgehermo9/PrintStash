@@ -113,7 +113,9 @@ declared with `VAULT_SHARED_STORAGE=true`; startup refuses a split topology
 without it. Uploads are staged on local disk whatever the storage backend, and
 the worker that commits one reads what the API staged, so the staging directory
 is always on it; with local storage the vault and thumbnails are too.
-`docker-compose.workers.yml` runs the third topology.
+`docker-compose.advanced.yml --profile workers` runs the second and third
+topologies (see [deployment](../deployment.md#background-work-and-workers));
+both Compose files run the first with no setting.
 
 ## Configuration
 

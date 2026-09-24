@@ -1,7 +1,7 @@
 # Unified image coverage
 
 Container cases run against the built image on each native architecture before
-CI promotes its digest to release tags: `bash backend/scripts/test-unified-image.sh
+the release workflow promotes its digest to release tags: `bash backend/scripts/test-unified-image.sh
 printstash:local`. The script runs the unittest cases, then verifies the full
 storage adapters and a restart with persistent files.
 

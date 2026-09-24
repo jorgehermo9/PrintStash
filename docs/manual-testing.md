@@ -2,7 +2,7 @@
 
 Run this checklist before tagging a release. It complements, but does not
 replace, the automated gates in [`release-validation.md`](./release-validation.md).
-Use the dedicated stack in [`docker-compose.manual-test.yml`](../docker-compose.manual-test.yml)
+Use the dedicated stack in [`deploy/manual-testing/compose.yml`](../deploy/manual-testing/compose.yml)
 for a reproducible PostgreSQL, S3, Spoolman, Authentik, and printer-emulator
 environment built from the current checkout.
 
@@ -63,7 +63,7 @@ The harness is intentionally separate from normal deployment volumes.
 cp deploy/manual-testing/.env.example deploy/manual-testing/.env
 docker compose \
   --env-file deploy/manual-testing/.env \
-  -f docker-compose.manual-test.yml \
+  -f deploy/manual-testing/compose.yml \
   --profile identity --profile emulators \
   up -d --build --wait
 ```
@@ -126,7 +126,7 @@ verify the Compose project shown by `config --volumes` first:
 
 ```bash
 docker compose --env-file deploy/manual-testing/.env \
-  -f docker-compose.manual-test.yml down --volumes --remove-orphans
+  -f deploy/manual-testing/compose.yml down --volumes --remove-orphans
 ```
 
 ## 4. Clean install, setup, and sessions

@@ -109,10 +109,8 @@ class TestComposeFiles:
     @pytest.mark.parametrize(
         "compose_file",
         [
-            "docker-compose.yml",
-            "docker-compose.light.yml",
-            "docker-compose.prod.yml",
-            "docker-compose.manual-test.yml",
+            "docker-compose.advanced.yml",
+            "deploy/manual-testing/compose.yml",
         ],
     )
     def test_every_deployment_gives_the_proxy_multipart_headroom(
@@ -126,7 +124,7 @@ class TestComposeFiles:
         )
 
     def test_compose_wires_the_backend_upload_cap_from_one_setting(self) -> None:
-        compose = (REPO_ROOT / "docker-compose.yml").read_text()
+        compose = (REPO_ROOT / "docker-compose.advanced.yml").read_text()
 
         assert "VAULT_MAX_UPLOAD_MB: ${VAULT_MAX_UPLOAD_MB:-512}" in compose
 
@@ -139,10 +137,8 @@ class TestComposeFiles:
     @pytest.mark.parametrize(
         "compose_file",
         [
-            "docker-compose.yml",
-            "docker-compose.light.yml",
-            "docker-compose.prod.yml",
-            "docker-compose.manual-test.yml",
+            "docker-compose.advanced.yml",
+            "deploy/manual-testing/compose.yml",
         ],
     )
     def test_every_deployment_wires_the_runtime_file_owner(
@@ -155,7 +151,7 @@ class TestComposeFiles:
         is not 10001 gets a vault they cannot read or back up from the host, and
         the only fix is a `chown -R` after the fact. `PUID`/`PGID` are how they
         say who they are, and a compose file that omits them silently takes the
-        default — which is why this checks all four rather than the one a
+        default — which is why this checks every stack rather than the one a
         contributor happened to edit.
         """
         config = yaml.safe_load((_root() / compose_file).read_text())
@@ -164,27 +160,32 @@ class TestComposeFiles:
         assert environment["PUID"] == "${PUID:-10001}"
         assert environment["PGID"] == "${PGID:-10001}"
 
-    def test_default_deployments_do_not_publish_api_port(self) -> None:
+    def test_advanced_deployment_does_not_publish_api_port(self) -> None:
         root = _root()
-        for name in ("docker-compose.yml", "docker-compose.light.yml"):
-            config = yaml.safe_load((root / name).read_text())
-            api = config["services"]["api"]
-            assert "ports" not in api
-            assert api["expose"] == ["8000"]
+        config = yaml.safe_load((root / "docker-compose.advanced.yml").read_text())
+        api = config["services"]["api"]
+        assert "ports" not in api
+        assert api["expose"] == ["8000"]
 
     def test_optional_stateful_services_do_not_publish_host_ports(self) -> None:
         root = _root()
-        default_config = yaml.safe_load((root / "docker-compose.yml").read_text())
+        default_config = yaml.safe_load(
+            (root / "docker-compose.advanced.yml").read_text()
+        )
         for service_name in ("postgres", "seaweedfs"):
             assert "ports" not in default_config["services"][service_name]
 
         migration_config = yaml.safe_load(
-            (root / "docker-compose.migrate-minio.yml").read_text()
+            (root / "deploy/minio-migration/compose.yml").read_text()
         )
         assert "ports" not in migration_config["services"]["minio"]
 
-    def test_legacy_migration_uses_the_same_pinned_release_from_official_quay(self) -> None:
-        config = yaml.safe_load((_root() / "docker-compose.migrate-minio.yml").read_text())
+    def test_legacy_migration_uses_the_same_pinned_release_from_official_quay(
+        self,
+    ) -> None:
+        config = yaml.safe_load(
+            (_root() / "deploy/minio-migration/compose.yml").read_text()
+        )
         assert config["services"]["minio"]["image"] == (
             "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@"
             "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"

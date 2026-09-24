@@ -76,8 +76,8 @@ Stop the compatibility service when validation is complete:
 
 ```bash
 docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.migrate-minio.yml \
+  -f docker-compose.advanced.yml \
+  -f deploy/minio-migration/compose.yml \
   stop minio
 ```
 

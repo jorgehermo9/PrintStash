@@ -1,156 +1,24 @@
-# Default deployment: pulls the prebuilt images published to GHCR on each
-# release. Just `docker compose up -d` — no build step required. Pin a specific
-# version with PRINTSTASH_VERSION in .env (defaults to latest).
-# Contributors who want to build from source can use docker-compose.build.yml.
+# PrintStash — start here: docker compose up -d, then open http://localhost:3000
+# One container (web UI + API), SQLite and local storage. No .env needed.
+# Optional settings: docs/deployment.md
+# Every setting, PostgreSQL and S3: docker-compose.advanced.yml
 services:
-  frontend:
-    image: ghcr.io/xiao-villamor/printstash-frontend:${PRINTSTASH_VERSION:-latest}
-    container_name: printstash-frontend
+  printstash:
+    # PRINTSTASH_IMAGE selects a fork's GHCR namespace or a locally built image.
+    image: ${PRINTSTASH_IMAGE:-ghcr.io/xiao-villamor/printstash}:${PRINTSTASH_VERSION:-latest}
     restart: unless-stopped
+    stop_grace_period: 60s
     ports:
-      - "3000:3000"
-    # The SPA is served by nginx, which proxies /api/v1 (incl. WebSockets) to
-    # the api service same-origin — so no browser-side API/WS URL is needed.
+      - "${PRINTSTASH_HTTP_PORT:-3000}:3000"
     environment:
-      NGINX_CLIENT_MAX_BODY_SIZE: ${VAULT_MAX_REQUEST_MB:-528}m
-    networks:
-      - printstash_net
-    depends_on:
-      api:
-        condition: service_healthy
-
-  api:
-    image: ghcr.io/xiao-villamor/printstash-api:${PRINTSTASH_VERSION:-latest}
-    container_name: printstash-api
-    restart: unless-stopped
-    expose:
-      - "8000"
-    environment:
-      VAULT_STORAGE_BACKEND: ${VAULT_STORAGE_BACKEND:-local}
-      VAULT_DATA_DIR: /data/files
-      VAULT_THUMB_DIR: /data/thumbs
-      VAULT_STAGING_DIR: /data/staging
-      # DB path must always point at the persistent volume — never use ${VAULT_DB_URL}
-      # here because a local-dev shell export (e.g. sqlite:///./dev.sqlite) would
-      # silently redirect the DB outside the volume and wipe state on every rebuild.
-      # Postgres users: set VAULT_DB_URL via docker-compose.override.yml instead.
-      VAULT_DB_URL: sqlite:////data/db/printstash.sqlite
-      VAULT_BACKUP_DIR: /data/backups
-      VAULT_BACKUP_RETENTION_DAYS: ${VAULT_BACKUP_RETENTION_DAYS:-30}
-      VAULT_BACKUP_S3_BUCKET: ${VAULT_BACKUP_S3_BUCKET:-}
-      VAULT_BACKUP_S3_ENDPOINT_URL: ${VAULT_BACKUP_S3_ENDPOINT_URL:-}
-      VAULT_BACKUP_S3_REGION: ${VAULT_BACKUP_S3_REGION:-auto}
-      VAULT_BACKUP_S3_ACCESS_KEY: ${VAULT_BACKUP_S3_ACCESS_KEY:-}
-      VAULT_BACKUP_S3_SECRET_KEY: ${VAULT_BACKUP_S3_SECRET_KEY:-}
-      VAULT_S3_BUCKET: ${VAULT_S3_BUCKET:-}
-      VAULT_S3_ENDPOINT_URL: ${VAULT_S3_ENDPOINT_URL:-}
-      VAULT_S3_REGION: ${VAULT_S3_REGION:-auto}
-      VAULT_S3_ACCESS_KEY: ${VAULT_S3_ACCESS_KEY:-}
-      VAULT_S3_SECRET_KEY: ${VAULT_S3_SECRET_KEY:-}
-      VAULT_S3_PRESIGNED_URL_EXPIRE_SECONDS: ${VAULT_S3_PRESIGNED_URL_EXPIRE_SECONDS:-900}
-      VAULT_S3_MULTIPART_THRESHOLD_MB: ${VAULT_S3_MULTIPART_THRESHOLD_MB:-50}
-      VAULT_JWT_SECRET: ${VAULT_JWT_SECRET:-changeme_jwt_secret_please_change}
-      VAULT_SETUP_MODE: ${VAULT_SETUP_MODE:-trusted_network}
-      VAULT_SETUP_ALLOWED_HOSTS: ${VAULT_SETUP_ALLOWED_HOSTS:-}
-      VAULT_SECRETS_KEY: ${VAULT_SECRETS_KEY:-}
-      VAULT_SESSION_COOKIE_SECURE: ${VAULT_SESSION_COOKIE_SECURE:-false}
-      VAULT_ACCESS_TOKEN_EXPIRE_MINUTES: ${VAULT_ACCESS_TOKEN_EXPIRE_MINUTES:-60}
-      VAULT_REMEMBER_ME_DAYS: ${VAULT_REMEMBER_ME_DAYS:-2}
-      VAULT_OIDC_ENABLED: ${VAULT_OIDC_ENABLED:-false}
-      VAULT_OIDC_ISSUER_URL: ${VAULT_OIDC_ISSUER_URL:-}
-      VAULT_OIDC_CLIENT_ID: ${VAULT_OIDC_CLIENT_ID:-}
-      VAULT_OIDC_CLIENT_SECRET: ${VAULT_OIDC_CLIENT_SECRET:-}
-      VAULT_OIDC_SCOPES: ${VAULT_OIDC_SCOPES:-openid profile email groups}
-      VAULT_OIDC_USERNAME_CLAIM: ${VAULT_OIDC_USERNAME_CLAIM:-preferred_username}
-      VAULT_OIDC_GROUPS_CLAIM: ${VAULT_OIDC_GROUPS_CLAIM:-groups}
-      VAULT_OIDC_ADMIN_GROUPS: ${VAULT_OIDC_ADMIN_GROUPS:-printstash-admins}
-      VAULT_OIDC_DISPLAY_NAME: ${VAULT_OIDC_DISPLAY_NAME:-Single sign-on}
-      VAULT_OIDC_REDIRECT_URI: ${VAULT_OIDC_REDIRECT_URI:-}
-      VAULT_OIDC_ALLOW_INSECURE_HTTP: ${VAULT_OIDC_ALLOW_INSECURE_HTTP:-false}
-      VAULT_MAX_UPLOAD_MB: ${VAULT_MAX_UPLOAD_MB:-512}
-      VAULT_LOG_LEVEL: ${VAULT_LOG_LEVEL:-INFO}
-      # Settings can request a graceful API exit because this service has an
-      # unless-stopped restart policy. Disable if you remove that supervisor.
-      VAULT_RESTART_ENABLED: ${VAULT_RESTART_ENABLED:-true}
-      # The API runs as this host identity so bind-mounted data remains
-      # writable. Defaults match the image's unprivileged account.
-      PUID: "${PUID:-10001}"
-      PGID: "${PGID:-10001}"
-      TZ: UTC
-      # Trust X-Forwarded-For only from these peer IPs/CIDRs (uvicorn
-      # --proxy-headers is already on in the image CMD). Leave unset if you
-      # publish port 8000 directly (the default above) — an unset value
-      # trusts only 127.0.0.1, so a request that reaches uvicorn straight
-      # from the internet can't spoof its own client IP. Set this only when
-      # api is reachable exclusively through a reverse proxy you control, to
-      # that proxy's address. See docs/known-limitations.md.
-      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-}
+      VAULT_SETUP_MODE: trusted_network
+      VAULT_RESTART_ENABLED: "true"
     volumes:
       - printstash_data:/data/files
       - printstash_thumbs:/data/thumbs
       - printstash_db:/data/db
       - printstash_staging:/data/staging
       - printstash_backups:/data/backups
-    networks:
-      - printstash_net
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    # No migration command needed: the image entrypoint runs DB migrations on
-    # every start, then launches the server (the image CMD). Removing or editing
-    # this stanza can no longer skip migrations (issue #29).
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: printstash-postgres
-    restart: unless-stopped
-    profiles:
-      - postgres
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-printstash}
-      POSTGRES_USER: ${POSTGRES_USER:-printstash}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-printstash}
-    # Internal-only by default. Use `docker compose exec postgres psql ...`
-    # instead of publishing the database to every host interface.
-    volumes:
-      - printstash_postgres:/var/lib/postgresql/data
-    networks:
-      - printstash_net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-printstash} -d ${POSTGRES_DB:-printstash}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  seaweedfs:
-    image: chrislusf/seaweedfs:4.41@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d
-    container_name: ${SEAWEEDFS_CONTAINER_NAME:-printstash-seaweedfs}
-    restart: unless-stopped
-    profiles:
-      - s3
-    environment:
-      AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-printstash}
-      AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-printstash-secret}
-    command: mini -dir=/data -master.telemetry=false
-    # Internal-only by default. The API reaches S3 at http://seaweedfs:8333.
-    volumes:
-      - printstash_seaweedfs:/data
-    networks:
-      - printstash_net
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9333/cluster/status"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-
-networks:
-  printstash_net:
-    driver: bridge
 
 volumes:
   printstash_data:
@@ -158,5 +26,3 @@ volumes:
   printstash_db:
   printstash_staging:
   printstash_backups:
-  printstash_postgres:
-  printstash_seaweedfs:
