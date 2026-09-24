@@ -230,6 +230,45 @@ class TestListItems:
         assert len(ids) == len(set(ids))
         assert total == len(created)
 
+    @pytest.mark.parametrize("sort", [ModelSort.FILAMENT_ASC, ModelSort.DURATION_ASC])
+    def test_a_model_whose_metadata_is_not_derived_yet_sorts_as_unknown(
+        self, db_session: Session, superuser: User, sort: ModelSort
+    ) -> None:
+        # Its derivative has not run: it is unknown, not the cheapest or the
+        # fastest in the library.
+        ids_by_name: dict[str, int] = {}
+        for index, (name, derived) in enumerate([("pending", False), ("known", True)]):
+            model = build_model(
+                db_session,
+                name=name,
+                slug=f"unknown-{name}",
+                hash=f"f{index:063d}",
+            )
+            artifact = build_file(
+                db_session,
+                model,
+                path=f"{name}.gcode",
+                filename=f"{name}.gcode",
+                file_type=FileType.GCODE,
+                size_bytes=10,
+                sha256=f"a{index:063d}",
+            )
+            if derived:
+                db_session.add(
+                    Metadata(
+                        file_id=artifact.id,
+                        estimated_time_s=3600,
+                        filament_weight_g=250.0,
+                    )
+                )
+            ids_by_name[name] = model.id
+        db_session.commit()
+
+        ids, _ = _cursor_page_ids(db_session, superuser, sort)
+
+        name_by_id = {model_id: name for name, model_id in ids_by_name.items()}
+        assert [name_by_id[i] for i in ids if i in name_by_id] == ["known", "pending"]
+
     def test_cursor_pages_apply_every_metric_sort_globally(
         self, db_session: Session, superuser: User
     ) -> None:
