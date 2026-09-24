@@ -64,8 +64,7 @@ def status(session: Session, actor: User) -> dict:
 def project_run(run: SimilarityRun) -> dict:
     return run.model_dump(
         exclude={
-            "lease_token",
-            "lease_expires_at",
+            "writer",
             "active_scope_key",
             "scope_ids_json",
             "checkpoint_json",

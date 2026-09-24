@@ -16,6 +16,7 @@ from app.modules.similarity.processing import SimilarityProcessor
 from app.modules.storage.storage_backend.runtime import get_backend
 from tests.factories.embeddings import local_embedding_assets
 from tests.factories.geometry import tetrahedron
+from tests.factories.similarity import advance_oldest_run
 
 
 class TestEmbeddingRun:
@@ -55,7 +56,7 @@ class TestEmbeddingRun:
             backend.write_stream(io.BytesIO(content), file.path)
         run = runs.start(db_session, actor)
         for _ in range(60):
-            SimilarityProcessor(get_session_factory(), backend).work_one()
+            advance_oldest_run(SimilarityProcessor(get_session_factory(), backend))
             db_session.refresh(run)
             if run.state in runs.TERMINAL:
                 break
@@ -82,7 +83,9 @@ class TestEmbeddingRun:
         )
         run = runs.start(db_session, actor)
         for _ in range(5):
-            SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+            advance_oldest_run(
+                SimilarityProcessor(get_session_factory(), get_backend())
+            )
         db_session.refresh(run)
         assert run.state == "completed"
         assert (
@@ -153,7 +156,9 @@ class TestEmbeddingRecovery:
                 path.write_bytes(b"new content")
             else:
                 path.unlink()
-        assert SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        assert advance_oldest_run(
+            SimilarityProcessor(get_session_factory(), get_backend())
+        )
         db_session.refresh(run)
         assert run.state == "running"
         assert json.loads(run.counters_json)["embedding_failed"] == 1
@@ -165,7 +170,7 @@ class TestEmbeddingRecovery:
         file.sha256 = "f" * 64
         db_session.add(file)
         db_session.commit()
-        SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        advance_oldest_run(SimilarityProcessor(get_session_factory(), get_backend()))
         db_session.refresh(run)
         assert json.loads(run.counters_json)["embedding_stale"] == 1
         assert json.loads(run.checkpoint_json)["embedding_fingerprint_id"] == fp.id
@@ -180,7 +185,7 @@ class TestEmbeddingRecovery:
         existing = make_passage_vector(
             db_session.get(IndexGeneration, generation), file
         )
-        SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        advance_oldest_run(SimilarityProcessor(get_session_factory(), get_backend()))
         db_session.refresh(run)
         assert json.loads(run.counters_json)["embedding_cached"] == 1
         assert json.loads(run.checkpoint_json)["embedding_fingerprint_id"] == fp.id
@@ -197,7 +202,7 @@ class TestEmbeddingRecovery:
         run.checkpoint_json = json.dumps(checkpoint)
         db_session.add(run)
         db_session.commit()
-        SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        advance_oldest_run(SimilarityProcessor(get_session_factory(), get_backend()))
         db_session.refresh(run)
         assert run.phase == "candidates"
         assert (

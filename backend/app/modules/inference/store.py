@@ -152,7 +152,7 @@ def publish(
     input_hash: str,
     vector: Iterable[float],
     run_id: int,
-    lease_token: str,
+    writer: str,
 ) -> bool:
     key = unit_key(file_id, component_index, input_hash, space.render_recipe)
     blob = normalize(vector, space.dimension)
@@ -165,8 +165,7 @@ def publish(
         select(SimilarityRun.id)
         .where(
             SimilarityRun.id == run_id,
-            SimilarityRun.lease_token == lease_token,
-            col(SimilarityRun.lease_expires_at) > utcnow(),
+            SimilarityRun.writer == writer,
             col(SimilarityRun.cancel_requested).is_(False),
             SimilarityRun.state == "running",
         )

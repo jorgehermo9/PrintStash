@@ -109,7 +109,7 @@ def work_one(
                 input_hash=fp.source_sha256,
                 vector=pooled,
                 run_id=run.id,
-                lease_token=token,
+                writer=token,
             ):
                 counters["embedded"] = counters.get("embedded", 0) + 1
         progress["embedding_fingerprint_id"] = fp.id

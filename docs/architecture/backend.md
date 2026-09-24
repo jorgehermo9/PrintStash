@@ -165,10 +165,13 @@ not just successful imports. Run query budgets, OpenAPI, schema parity,
 migration upgrades and publication/restore failure cases throughout extraction.
 See `docs/backend-refactor-validation.md` for the behavior matrix and evidence.
 
-Similarity analysis is an optional derivative of committed Artifacts. Its Job
-(`similarity.analyze`) runs in the `similarity` lane under restore/cleanup
-admission and the shared native compute budget; the capability owner
-checkpoints each mesh, shortlist or verified pair.
+Similarity analysis is an optional derivative of committed Artifacts. Each
+unfinished `SimilarityRun` is the subject of `similarity.analyze` Jobs in the
+`similarity` lane, under restore/cleanup admission. The engine runs one
+execution per run; that execution is the run's `writer`, and every checkpoint,
+candidate and vector publication is fenced on it. The run itself holds only
+intent and progress: scope, settings snapshot, the checkpoint of each mesh,
+shortlist or verified pair, and cancellation.
 Geometry arrays and embedding contracts live in `printstash-core`; file parsers,
 OCP/ONNX children, storage materialization and SQL authorization stay in the app.
 See [ADR 0005](../adr/0005-similar-models-evidence.md) for source/version fencing

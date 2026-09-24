@@ -72,6 +72,33 @@ def build_similarity_run(
     return save(session, SimilarityRun(**(defaults | overrides)))
 
 
+TEST_WRITER = "test-execution:1"
+
+
+def advance_oldest_run(processor: Any, *, writer: str = TEST_WRITER) -> bool:
+    """One unit of the oldest unfinished run: what one step of its Job does.
+
+    Production advances each run from its own ``similarity.analyze`` Job; a
+    test that wants to watch the units one at a time drives them here.
+    """
+    from sqlmodel import col, select
+
+    from app.modules.similarity.configuration import read_settings
+    from app.modules.similarity.runs import TERMINAL
+
+    with processor.sessions.scoped_session() as session:
+        # The source offers only cancellations while similarity is disabled.
+        query = select(SimilarityRun.id).where(
+            col(SimilarityRun.state).not_in(TERMINAL)
+        )
+        if not read_settings(session).enabled:
+            query = query.where(col(SimilarityRun.cancel_requested).is_(True))
+        run_id = session.exec(query.order_by(col(SimilarityRun.id)).limit(1)).first()
+    if run_id is None:
+        return False
+    return processor.work_one(run_id, writer)
+
+
 def build_similarity_candidate(
     session: Session, first: Model, second: Model, **overrides: Any
 ) -> SimilarityCandidate:

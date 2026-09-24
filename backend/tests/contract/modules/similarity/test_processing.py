@@ -20,6 +20,7 @@ from app.modules.storage.storage_providers import (
     parse_provider_config,
     resolve_transport,
 )
+from tests.factories.similarity import TEST_WRITER
 from tests.fixtures.storage_presets import real_preset_configuration
 
 pytestmark = pytest.mark.s3
@@ -59,7 +60,9 @@ class TestRemoteProcessing:
         monkeypatch.setattr(ThumbnailEngine, "generate", observe)
         try:
             run = runs.start(db_session, actor)
-            assert SimilarityProcessor(get_session_factory(), backend).work_one()
+            assert SimilarityProcessor(get_session_factory(), backend).work_one(
+                run.id, TEST_WRITER
+            )
             db_session.refresh(run)
             assert json.loads(run.counters_json)["failed"] == 1
             assert db_session.exec(select(GeometryFingerprint)).one().state == "failed"

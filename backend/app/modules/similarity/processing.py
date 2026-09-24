@@ -39,16 +39,19 @@ class SimilarityProcessor:
         self.backend = backend
         self._retain_storage = retain_storage
 
-    def work_one(self) -> bool:
-        """A mesh, shortlist or pair, with the checkpoint committed before return."""
+    def work_one(self, run_id: int, writer: str) -> bool:
+        """Advance one run by a mesh, shortlist or pair; ``False`` when it cannot.
+
+        ``writer`` is the engine execution doing it: every write the unit
+        makes is fenced on it. The checkpoint commits before this returns.
+        While similarity is disabled a run only settles a cancellation.
+        """
         with self.sessions.scoped_session() as session:
             enabled = read_settings(session).enabled
-            if enabled:
-                runs.schedule_due(session)
-            claimed = runs.claim(session, cancellations_only=not enabled)
-            if claimed is None:
+            run = runs.take(session, run_id, writer)
+            if run is None or not (enabled or run.cancel_requested):
                 return False
-            run, token = claimed
+            token = writer
             if run.cancel_requested:
                 runs.checkpoint(session, run, token, state="cancelled")
                 return True

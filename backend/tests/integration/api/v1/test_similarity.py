@@ -68,7 +68,7 @@ class TestSimilarity:
         )
         assert response.status_code == 202, response.text
         run_id = response.json()["id"]
-        assert "lease_token" not in response.json()
+        assert "writer" not in response.json()
         assert (
             client.post(
                 f"/api/v1/similarity/runs/{run_id}/cancel", headers=auth_headers
@@ -198,7 +198,7 @@ class TestPersistedResults:
         assert listed.status_code == detail.status_code == 200
         assert listed.json() == {"items": [expected], "next_cursor": None}
         assert detail.json() == expected
-        assert "lease_token" not in expected
+        assert "writer" not in expected
         assert "active_scope_key" not in expected
         assert expected["state"] == "queued"
 

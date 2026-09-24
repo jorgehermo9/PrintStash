@@ -75,7 +75,6 @@ export interface SimilarityRun {
   failure_code: string | null;
   created_at: string;
   finished_at: string | null;
-  last_activity_at: string;
 }
 export interface SimilarityModel {
   id: number;

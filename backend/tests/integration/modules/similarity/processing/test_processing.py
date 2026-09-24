@@ -19,6 +19,7 @@ from app.modules.similarity import configuration, runs
 from app.modules.similarity.processing import SimilarityProcessor
 from app.modules.storage.storage_backend.runtime import get_backend
 from tests.factories.geometry import tetrahedron
+from tests.factories.similarity import advance_oldest_run
 
 
 @pytest.fixture
@@ -56,7 +57,7 @@ class TestProcessing:
         processor = SimilarityProcessor(get_session_factory(), get_backend())
         original = runs.start(db_session, actor)
         for _ in range(35):
-            assert processor.work_one()
+            assert advance_oldest_run(processor)
             db_session.refresh(original)
             if original.state in runs.TERMINAL:
                 break
@@ -67,7 +68,7 @@ class TestProcessing:
         repeated = runs.start(db_session, actor)
 
         for _ in range(35):
-            assert processor.work_one()
+            assert advance_oldest_run(processor)
             db_session.refresh(repeated)
             if repeated.state in runs.TERMINAL:
                 break
@@ -84,7 +85,7 @@ class TestProcessing:
         for _ in range(2):
             run = runs.start(db_session, actor)
             for _ in range(35):
-                assert processor.work_one()
+                assert advance_oldest_run(processor)
                 db_session.refresh(run)
                 if run.state in runs.TERMINAL:
                     break
@@ -105,7 +106,9 @@ class TestProcessing:
         # Construct a fresh processor each time, as after process restarts. The
         # durable database checkpoint, not an in-memory iterator, owns progress.
         for _ in range(35):
-            SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+            advance_oldest_run(
+                SimilarityProcessor(get_session_factory(), get_backend())
+            )
             db_session.expire_all()
             if db_session.get(SimilarityRun, run.id).state in runs.TERMINAL:
                 break
@@ -135,11 +138,11 @@ class TestProcessing:
         actor, _ = local_pair
         run = runs.start(db_session, actor)
         processor = SimilarityProcessor(get_session_factory(), get_backend())
-        processor.work_one()
+        advance_oldest_run(processor)
         db_session.refresh(run)
         assert json.loads(run.counters_json)["ready"] == 1
         runs.cancel(db_session, actor, run.id)
-        processor.work_one()
+        advance_oldest_run(processor)
         db_session.refresh(run)
         assert run.state == "cancelled"
         assert len(db_session.exec(select(GeometryFingerprint)).all()) == 2
@@ -157,7 +160,10 @@ class TestDisabledCancellation:
         run = runs.start(db_session, actor, scope="library")
         runs.cancel(db_session, actor, run.id)
         update_settings(db_session, actor, {"enabled": False})
-        assert SimilarityProcessor(get_session_factory(), backend).work_one() is True
+        assert (
+            advance_oldest_run(SimilarityProcessor(get_session_factory(), backend))
+            is True
+        )
         db_session.refresh(run)
         assert run.state == "cancelled"
         assert run.active_scope_key is None
@@ -178,7 +184,9 @@ class TestProcessingFailures:
             actor.is_superuser = False
         db_session.add_all([actor, run])
         db_session.commit()
-        assert SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        assert advance_oldest_run(
+            SimilarityProcessor(get_session_factory(), get_backend())
+        )
         db_session.refresh(run)
         assert run.state == "failed"
         assert run.failure_code == (
@@ -193,12 +201,12 @@ class TestProcessingFailures:
         actor, _ = local_pair
         run = runs.start(db_session, actor)
         processor = SimilarityProcessor(get_session_factory(), get_backend())
-        processor.work_one()
+        advance_oldest_run(processor)
         db_session.refresh(run)
         run.checkpoint_json = "{}"
         db_session.add(run)
         db_session.commit()
-        processor.work_one()
+        advance_oldest_run(processor)
         db_session.refresh(run)
         assert json.loads(run.counters_json)["cached"] == 1
         whole = db_session.exec(
@@ -216,7 +224,7 @@ class TestProcessingFailures:
         ).materialize() as path:
             path.write_bytes(b"changed-source")
         run = runs.start(db_session, actor)
-        SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        advance_oldest_run(SimilarityProcessor(get_session_factory(), get_backend()))
         db_session.refresh(run)
         assert json.loads(run.counters_json)["failed"] == 1
         fp = db_session.exec(select(GeometryFingerprint)).one()
@@ -227,7 +235,7 @@ class TestProcessingFailures:
         run = runs.start(db_session, actor)
         processor = SimilarityProcessor(get_session_factory(), get_backend())
         for _ in range(35):
-            processor.work_one()
+            advance_oldest_run(processor)
             db_session.refresh(run)
             if json.loads(run.counters_json).get("verified", 0):
                 break
@@ -238,7 +246,7 @@ class TestProcessingFailures:
             for row in db_session.exec(select(SimilarityCandidate))
         ]
         runs.cancel(db_session, actor, run.id)
-        processor.work_one()
+        advance_oldest_run(processor)
         db_session.refresh(run)
         assert run.state == "cancelled"
         assert [
@@ -267,8 +275,8 @@ class TestPairRecovery:
         actor, files = local_pair
         run = runs.start(db_session, actor)
         worker = SimilarityProcessor(get_session_factory(), get_backend())
-        worker.work_one()
-        worker.work_one()
+        advance_oldest_run(worker)
+        advance_oldest_run(worker)
         fingerprints = db_session.exec(
             select(GeometryFingerprint)
             .where(GeometryFingerprint.component_index == 0)
@@ -299,7 +307,7 @@ class TestPairRecovery:
         run.checkpoint_json = json.dumps({"pending_pairs": [pair]})
         db_session.add(run)
         db_session.commit()
-        assert worker.work_one()
+        assert advance_oldest_run(worker)
         db_session.refresh(run)
         assert run.state == "running"
         assert json.loads(run.checkpoint_json)["pending_pairs"] == []
@@ -332,7 +340,9 @@ class TestUnexpectedAnalysisFailure:
 
         monkeypatch.setattr(ThumbnailEngine, "generate", refuse)
         run = runs.start(db_session, actor)
-        result = SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        result = advance_oldest_run(
+            SimilarityProcessor(get_session_factory(), get_backend())
+        )
         db_session.refresh(run)
         assert result is (failure != "busy")
         assert run.state == ("running" if failure == "busy" else "failed")
@@ -380,7 +390,9 @@ class TestIncompleteReanalysis:
         fingerprint = make_geometry_fingerprint(file, state=state, attempts=1)
         run = runs.start(db_session, actor)
 
-        assert SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        assert advance_oldest_run(
+            SimilarityProcessor(get_session_factory(), get_backend())
+        )
 
         db_session.refresh(fingerprint)
         db_session.refresh(run)
@@ -400,7 +412,9 @@ class TestIncompleteReanalysis:
         fingerprint = make_geometry_fingerprint(file, state=state, attempts=1)
         run = runs.start(db_session, actor, trigger="scheduled")
 
-        assert SimilarityProcessor(get_session_factory(), get_backend()).work_one()
+        assert advance_oldest_run(
+            SimilarityProcessor(get_session_factory(), get_backend())
+        )
 
         db_session.refresh(fingerprint)
         db_session.refresh(run)
