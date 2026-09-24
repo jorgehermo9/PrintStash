@@ -130,12 +130,16 @@ class TestRestoreMaintenance:
 
         assert maintenance.restore_in_progress() is False
 
-    def test_recovery_gates_this_process_and_fences_the_others(self) -> None:
+    def test_recovery_gates_this_process(self) -> None:
+        maintenance.hold_restore_maintenance()
+
+        assert maintenance.begin_mutating_operation() is False
+
+    def test_recovery_fences_the_other_processes(self) -> None:
         maintenance.hold_restore_maintenance()
 
         fence = fences.get(fences.RESTORE)
         assert fence is not None and fence.reason == "restore_recovery"
-        assert maintenance.begin_mutating_operation() is False
 
     def test_recovery_still_gates_locally_without_a_fence(self, monkeypatch) -> None:
         monkeypatch.setattr(fences, "acquire", _unreadable)

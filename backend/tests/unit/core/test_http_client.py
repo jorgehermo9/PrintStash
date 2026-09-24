@@ -44,7 +44,7 @@ class TestGetHttpClient:
 
 
 class TestCloseHttpClient:
-    def test_closes_the_loops_client_and_the_loopless_one(self) -> None:
+    def test_closes_every_client_the_loop_can_reach(self) -> None:
         loopless = http_client.get_http_client()
 
         async def close():

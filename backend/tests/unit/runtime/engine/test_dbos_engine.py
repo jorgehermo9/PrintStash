@@ -70,7 +70,7 @@ class TestConfig:
         assert config["dbos_system_schema"] == "dbos"
         assert "db_engine_kwargs" not in config
 
-    def test_runs_as_this_build_and_this_executor(self) -> None:
+    def test_identifies_this_build_to_the_engine(self) -> None:
         config = _engine()._config()
 
         assert (config["application_version"], config["executor_id"]) == (
