@@ -8,7 +8,13 @@
  * the artefact it produced, because "the toast appeared" is not evidence anything saved.
  */
 import { test, expect } from "./helpers";
-import { clickModelAction, modelCard, uploadGcodeModel } from "./util";
+import {
+  backupFromAccepted,
+  clickModelAction,
+  createBackupViaApi,
+  modelCard,
+  uploadGcodeModel,
+} from "./util";
 
 test.describe("settings", () => {
   test("create and revoke an API key", async ({ page }) => {
@@ -79,7 +85,8 @@ test.describe("settings", () => {
       ),
       page.getByRole("button", { name: "Backup now" }).click(),
     ]);
-    const metadata = await created.json();
+    const metadata = await backupFromAccepted(page, created);
+    await expect(page.getByText(/Backup created/)).toBeVisible();
 
     // The new backup shows up in the Restore-backup list with a Download action.
     const backupRow = page.locator("div.grid").filter({ hasText: metadata.backup_id }).last();
@@ -167,9 +174,7 @@ test.describe("settings", () => {
   });
 
   test("upload an existing backup archive", async ({ page }) => {
-    const createdResponse = await page.request.post("/api/v1/backups");
-    expect(createdResponse.ok()).toBeTruthy();
-    const metadata = await createdResponse.json();
+    const metadata = await createBackupViaApi(page);
     const source = new URLSearchParams({ source_ref: metadata.source_ref });
     const archiveResponse = await page.request.get(
       `/api/v1/backups/${metadata.backup_id}/download?${source}`,
@@ -281,8 +286,9 @@ test.describe("settings", () => {
         response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
     );
     await page.getByRole("button", { name: "Backup now" }).click();
-    const metadata = await (await created).json();
+    const metadata = await backupFromAccepted(page, await created);
     expect(metadata.source_ref).toBeTruthy();
+    await expect(page.getByText(/Backup created/)).toBeVisible();
 
     const download = page.waitForRequest(
       (request) =>

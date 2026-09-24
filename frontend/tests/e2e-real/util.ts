@@ -1,4 +1,54 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type APIResponse, type Page, type Response } from "@playwright/test";
+
+/** The new backup, as the finished `backup.create` Job reports it. */
+export interface CreatedBackup {
+  backup_id: string;
+  source_ref: string;
+  location: string;
+  outcome: string | null;
+  run_id: string | null;
+  archive_sha256: string | null;
+  destination_results: Array<{
+    id: string;
+    name: string;
+    outcome: string;
+    key: string | null;
+  }> | null;
+}
+
+/**
+ * Follow an accepted `POST /api/v1/backups` to the backup it produced.
+ *
+ * A manual backup is a Job: the POST answers 202 with its id, and the
+ * completed Job's result is the backup.
+ */
+export async function backupFromAccepted(
+  page: Page,
+  accepted: Response | APIResponse,
+): Promise<CreatedBackup> {
+  expect(accepted.status()).toBe(202);
+  const { job_id }: { job_id: string } = await accepted.json();
+  let backup: CreatedBackup | null = null;
+  await expect
+    .poll(
+      async () => {
+        const job: { state: string; error: string | null; result: CreatedBackup | null } = await (
+          await page.request.get(`/api/v1/jobs/${job_id}`)
+        ).json();
+        if (job.state === "completed") backup = job.result;
+        return job.state === "failed" ? `failed: ${job.error}` : job.state;
+      },
+      { timeout: 120_000 },
+    )
+    .toBe("completed");
+  expect(backup).not.toBeNull();
+  return backup!;
+}
+
+/** Take a manual backup through the API and wait for it to exist. */
+export async function createBackupViaApi(page: Page): Promise<CreatedBackup> {
+  return backupFromAccepted(page, await page.request.post("/api/v1/backups"));
+}
 
 // The backend dedupes files by content hash, so the bytes must be unique per
 // model — embed the name so each upload creates a distinct model.
