@@ -51,6 +51,11 @@ class TestRecipesFor:
     def test_a_sentinel_row_gets_nothing(self) -> None:
         assert kinds.recipes_for(_file(FileType.STL, sha=SENTINEL_FILE_HASH)) == {}
 
+    def test_a_dxf_drawing_gets_nothing_yet(self) -> None:
+        # Kept as its original bytes; no drawing preview renderer exists, so
+        # no derivative is owed (it never shows as pending or failed).
+        assert kinds.recipes_for(_file(FileType.DXF, "plate.dxf")) == {}
+
 
 class TestGroups:
     def test_names_the_producer_of_each_kind(self) -> None:

@@ -1,0 +1,155 @@
+"""The ``inference.model_download`` Job: an administrator installs a local model.
+
+Acquisition is explicit and one at a time: a download is requested by an
+administrator, runs as a Job (so it survives the request, reports progress and
+is cancelled like any other Job), and rechecks that it is still allowed as it
+goes. The model lands in the model cache every process reads.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import time
+
+from sqlmodel import Session, col, select
+
+from app.core.errors import ErrorKind, OperationError
+from app.db.models import ACTIVE_JOB_STATES, Job, User
+from app.db.session import get_session_factory
+from app.modules.work.catalog import NETWORK
+from app.modules.work.contracts import JobContext, JobDefinition, Step
+
+DOWNLOAD_DEFINITION = "inference.model_download"
+_RUNTIME_MODULES = ("onnxruntime", "onnx", "tokenizers")
+
+
+def subject_key(identity: str) -> str:
+    return f"model/{identity}"
+
+
+def _identity(subject: str) -> str:
+    return subject.split("/", 1)[1]
+
+
+def _allowed(session: Session, actor_id: int | None) -> bool:
+    from app.modules.search.configuration import settings
+
+    flags = settings(session)
+    actor = session.get(User, actor_id) if actor_id is not None else None
+    return bool(
+        actor
+        and actor.is_active
+        and actor.is_superuser
+        and flags.enabled
+        and flags.local_models_enabled
+        and flags.download_enabled
+    )
+
+
+def request(session: Session, actor: User, key: str) -> str:
+    """Queue a download of curated model ``key``; returns its Job id.
+
+    The caller commits and nudges. Refused while another download is active.
+    """
+    from app.modules.inference.model_registry import require
+    from app.modules.search.configuration import settings
+    from app.modules.work import service as work_service
+
+    flags = settings(session)
+    if not actor.is_superuser or not actor.is_active:
+        raise OperationError("admin_required", kind=ErrorKind.FORBIDDEN)
+    if (
+        not flags.enabled
+        or not flags.local_models_enabled
+        or not flags.download_enabled
+    ):
+        raise OperationError("embedding_download_disabled", kind=ErrorKind.CONFLICT)
+    entry = require(key)
+    if not all(importlib.util.find_spec(name) for name in _RUNTIME_MODULES):
+        raise OperationError("embedding_runtime_unavailable", kind=ErrorKind.CONFLICT)
+    busy = session.exec(
+        select(Job.id).where(
+            Job.kind == DOWNLOAD_DEFINITION, col(Job.state).in_(ACTIVE_JOB_STATES)
+        )
+    ).first()
+    if busy is not None:
+        raise OperationError("embedding_download_busy", kind=ErrorKind.CONFLICT)
+    return work_service.request(
+        session,
+        definition=DOWNLOAD_DEFINITION,
+        subject_key=subject_key(entry.id),
+        owner_user_id=actor.id,
+        status={"result": {"model_id": entry.id}},
+    )
+
+
+def _download(ctx: JobContext) -> None:
+    from printstash_core.inference import EmbeddingError
+
+    from app.modules.inference.model_acquisition import Acquisition
+    from app.modules.inference.model_registry import require
+
+    identity = _identity(ctx.subject_key)
+    entry = require(identity)
+    sessions = get_session_factory()
+    with sessions.scoped_session() as session:
+        row = session.get(Job, ctx.job_id)
+        actor_id = row.owner_user_id if row is not None else None
+    checked, allowed, received, reported = 0.0, False, 0, 0.0
+
+    def enabled() -> bool:
+        nonlocal checked, allowed
+        if time.monotonic() - checked > 0.25:
+            checked = time.monotonic()
+            with sessions.scoped_session() as session:
+                allowed = _allowed(session, actor_id)
+        return allowed
+
+    def progress(size: int) -> None:
+        nonlocal received, reported
+        received += size
+        if time.monotonic() - reported > 0.5:
+            reported = time.monotonic()
+            ctx.update(
+                processed=received,
+                total=entry.size,
+                progress=min(99, 100 * received / entry.size),
+            )
+
+    ctx.update(
+        label="Downloading model", total=entry.size, result={"model_id": identity}
+    )
+    try:
+        Acquisition(sessions).install(
+            identity, enabled=enabled, cancelled=ctx.cancelled, progress=progress
+        )
+    except Exception as exc:  # noqa: BLE001 - the Job records a safe code
+        if ctx.cancelled():
+            # Cancelled through the Jobs API: that is the outcome, not a failure.
+            return
+        code = (
+            exc.code if isinstance(exc, EmbeddingError) else "embedding_download_failed"
+        )
+        ctx.finish(
+            "failed",
+            error=code,
+            retryable=True,
+            result={"model_id": identity, "error_code": code},
+        )
+        return
+    ctx.update(progress=100, processed=entry.size, result={"model_id": identity})
+
+
+def definitions() -> list[JobDefinition]:
+    return [
+        JobDefinition(
+            name=DOWNLOAD_DEFINITION,
+            lane=NETWORK,
+            steps=(Step(f"{DOWNLOAD_DEFINITION}.install", _download),),
+            # A new download is a new request: it re-checks consent and space.
+            retry=lambda _session, _subject: False,
+            # It writes only the model cache, which restore does not govern.
+            mutating=False,
+            label="Model downloads",
+        )
+    ]

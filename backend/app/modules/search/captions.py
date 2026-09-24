@@ -127,6 +127,10 @@ def queue(
     row.updated_at = utcnow()
     session.add(row)
     session.flush()
+    from app.modules.search.job_names import CAPTION_DEFINITION
+    from app.modules.work.submission import nudge_after_commit
+
+    nudge_after_commit(session, CAPTION_DEFINITION)
 
 
 def read(session: Session, actor: User, subject: SearchSubject) -> CaptionRead:

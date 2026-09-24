@@ -186,3 +186,69 @@ class TestModelWarmup:
         )
         assert not provider.is_warm
         processor.stop()
+
+
+class TestWarmupSupervisor:
+    """The API process keeps its own query models warm, and stops with it."""
+
+    def test_warms_until_stopped(self, monkeypatch):
+        from app.modules.search.model_warmup import WarmupSupervisor
+
+        supervisor = WarmupSupervisor(get_session_factory(), idle_seconds=0.01)
+        called = threading.Event()
+
+        def work_one():
+            called.set()
+            return False
+
+        monkeypatch.setattr(supervisor.warmup, "work_one", work_one)
+        supervisor.start()
+        try:
+            assert called.wait(5)
+        finally:
+            supervisor.stop()
+
+        assert supervisor._thread is None
+
+    def test_waits_while_a_restore_holds_maintenance(self, monkeypatch):
+        from app.modules.search.model_warmup import WarmupSupervisor
+        from app.runtime.maintenance import (
+            end_restore_maintenance,
+            hold_restore_maintenance,
+        )
+
+        supervisor = WarmupSupervisor(get_session_factory())
+        calls = []
+        monkeypatch.setattr(supervisor.warmup, "work_one", lambda: calls.append(1))
+        hold_restore_maintenance()
+        try:
+            assert supervisor._unit() is False
+        finally:
+            end_restore_maintenance()
+
+        assert calls == []
+
+    def test_a_failing_unit_does_not_end_it(self, monkeypatch):
+        from app.modules.search.model_warmup import WarmupSupervisor
+
+        supervisor = WarmupSupervisor(get_session_factory(), idle_seconds=0.01)
+        calls = []
+
+        def work_one():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("model cache unreadable")
+            return False
+
+        monkeypatch.setattr(supervisor.warmup, "work_one", work_one)
+        supervisor.start()
+        try:
+            deadline = threading.Event()
+            for _ in range(500):
+                if len(calls) >= 2:
+                    break
+                deadline.wait(0.01)
+        finally:
+            supervisor.stop()
+
+        assert len(calls) >= 2

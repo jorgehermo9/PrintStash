@@ -20,16 +20,18 @@ image. See UPGRADE.md before pulling.**
   Grype scans; release builds and the legacy migration helper remain available.
 
 - **Background work runs on a durable engine.** Imports, previews, metadata,
-  backups, scans, notifications, fleet dispatch, audits and migrations are Jobs
+  backups, scans, notifications, fleet dispatch, audits, migrations and AI
+  Search projection, indexing, captions, expansion and model downloads are Jobs
   on DBOS, found by a reconciler from what the database says is owed, so a
   crash, restart or upgrade resumes them instead of losing them. Uploads now
   commit the Artifact and return; its metadata, thumbnail and binary G-code
   toolpath are derived afterwards and appear on an open page without a reload.
   A new kind or a renderer change re-derives the library in the background
   while current previews stay visible. Native work is bounded by its lane, not
-  a database permit: indexing runs as similarity Jobs, and a semantic search
-  embeds its query inside the request, in a subprocess with its own memory and
-  time limits.
+  a database permit: indexing runs as similarity and search Jobs, and a search
+  query embeds inside the request, ahead of background inference, in a worker
+  with its own memory and time limits. An index build and a model download are
+  each a Job, followed and cancelled through the Jobs API.
 - Follow any Job at `GET /api/v1/jobs/{id}` (cancel and retry beside it) and
   live changes on the `/api/v1/events/ws` socket. **Breaking:**
   `/api/v1/ingest/jobs`, `POST /api/v1/files/thumbnails/rebuild`, plain
@@ -61,7 +63,10 @@ image. See UPGRADE.md before pulling.**
   API's volumes, declared with `VAULT_SHARED_STORAGE=true`; with
   `VAULT_API_RUNS_JOBS=false` the API leaves every Job to them. Realtime notices
   cross processes over PostgreSQL `NOTIFY`. Both Compose files keep running
-  everything in one process by default.
+  everything in one process by default. `.env.example` documents the
+  background-work settings, and the advanced file forwards
+  `VAULT_MAX_RENDER_JOBS` and `VAULT_JOBS_INGEST_CONCURRENCY`;
+  `VAULT_INGEST_WORKER_COUNT`, which nothing read, is gone.
 
 - DXF files can be imported as source Artifacts, downloaded with their original
   bytes, and included in backups. Drawing previews are not yet available.

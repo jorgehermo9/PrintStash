@@ -66,20 +66,7 @@ async def _close_outbound_clients() -> None:
         await close_http_client()
     finally:
         try:
-            from app.bootstrap.optional_features import inference_available
-
-            if inference_available():
-                from app.modules.inference.query import close_queries
-                from app.modules.inference.transport import (
-                    close_client as close_inference_client,
-                )
-                from app.modules.inference.worker_pool import pool as model_workers
-                from app.runtime.model_acquisition import close as close_model_downloads
-
-                await asyncio.to_thread(close_model_downloads)
-                await asyncio.to_thread(close_queries)
-                await asyncio.to_thread(model_workers.close)
-                await asyncio.to_thread(close_inference_client)
+            await asyncio.to_thread(close_inference)
         except Exception:
             logger.error("failed to close inference transport")
         try:
@@ -350,6 +337,38 @@ def bind_search() -> SearchBindings:
     return previous
 
 
+def start_model_warmup():
+    """Warm the API's query models when local inference is installed."""
+    from app.bootstrap.optional_features import inference_available
+
+    if not inference_available():
+        return None
+    from app.modules.search.model_warmup import WarmupSupervisor
+
+    supervisor = WarmupSupervisor(get_session_factory())
+    supervisor.start()
+    return supervisor
+
+
+def close_inference() -> None:
+    """Stop this process's query and model workers and its inference client.
+
+    Blocking; every process that ran inference (the API, a worker) calls it
+    on shutdown. Model downloads are Jobs, which the engine's shutdown ends.
+    """
+    from app.bootstrap.optional_features import inference_available
+
+    if not inference_available():
+        return
+    from app.modules.inference.query import close_queries
+    from app.modules.inference.transport import close_client
+    from app.modules.inference.worker_pool import pool as model_workers
+
+    close_queries()
+    model_workers.close()
+    close_client()
+
+
 def restore_search(previous: SearchBindings) -> None:
     from app.db.content_search import bind_content_search
     from app.db.projections import bind_content_projection
@@ -412,6 +431,7 @@ async def lifespan(app: FastAPI):
     # Off the event loop: the engine refuses to register its queues from a
     # running loop, and the startup reconcile is blocking database work.
     await asyncio.to_thread(_start_work, prepared, publisher=bus)
+    warmup = start_model_warmup()
     await hub.start_all()
     # Real-time folder watching is best-effort: never let it block startup.
     try:
@@ -427,6 +447,8 @@ async def lifespan(app: FastAPI):
     logger.info("shutting down printer hub")
     await watcher.stop_all()
     await hub.stop_all()
+    if warmup is not None:
+        await asyncio.to_thread(warmup.stop)
     await asyncio.to_thread(stop_work)
     await bus.stop()
     try:

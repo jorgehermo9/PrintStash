@@ -196,7 +196,11 @@ class Settings(BaseSettings):
     jobs_notify_rate_per_minute: int = Field(default=30, ge=1, le=6000)
     jobs_printing_concurrency: int = Field(default=1, ge=1, le=16)
     jobs_maintenance_concurrency: int = Field(default=1, ge=1, le=16)
-    ingest_worker_count: int = Field(default=2, gt=0)
+    # AI Search: projection and indexing, captions, and sparse expansion each
+    # have their own lane, so a slow caption never holds indexing back.
+    jobs_search_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_captions_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_expansion_concurrency: int = Field(default=1, ge=1, le=16)
     media_worker_timeout_seconds: int = Field(default=180, gt=0)
     # Best-effort archive ceiling for files recovered from a Bambu printer's
     # short-lived FTPS cache. Zero disables automatic external-job capture.
@@ -246,14 +250,14 @@ class Settings(BaseSettings):
     # setups that run other workloads alongside the scan.
     mesh_memory_budget_fraction: float = Field(default=0.5, ge=0, le=1)
 
-    # Maximum number of mesh load+render jobs allowed to run at once. Ingestion
-    # runs in FastAPI's background-task threadpool, so a bulk/folder upload (#26)
-    # can otherwise fire dozens of concurrent renders that each peak hundreds of
-    # MB and collectively OOM the box. This bounds concurrency two ways: a
-    # semaphore caps how many renders run simultaneously, and the RAM-aware
-    # triangle cap divides its budget by this count so each concurrent job stays
-    # within its share. 1 (serialised) is the safe default; raise it on hosts with
-    # RAM headroom. Zero is the supported sentinel for serial execution.
+    # Maximum number of mesh load+render jobs allowed to run at once in one
+    # process. A bulk/folder upload (#26) can otherwise fire dozens of concurrent
+    # renders that each peak hundreds of MB and collectively OOM the box. This is
+    # the default concurrency of the derive.native lane, the process's local
+    # inference admission, and the divisor of the RAM-aware triangle cap, so each
+    # concurrent job stays within its share. 1 (serialised) is the safe default;
+    # raise it on hosts with RAM headroom. Zero is the supported sentinel for
+    # serial execution.
     max_render_jobs: int = Field(default=1, ge=0)
 
     # Number of faces processed per chunk in the software rasteriser. The renderer

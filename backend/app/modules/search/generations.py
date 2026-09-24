@@ -44,7 +44,6 @@ from app.modules.search import configuration, vector_index, vector_store, visual
 from app.modules.search.access import indexable_passage_ids, passage_in_scope
 from app.modules.search.text_inputs import TextRecipe
 from app.modules.storage.capacity import CapacityManager, CapacityResource
-from app.runtime.jobs import registry
 from app.schemas.search_generations import (
     GenerationEstimate,
     GenerationProposal,
@@ -546,7 +545,21 @@ def _prepare_space(
         )
         session.add(generation)
         session.flush()  # Unique building/profile rejects a competing proposal here.
-        generation.job_id = registry.create(actor.id, kind="ai_search", session=session)
+        # The build is a Job: it drives this generation and reports its progress.
+        from app.modules.search.job_names import (
+            GENERATION_DEFINITION,
+            generation_subject,
+        )
+        from app.modules.work import service as work_service
+        from app.modules.work.submission import nudge_after_commit
+
+        generation.job_id = work_service.request(
+            session,
+            definition=GENERATION_DEFINITION,
+            subject_key=generation_subject(generation.id),  # type: ignore[arg-type]
+            owner_user_id=actor.id,
+        )
+        nudge_after_commit(session, GENERATION_DEFINITION)
         vector_index.prepare(session, generation)
         session.add(generation)
         audit.record(
@@ -664,14 +677,7 @@ def activate(
     )
     if generation.reservation_id:
         CapacityManager(get_session_factory()).release(generation.reservation_id)
-    if generation.job_id:
-        registry.update(
-            generation.job_id,
-            state="completed",
-            processed=generation.processed,
-            progress=100,
-            result={"generation_id": generation.id},
-        )
+    # Its build Job sees the generation active and completes.
     return read(session, generation)
 
 
@@ -694,14 +700,8 @@ def cancel(session: Session, generation_id: int, version_token: str) -> Generati
         resource_type="search_generation",
         resource_id=row.id,
     )
-    if row.job_id:
-        registry.update(
-            row.job_id,
-            state="failed",
-            error="search_generation_cancelled",
-            retryable=False,
-            result={"state": "cancelled", "generation_id": row.id},
-        )
+    # Its build Job sees the generation cancelled and ends failed with
+    # ``search_generation_cancelled``.
     return read(session, row)
 
 

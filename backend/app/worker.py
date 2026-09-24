@@ -69,7 +69,12 @@ def main() -> int:
     try:
         stop.wait()
     finally:
-        work.stop()
+        try:
+            work.stop()
+        finally:
+            from app.bootstrap.lifecycle import close_inference
+
+            close_inference()
     return 0
 
 

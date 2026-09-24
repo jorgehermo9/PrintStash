@@ -30,8 +30,16 @@ class TestSchemaIsCurrent:
 
     def test_a_database_one_revision_behind_is_not(self, tmp_path: Path) -> None:
         # The API of a newer build has not upgraded it yet.
+        from alembic.script import ScriptDirectory
+
         url = _url(tmp_path)
         run_migrations(url)
-        command.downgrade(_alembic_config(normalize_database_url(url)), "-1")
+        config = _alembic_config(normalize_database_url(url))
+        # A merge revision has several parents, so "-1" is ambiguous: step back
+        # to one of them explicitly.
+        head = ScriptDirectory.from_config(config).get_current_head()
+        parents = ScriptDirectory.from_config(config).get_revision(head).down_revision
+        parent = parents[0] if isinstance(parents, tuple) else parents
+        command.downgrade(config, parent)
 
         assert schema_is_current(url) is False

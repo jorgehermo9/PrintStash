@@ -108,13 +108,17 @@ class TestIngestArchive:
         bundle = io.BytesIO()
         with zipfile.ZipFile(bundle, "w") as archive:
             archive.writestr("drawings/plate.dxf", original)
-        manifest = client.post(
-            "/api/v1/ingest/archive",
-            headers=auth_headers,
-            files={"file": ("drawings.zip", bundle.getvalue(), "application/zip")},
+        inspected = _completed(
+            client,
+            client.post(
+                "/api/v1/ingest/archive/inspect",
+                headers=auth_headers,
+                files={"file": ("drawings.zip", bundle.getvalue(), "application/zip")},
+            ),
+            auth_headers,
         )
-        assert manifest.status_code == 200, manifest.text
-        body = manifest.json()
+        assert inspected["state"] == "completed", inspected
+        body = inspected["result"]
         assert [(entry["name"], entry["file_type"]) for entry in body["entries"]] == [
             ("drawings/plate.dxf", "dxf")
         ]

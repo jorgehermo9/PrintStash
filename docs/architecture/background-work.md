@@ -30,7 +30,7 @@ a port. Why it is shaped this way is in
 | Step | `work.contracts.Step` | An idempotent unit with its own `RetryPolicy`. |
 | Subject | `Job.subject_key` | The domain key the Job's intent belongs to (`file/42`, `library/3`). One active Job per definition and subject (`uq_jobs_active_subject`). |
 | Work Source | `work.sources` | Computes pending subjects from domain state, bounded by the room it is given. `StateSource` for domain rows, `ScheduleSource` for a cadence. |
-| Lane | `work.catalog` | A concurrency class and an engine queue: `ingest`, `derive.native`, `derive.light`, `similarity`, `network`, `notify` (partitioned per channel), `printing` (per printer), `maintenance`, `reconcile`. |
+| Lane | `work.catalog` | A concurrency class and an engine queue: `ingest`, `derive.native`, `derive.light`, `similarity`, `network`, `notify` (partitioned per channel), `printing` (per printer), `maintenance`, `search`, `captions`, `expansion`, `reconcile`. |
 | Priority | `WorkPriority` | `interactive` (a user is waiting) or `backfill`. A child Job never raises it. |
 | Fence | `work.fences` | A database lease (holder, heartbeat, TTL) checked before every step; restore and migrations hold them. |
 | Executor | `work.executors` | A process that runs Jobs, heartbeating its role, lanes and in-flight writes. |
@@ -133,17 +133,38 @@ both Compose files run the first with no setting.
 | `ENGINE_HISTORY_RETENTION_DAYS` | 7 | Settled engine executions |
 | `DERIVATIVE_MAX_ATTEMPTS` / `DERIVATIVE_BACKOFF_SECONDS` | 5 / 30 | Derivative retries, doubling, capped at a day |
 | `FENCE_HEARTBEAT_SECONDS` / `FENCE_TTL_SECONDS` | 15 / 60 | Fence liveness |
-| `JOBS_<LANE>_CONCURRENCY` | ingest 2, derive.light 4, network 4, similarity 1, notify 1, printing 1, maintenance 1 | Per-lane concurrency; `derive.native` defaults to `MAX_RENDER_JOBS` |
+| `JOBS_<LANE>_CONCURRENCY` | ingest 2, derive.light 4, network 4, similarity 1, notify 1, printing 1, maintenance 1, search 1, captions 1, expansion 1 | Per-lane concurrency; `derive.native` defaults to `MAX_RENDER_JOBS` |
 | `JOBS_NOTIFY_RATE_PER_MINUTE` | 30 | Deliveries per channel |
 
 Administrators override lane concurrency at runtime on Settings → Background
 work; the override is stored in the database and applies to every process.
 
-Native memory is bounded by lanes alone: at most `derive.native` renders plus
-`similarity` indexing steps run at once per process, and each native child is
-killed past its memory budget. There is no separate permit. The one native
-call outside the engine is a semantic search embedding its query: it runs in
-the request, in its own subprocess under the same memory and time limits.
+Native memory is bounded by lanes: at most `derive.native` renders plus the
+`similarity` and `search` lanes' steps run at once, and each native child is
+killed past its memory budget. Within one process, local inference (embedding
+and search-view workers) is also admitted locally, up to `MAX_RENDER_JOBS` at
+once, because a search query embeds in the request, outside every lane: a
+waiting query goes first, and background inference that would wait yields
+(`embedding_compute_busy`) and its Job's next pass retries it. No permit is
+stored in the database.
+
+AI Search work is durable intent, found like any other:
+
+| Definition | Source (intent) | Lane |
+| --- | --- | --- |
+| `search.project` | `SearchProjectionRequest` rows each library change records | `search` |
+| `search.generation` | one Job per building `IndexGeneration`; the Job an administrator follows | `search` |
+| `search.index` | active generations with passages to index, retired ones to prune | `search` |
+| `search.repair` | every five minutes while search is on: passage, lexical and vector repair | `search` |
+| `search.caption_queue` / `search.caption` | Models owed a caption / one Job per caption attempt | `captions` |
+| `search.expand` | visible passages owed a sparse expansion | `expansion` |
+| `inference.model_download` | one administrator-requested download at a time | `network` |
+
+Their units keep their row leases, which fence publication by a superseded
+attempt, and admit themselves one at a time, so a restore drains between two
+units and a user's write in flight goes first. Warming the query models is the
+exception: a warm model is memory in the API process's own worker pool, so a
+supervisor thread in that process keeps it warm rather than a Job.
 
 A restarted API reruns what its predecessor left running at once, not after
 the stale window: holding the vault's API lock proves the earlier API process

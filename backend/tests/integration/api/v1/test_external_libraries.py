@@ -535,7 +535,10 @@ class TestScanNow:
             data={"model_name": "new", "collection": "Models/Christine"},
         )
         assert uploaded.status_code == 202, uploaded.text
-        job = client.get(f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=auth_headers)
+        from tests.integration.api.v1._ingest_assertions import drain_work
+
+        drain_work()
+        job = client.get(f"/api/v1/jobs/{uploaded.json()['job_id']}", headers=auth_headers)
         assert job.json()["state"] == "completed", job.text
 
         db_session.expire_all()

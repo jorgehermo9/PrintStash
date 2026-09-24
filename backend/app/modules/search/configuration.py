@@ -68,4 +68,16 @@ def update(
         resource_type="ai_search",
         diff=value.model_dump(),
     )
+    # Enabling a feature makes its work owed now, not at the next tick.
+    from app.modules.search import job_names
+    from app.modules.work.submission import nudge_after_commit
+
+    for definition in (
+        job_names.PROJECT_DEFINITION,
+        job_names.INDEX_DEFINITION,
+        job_names.REPAIR_DEFINITION,
+        job_names.CAPTION_QUEUE_DEFINITION,
+        job_names.EXPAND_DEFINITION,
+    ):
+        nudge_after_commit(session, definition)
     return read(session)

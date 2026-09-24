@@ -33,7 +33,10 @@ logger = get_logger(__name__)
 
 def definitions() -> list[JobDefinition]:
     """Every job definition, collected from the module that owns its work."""
-    from app.bootstrap.optional_features import similarity_available
+    from app.bootstrap.optional_features import (
+        inference_available,
+        similarity_available,
+    )
     from app.modules.administration import audit_jobs
     from app.modules.backups import gc_jobs
     from app.modules.backups import jobs as backup_jobs
@@ -55,6 +58,13 @@ def definitions() -> list[JobDefinition]:
         from app.modules.similarity import jobs as similarity_jobs
 
         optional.extend(similarity_jobs.definitions())
+    if inference_available():
+        # AI Search: projection, indexing, captions, expansion, model downloads.
+        from app.modules.inference import jobs as inference_jobs
+        from app.modules.search import jobs as search_jobs
+
+        optional.extend(search_jobs.definitions())
+        optional.extend(inference_jobs.definitions())
     return [
         housekeeping.definition(),
         *ingest_jobs.definitions(),

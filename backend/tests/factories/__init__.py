@@ -109,9 +109,6 @@ from tests.factories.manufacturing import (
     build_multipart_build_part,
     build_multipart_part,
 )
-from tests.factories.media import (
-    build_thumbnail_generation as build_thumbnail_generation,
-)
 from tests.factories.ops import (
     build_artifact_upload,
     build_artifact_upload_part,
@@ -349,4 +346,3 @@ __all__ += [
 
 __all__ += ["build_search_projection_request"]
 
-__all__ += ["build_thumbnail_generation"]

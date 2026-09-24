@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -218,28 +219,21 @@ class TestVisualIndex:
             assert result["items"][0]["subject_id"] == model.id
             assert result["items"][0]["evidence"]
 
-    def test_respects_an_independent_consumers_render_permit(
-        self, db_session, visual_setup, monkeypatch
+    def test_a_background_render_yields_while_local_inference_is_full(
+        self, visual_setup, monkeypatch
     ):
+        # The indexing Job retries a busy unit; it never waits behind a query.
         from printstash_core.inference import EmbeddingError
         from printstash_core.inference.context import InferenceContext
         from printstash_core.search.visual_inputs import VisualRecipe
 
-        from app.db.models import ThumbnailRenderSlot
-        from app.modules.media import compute_slots
-        from app.modules.media.thumbnail_generations import (
-            ThumbnailEnsureOutcome,
-            ensure_thumbnail,
-        )
+        from app.modules.inference import local
 
         _, encoder, _, file = visual_setup
         monkeypatch.setitem(_overlay, "max_render_jobs", 1)
-        permit = compute_slots.acquire(db_session, "independent-consumer")
-        assert permit is not None
         recipe = VisualRecipe(encoder.id, 32, "multiview")
+        local.acquire_slot(InferenceContext.bounded(2, priority="interactive"))
         try:
-            thumbnail = ensure_thumbnail(db_session, file)
-            assert thumbnail.outcome == ThumbnailEnsureOutcome.COALESCED
             with pytest.raises(EmbeddingError, match="embedding_compute_busy"):
                 visual_index.render(
                     get_session_factory(),
@@ -247,13 +241,8 @@ class TestVisualIndex:
                     recipe,
                     InferenceContext.bounded(2, priority="background"),
                 )
-            slots = db_session.exec(select(ThumbnailRenderSlot)).all()
-            assert [(slot.id, slot.lease_token) for slot in slots] == [
-                (permit.id, "independent-consumer")
-            ]
         finally:
-            compute_slots.release(db_session, permit.id, "independent-consumer")
-            db_session.commit()
+            local.release_slot()
 
         result = visual_index.render(
             get_session_factory(),
@@ -263,8 +252,6 @@ class TestVisualIndex:
         )
         assert len(result.views) == 6
         assert len(result.thumbnail.rgb) == 32 * 32 * 3
-        db_session.expire_all()
-        assert db_session.exec(select(ThumbnailRenderSlot)).one().lease_token is None
 
     def test_corrupt_view_identity_does_not_count_as_complete(
         self, db_session, visual_setup, advance_generation
@@ -286,17 +273,21 @@ class TestVisualIndex:
         assert generations.counts(db_session, stored) == (1, 0, 0)
 
     @pytest.mark.parametrize(
-        "changed", [None, "source", "recipe", "strategy", "digest"]
+        "changed", [None, "state", "recipe", "strategy", "incomplete", "digest"]
     )
     def test_reuses_only_verified_current_mesh_thumbnails(
         self, db_session, visual_setup, tmp_path, monkeypatch, changed
     ):
+        # The thumbnail derivative is reused only as it stands at the current
+        # recipe: ready, a complete full render, bytes matching its digest.
         from PIL import Image
         from printstash_core.inference.context import InferenceContext
         from printstash_core.search.visual_inputs import VisualRecipe
 
-        from app.db.models import ThumbnailGeneration, ThumbnailGenerationState
+        from app.db.models import DerivativeState
+        from app.modules.derivatives.kinds import THUMBNAIL, recipes_for
         from app.modules.storage.storage_backend.local import LocalStorageBackend
+        from tests.factories import build_derivative
 
         actor, encoder, model, file = visual_setup
         recipe = VisualRecipe(encoder.id, 32, "thumbnail")
@@ -311,29 +302,31 @@ class TestVisualIndex:
         key = str(tmp_path / "stored" / "thumbnail.webp")
         Path(key).write_bytes(data)
         monkeypatch.setattr(visual_index, "get_backend", lambda: backend)
-        row = ThumbnailGeneration(
-            file_id=file.id,
-            source_sha256=file.sha256,
-            recipe_fingerprint=recipe.thumbnail_recipe,
-            state=ThumbnailGenerationState.READY,
-            storage_key=key,
-            output_sha256=hashlib.sha256(data).hexdigest(),
-            output_size_bytes=len(data),
-            width=640,
-            height=480,
-            strategy="full",
-            complete=True,
-        )
-        if changed == "source":
-            row.source_sha256 = "f" * 64
-        if changed == "recipe":
-            row.recipe_fingerprint = "another-recipe"
+        output = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+            "width": 640,
+            "height": 480,
+            "strategy": "full",
+            "complete": True,
+        }
         if changed == "strategy":
-            row.strategy = "embedded"
+            output["strategy"] = "embedded"
+        if changed == "incomplete":
+            output["complete"] = False
         if changed == "digest":
-            row.output_sha256 = "f" * 64
-        db_session.add(row)
-        db_session.commit()
+            output["sha256"] = "f" * 64
+        build_derivative(
+            db_session,
+            file,
+            THUMBNAIL,
+            state=DerivativeState.RUNNING
+            if changed == "state"
+            else DerivativeState.READY,
+            recipe_version=recipes_for(file)[THUMBNAIL] + (changed == "recipe"),
+            storage_key=key,
+            output_json=json.dumps(output),
+        )
         result = visual_index.cached_thumbnail(
             db_session, file, recipe, InferenceContext.bounded(10)
         )
@@ -825,11 +818,11 @@ class TestFilteredVisualQuery:
 
 
 @pytest.fixture
-def cached_preview(make_model, make_file, make_thumbnail_generation):
+def cached_preview(make_model, make_file, make_derivative):
     from PIL import Image
     from printstash_core.search.visual_inputs import VisualRecipe
 
-    from app.db.models import ThumbnailGenerationState
+    from app.modules.derivatives.kinds import THUMBNAIL
     from app.modules.storage.storage_backend.runtime import get_backend
 
     file = make_file(make_model(), file_type=FileType.STL)
@@ -840,17 +833,20 @@ def cached_preview(make_model, make_file, make_thumbnail_generation):
     backend = get_backend()
     key = backend.thumbnail_variant_key(file.id, file.sha256, recipe.thumbnail_recipe)
     backend.write_bytes(payload, key)
-    row = make_thumbnail_generation(
+    row = make_derivative(
         file,
-        recipe_fingerprint=recipe.thumbnail_recipe,
-        state=ThumbnailGenerationState.READY,
+        THUMBNAIL,
         storage_key=key,
-        output_sha256=hashlib.sha256(payload).hexdigest(),
-        output_size_bytes=len(payload),
-        width=640,
-        height=480,
-        strategy="full",
-        complete=True,
+        output_json=json.dumps(
+            {
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size": len(payload),
+                "width": 640,
+                "height": 480,
+                "strategy": "full",
+                "complete": True,
+            }
+        ),
     )
     return file, recipe, row, backend
 
@@ -871,7 +867,9 @@ class TestCachedThumbnail:
         from printstash_core.inference.context import InferenceContext
 
         file, recipe, row, _ = cached_preview
-        row.output_size_bytes -= 1
+        output = json.loads(row.output_json)
+        output["size"] -= 1
+        row.output_json = json.dumps(output)
         db_session.add(row)
         db_session.commit()
 

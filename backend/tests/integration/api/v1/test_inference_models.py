@@ -91,7 +91,7 @@ class TestInferenceModels:
     def test_rejects_unsupported_local_runtime_before_download(
         self, client, auth_headers, monkeypatch, tmp_path
     ):
-        from app.runtime import model_acquisition
+        from app.modules.inference import jobs as model_acquisition
 
         root = tmp_path / "uncreated"
         monkeypatch.setitem(_overlay, "embedding_cache_dir", root)

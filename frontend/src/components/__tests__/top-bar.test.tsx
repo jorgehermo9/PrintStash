@@ -56,7 +56,7 @@ function renderTopBar({ at = "/", auth = session() }: { at?: string; auth?: Auth
       auth,
       routes: {
         "GET /api/v1/search/status": json(searchStatus()),
-        "GET /api/v1/ingest/jobs": json([]),
+        "GET /api/v1/jobs": json([]),
       },
     },
   );

@@ -86,7 +86,6 @@ from app.db.models import (
     SubjectCaption,
     SystemConfig,
     Tag,
-    ThumbnailGeneration,
     User,
     UserSearchPreferences,
     VaultAuditEvent,
@@ -720,7 +719,3 @@ class MakeSearchProjectionRequest(Protocol):
     def __call__(
         self, source: ContentSource, **overrides: Any
     ) -> SearchProjectionRequest: ...
-
-
-class MakeThumbnailGeneration(Protocol):
-    def __call__(self, file: File, **overrides: Any) -> ThumbnailGeneration: ...

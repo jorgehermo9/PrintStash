@@ -148,6 +148,7 @@ class TestArtifactUploads:
             f"/api/v1/artifact-uploads/{upload_id}/finalize", headers=auth_headers
         )
         assert finalized.status_code == 200, finalized.text
+        drain_work()
         artifact = db_session.exec(
             select(File).where(File.sha256 == hashlib.sha256(payload).hexdigest())
         ).one()

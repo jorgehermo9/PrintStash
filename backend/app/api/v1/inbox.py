@@ -21,7 +21,7 @@ from app.core.browser_device_auth import require_user_or_browser_import_user
 from app.core.config import settings
 from app.core.security import require_auth, require_user
 from app.db.models import InboxItemState, InboxSourceKind, User
-from app.db.session import SessionFactory, get_session, get_session_factory
+from app.db.session import get_session
 from app.modules.ingestion import importer, inbox, staging_leases
 from app.modules.storage import storage
 from app.modules.work import nudge

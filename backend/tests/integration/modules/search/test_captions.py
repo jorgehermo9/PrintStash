@@ -1,6 +1,5 @@
 """Human actions fence late VLM results and synchronously invalidate search."""
 
-import json
 from datetime import timedelta
 
 import pytest
@@ -103,15 +102,12 @@ class TestCaptions:
         )
         assert provider.requests == []
 
-    def test_finishes_exhausted_durable_caption_jobs(self, db_session, caption_setup):
-        from app.db.models import BackgroundJob
-        from app.runtime.jobs import registry
-
+    def test_fails_a_caption_whose_last_attempt_died(self, db_session, caption_setup):
+        # Its Job was lost with the process that ran it; nothing is due any
+        # more, so the caption says why it has no text.
         actor, subject, _, _ = caption_setup
         captions.patch(db_session, actor, subject, CaptionPatch(action="generate"))
         row = captions.lookup(db_session, subject)
-        job_id = registry.create(actor.id, kind="ai_caption", session=db_session)
-        row.job_id = job_id
         row.phase, row.attempts, row.lease_token = "running", 3, "a" * 32
         row.lease_expires_at = utcnow() - timedelta(seconds=1)
         db_session.add(row)
@@ -123,11 +119,6 @@ class TestCaptions:
         assert (
             captions.read(db_session, actor, subject).error_code
             == "caption_attempts_exhausted"
-        )
-        job = db_session.get(BackgroundJob, job_id)
-        assert (job.state, json.loads(job.status_json)["error"]) == (
-            "failed",
-            "caption_attempts_exhausted",
         )
 
     def test_fences_caption_egress_after_actor_loss(self, db_session, caption_setup):

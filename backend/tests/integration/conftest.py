@@ -83,7 +83,6 @@ from tests.factories.protocols import (
     MakeStorageConnection,
     MakeSubjectCaption,
     MakeSystemConfig,
-    MakeThumbnailGeneration,
     MakeUser,
     MakeUserSearchPreferences,
     MakeVaultGeneration,
@@ -763,10 +762,3 @@ def make_search_projection_request(db_session: Session) -> MakeSearchProjectionR
     return _bound(factories.build_search_projection_request, db_session)
 
 __all__ += ["make_search_projection_request"]
-
-
-@pytest.fixture
-def make_thumbnail_generation(db_session: Session) -> MakeThumbnailGeneration:
-    return _bound(factories.build_thumbnail_generation, db_session)
-
-__all__ += ["make_thumbnail_generation"]

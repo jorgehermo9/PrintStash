@@ -3,7 +3,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AiSearchSettings } from "@/components/ai-search-settings";
-import { anIngestJob } from "@/test-support/factories";
+import { aJob } from "@/test-support/factories";
 import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
 import {
   anInferenceEndpoint,
@@ -29,7 +29,7 @@ async function settingsPanel(options: RenderAppOptions = {}) {
       ),
       "GET /api/v1/config/ai-search/generations": json([aSearchGeneration()]),
       "GET /api/v1/inference/models": json([anInferenceModel()]),
-      "GET /api/v1/ingest/jobs": json([]),
+      "GET /api/v1/jobs": json([]),
       "PUT /api/v1/config/ai-search": json(searchConfiguration()),
       ...options.routes,
     },
@@ -286,11 +286,11 @@ describe("AI Search settings", () => {
   });
   it("refreshes installed models when a download completes", async () => {
     const user = userEvent.setup();
-    const job = anIngestJob({ job_id: "download-2", kind: "model_download", state: "running" });
+    const job = aJob({ job_id: "download-2", kind: "inference.model_download", state: "running" });
     const app = await settingsPanel({
       routes: {
         "GET /api/v1/inference/models": json([anInferenceModel({ installed: false })]),
-        "GET /api/v1/ingest/jobs": json([job]),
+        "GET /api/v1/jobs": json([job]),
       },
     });
     await screen.findByRole("option", { name: /bge-small-en-v1.5/ });
@@ -301,7 +301,7 @@ describe("AI Search settings", () => {
     expect(screen.getByRole("button", { name: "Build new index" })).toBeDisabled();
     app.route({
       "GET /api/v1/inference/models": json([anInferenceModel()]),
-      "GET /api/v1/ingest/jobs": json([{ ...job, state: "completed" }]),
+      "GET /api/v1/jobs": json([{ ...job, state: "completed" }]),
     });
     await act(async () => {
       await app.client.refetchQueries({ queryKey: ["ai-search", "downloads"] });
@@ -463,10 +463,10 @@ describe("AI Search settings", () => {
     const user = userEvent.setup();
     const app = await settingsPanel({
       routes: {
-        "GET /api/v1/ingest/jobs": json([
-          anIngestJob({
+        "GET /api/v1/jobs": json([
+          aJob({
             job_id: "download-1",
-            kind: "model_download",
+            kind: "inference.model_download",
             state: "running",
             progress: 42,
             processed: 42000,

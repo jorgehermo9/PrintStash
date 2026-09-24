@@ -46,21 +46,10 @@ class TestBackupRestore:
             data={"model_name": "Backup Drawing"},
             headers=headers,
         )
-        assert uploaded.status_code == 202, uploaded.text
-        for _ in range(50):
-            job = (
-                await api.get(
-                    f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=headers
-                )
-            ).json()
-            if job["state"] in ("completed", "failed", "duplicate"):
-                break
-            await asyncio.sleep(0.05)
-        assert job["state"] == "completed", job
+        job = await completed_job(api, uploaded, headers)
         file_id = job["file_id"]
         model_id = job["model_id"]
-        backup = await api.post("/api/v1/backups", headers=headers)
-        assert backup.status_code == 202, backup.text
+        backup = await create_backup(api, headers)
 
         artifact = e2e_db.get(File, file_id)
         assert artifact is not None
@@ -72,7 +61,7 @@ class TestBackupRestore:
         blob_path.unlink()
 
         restored = await api.post(
-            f"/api/v1/backups/{backup.json()['backup_id']}/restore", headers=headers
+            f"/api/v1/backups/{backup['backup_id']}/restore", headers=headers
         )
         assert restored.status_code == 200, restored.text
         downloaded = await api.get(

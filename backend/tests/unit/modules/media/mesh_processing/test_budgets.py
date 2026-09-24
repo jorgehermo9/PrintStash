@@ -307,6 +307,24 @@ class TestExceedsCap:
         assert mesh_processing._exceeds_cap(p) is False
 
 
+class TestNativeMemoryBudget:
+    """What one native worker (an embedding or search-view child) may use."""
+
+    def test_is_capped_at_two_gibibytes(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            mesh_processing, "_step_memory_budget_bytes", lambda: 64 * 1024**3
+        )
+
+        assert mesh_processing.native_memory_budget_bytes() == 2 * 1024**3
+
+    def test_an_undetectable_budget_falls_back_to_one_gibibyte(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(mesh_processing, "_step_memory_budget_bytes", lambda: None)
+
+        assert mesh_processing.native_memory_budget_bytes() == 1024**3
+
+
 class TestReclaimMemory:
     def test_reclaim_memory_is_safe_to_call(self) -> None:
         # Must never raise, regardless of libc/platform — it's best-effort cleanup.

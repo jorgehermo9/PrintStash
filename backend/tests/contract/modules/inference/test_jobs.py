@@ -1,16 +1,23 @@
-"""The job owner records and cancels real HTTPS model transfers."""
+"""A model download is a Job that records and cancels a real HTTPS transfer.
 
+The transfer itself (verification, atomic install) is ``test_model_acquisition``.
+This defends the Job around it: one download at a time, its failure recorded
+with a safe code and no partial files, and a cancel through the Jobs API that
+stops the transfer mid-flight and leaves nothing installed.
+"""
+
+import contextvars
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from app.core.errors import OperationError
 from app.db.session import get_session_factory
+from app.modules.inference import jobs as inference_jobs
 from app.modules.search.configuration import update
-from app.runtime import model_acquisition
-from app.runtime.jobs import registry
+from app.modules.work import service as work_service
+from app.modules.work.jobs import jobs
 from app.schemas.inference import SearchSettings
 from tests.factories import build_user
 from tests.fixtures.model_acquisition import model_host as _model_host  # noqa: F401
@@ -29,38 +36,54 @@ def download_case(threaded_hub_db, model_host):
         )
         session.commit()
         yield session, actor, fake, cache
-    model_acquisition.close()
 
 
-@pytest.fixture
-def terminal_job():
-    def wait(job_id):
-        for _ in range(200):
-            job = registry.get(job_id)
-            if job.state in ("completed", "failed"):
-                return job
-            time.sleep(0.05)
-        raise AssertionError("download did not reach a terminal state")
+def _request(session, actor, key: str) -> str:
+    """What the download route does: record the Job, commit, then nudge."""
+    from app.modules.work import nudge
 
-    return wait
+    job_id = inference_jobs.request(session, actor, key)
+    session.commit()
+    nudge(inference_jobs.DOWNLOAD_DEFINITION)
+    return job_id
 
 
-class TestModelAcquisition:
-    def test_records_a_failed_transfer(self, download_case, terminal_job):
+class TestModelDownload:
+    def test_installs_the_model(self, download_case, work_engine) -> None:
+        session, actor, fake, cache = download_case
+        job_id = _request(session, actor, fake.entry.id)
+
+        work_engine.drain()
+
+        status = jobs.get(job_id)
+        assert status is not None and status.state == "completed"
+        assert (cache / fake.entry.id / "manifest.json").exists()
+
+    def test_records_a_failed_transfer(self, download_case, work_engine) -> None:
         session, actor, fake, cache = download_case
         fake.fault = "corrupt"
-        job_id = model_acquisition.start(session, actor, fake.entry.id)
-        result = terminal_job(job_id)
-        assert result.state == "failed"
-        assert result.error == "embedding_asset_digest_mismatch"
-        assert result.result == {"model_id": fake.entry.id, "error_code": result.error}
+        job_id = _request(session, actor, fake.entry.id)
+
+        work_engine.drain()
+
+        status = jobs.get(job_id)
+        assert status is not None
+        assert (status.state, status.error) == (
+            "failed",
+            "embedding_asset_digest_mismatch",
+        )
+        assert status.result == {"model_id": fake.entry.id, "error_code": status.error}
         assert not (cache / fake.entry.id).exists()
         assert not list(cache.glob(".download-*"))
-        with pytest.raises(OperationError, match="embedding_download_not_running"):
-            model_acquisition.cancel(job_id)
 
-    @pytest.mark.parametrize("action", ["cancel", "shutdown"])
-    def test_cancels_an_admitted_transfer(self, download_case, terminal_job, action):
+    def test_one_download_runs_at_a_time(self, download_case) -> None:
+        session, actor, fake, _ = download_case
+        _request(session, actor, fake.entry.id)
+
+        with pytest.raises(OperationError, match="embedding_download_busy"):
+            _request(session, actor, fake.entry.id)
+
+    def test_a_cancel_stops_the_transfer(self, download_case, work_engine) -> None:
         session, actor, fake, cache = download_case
         entered, release = threading.Event(), threading.Event()
 
@@ -69,27 +92,18 @@ class TestModelAcquisition:
             assert release.wait(5)
 
         fake.before_reply = hold_reply
-        job_id = model_acquisition.start(session, actor, fake.entry.id)
-        try:
-            assert entered.wait(3)
-            with ThreadPoolExecutor(1) as executor:
-                stop = (
-                    executor.submit(model_acquisition.close)
-                    if action == "shutdown"
-                    else None
-                )
-                if stop is None:
-                    model_acquisition.cancel(job_id)
-                else:
-                    time.sleep(0.05)
-                    assert not stop.done()
+        job_id = _request(session, actor, fake.entry.id)
+        with ThreadPoolExecutor(1) as executor:
+            # In this test's context, so the drain sees this test's database.
+            running = executor.submit(contextvars.copy_context().run, work_engine.drain)
+            try:
+                assert entered.wait(5)
+                work_service.cancel(job_id, actor=actor)
+            finally:
                 release.set()
-                if stop is not None:
-                    stop.result(timeout=5)
-            result = terminal_job(job_id)
-            assert result.state == "failed"
-            assert result.error == "embedding_download_cancelled"
-            assert not (cache / fake.entry.id).exists()
-            assert not list(cache.glob(".download-*"))
-        finally:
-            release.set()
+            running.result(timeout=10)
+
+        status = jobs.get(job_id)
+        assert status is not None and status.state == "cancelled"
+        assert not (cache / fake.entry.id).exists()
+        assert not list(cache.glob(".download-*"))

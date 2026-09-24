@@ -223,12 +223,15 @@ class TestMetadata:
         assert uploaded.status_code == 202, uploaded.text
         job = await _await_job(api, headers, uploaded.json()["job_id"])
         assert job["state"] == "completed", job
-        assert job["thumbnail_status"] == "skipped"
-        assert job["thumbnail_reason"] == "unsupported_preview"
         file_id = job["file_id"]
-        downloaded = await api.get(
-            f"/api/v1/files/{file_id}/download", headers=headers
+        # No preview renderer exists for drawings, so no derivative is owed:
+        # nothing shows as pending, and nothing ever fails.
+        derivatives = await api.get(
+            f"/api/v1/files/{file_id}/derivatives", headers=headers
         )
+        assert derivatives.status_code == 200, derivatives.text
+        assert derivatives.json() == []
+        downloaded = await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
         assert downloaded.status_code == 200, downloaded.text
         assert downloaded.content == original
 
@@ -240,9 +243,11 @@ class TestMetadata:
         )
         assert repeated.status_code == 202, repeated.text
         duplicate_job = await _await_job(api, headers, repeated.json()["job_id"])
-        assert duplicate_job["state"] in ("duplicate", "completed"), duplicate_job
+        assert duplicate_job["state"] == "completed", duplicate_job
         models = (await api.get("/api/v1/models", headers=headers)).json()
-        assert len([model for model in models if model["name"].startswith("Drawing")]) == 1
+        assert (
+            len([model for model in models if model["name"].startswith("Drawing")]) == 1
+        )
 
     @pytest.mark.critical
     @pytest.mark.asyncio

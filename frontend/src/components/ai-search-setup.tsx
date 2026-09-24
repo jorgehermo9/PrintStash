@@ -4,8 +4,9 @@ import { Check, HardDrive, Server, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { InferenceEndpointForm } from "@/components/inference-endpoint-form";
-import { listIngestJobs } from "@/lib/api/models";
+import { listJobs } from "@/lib/api/jobs";
 import {
+  MODEL_DOWNLOAD_KIND,
   actOnSearchGeneration,
   cancelInferenceDownload,
   downloadInferenceModel,
@@ -51,9 +52,9 @@ export function AiSearchSetup({
   });
   const downloads = useQuery({
     queryKey: ["ai-search", "downloads"],
-    queryFn: async () => (await listIngestJobs()).filter((job) => job.kind === "model_download"),
+    queryFn: async () => (await listJobs()).filter((job) => job.kind === MODEL_DOWNLOAD_KIND),
     refetchInterval: (query) =>
-      query.state.data?.some((job) => job.state === "running" || job.state === "pending")
+      query.state.data?.some((job) => job.state === "running" || job.state === "queued")
         ? 1500
         : false,
   });
@@ -96,7 +97,7 @@ export function AiSearchSetup({
     (generation) => generation.profile === "semantic_text" && generation.state === "failed",
   );
   const downloading = downloads.data?.find(
-    (job) => job.state === "running" || job.state === "pending",
+    (job) => job.state === "running" || job.state === "queued",
   );
   const failedDownload = downloads.data?.find((job) => job.state === "failed");
   const enabled =

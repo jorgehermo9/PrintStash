@@ -25,6 +25,9 @@ NETWORK = "network"
 NOTIFY = "notify"
 PRINTING = "printing"
 MAINTENANCE = "maintenance"
+SEARCH = "search"
+CAPTIONS = "captions"
+EXPANSION = "expansion"
 RECONCILE = "reconcile"
 
 # The reconciler's own executions. Not a Job: its bookkeeping is the cursor.
@@ -58,6 +61,9 @@ def default_lanes() -> dict[str, Lane]:
             # Fleet routing is one fleet-wide decision: one dispatcher, anywhere.
             Lane(PRINTING, settings.jobs_printing_concurrency, scope="global"),
             Lane(MAINTENANCE, settings.jobs_maintenance_concurrency, scope="global"),
+            Lane(SEARCH, settings.jobs_search_concurrency, scope="global"),
+            Lane(CAPTIONS, settings.jobs_captions_concurrency, scope="global"),
+            Lane(EXPANSION, settings.jobs_expansion_concurrency, scope="global"),
             Lane(RECONCILE, 4, scope="global"),
         )
     }
