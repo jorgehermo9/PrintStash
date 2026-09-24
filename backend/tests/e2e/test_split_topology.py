@@ -27,7 +27,8 @@ from sqlalchemy import create_engine, text
 
 from app.db.migrate import run_migrations
 from app.db.url import normalize_database_url
-from tests.e2e._processes import fresh_postgres_database, vault_environment
+from tests.containers import fresh_postgres_database
+from tests.e2e._processes import vault_environment
 from tests.paths import BACKEND_DIR
 
 _ROLE = "tests.fakes.job_engine_process"

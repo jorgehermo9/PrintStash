@@ -654,6 +654,64 @@ class TestPrune:
         assert store.prune() == 0
         assert db_session.get(Job, job.id) is not None
 
+    def test_a_pending_import_outlives_the_job_that_resolved_it(
+        self, store: JobStore, owner: User, make_job, db_session: Session
+    ) -> None:
+        # The inbox item is the user's record; the Job is only its history.
+        from app.db.models import InboxItem
+        from tests.factories import build_inbox_item
+
+        expired = utcnow() - timedelta(days=settings.jobs_retention_days, hours=1)
+        job = make_job(owner=owner, state=JobState.COMPLETED, updated_at=expired)
+        item = build_inbox_item(db_session, owner, job_id=job.id)
+
+        assert store.prune() == 1
+
+        db_session.expire_all()
+        kept = db_session.get(InboxItem, item.id)
+        assert kept is not None and kept.job_id is None
+
+    def test_an_upload_outlives_the_job_that_finalized_it(
+        self,
+        store: JobStore,
+        owner: User,
+        make_job,
+        make_artifact_upload,
+        db_session: Session,
+    ) -> None:
+        from app.db.models import ArtifactUploadSession
+
+        expired = utcnow() - timedelta(days=settings.jobs_retention_days, hours=1)
+        job = make_job(owner=owner, state=JobState.COMPLETED, updated_at=expired)
+        upload = make_artifact_upload(owner, job_id=job.id)
+
+        assert store.prune() == 1
+
+        db_session.expire_all()
+        kept = db_session.get(ArtifactUploadSession, upload.id)
+        assert kept is not None and kept.job_id is None
+
+    def test_a_pruned_ingest_job_takes_its_request_with_it(
+        self, store: JobStore, owner: User, make_ingest_request, db_session: Session
+    ) -> None:
+        from app.db.models import IngestRequest
+
+        request = make_ingest_request(owner)
+        job = db_session.get(Job, request.job_id)
+        assert job is not None
+        job.state = JobState.COMPLETED
+        job.finished_at = utcnow() - timedelta(
+            days=settings.jobs_retention_days, hours=1
+        )
+        db_session.add(job)
+        db_session.commit()
+        job_id = job.id
+
+        assert store.prune() == 1
+
+        db_session.expire_all()
+        assert db_session.get(IngestRequest, job_id) is None
+
     def test_caps_each_users_history(
         self, store: JobStore, owner: User, make_job, db_session: Session
     ) -> None:

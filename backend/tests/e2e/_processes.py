@@ -1,33 +1,17 @@
 """Vaults for E2E tests that run PrintStash in child processes on real DBOS.
 
 In-process E2E flows use the inline engine. These build what a deployment
-has instead: a database of its own (a SQLite file, or a fresh database on the
-run's PostgreSQL container) and the environment every child process of that
-vault is started with.
+has instead: the environment every child process of one vault is started
+with, over a database of its own (a SQLite file, or a fresh database from
+``tests.containers.fresh_postgres_database``).
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from uuid import uuid4
 
-from sqlalchemy import create_engine, make_url
-
-from app.db.url import normalize_database_url
-from tests.containers import postgres_url
 from tests.paths import BACKEND_DIR
-
-
-def fresh_postgres_database(prefix: str) -> str:
-    """Create an empty database on the run's server and return its URL."""
-    server = make_url(normalize_database_url(postgres_url()))
-    name = f"{prefix}_{uuid4().hex[:12]}"
-    admin = create_engine(server, isolation_level="AUTOCOMMIT")
-    with admin.connect() as connection:
-        connection.exec_driver_sql(f'CREATE DATABASE "{name}"')
-    admin.dispose()
-    return server.set(database=name).render_as_string(hide_password=False)
 
 
 def vault_environment(tmp_path: Path, db_url: str) -> dict[str, str]:
