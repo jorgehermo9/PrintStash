@@ -1845,6 +1845,30 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     drainRequest(req, () => sendJson(res, { created: 0, updated: 0, adopted: 0, unlinked: 0 }));
     return;
   }
+  if (/^\/api\/v1\/files\/\d+\/derivatives$/.test(url.pathname)) {
+    // Every mock Artifact is fully derived.
+    sendJson(res, [
+      {
+        kind: "metadata",
+        recipe_version: 1,
+        state: "ready",
+        attempts: 1,
+        failure_reason: null,
+        updated_at: now,
+        retryable: false,
+      },
+      {
+        kind: "thumbnail",
+        recipe_version: 1,
+        state: "ready",
+        attempts: 1,
+        failure_reason: null,
+        updated_at: now,
+        retryable: false,
+      },
+    ]);
+    return;
+  }
   if (url.pathname === "/api/v1/files/1/thumbnail") {
     sendPng(res);
     return;

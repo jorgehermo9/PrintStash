@@ -3636,5 +3636,10 @@
   "Regenerate every {kind}?": "¿Regenerar todo {kind}?",
   "Jobs that have not started are withdrawn. Running Jobs finish normally.": "Se retiran los trabajos que no han empezado. Los que están en curso terminan con normalidad.",
   "Every Artifact is derived again in the background. Current outputs stay visible until their replacements are ready.": "Cada Artefacto se deriva de nuevo en segundo plano. Los resultados actuales siguen visibles hasta que sus sustitutos estén listos.",
-  "Regenerate": "Regenerar"
+  "Regenerate": "Regenerar",
+  "Metadata": "Metadatos",
+  "Toolpath": "Trayectoria",
+  "Preparing {kinds}…": "Preparando {kinds}…",
+  "{kind} failed: {reason}": "{kind} ha fallado: {reason}",
+  "Retry {kind}": "Reintentar {kind}"
 }

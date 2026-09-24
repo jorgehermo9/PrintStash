@@ -3636,5 +3636,10 @@
   "Regenerate every {kind}?": "Regenerate every {kind}?",
   "Jobs that have not started are withdrawn. Running Jobs finish normally.": "Jobs that have not started are withdrawn. Running Jobs finish normally.",
   "Every Artifact is derived again in the background. Current outputs stay visible until their replacements are ready.": "Every Artifact is derived again in the background. Current outputs stay visible until their replacements are ready.",
-  "Regenerate": "Regenerate"
+  "Regenerate": "Regenerate",
+  "Metadata": "Metadata",
+  "Toolpath": "Toolpath",
+  "Preparing {kinds}…": "Preparing {kinds}…",
+  "{kind} failed: {reason}": "{kind} failed: {reason}",
+  "Retry {kind}": "Retry {kind}"
 }
