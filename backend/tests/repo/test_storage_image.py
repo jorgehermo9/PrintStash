@@ -1,7 +1,8 @@
 """The release wheel and native image jobs cover every advertised transport.
 
 Development wheels cannot prove which services a custom release wheel compiled.
-These build contracts keep the final-image lifecycle check on both architectures.
+These build contracts keep both API images built natively on both
+architectures at release; pull-request CI no longer builds images (#236).
 """
 
 from __future__ import annotations
@@ -22,8 +23,10 @@ class TestStorageImage:
         assert feature_line is not None
         assert "services-s3" in feature_line.group(1).split(",")
 
-    def test_checks_each_backend_image_on_its_native_architecture(self) -> None:
-        workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text())
+    def test_releases_each_backend_image_on_its_native_architecture(self) -> None:
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".github/workflows/container-publish.yml").read_text()
+        )
         job = next(
             value
             for value in workflow["jobs"].values()
@@ -45,5 +48,7 @@ class TestStorageImage:
             ("printstash-api-lite", "amd64"),
             ("printstash-api-lite", "arm64"),
         }
-        assert all(row["load"] and row["storage-smoke"] for row in images)
-        assert any("test.sh image" in step.get("run", "") for step in job["steps"])
+        # Native runners, never QEMU: an ARM image is built on an ARM machine.
+        assert all(
+            ("arm" in row["runner"]) == (row["arch"] == "arm64") for row in images
+        )
