@@ -177,6 +177,34 @@ class TestGenerationJob:
         assert status is not None and status.state == "completed"
         assert status.result == {"generation_id": proposal.id}
 
+    def test_a_running_build_keeps_projecting_library_changes(
+        self,
+        db_session: Session,
+        generation_setup,
+        healthy_embeddings,
+        work_engine,
+        make_search_projection_request,
+        make_model,
+    ) -> None:
+        # A build holds the one search lane for as long as it runs (hours on a
+        # large library); a change recorded meanwhile must still be projected.
+        actor, endpoint = generation_setup
+        generations.prepare(
+            db_session,
+            actor,
+            GenerationProposal(
+                endpoint_id=endpoint.id, index_backend="numpy", auto_activate=True
+            ),
+        )
+        db_session.commit()
+        make_search_projection_request(ContentSource("model", make_model().id))
+
+        nudge(jobs.GENERATION_DEFINITION)
+        work_engine.drain()
+
+        db_session.expire_all()
+        assert db_session.exec(select(SearchProjectionRequest)).all() == []
+
     def test_a_cancelled_generation_fails_its_build(
         self, db_session: Session, generation_setup, work_engine
     ) -> None:
@@ -326,6 +354,62 @@ class TestDrain:
             end_mutating_operation(foreground=True)
 
         assert (admitted, ran) == (None, [])
+
+    def test_waits_out_a_short_user_write(self, monkeypatch) -> None:
+        import threading
+
+        from app.runtime.maintenance import (
+            begin_mutating_operation,
+            end_mutating_operation,
+        )
+
+        monkeypatch.setattr(jobs, "_ADMISSION_POLL_SECONDS", 0.01)
+        units = iter([True, False])
+        assert begin_mutating_operation(foreground=True)
+        finished = threading.Timer(0.2, lambda: end_mutating_operation(foreground=True))
+        finished.start()
+        try:
+            done = jobs._drain(self._Context(), lambda: next(units))  # type: ignore[arg-type]
+        finally:
+            finished.join()
+
+        # One Job carries on after the write instead of ending for another.
+        assert done == 1
+
+    def test_yields_once_a_user_write_outlasts_its_patience(self, monkeypatch) -> None:
+        from app.runtime.maintenance import (
+            begin_mutating_operation,
+            end_mutating_operation,
+        )
+
+        monkeypatch.setattr(jobs, "_DRAIN_YIELD_SECONDS", 0.05)
+        monkeypatch.setattr(jobs, "_ADMISSION_POLL_SECONDS", 0.01)
+        ran = []
+        assert begin_mutating_operation(foreground=True)
+        try:
+            done = jobs._drain(self._Context(), lambda: ran.append(1) or True)  # type: ignore[arg-type]
+        finally:
+            end_mutating_operation(foreground=True)
+
+        assert (done, ran) == (0, [])
+
+    def test_does_not_wait_for_a_restore(self) -> None:
+        import time
+
+        from app.runtime.maintenance import (
+            end_restore_maintenance,
+            hold_restore_maintenance,
+        )
+
+        hold_restore_maintenance()
+        started = time.monotonic()
+        try:
+            done = jobs._drain(self._Context(), lambda: True)  # type: ignore[arg-type]
+        finally:
+            end_restore_maintenance()
+
+        assert done == 0
+        assert time.monotonic() - started < jobs._DRAIN_YIELD_SECONDS
 
     def test_does_no_index_work_without_consent(
         self, db_session: Session, generation_setup
@@ -495,6 +579,37 @@ class TestCaptionJobs:
         )
         # Due again only after its backoff, as a new attempt.
         assert caption.phase == "pending" and caption.retry_after is not None
+
+    def test_a_held_restore_defers_the_attempt(self) -> None:
+        from app.runtime.maintenance import (
+            end_restore_maintenance,
+            hold_restore_maintenance,
+        )
+
+        finished: dict = {}
+
+        class Context:
+            subject_key = jobs.caption_subject(1)
+            job_id = "caption-job"
+
+            def cancelled(self) -> bool:
+                return False
+
+            def finish(self, state, **fields) -> None:
+                finished.update(state=state, **fields)
+
+        hold_restore_maintenance()
+        try:
+            jobs._caption(Context())  # type: ignore[arg-type]
+        finally:
+            end_restore_maintenance()
+
+        # Retryable, and named for what happened: nothing was attempted.
+        assert finished == {
+            "state": "failed",
+            "error": "caption_deferred",
+            "retryable": True,
+        }
 
     def test_cancelling_a_caption_job_withdraws_the_attempt(
         self, db_session: Session, owed_caption

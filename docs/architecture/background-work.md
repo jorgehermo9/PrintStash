@@ -162,7 +162,11 @@ AI Search work is durable intent, found like any other:
 
 Their units keep their row leases, which fence publication by a superseded
 attempt, and admit themselves one at a time, so a restore drains between two
-units and a user's write in flight goes first. Warming the query models is the
+units and a user's write in flight goes first: a unit waits a few seconds for
+that write rather than ending its Job, and never waits for a restore. A build
+holds the `search` lane for as long as it runs, so each of its turns also
+projects a batch of library changes. Downloads share one subject, so the
+active-subject index keeps them one at a time. Warming the query models is the
 exception: a warm model is memory in the API process's own worker pool, so a
 supervisor thread in that process keeps it warm rather than a Job.
 

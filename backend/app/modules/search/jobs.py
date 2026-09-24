@@ -65,6 +65,10 @@ logger = get_logger(__name__)
 # completion nudge runs the next pass straight away while work remains.
 _DRAIN_SECONDS = 30.0
 _DRAIN_UNITS = 64
+# How long a unit waits out a user's write in flight before its Job yields.
+_DRAIN_YIELD_SECONDS = 5.0
+_CAPTION_YIELD_SECONDS = 30.0
+_ADMISSION_POLL_SECONDS = 0.25
 _REPAIR_SECONDS = 300
 _INDEXED_PROFILES = ("semantic_text", "thumbnail", "multiview", "point_cloud")
 
@@ -98,6 +102,33 @@ def _admitted(unit) -> bool | None:
         end_mutating_operation()
 
 
+def _admitted_soon(ctx: JobContext, unit, *, patience: float) -> bool | None:
+    """``_admitted``, waiting out a user's write in flight for ``patience`` seconds.
+
+    A write in flight (an upload being staged) is short, and giving the lane
+    back at once would end this Job only for the next pass to start another.
+    A restore or migration holding maintenance is not waited for here: it can
+    last far longer than a step should hold its lane.
+    """
+    from app.runtime.maintenance import foreground_mutations_pending
+
+    deadline = time.monotonic() + patience
+    retried = False
+    while True:
+        admitted = _admitted(unit)
+        if admitted is not None:
+            return admitted
+        if not foreground_mutations_pending():
+            # Maintenance holds it, unless the write finished just now.
+            if retried:
+                return None
+            retried = True
+            continue
+        if ctx.cancelled() or time.monotonic() >= deadline:
+            return None
+        time.sleep(_ADMISSION_POLL_SECONDS)
+
+
 def _drain(ctx: JobContext, unit) -> int:
     """Run ``unit`` until it reports no work, the budget ends or it is cancelled.
 
@@ -107,7 +138,9 @@ def _drain(ctx: JobContext, unit) -> int:
     deadline = time.monotonic() + _DRAIN_SECONDS
     done = 0
     while done < _DRAIN_UNITS and time.monotonic() < deadline:
-        if ctx.cancelled() or not _admitted(unit):
+        if ctx.cancelled() or not _admitted_soon(
+            ctx, unit, patience=_DRAIN_YIELD_SECONDS
+        ):
             break
         done += 1
     ctx.update(processed=done)
@@ -137,16 +170,17 @@ class ProjectionSource:
         return ensure_utc(later) if later is not None else None
 
 
-def _project(ctx: JobContext) -> None:
+def _project_unit() -> bool:
     from app.modules.search.projection import process_pending
 
-    def unit() -> bool:
-        with get_session_factory().scoped_session() as session:
-            changed = process_pending(session)
-            session.commit()
-        return bool(changed)
+    with get_session_factory().scoped_session() as session:
+        changed = process_pending(session)
+        session.commit()
+    return bool(changed)
 
-    _drain(ctx, unit)
+
+def _project(ctx: JobContext) -> None:
+    _drain(ctx, _project_unit)
 
 
 # --- search.index / search.generation --------------------------------------
@@ -269,9 +303,15 @@ def _generation_progress(ctx: JobContext, generation_id: int) -> str | None:
 
 
 def _build(ctx: JobContext) -> None:
-    """Drive one generation until it is active; its Job reports the progress."""
+    """Drive one generation until it is active; its Job reports the progress.
+
+    The build holds the search lane for as long as it runs, so each turn also
+    projects one batch of library changes first: an upload made during an
+    hours-long rebuild still becomes searchable.
+    """
     generation_id = _id_of(ctx.subject_key)
     while not ctx.cancelled():
+        _admitted(_project_unit)
         settled = _generation_progress(ctx, generation_id)
         if settled == "active":
             ctx.update(progress=100, result={"generation_id": generation_id})
@@ -427,9 +467,10 @@ def _caption(ctx: JobContext) -> None:
         )
         return True
 
-    if _admitted(unit) is None:
-        # A restore holds maintenance; the caption stays due for the next pass.
-        ctx.finish("failed", error="caption_deferred_by_maintenance", retryable=True)
+    if _admitted_soon(ctx, unit, patience=_CAPTION_YIELD_SECONDS) is None:
+        # Maintenance holds the vault, or a long user write outlasted the
+        # wait; the caption stays due and the next pass starts a new attempt.
+        ctx.finish("failed", error="caption_deferred", retryable=True)
         return
     outcome = captioned[0]
     if outcome.error is not None:
