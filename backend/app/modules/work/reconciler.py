@@ -40,6 +40,7 @@ from app.db.session import get_session_factory
 
 from . import catalog as catalog_module
 from . import executors
+from .catalog import RECONCILE_DEFINITION
 from .contracts import EngineEvidence, EngineStatus, JobDefinition, WorkItem
 from .jobs import TERMINAL_STATES, ActiveJobExists, jobs
 from .submission import execution_id, nudge, submit
@@ -517,6 +518,46 @@ def _pass_summary(source: str) -> int:
     return run_pass(source).submitted
 
 
+def sweep_lost_passes(*, now: datetime | None = None) -> int:
+    """Cancel reconcile passes a dead executor was running.
+
+    Passes are not Jobs, so repair never interrupts them, and their lane is
+    global: each one a killed process left running holds a slot everywhere
+    until it is cancelled. A pass is idempotent and every source is nudged
+    again (at startup, and by each tick), so cancelling one loses nothing.
+    """
+    stale = executors.stale_ids(now=now)
+    if not stale:
+        return 0
+    engine = catalog_module.get_engine()
+    cancelled = 0
+    for execution in engine.active():
+        if (
+            execution.definition != RECONCILE_DEFINITION
+            or execution.status is not EngineStatus.RUNNING
+            or execution.executor_id not in stale
+        ):
+            continue
+        try:
+            engine.cancel(execution.execution_id)
+            cancelled += 1
+        except Exception:  # noqa: BLE001 - the next sweep retries
+            logger.warning(
+                "lost pass cancel failed", extra={"id": execution.execution_id}
+            )
+    return cancelled
+
+
+def tick() -> None:
+    """The periodic sweep: free lost passes, then nudge every source."""
+    from .submission import nudge_all
+
+    swept = sweep_lost_passes()
+    if swept:
+        logger.warning("cancelled %d reconcile pass(es) of a lost executor", swept)
+    nudge_all()
+
+
 def sweep_foreign_versions() -> int:
     """Cancel executions another application version left behind.
 
@@ -542,4 +583,6 @@ __all__ = [
     "execute_pass",
     "run_pass",
     "sweep_foreign_versions",
+    "sweep_lost_passes",
+    "tick",
 ]

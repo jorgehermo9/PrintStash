@@ -224,9 +224,9 @@ class DbosJobEngine(JobEngine):
         @DBOS.workflow(name=TICK_WORKFLOW)
         def tick_workflow(scheduled: datetime, actual: datetime) -> None:
             del scheduled, actual
-            from app.modules.work.submission import nudge_all
+            from app.modules.work.reconciler import tick
 
-            DBOS.run_step({"name": "work.tick"}, nudge_all)
+            DBOS.run_step({"name": "work.tick"}, tick)
 
         self._job_workflow = job_workflow
         self._reconcile_workflow = reconcile_workflow
@@ -336,7 +336,12 @@ class DbosJobEngine(JobEngine):
         return [
             ActiveExecution(
                 execution_id=status.workflow_id,
-                definition=str(status.name),
+                # A pass is named as the port names it, like the inline engine.
+                definition=(
+                    RECONCILE_DEFINITION
+                    if status.name == RECONCILE_WORKFLOW
+                    else str(status.name)
+                ),
                 status=_STATUS[str(status.status)],
                 app_version=status.app_version,
                 executor_id=status.executor_id,

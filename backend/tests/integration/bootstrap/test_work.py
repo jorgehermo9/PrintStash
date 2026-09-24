@@ -268,6 +268,29 @@ class TestStart:
         finally:
             work_bootstrap.stop()
 
+    def test_frees_the_passes_its_predecessor_died_running(
+        self, work_engine, work_catalog, make_work_executor
+    ) -> None:
+        # The reconcile lane is global: passes the killed API left running
+        # would otherwise keep this process's startup reconcile from running.
+        from app.modules.work.submission import nudge
+
+        previous = make_work_executor("previous-api", role="all")
+        nudge("library.scan")
+        (lost,) = [
+            execution
+            for execution in work_engine.executions.values()
+            if execution.submission.definition == RECONCILE_DEFINITION
+        ]
+        lost.status = EngineStatus.RUNNING
+        lost.executor_id = previous.executor_id
+
+        work_bootstrap.start(engine=work_engine, catalog=work_catalog, sole_api=True)
+        try:
+            assert lost.status is EngineStatus.CANCELLED
+        finally:
+            work_bootstrap.stop()
+
     def test_a_process_without_the_api_lock_retires_nobody(
         self, work_engine, work_catalog, make_work_executor
     ) -> None:

@@ -104,10 +104,13 @@ def _run(environment: dict[str, str], *role: str) -> dict:
     lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
     assert lines, result.stdout + result.stderr
     outcome = json.loads(lines[-1])
-    assert set(outcome["states"].values()) == {"ready"}, (
-        outcome,
-        (result.stdout + result.stderr)[-6000:],
-    )
+    if set(outcome["states"].values()) != {"ready"}:
+        # pytest.fail keeps the whole message; an assertion repr would cut
+        # the diagnostics that say why the work never converged.
+        pytest.fail(
+            f"did not converge:\n{json.dumps(outcome, indent=1)}\n"
+            f"{(result.stdout + result.stderr)[-6000:]}"
+        )
     return outcome
 
 

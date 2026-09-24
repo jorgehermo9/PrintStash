@@ -242,9 +242,49 @@ def _settle(file_id: int) -> dict:
         settled = set(states) == set(current) and all(
             state in {"ready", "failed"} for state in states.values()
         )
-        if settled or time.monotonic() > deadline:
+        if settled:
             return outcome
+        if time.monotonic() > deadline:
+            # What the parent needs to tell a lost nudge from a wrong verdict.
+            return {**outcome, "diagnostics": _diagnostics()}
         time.sleep(0.25)
+
+
+def _diagnostics() -> dict:
+    from sqlmodel import select
+
+    from app.db.models import Job, ReconcileCursor, WorkExecutor
+    from app.db.session import get_session_factory
+    from app.modules.work.catalog import get_engine
+    from app.modules.work.submission import execution_id
+
+    with get_session_factory().scoped_session() as session:
+        jobs = session.exec(select(Job)).all()
+        ids = [execution_id(job.id, job.attempts) for job in jobs if job.attempts]
+        evidence = get_engine().evidence(ids) if ids else {}
+        return {
+            "jobs": [
+                [job.kind, str(job.state), job.attempts, job.subject_key]
+                for job in jobs
+            ],
+            "evidence": {key: repr(value) for key, value in evidence.items()},
+            "executors": [
+                [row.executor_id, row.role, str(row.heartbeat_at)]
+                for row in session.exec(select(WorkExecutor)).all()
+            ],
+            "cursors": [
+                [
+                    row.source,
+                    str(row.nudged_at),
+                    str(row.pass_queued_at),
+                    str(row.last_pass_finished_at),
+                    row.last_pass_submitted,
+                    row.last_pass_deferred,
+                ]
+                for row in session.exec(select(ReconcileCursor)).all()
+                if row.source.startswith(("derive", "ingest"))
+            ],
+        }
 
 
 def converge(file_id: int) -> None:

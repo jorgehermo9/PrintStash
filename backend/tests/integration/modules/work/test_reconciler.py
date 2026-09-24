@@ -31,7 +31,11 @@ from app.modules.work.contracts import (
     Step,
     WorkItem,
 )
-from app.modules.work.reconciler import run_pass, sweep_foreign_versions
+from app.modules.work.reconciler import (
+    run_pass,
+    sweep_foreign_versions,
+    sweep_lost_passes,
+)
 from app.modules.work.submission import execution_id, nudge
 from app.runtime.engine.inline import InlineJobEngine
 
@@ -522,6 +526,56 @@ class TestPass:
         db_session.expire_all()
         cursor = db_session.get(ReconcileCursor, SOURCED)
         assert cursor is not None and cursor.holder is None
+
+
+def _stranded_pass(engine: InlineJobEngine, source: str, executor: str) -> str:
+    """A reconcile pass a process was running when it died."""
+    nudge(source)
+    (stranded,) = _passes(engine, source)
+    stranded.status = EngineStatus.RUNNING
+    stranded.executor_id = executor
+    return stranded.submission.execution_id
+
+
+class TestSweepLostPasses:
+    """A pass a dead process was running holds a reconcile slot until cancelled.
+
+    Reconcile passes are not Jobs, so no repair ever interrupts them, and the
+    lane is global: a process killed while its startup passes ran would keep
+    every later pass, on every process, from starting.
+    """
+
+    def test_cancels_a_pass_stranded_on_a_dead_executor(
+        self, engine: InlineJobEngine, make_work_executor
+    ) -> None:
+        dead = make_work_executor("dead-executor", stale=True)
+        stranded = _stranded_pass(engine, SOURCED, dead.executor_id)
+
+        assert sweep_lost_passes() == 1
+        assert engine.executions[stranded].status is EngineStatus.CANCELLED
+
+    def test_leaves_a_live_executors_pass_running(
+        self, engine: InlineJobEngine, make_work_executor
+    ) -> None:
+        live = make_work_executor("live-executor")
+        running = _stranded_pass(engine, SOURCED, live.executor_id)
+
+        assert sweep_lost_passes() == 0
+        assert engine.executions[running].status is EngineStatus.RUNNING
+
+    def test_leaves_a_dead_executors_jobs_to_repair(
+        self, engine: InlineJobEngine, make_job, make_work_executor
+    ) -> None:
+        # A Job's execution is repair's to interrupt, with its Job's record.
+        dead = make_work_executor("dead-executor", stale=True)
+        job = make_job(kind=REQUESTED)
+        run_pass(REQUESTED)
+        execution = engine.executions[execution_id(job.id, 1)]
+        execution.status = EngineStatus.RUNNING
+        execution.executor_id = dead.executor_id
+
+        assert sweep_lost_passes() == 0
+        assert execution.status is EngineStatus.RUNNING
 
 
 class TestSweepForeignVersions:

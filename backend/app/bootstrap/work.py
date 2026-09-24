@@ -202,7 +202,7 @@ def start(
         retired = executors.retire_predecessors()
         if retired:
             logger.warning("rerunning the work of %d previous API process(es)", retired)
-    from app.modules.work.reconciler import sweep_foreign_versions
+    from app.modules.work.reconciler import sweep_foreign_versions, sweep_lost_passes
     from app.modules.work.submission import forget_queued_passes, nudge_all
 
     swept = sweep_foreign_versions()
@@ -210,6 +210,11 @@ def start(
         logger.warning(
             "cancelled %d execution(s) of another application version", swept
         )
+    # Passes a dead process was running hold the global reconcile lane; the
+    # startup reconcile below could not start without freeing them.
+    lost = sweep_lost_passes()
+    if lost:
+        logger.warning("cancelled %d reconcile pass(es) of a lost executor", lost)
     # Queued-pass marks may belong to passes a dead process (or the sweep
     # above) will never run; without this the startup reconcile below would
     # be suppressed until their grace expires.
