@@ -221,6 +221,55 @@ class TestNudgeAfterCommit:
 
         assert _passes(work_engine, "library.scan") == []
 
+    def test_many_records_in_one_transaction_nudge_once(
+        self, work_engine, db_session: Session
+    ) -> None:
+        # A bulk edit records hundreds of changes; its nudge is still one.
+        for _ in range(3):
+            nudge_after_commit(db_session, "library.scan")
+
+        db_session.commit()
+
+        assert len(_passes(work_engine, "library.scan")) == 1
+
+    def test_a_released_savepoint_waits_for_the_real_commit(
+        self, work_engine, db_session: Session
+    ) -> None:
+        # SQLAlchemy reports a savepoint's release as a commit. Nudging there
+        # writes the cursor on a second connection while this transaction
+        # still holds SQLite's write lock: the nudge waits on its own caller.
+        nudge_after_commit(db_session, "library.scan")
+        with db_session.begin_nested():
+            pass
+        assert _passes(work_engine, "library.scan") == []
+
+        db_session.commit()
+
+        assert len(_passes(work_engine, "library.scan")) == 1
+
+    def test_a_rolled_back_savepoint_keeps_the_outer_nudge(
+        self, work_engine, db_session: Session
+    ) -> None:
+        nudge_after_commit(db_session, "library.scan")
+        nested = db_session.begin_nested()
+        nested.rollback()
+
+        db_session.commit()
+
+        assert len(_passes(work_engine, "library.scan")) == 1
+
+    def test_the_next_transaction_nudges_again(
+        self, work_engine, db_session: Session
+    ) -> None:
+        nudge_after_commit(db_session, "library.scan")
+        db_session.commit()
+        work_engine.drain()
+
+        nudge_after_commit(db_session, "library.scan")
+        db_session.commit()
+
+        assert len(_passes(work_engine, "library.scan")) == 2
+
 
 class TestNudgeAll:
     def test_nudges_every_definition_as_backfill(self, work_engine) -> None:

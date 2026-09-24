@@ -173,10 +173,35 @@ def nudge_after_commit(session: Session, source: str) -> None:
     """
     from sqlalchemy import event
 
-    def _after_commit(_session: Session) -> None:
+    # One nudge per source per transaction, however many rows it recorded, and
+    # one pair of listeners per session, however many transactions it runs.
+    pending: set[str] | None = session.info.get(_PENDING_NUDGES)
+    if pending is None:
+        pending = session.info[_PENDING_NUDGES] = set()
+        event.listen(session, "after_commit", _nudge_committed)
+        event.listen(session, "after_soft_rollback", _forget_rolled_back)
+    pending.add(source)
+
+
+_PENDING_NUDGES = "work_nudges_after_commit"
+
+
+def _nudge_committed(session: Session) -> None:
+    # A released savepoint is reported as a commit too. Its transaction still
+    # holds the write lock that the nudge's own session would wait on.
+    if session.get_nested_transaction() is not None:
+        return
+    pending: set[str] = session.info.get(_PENDING_NUDGES, set())
+    sources = sorted(pending)
+    pending.clear()
+    for source in sources:
         nudge(source)
 
-    event.listen(session, "after_commit", _after_commit, once=True)
+
+def _forget_rolled_back(session: Session, previous_transaction) -> None:
+    if previous_transaction.nested:
+        return
+    session.info.get(_PENDING_NUDGES, set()).clear()
 
 
 def forget_queued_passes() -> int:
