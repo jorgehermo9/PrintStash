@@ -34,6 +34,7 @@ from app.modules.derivatives.kinds import METADATA, THUMBNAIL, TOOLPATH
 from app.modules.identity.auth import create_access_token
 from app.modules.storage.storage_backend.runtime import get_backend
 from tests.factories import (
+    bearer,
     build_collection,
     build_derivative,
     build_file,
@@ -52,6 +53,14 @@ def _headers(user: User) -> dict[str, str]:
 def _states(response) -> dict[str, str]:
     assert response.status_code in (200, 202), response.text
     return {row["kind"]: row["state"] for row in response.json()}
+
+
+def _states_of(client: TestClient, user: User, file: File) -> list[dict]:
+    response = client.get(
+        f"/api/v1/files/{file.id}/derivatives", headers=_headers(user)
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 @pytest.fixture
@@ -252,3 +261,24 @@ class TestRetryFileDerivative:
         )
 
         assert response.status_code == 403, response.text
+
+    def test_a_read_only_token_cannot_retry(
+        self, client: TestClient, db_session: Session, editor: User, mesh: File
+    ) -> None:
+        # The editor may retry, but not through a token scoped to reading.
+        build_derivative(
+            db_session, mesh, THUMBNAIL, state=DerivativeState.FAILED, exhausted=True
+        )
+
+        response = client.post(
+            f"/api/v1/files/{mesh.id}/derivatives/{THUMBNAIL}/retry",
+            headers=bearer(editor, scope="read"),
+        )
+
+        assert (response.status_code, response.json()["detail"]) == (
+            401,
+            "insufficient_scope",
+        )
+        db_session.expire_all()
+        rows = {row["kind"]: row["state"] for row in _states_of(client, editor, mesh)}
+        assert rows[THUMBNAIL] == "failed"

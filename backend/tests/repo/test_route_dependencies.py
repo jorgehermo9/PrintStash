@@ -1,4 +1,4 @@
-"""Write-capability guards on rich-capture mutation routes.
+"""Write-capability guards on rich-capture and background-work mutation routes.
 
 These assertions intentionally inspect the router seam instead of sending
 requests through TestClient: this keeps the authorization contract focused and
@@ -14,7 +14,7 @@ import pytest
 from fastapi import APIRouter, HTTPException
 from fastapi.routing import APIRoute
 
-from app.api.v1 import inbox, models, provider_connections
+from app.api.v1 import files, inbox, jobs, models, provider_connections, work
 from app.core.browser_device_auth import require_user_or_browser_import_user
 from app.core.security import require_auth
 from app.db.models import User
@@ -86,6 +86,18 @@ class TestRouteDependencies:
             ("/models/{model_id}/provenance/{source_id}/cover", "DELETE"),
         ):
             _assert_read_token_is_rejected(_route(models.router, path, method))
+
+    def test_background_work_mutations_require_write_scope(self) -> None:
+        for router, path, method in (
+            (jobs.router, "/jobs/{job_id}/cancel", "POST"),
+            (jobs.router, "/jobs/{job_id}/retry", "POST"),
+            (jobs.events_router, "/events/ticket", "POST"),
+            (work.router, "/admin/work/lanes/{lane}", "PUT"),
+            (work.router, "/admin/work/cancel-queued", "POST"),
+            (work.router, "/admin/work/derivatives/{kind}/regenerate", "POST"),
+            (files.router, "/files/{file_id}/derivatives/{kind}/retry", "POST"),
+        ):
+            _assert_read_token_is_rejected(_route(router, path, method))
 
     def test_browser_credentials_are_limited_to_capture_routes(self) -> None:
         capture_routes = {

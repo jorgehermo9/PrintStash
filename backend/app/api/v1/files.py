@@ -24,7 +24,7 @@ from app.api.artifact_responses import delivery_request, render_delivery
 from app.core.config import settings
 from app.core.http import get_or_404
 from app.core.logging import get_logger
-from app.core.security import get_current_user, require_user
+from app.core.security import get_current_user, require_auth, require_user
 from app.db.models import CollectionRole, File, FileType, Model, User
 from app.db.session import get_session, get_session_factory
 from app.modules.identity import auth, rbac
@@ -419,6 +419,7 @@ def list_file_derivatives(
     "/{file_id}/derivatives/{kind}/retry",
     response_model=list[DerivativeRead],
     status_code=202,
+    dependencies=[Depends(require_auth)],
     summary="Retry one failed or cancelled derivative of an Artifact",
 )
 def retry_file_derivative(
