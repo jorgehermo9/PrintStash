@@ -36,7 +36,7 @@ class TestDefaultLanes:
 
         assert lane.scope == "global"
 
-    def test_notifications_are_partitioned_and_rate_limited(self) -> None:
+    def test_notifications_are_throttled_per_channel(self) -> None:
         lane = default_lanes()["notify"]
 
         assert lane.partitioned is True

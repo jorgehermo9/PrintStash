@@ -305,7 +305,9 @@ class TestSetLaneDepth:
         set_lane_depth("derive.light", queued=4, running=1)
 
         assert (
-            _sample("printstash_lane_depth", {"lane": "derive.light", "state": "queued"})
+            _sample(
+                "printstash_lane_depth", {"lane": "derive.light", "state": "queued"}
+            )
             == 4.0
         )
 

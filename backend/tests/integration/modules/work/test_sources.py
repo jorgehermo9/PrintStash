@@ -213,7 +213,7 @@ class TestIdle:
 
 
 class TestNoPending:
-    def test_offers_nothing_and_is_never_due(self, db_session: Session) -> None:
+    def test_a_source_without_state_is_inert(self, db_session: Session) -> None:
         source = NoPending()
 
         assert source.pending(db_session, now=NOW, limit=10) == []

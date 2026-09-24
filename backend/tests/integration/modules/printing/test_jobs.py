@@ -152,9 +152,7 @@ class TestDispatchSource:
 
 
 class TestWakeDispatch:
-    def test_wakes_a_parked_dispatcher(
-        self, db_session: Session, monkeypatch
-    ) -> None:
+    def test_wakes_a_parked_dispatcher(self, db_session: Session, monkeypatch) -> None:
         nudged: list[str] = []
         monkeypatch.setattr(work, "nudge", lambda name, **_: nudged.append(name))
         mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30)

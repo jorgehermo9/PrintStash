@@ -618,7 +618,9 @@ class TestInspectUploadedArchive:
         use_local_storage(tmp_path)
         staged = _leased_archive(db_session, owner, job_id)
 
-        with patch.object(importer, "inspect_archive", side_effect=RuntimeError("boom")):
+        with patch.object(
+            importer, "inspect_archive", side_effect=RuntimeError("boom")
+        ):
             with pytest.raises(RuntimeError, match="boom"):
                 ingest_background.inspect_uploaded_archive(
                     job_id=job_id, staged=staged, original_filename="staged.zip"

@@ -544,7 +544,9 @@ class TestQueueScheduler:
 
         provider.capabilities = capabilities_for_provider(printer.provider)
         with (
-            patch("app.modules.printing.printer_jobs.get_backend", return_value=Backend()),
+            patch(
+                "app.modules.printing.printer_jobs.get_backend", return_value=Backend()
+            ),
         ):
             from app.modules.printing.printer_jobs import dispatch_next
 
@@ -635,7 +637,9 @@ class TestQueueScheduler:
 
         provider.capabilities = capabilities_for_provider(printer.provider)
         with (
-            patch("app.modules.printing.printer_jobs.get_backend", return_value=Backend()),
+            patch(
+                "app.modules.printing.printer_jobs.get_backend", return_value=Backend()
+            ),
         ):
             assert (
                 asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]

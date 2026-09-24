@@ -212,7 +212,7 @@ class TestRepair:
         assert _row(db_session, job.id).state == JobState.FAILED
         assert PROBE.failures == [(job.subject_key, "engine_failed")]
 
-    def test_cancels_and_reruns_work_stranded_on_a_dead_executor(
+    def test_reruns_work_stranded_on_a_dead_executor(
         self, engine: InlineJobEngine, make_job, make_work_executor, db_session
     ) -> None:
         dead = make_work_executor("dead-executor", stale=True)
@@ -228,7 +228,7 @@ class TestRepair:
         assert stranded.status is EngineStatus.CANCELLED
         assert _row(db_session, job.id).attempts == 2
 
-    def test_cancels_and_reruns_work_of_another_version(
+    def test_reruns_work_of_another_version(
         self, engine: InlineJobEngine, make_job, db_session: Session
     ) -> None:
         job = make_job(kind=REQUESTED)
@@ -273,7 +273,7 @@ class TestRepair:
 
 
 class TestDiscover:
-    def test_creates_and_submits_one_job_per_pending_subject(
+    def test_submits_one_job_per_pending_subject(
         self, engine: InlineJobEngine, db_session: Session
     ) -> None:
         PROBE.items = _items("a", "b")
@@ -283,7 +283,7 @@ class TestDiscover:
         assert result.submitted == 2
         assert sorted(job.subject_key for job in _jobs(db_session)) == ["a", "b"]
 
-    def test_carries_the_items_priority_and_owner(
+    def test_the_job_takes_what_its_item_asked_for(
         self, engine: InlineJobEngine, db_session: Session, make_user
     ) -> None:
         owner = make_user()
@@ -471,7 +471,7 @@ class TestPass:
         assert PROBE.calls == 2
         assert [job.subject_key for job in _jobs(db_session)] == ["late"]
 
-    def test_a_pass_that_never_settles_gives_up_and_hands_over(
+    def test_a_pass_that_never_settles_hands_over(
         self, engine: InlineJobEngine, db_session: Session
     ) -> None:
         PROBE.on_pending = lambda: nudge(SOURCED)

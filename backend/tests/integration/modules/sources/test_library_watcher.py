@@ -254,7 +254,8 @@ class TestComputeDesired:
         )
 
         monkeypatch.setattr(
-            "app.modules.sources.external_library.detect_fs_kind", lambda _path: "network"
+            "app.modules.sources.external_library.detect_fs_kind",
+            lambda _path: "network",
         )
 
         watcher = lw.LibraryWatcher()
@@ -277,7 +278,8 @@ class TestComputeDesired:
         db_session.commit()
 
         monkeypatch.setattr(
-            "app.modules.sources.external_library.detect_fs_kind", lambda _path: "network"
+            "app.modules.sources.external_library.detect_fs_kind",
+            lambda _path: "network",
         )
 
         watcher = lw.LibraryWatcher()

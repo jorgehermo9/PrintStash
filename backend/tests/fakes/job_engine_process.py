@@ -103,7 +103,9 @@ def converge(file_id: int) -> None:
                 ).all()
                 states = {row.kind: DerivativeState(row.state).value for row in rows}
                 reasons = {row.kind: row.failure_reason for row in rows}
-            if states and all(state in {"ready", "failed"} for state in states.values()):
+            if states and all(
+                state in {"ready", "failed"} for state in states.values()
+            ):
                 break
             if time.monotonic() > deadline:
                 break

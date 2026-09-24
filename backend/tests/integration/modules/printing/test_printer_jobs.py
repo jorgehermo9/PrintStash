@@ -438,7 +438,9 @@ class TestDispatchClaimed:
                 yield target
 
         with (
-            patch("app.modules.printing.printer_jobs.get_backend", return_value=_Backend()),
+            patch(
+                "app.modules.printing.printer_jobs.get_backend", return_value=_Backend()
+            ),
         ):
             asyncio.run(
                 printer_jobs._dispatch_claimed(job.id, _provider_builder(provider))
@@ -472,9 +474,7 @@ class TestDrainDispatchQueue:
         assert queue == []
         assert printer_jobs.scheduler_status.last_dispatch_at is not None
 
-    def test_a_bad_claim_ends_the_slice(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_bad_claim_ends_the_slice(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The next slice starts from the database again; a failing claim must
         # not spin inside this one.
         calls: list[int] = []

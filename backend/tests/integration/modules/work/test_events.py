@@ -40,7 +40,7 @@ def _status(**fields) -> JobStatus:
 
 
 class TestJobChanged:
-    def test_tells_the_owner_and_the_administrators(self, publisher: Recorder) -> None:
+    def test_tells_everyone_watching_an_owned_job(self, publisher: Recorder) -> None:
         events.job_changed(_status(owner_user_id=7, progress=40.0))
 
         assert [channel for channel, _ in publisher.sent] == ["jobs:7", "work:admin"]

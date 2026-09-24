@@ -96,7 +96,9 @@ class TestAutomatic:
     ) -> None:
         seed_model_with_blob(backup_env, name="Widget", content=b"solid auto\n")
         _config(
-            backup_env, automatic_backups_enabled=True, automatic_backup_time_utc="00:00"
+            backup_env,
+            automatic_backups_enabled=True,
+            automatic_backup_time_utc="00:00",
         )
 
         self._run(work_engine)
@@ -110,7 +112,9 @@ class TestAutomatic:
     ) -> None:
         seed_model_with_blob(backup_env, name="Widget", content=b"solid once\n")
         _config(
-            backup_env, automatic_backups_enabled=True, automatic_backup_time_utc="00:00"
+            backup_env,
+            automatic_backups_enabled=True,
+            automatic_backup_time_utc="00:00",
         )
 
         self._run(work_engine)
@@ -156,7 +160,9 @@ class TestAutomatic:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _config(
-            backup_env, automatic_backups_enabled=True, automatic_backup_time_utc="00:00"
+            backup_env,
+            automatic_backups_enabled=True,
+            automatic_backup_time_utc="00:00",
         )
 
         def fail_backup(**_kwargs: object) -> None:

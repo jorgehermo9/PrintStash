@@ -172,7 +172,11 @@ class TestMetadata:
     ) -> None:
         use_local_storage(tmp_path)
         model, f = _ingest_mesh(
-            db_session, work_engine, CUBE_STL, FileType.STL, model_name="Calibration Cube"
+            db_session,
+            work_engine,
+            CUBE_STL,
+            FileType.STL,
+            model_name="Calibration Cube",
         )
 
         assert f.file_type == FileType.STL
@@ -197,7 +201,11 @@ class TestMetadata:
     ) -> None:
         use_local_storage(tmp_path)
         model, f = _ingest_mesh(
-            db_session, work_engine, SPATULA_3MF, FileType.THREE_MF, model_name="Spatula"
+            db_session,
+            work_engine,
+            SPATULA_3MF,
+            FileType.THREE_MF,
+            model_name="Spatula",
         )
 
         assert f.file_type == FileType.THREE_MF

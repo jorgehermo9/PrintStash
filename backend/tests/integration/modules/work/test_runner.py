@@ -136,7 +136,7 @@ class TestExecuteJob:
         assert (status.state, status.attempts) == ("completed", 1)
         assert status.started_at is not None
 
-    def test_nudges_its_definition_and_every_source_it_names(
+    def test_nudges_every_source_its_completion_affects(
         self, engine: InlineJobEngine, make_job
     ) -> None:
         job = make_job(kind=MUTATING)

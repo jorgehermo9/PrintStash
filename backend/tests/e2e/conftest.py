@@ -117,7 +117,6 @@ def e2e_db(tmp_path: Path) -> Iterator[Session]:
     try:
         yield session
     finally:
-
         # A failed restore may leave the process gate set while its durable
         # journal remains under this test's private backup directory. Clear
         # only test-owned evidence after all clients have stopped, so the next

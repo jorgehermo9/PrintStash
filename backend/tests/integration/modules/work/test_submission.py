@@ -47,7 +47,7 @@ def _cursor(session: Session, source: str) -> ReconcileCursor:
 
 
 class TestSubmit:
-    def test_submits_and_records_the_next_attempt(
+    def test_an_accepted_submission_counts_as_the_next_attempt(
         self, work_engine, make_job, db_session: Session
     ) -> None:
         job = make_job(kind="library.scan")
@@ -96,7 +96,7 @@ class TestSubmit:
         db_session.refresh(job)
         assert job.attempts == 0
 
-    def test_a_partitioned_lane_gets_a_partition_key_and_no_dedupe(
+    def test_a_partitioned_lane_is_keyed_by_partition_not_dedupe(
         self, work_engine, make_job
     ) -> None:
         # Engines cannot deduplicate a partitioned queue; the active-subject
@@ -110,7 +110,7 @@ class TestSubmit:
 
 
 class TestNudge:
-    def test_stamps_the_dirty_mark_and_queues_a_pass(
+    def test_a_nudge_queues_a_pass_of_a_dirty_source(
         self, work_engine, db_session: Session
     ) -> None:
         nudge("library.scan")

@@ -59,7 +59,7 @@ class TestRegister:
 
 
 class TestHeartbeat:
-    def test_reports_liveness_and_in_flight_writes(self, db_session: Session) -> None:
+    def test_reports_what_the_process_is_doing(self, db_session: Session) -> None:
         executors.register(role="all", lanes=[])
         later = utcnow() + timedelta(seconds=30)
 

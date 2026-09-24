@@ -35,15 +35,28 @@ class TestHousekeeping:
         assert definition.source is not None
         assert definition.source.cron(None) == "*/15 * * * *"  # type: ignore[attr-defined]
 
-    def test_prunes_expired_jobs_and_forgets_dead_executors(
-        self,
-        work_engine,
-        make_job,
-        make_work_executor,
-        db_session: Session,
+    def test_prunes_jobs_past_retention(
+        self, work_engine, make_job, db_session: Session
     ) -> None:
+        from app.modules.work.submission import submit
+
         expired = utcnow() - timedelta(hours=settings.jobs_system_retention_hours + 1)
-        make_job(kind="derive.mesh", state=JobState.COMPLETED, updated_at=expired)
+        old_id = make_job(
+            kind="derive.mesh", state=JobState.COMPLETED, updated_at=expired
+        ).id
+        job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
+
+        submit(job.id)
+        work_engine.run_one()
+
+        assert _result(db_session, job.id)["jobs_pruned"] == 1
+        assert db_session.get(Job, old_id) is None
+
+    def test_forgets_long_dead_executors(
+        self, work_engine, make_job, make_work_executor, db_session: Session
+    ) -> None:
+        from app.modules.work.submission import submit
+
         gone = make_work_executor("gone", stale=True)
         gone.heartbeat_at = utcnow() - timedelta(
             seconds=settings.jobs_executor_stale_seconds * 11
@@ -52,14 +65,10 @@ class TestHousekeeping:
         db_session.commit()
         job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
 
-        from app.modules.work.submission import submit
-
         submit(job.id)
         work_engine.run_one()
 
-        result = _result(db_session, job.id)
-        assert result["jobs_pruned"] == 1
-        assert result["executors_forgotten"] == 1
+        assert _result(db_session, job.id)["executors_forgotten"] == 1
         assert db_session.get(WorkExecutor, "gone") is None
 
     def test_prunes_the_engines_settled_history(
