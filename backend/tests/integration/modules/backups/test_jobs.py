@@ -296,6 +296,25 @@ class TestRetryDestination:
         with pytest.raises(RetryRefused, match="backup_retry_not_failed"):
             self._request(backup_env, done_id)
 
+    def test_a_destination_of_a_backup_still_running_is_refused(
+        self, backup_env: BackupEnv
+    ) -> None:
+        # Its backup's own Job is still publishing the other destinations; a
+        # retry ending (even by a cancel) would settle that live run under it.
+        from app.modules.backups.backup_replica_retry import RetryRefused
+        from tests.factories import build_backup_destination_result, build_backup_run
+
+        with backup_env.new_session() as session:
+            run = build_backup_run(session, outcome="running")
+            build_backup_destination_result(session, run, outcome="publishing")
+            failed = build_backup_destination_result(
+                session, run, kind="connection", name="Replica", outcome="failed"
+            )
+            failed_id = failed.id
+
+        with pytest.raises(RetryRefused, match="backup_retry_backup_running"):
+            self._request(backup_env, failed_id)
+
     def test_an_unknown_destination_cannot_be_retried(
         self, backup_env: BackupEnv
     ) -> None:

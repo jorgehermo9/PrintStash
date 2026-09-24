@@ -524,6 +524,26 @@ class TestHeldWork:
         finally:
             work_bootstrap.stop()
 
+    def test_work_that_fails_to_start_stays_held(
+        self, work_engine, work_catalog, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The recovery that called it succeeded; a failed start must neither
+        # fail it nor lose the work, which the next resolution starts.
+        work_bootstrap.hold(engine=work_engine, catalog=work_catalog)
+        real_start = work_bootstrap.start
+
+        def refuse(**_kwargs) -> None:
+            raise RuntimeError("engine unavailable")
+
+        monkeypatch.setattr(work_bootstrap, "start", refuse)
+        try:
+            assert work_bootstrap.release_held() is False
+            monkeypatch.setattr(work_bootstrap, "start", real_start)
+
+            assert work_bootstrap.release_held() is True
+        finally:
+            work_bootstrap.stop()
+
     def test_nothing_held_starts_nothing(self) -> None:
         assert work_bootstrap.release_held() is False
 

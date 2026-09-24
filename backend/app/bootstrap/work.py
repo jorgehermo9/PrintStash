@@ -262,7 +262,12 @@ def release_held() -> bool:
         if _held is None or _runtime is not None or restore_in_progress():
             return False
         start_kwargs, _held = _held, None
-        start(**start_kwargs)
+        try:
+            start(**start_kwargs)
+        except Exception:  # noqa: BLE001 - the resolved restore stands; retry later
+            _held = start_kwargs
+            logger.exception("held background work failed to start")
+            return False
     logger.info("background work started after restore recovery")
     return True
 

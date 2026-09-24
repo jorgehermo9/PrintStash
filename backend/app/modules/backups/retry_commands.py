@@ -57,6 +57,10 @@ def request_retry(
     run = session.get(BackupRun, result.run_id)
     if run is None or result.outcome != "failed":
         raise RetryRefused("backup_retry_not_failed")
+    if run.outcome == "running":
+        # The backup's own Job still publishes its other destinations and
+        # settles the run; a retry ending first would settle it under that Job.
+        raise RetryRefused("backup_retry_backup_running")
     attempt_id = uuid.uuid4().hex
     try:
         work_service.request(
