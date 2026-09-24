@@ -1,6 +1,6 @@
 """Storage Jobs: copying a vault migration, and sampling storage inventory.
 
-``vault.migrate`` has one subject per run that is ``copying``, and its single
+``storage.migrate`` has one subject per run that is ``copying``, and its single
 step copies batch after batch until the run leaves that state, so the storage
 retention the copy holds never outlives the process holding it. It pauses
 while a restore runs and stops when its Job is cancelled. A run whose batches

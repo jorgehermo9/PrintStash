@@ -59,7 +59,7 @@ class TestOverview:
     def test_lists_every_lane_with_its_depth(
         self, client: TestClient, admin: User, make_job, work_engine
     ) -> None:
-        job = make_job(kind="ingest.upload")
+        job = make_job(kind="ingestion.upload")
         from app.modules.work.submission import submit
 
         submit(job.id)
@@ -74,13 +74,13 @@ class TestOverview:
     def test_counts_each_definitions_jobs(
         self, client: TestClient, admin: User, make_job
     ) -> None:
-        make_job(kind="library.scan")
-        make_job(kind="library.scan", state=JobState.FAILED)
-        make_job(kind="library.scan", state=JobState.COMPLETED)
+        make_job(kind="sources.scan")
+        make_job(kind="sources.scan", state=JobState.FAILED)
+        make_job(kind="sources.scan", state=JobState.COMPLETED)
 
         body = client.get("/api/v1/admin/work", headers=_headers(admin)).json()
 
-        scan = next(d for d in body["definitions"] if d["name"] == "library.scan")
+        scan = next(d for d in body["definitions"] if d["name"] == "sources.scan")
         assert (scan["queued"], scan["failed"], scan["completed"]) == (1, 1, 1)
         assert scan["last_finished_at"] is not None
 
@@ -89,13 +89,13 @@ class TestOverview:
     ) -> None:
         body = client.get("/api/v1/admin/work", headers=_headers(admin)).json()
 
-        mesh = next(d for d in body["definitions"] if d["name"] == "derive.mesh")
+        mesh = next(d for d in body["definitions"] if d["name"] == "derivatives.mesh")
         assert set(mesh["derivative_kinds"]) == {"metadata", "thumbnail"}
 
     def test_lists_recent_failures_without_their_owners(
         self, client: TestClient, admin: User, member: User, make_job
     ) -> None:
-        failed = make_job(kind="ingest.url", owner=member, state=JobState.FAILED)
+        failed = make_job(kind="ingestion.url", owner=member, state=JobState.FAILED)
 
         body = client.get("/api/v1/admin/work", headers=_headers(admin)).json()
 
@@ -212,12 +212,12 @@ class TestCancelQueued:
     ) -> None:
         queued = [make_ingest_request(admin) for _ in range(2)]
         running = make_ingest_request(admin, state=JobState.RUNNING)
-        other = make_job(kind="library.scan")
+        other = make_job(kind="sources.scan")
 
         response = client.post(
             "/api/v1/admin/work/cancel-queued",
             headers=_headers(admin),
-            json={"definition": "ingest.url"},
+            json={"definition": "ingestion.url"},
         )
 
         assert response.status_code == 200, response.text
@@ -256,7 +256,7 @@ class TestCancelQueued:
         response = client.post(
             "/api/v1/admin/work/cancel-queued",
             headers=_headers(member, scope="write"),
-            json={"definition": "ingest.url"},
+            json={"definition": "ingestion.url"},
         )
 
         assert response.status_code == 403, response.text
@@ -273,7 +273,7 @@ class TestRegenerateDerivatives:
         )
 
         assert response.status_code == 202, response.text
-        assert {"derive.mesh", "derive.gcode"} <= _nudged(work_engine)
+        assert {"derivatives.mesh", "derivatives.gcode"} <= _nudged(work_engine)
         assert db_session.exec(select(DerivativeRegeneration)).all() == []
 
     def test_all_marks_every_output_of_the_kind_stale(
@@ -292,7 +292,7 @@ class TestRegenerateDerivatives:
         assert row is not None
         assert row.requested_by == admin.id
         assert row.requested_at.replace(tzinfo=None) >= before.replace(tzinfo=None)
-        assert "derive.mesh" in _nudged(work_engine)
+        assert "derivatives.mesh" in _nudged(work_engine)
 
     def test_an_unknown_kind_is_not_found(
         self, client: TestClient, admin: User

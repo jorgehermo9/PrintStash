@@ -49,7 +49,7 @@ class Job(SQLModel, table=True):
     )
 
     id: str = Field(primary_key=True, max_length=64)
-    # The job definition's registered name, e.g. ``ingest.upload``.
+    # The job definition's registered name, e.g. ``ingestion.upload``.
     kind: str = Field(max_length=64, index=True)
     subject_key: str = Field(max_length=255, index=True)
     owner_user_id: Optional[int] = Field(

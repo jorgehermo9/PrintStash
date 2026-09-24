@@ -57,7 +57,7 @@ function busyOverview(): WorkOverview {
     failed_jobs: [
       aJob({
         job_id: "failed-1",
-        kind: "derive.mesh",
+        kind: "derivatives.mesh",
         label: "Mesh derivatives",
         state: "failed",
         error: "backup_blob_missing",
@@ -160,7 +160,7 @@ describe("BackgroundWorkPanel", () => {
       const dialog = await screen.findByRole("dialog");
       await user.click(within(dialog).getByRole("button", { name: "Cancel queued" }));
 
-      await waitFor(() => expect(api.cancelQueued).toHaveBeenCalledWith("derive.mesh"));
+      await waitFor(() => expect(api.cancelQueued).toHaveBeenCalledWith("derivatives.mesh"));
     });
 
     it("offers no cancel for a definition with nothing queued", async () => {
@@ -236,7 +236,7 @@ describe("BackgroundWorkPanel", () => {
       await waitFor(() => expect(socket.onmessage).not.toBeNull());
 
       socket.onmessage?.({
-        data: JSON.stringify({ type: "job", job_id: "j", kind: "derive.mesh", state: "completed" }),
+        data: JSON.stringify({ type: "job", job_id: "j", kind: "derivatives.mesh", state: "completed" }),
       });
 
       await waitFor(() => expect(api.overview).toHaveBeenCalledTimes(2));

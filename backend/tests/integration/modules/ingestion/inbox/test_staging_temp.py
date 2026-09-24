@@ -320,7 +320,7 @@ class TestCaptureStagingLeaseEdges:
         row, slots = inbox.create_capture_upload_slots(
             db_session, owner, _payload(b"payload")
         )
-        job = build_job(db_session, kind="inbox.import", owner=owner)
+        job = build_job(db_session, kind="ingestion.inbox_import", owner=owner)
         staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=job.id
         )

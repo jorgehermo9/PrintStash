@@ -1,6 +1,6 @@
 """The automatic backup claim is durable across scheduler ticks and failures.
 
-The claim is what lets the ``backup.automatic`` schedule be resubmitted after a
+The claim is what lets the ``backups.automatic`` schedule be resubmitted after a
 crash without archiving twice in one day; the Job itself is defended in
 ``test_jobs.py``.
 """

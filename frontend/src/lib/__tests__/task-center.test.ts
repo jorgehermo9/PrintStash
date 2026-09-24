@@ -584,7 +584,7 @@ describe("syncImportJobs", () => {
 
   it("titles a discovered non-import Job by its label", async () => {
     listJobs.mockResolvedValue([
-      aJob({ job_id: "backup-job", kind: "backup.create", label: "Backup", state: "running" }),
+      aJob({ job_id: "backup-job", kind: "backups.create", label: "Backup", state: "running" }),
     ]);
 
     await tc.syncImportJobs();
@@ -594,7 +594,7 @@ describe("syncImportJobs", () => {
 
   it("titles a discovered import Job as an import", async () => {
     listJobs.mockResolvedValue([
-      aJob({ job_id: "url-job", kind: "ingest.url", label: "ingest.url", state: "running" }),
+      aJob({ job_id: "url-job", kind: "ingestion.url", label: "ingestion.url", state: "running" }),
     ]);
 
     await tc.syncImportJobs();

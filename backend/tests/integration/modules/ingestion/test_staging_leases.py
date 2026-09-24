@@ -121,7 +121,7 @@ class TestTransfer:
             select(StagingLease).where(StagingLease.inbox_item_id == inbox.id)
         ).one()
         assert lease.job_id is None
-        job = build_job(db_session, kind="inbox.import", owner=user)
+        job = build_job(db_session, kind="ingestion.inbox_import", owner=user)
         transferred = staging_leases.transfer_inbox_to_job(
             db_session, inbox_item_id=inbox.id, job_id=job.id
         )

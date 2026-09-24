@@ -1407,7 +1407,7 @@ def next_scheduled_scan(session: Session, *, now: datetime) -> datetime | None:
     return min(upcoming) if upcoming else None
 
 
-SCAN_DEFINITION = "library.scan"
+SCAN_DEFINITION = "sources.scan"
 
 
 class ScanSource:

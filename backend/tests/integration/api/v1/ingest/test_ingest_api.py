@@ -665,7 +665,7 @@ class TestIngestModel:
         ).one()
         old_job = build_job(
             db_session,
-            kind="inbox.import",
+            kind="ingestion.inbox_import",
             state=JobState.COMPLETED,
             owner=owner,
             updated_at=utcnow() - timedelta(days=30),

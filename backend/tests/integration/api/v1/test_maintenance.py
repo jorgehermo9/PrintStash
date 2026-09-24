@@ -87,7 +87,7 @@ def make_finding(db_session: Session):
 
 
 class TestStartAudit:
-    # A started run stays pending until its ``audit.run`` Job is drained, so
+    # A started run stays pending until its ``administration.audit`` Job is drained, so
     # every test before the drain sees the active run.
     def test_accepts_the_request(
         self,

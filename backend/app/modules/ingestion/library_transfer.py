@@ -2354,7 +2354,7 @@ def run_import_job(
         registry.finish(job_id, state="failed", error=str(exc), retryable=True)
 
 
-IMPORT_DEFINITION = "ingest.library_import"
+IMPORT_DEFINITION = "ingestion.library_import"
 
 
 def _import_step(ctx) -> None:

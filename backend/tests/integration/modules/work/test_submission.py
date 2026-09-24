@@ -50,7 +50,7 @@ class TestSubmit:
     def test_an_accepted_submission_counts_as_the_next_attempt(
         self, work_engine, make_job, db_session: Session
     ) -> None:
-        job = make_job(kind="library.scan")
+        job = make_job(kind="sources.scan")
 
         outcome = submit(job.id)
 
@@ -58,12 +58,12 @@ class TestSubmit:
         db_session.refresh(job)
         assert job.attempts == 1
         execution = work_engine.executions[execution_id(job.id, 1)]
-        assert execution.submission.dedupe_key == f"library.scan|{job.subject_key}"
+        assert execution.submission.dedupe_key == f"sources.scan|{job.subject_key}"
 
     def test_an_interrupted_job_is_queued_again_on_resubmission(
         self, work_engine, make_job, db_session: Session
     ) -> None:
-        job = make_job(kind="library.scan", state=JobState.INTERRUPTED, attempts=1)
+        job = make_job(kind="sources.scan", state=JobState.INTERRUPTED, attempts=1)
 
         submit(job.id)
 
@@ -76,7 +76,7 @@ class TestSubmit:
     def test_a_settled_job_has_nothing_to_submit(
         self, work_engine, make_job, state: JobState
     ) -> None:
-        job = make_job(kind="library.scan", state=state)
+        job = make_job(kind="sources.scan", state=state)
 
         assert submit(job.id) is None
         assert work_engine.executions == {}
@@ -87,7 +87,7 @@ class TestSubmit:
     def test_a_deduplicated_attempt_is_not_recorded(
         self, work_engine, make_job, db_session: Session, monkeypatch
     ) -> None:
-        job = make_job(kind="library.scan")
+        job = make_job(kind="sources.scan")
         monkeypatch.setattr(
             work_engine, "submit", lambda _submission: SubmitOutcome.DEDUPLICATED
         )
@@ -101,7 +101,7 @@ class TestSubmit:
     ) -> None:
         # Engines cannot deduplicate a partitioned queue; the active-subject
         # claim on the Job row is what keeps one delivery single-flight.
-        job = make_job(kind="notify.deliver", subject="channel/7/delivery/9")
+        job = make_job(kind="notifications.deliver", subject="channel/7/delivery/9")
 
         submit(job.id)
 
@@ -113,38 +113,38 @@ class TestNudge:
     def test_a_nudge_queues_a_pass_of_a_dirty_source(
         self, work_engine, db_session: Session
     ) -> None:
-        nudge("library.scan")
+        nudge("sources.scan")
 
-        cursor = _cursor(db_session, "library.scan")
+        cursor = _cursor(db_session, "sources.scan")
         assert cursor.nudged_at is not None
         assert cursor.pass_queued_at is not None
-        (queued,) = _passes(work_engine, "library.scan")
+        (queued,) = _passes(work_engine, "sources.scan")
         assert queued.submission.priority is WorkPriority.INTERACTIVE
 
     def test_a_second_nudge_rides_on_the_queued_pass(self, work_engine) -> None:
-        nudge("library.scan")
-        nudge("library.scan")
+        nudge("sources.scan")
+        nudge("sources.scan")
 
-        assert len(_passes(work_engine, "library.scan")) == 1
+        assert len(_passes(work_engine, "sources.scan")) == 1
 
     def test_a_backfill_nudge_rides_on_any_queued_pass(self, work_engine) -> None:
-        nudge("library.scan")
-        nudge("library.scan", priority=WorkPriority.BACKFILL)
+        nudge("sources.scan")
+        nudge("sources.scan", priority=WorkPriority.BACKFILL)
 
-        assert len(_passes(work_engine, "library.scan")) == 1
+        assert len(_passes(work_engine, "sources.scan")) == 1
 
     def test_an_interactive_nudge_does_not_wait_behind_a_backfill_pass(
         self, work_engine
     ) -> None:
         # Regression: an upload just after startup waited behind the startup
         # sweep's backfill pass for the same source.
-        nudge("library.scan", priority=WorkPriority.BACKFILL)
+        nudge("sources.scan", priority=WorkPriority.BACKFILL)
 
-        nudge("library.scan")
+        nudge("sources.scan")
 
         priorities = sorted(
             execution.submission.priority.value
-            for execution in _passes(work_engine, "library.scan")
+            for execution in _passes(work_engine, "sources.scan")
         )
         assert priorities == ["backfill", "interactive"]
 
@@ -153,25 +153,25 @@ class TestNudge:
     ) -> None:
         db_session.add(
             ReconcileCursor(
-                source="library.scan",
+                source="sources.scan",
                 pass_queued_at=utcnow()
                 - timedelta(seconds=settings.jobs_submit_grace_seconds + 1),
             )
         )
         db_session.commit()
 
-        nudge("library.scan")
+        nudge("sources.scan")
 
-        assert len(_passes(work_engine, "library.scan")) == 1
+        assert len(_passes(work_engine, "sources.scan")) == 1
 
     def test_a_delayed_nudge_leaves_the_dirty_mark_alone(
         self, work_engine, db_session: Session
     ) -> None:
-        nudge("library.scan", delay=45)
+        nudge("sources.scan", delay=45)
 
-        cursor = _cursor(db_session, "library.scan")
+        cursor = _cursor(db_session, "sources.scan")
         assert (cursor.nudged_at, cursor.pass_queued_at) == (None, None)
-        (delayed,) = _passes(work_engine, "library.scan")
+        (delayed,) = _passes(work_engine, "sources.scan")
         assert delayed.submission.delay_seconds == 45
 
     def test_does_nothing_without_a_bound_engine(
@@ -179,7 +179,7 @@ class TestNudge:
     ) -> None:
         catalog_module.bind(None, None)
 
-        nudge("library.scan")
+        nudge("sources.scan")
 
         assert db_session.exec(select(ReconcileCursor)).all() == []
 
@@ -198,39 +198,39 @@ class TestNudge:
 
         monkeypatch.setattr(work_engine, "submit", refuse)
 
-        nudge("library.scan")
+        nudge("sources.scan")
 
 
 class TestNudgeAfterCommit:
     def test_nudges_once_the_transaction_commits(
         self, work_engine, db_session: Session
     ) -> None:
-        nudge_after_commit(db_session, "library.scan")
-        assert _passes(work_engine, "library.scan") == []
+        nudge_after_commit(db_session, "sources.scan")
+        assert _passes(work_engine, "sources.scan") == []
 
         db_session.commit()
 
-        assert len(_passes(work_engine, "library.scan")) == 1
+        assert len(_passes(work_engine, "sources.scan")) == 1
 
     def test_a_rolled_back_transaction_nudges_nothing(
         self, work_engine, db_session: Session
     ) -> None:
-        nudge_after_commit(db_session, "library.scan")
+        nudge_after_commit(db_session, "sources.scan")
 
         db_session.rollback()
 
-        assert _passes(work_engine, "library.scan") == []
+        assert _passes(work_engine, "sources.scan") == []
 
     def test_many_records_in_one_transaction_nudge_once(
         self, work_engine, db_session: Session
     ) -> None:
         # A bulk edit records hundreds of changes; its nudge is still one.
         for _ in range(3):
-            nudge_after_commit(db_session, "library.scan")
+            nudge_after_commit(db_session, "sources.scan")
 
         db_session.commit()
 
-        assert len(_passes(work_engine, "library.scan")) == 1
+        assert len(_passes(work_engine, "sources.scan")) == 1
 
     def test_a_released_savepoint_waits_for_the_real_commit(
         self, work_engine, db_session: Session
@@ -238,37 +238,37 @@ class TestNudgeAfterCommit:
         # SQLAlchemy reports a savepoint's release as a commit. Nudging there
         # writes the cursor on a second connection while this transaction
         # still holds SQLite's write lock: the nudge waits on its own caller.
-        nudge_after_commit(db_session, "library.scan")
+        nudge_after_commit(db_session, "sources.scan")
         with db_session.begin_nested():
             pass
-        assert _passes(work_engine, "library.scan") == []
+        assert _passes(work_engine, "sources.scan") == []
 
         db_session.commit()
 
-        assert len(_passes(work_engine, "library.scan")) == 1
+        assert len(_passes(work_engine, "sources.scan")) == 1
 
     def test_a_rolled_back_savepoint_keeps_the_outer_nudge(
         self, work_engine, db_session: Session
     ) -> None:
-        nudge_after_commit(db_session, "library.scan")
+        nudge_after_commit(db_session, "sources.scan")
         nested = db_session.begin_nested()
         nested.rollback()
 
         db_session.commit()
 
-        assert len(_passes(work_engine, "library.scan")) == 1
+        assert len(_passes(work_engine, "sources.scan")) == 1
 
     def test_the_next_transaction_nudges_again(
         self, work_engine, db_session: Session
     ) -> None:
-        nudge_after_commit(db_session, "library.scan")
+        nudge_after_commit(db_session, "sources.scan")
         db_session.commit()
         work_engine.drain()
 
-        nudge_after_commit(db_session, "library.scan")
+        nudge_after_commit(db_session, "sources.scan")
         db_session.commit()
 
-        assert len(_passes(work_engine, "library.scan")) == 2
+        assert len(_passes(work_engine, "sources.scan")) == 2
 
 
 class TestNudgeAll:

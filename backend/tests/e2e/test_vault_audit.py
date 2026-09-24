@@ -53,7 +53,7 @@ async def _await_job(api, headers: dict[str, str], job_id: str) -> dict:
 
 
 def _run_due_audit(session) -> int:
-    """Let the ``audit.run`` source admit the due policy, and run it.
+    """Let the ``administration.audit`` source admit the due policy, and run it.
 
     Returns the id of the newest run: the one the due policy just admitted.
     """

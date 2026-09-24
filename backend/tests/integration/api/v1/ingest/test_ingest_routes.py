@@ -456,7 +456,7 @@ class TestSelectArchiveEntries:
             auth_headers,
         )
         assert payload["state"] == "completed", payload
-        assert payload["kind"] == "ingest.archive_selection"
+        assert payload["kind"] == "ingestion.archive_selection"
 
     def test_an_unsafe_entry_fails_the_selection_job(
         self, tmp_path: Path, client: TestClient, auth_headers: dict[str, str]

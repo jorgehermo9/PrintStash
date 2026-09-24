@@ -10,7 +10,7 @@ Two halves:
   outbox can't be lost — and because the hub edge-triggers state changes, an
   event is enqueued exactly once.
 
-* Delivery is the ``notify.deliver`` Job, one per delivery, on a lane
+* Delivery is the ``notifications.deliver`` Job, one per delivery, on a lane
   partitioned (and rate-limited) per channel. Its source reports due rows; the
   enqueue nudges it after the caller's commit, and its ``next_due`` is the
   earliest scheduled retry, so backoff needs no polling loop. Each Job renders
@@ -412,7 +412,7 @@ async def _send_one(item: Dict[str, Any]) -> None:
         )
 
 
-DELIVER_DEFINITION = "notify.deliver"
+DELIVER_DEFINITION = "notifications.deliver"
 
 
 def _claim_delivery(delivery_id: int) -> Dict[str, Any] | None:

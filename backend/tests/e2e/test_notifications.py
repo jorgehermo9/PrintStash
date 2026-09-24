@@ -3,7 +3,7 @@
 This is the keystone of the E2E layer. It drives the *real* app — enable the
 master switch and create channels through the public REST API — fires a real
 ``print_completed`` event through the same enqueue path the printer hub uses, lets
-the ``notify.deliver`` Jobs that enqueue nudged run, and asserts each fake provider received a payload it would
+the ``notifications.deliver`` Jobs that enqueue nudged run, and asserts each fake provider received a payload it would
 actually accept.
 
 Two assertions here fail against the pre-fix renderers, which is the point:

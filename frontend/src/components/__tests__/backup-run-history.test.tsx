@@ -19,7 +19,7 @@ function retryAccepted(jobId: string) {
 }
 
 function retryJob(job: Partial<JobStatus> & { job_id: string }): RouteTable {
-  const status = aJob({ kind: "backup.retry_destination", model_id: null, file_id: null, ...job });
+  const status = aJob({ kind: "backups.retry_destination", model_id: null, file_id: null, ...job });
   return {
     "GET /api/v1/jobs": json([status]),
     [`GET /api/v1/jobs/${job.job_id}`]: json(status),

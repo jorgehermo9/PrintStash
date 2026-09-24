@@ -109,7 +109,7 @@ class TestReconcileArtifactUploads:
         use_local_storage(tmp_path)
         owner = make_user("interrupted-upload-owner")
         job = make_job(
-            kind="ingest.artifact_upload",
+            kind="ingestion.artifact_upload",
             state=JobState.FAILED,
             owner=owner,
             status_json='{"retryable":true}',
@@ -139,7 +139,7 @@ class TestReconcileArtifactUploads:
         use_local_storage(tmp_path)
         owner = make_user("completed-upload-owner")
         job = make_job(
-            kind="ingest.artifact_upload",
+            kind="ingestion.artifact_upload",
             state=JobState.COMPLETED,
             owner=owner,
         )

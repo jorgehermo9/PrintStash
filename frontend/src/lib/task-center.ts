@@ -44,7 +44,7 @@ export function taskStatusOf(state: JobState): TaskStatus {
 }
 
 function titleForJob(job: JobStatus): MessageDescriptor | string {
-  if (!job.kind || job.kind.startsWith("ingest.") || job.kind.startsWith("inbox.")) {
+  if (!job.kind || job.kind.startsWith("ingestion.")) {
     return uiMessage("Import");
   }
   return job.label ?? job.kind;

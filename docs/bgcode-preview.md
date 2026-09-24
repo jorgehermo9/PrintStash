@@ -20,7 +20,7 @@ The build script verifies the source archive digest and packages license notices
 | `VAULT_TOOLPATH_TIMEOUT_SECONDS` | 30 | Converter wall/CPU time |
 | `VAULT_TOOLPATH_MEMORY_MAX_MB` | 512 | Converter address-space MiB |
 
-Conversion is a derivative, not a request: the `derive.toolpath` job converts
+Conversion is a derivative, not a request: the `derivatives.toolpath` job converts
 each BGCODE Artifact once per recipe, on the `derive.native` lane, and stores
 the result. Its concurrency is the lane's (see
 [background work](architecture/background-work.md)). ASCII G-code needs no

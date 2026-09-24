@@ -36,7 +36,7 @@ def publisher() -> Iterator[Recorder]:
 
 
 def _status(**fields) -> JobStatus:
-    return JobStatus(job_id="j1", kind="ingest.upload", state="running", **fields)
+    return JobStatus(job_id="j1", kind="ingestion.upload", state="running", **fields)
 
 
 class TestJobChanged:
@@ -47,7 +47,7 @@ class TestJobChanged:
         assert publisher.sent[0][1] == {
             "type": "job",
             "job_id": "j1",
-            "kind": "ingest.upload",
+            "kind": "ingestion.upload",
             "state": "running",
             "progress": 40.0,
         }

@@ -34,9 +34,9 @@ METADATA = "metadata"
 THUMBNAIL = "thumbnail"
 TOOLPATH = "toolpath"
 
-MESH_DEFINITION = "derive.mesh"
-GCODE_DEFINITION = "derive.gcode"
-TOOLPATH_DEFINITION = "derive.toolpath"
+MESH_DEFINITION = "derivatives.mesh"
+GCODE_DEFINITION = "derivatives.gcode"
+TOOLPATH_DEFINITION = "derivatives.toolpath"
 
 # Recipe versions. Bump rule: see the module docstring.
 MESH_GEOMETRY_RECIPE = 1

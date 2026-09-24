@@ -29,7 +29,7 @@ def _run(session: Session, owner: User, groups: list[ResolvedGroup]) -> object:
     a foreign key: an id that merely happens to be free is refused, here and in
     production.
     """
-    job = build_job(session, kind="ingest.collection", owner=owner)
+    job = build_job(session, kind="ingestion.collection", owner=owner)
     importer.import_resolved_groups(
         job_id=job.id,
         groups=groups,

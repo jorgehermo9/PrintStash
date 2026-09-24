@@ -34,7 +34,7 @@ from app.modules.work.catalog import INGEST, NETWORK
 from app.modules.work.submission import submit
 
 DEFINITIONS = {definition.name: definition for definition in ingest_jobs.definitions()}
-UPLOAD = DEFINITIONS["ingest.upload"]
+UPLOAD = DEFINITIONS["ingestion.upload"]
 
 
 @pytest.fixture
@@ -72,12 +72,12 @@ class TestDefinitions:
     @pytest.mark.parametrize(
         ("name", "lane"),
         [
-            ("ingest.upload", INGEST),
-            ("ingest.archive_inspect", INGEST),
-            ("ingest.archive_selection", INGEST),
-            ("ingest.url", NETWORK),
-            ("ingest.url_selection", NETWORK),
-            ("ingest.collection", NETWORK),
+            ("ingestion.upload", INGEST),
+            ("ingestion.archive_inspect", INGEST),
+            ("ingestion.archive_selection", INGEST),
+            ("ingestion.url", NETWORK),
+            ("ingestion.url_selection", NETWORK),
+            ("ingestion.collection", NETWORK),
         ],
     )
     def test_each_import_runs_in_the_lane_its_io_needs(
@@ -108,7 +108,7 @@ class TestCancel:
     ) -> None:
         request = make_ingest_request(owner, source_credential="thingiverse-cookie")
 
-        DEFINITIONS["ingest.url"].cancel(db_session, subject_key(request.job_id))
+        DEFINITIONS["ingestion.url"].cancel(db_session, subject_key(request.job_id))
         db_session.commit()
 
         db_session.refresh(request)
@@ -171,7 +171,7 @@ class TestRetry:
         request = make_ingest_request(owner, kind=IngestRequestKind.URL)
 
         assert (
-            DEFINITIONS["ingest.url"].retry(db_session, subject_key(request.job_id))
+            DEFINITIONS["ingestion.url"].retry(db_session, subject_key(request.job_id))
             is True
         )
 
@@ -183,7 +183,7 @@ class TestRetry:
         )
 
         assert (
-            DEFINITIONS["ingest.url"].retry(db_session, subject_key(request.job_id))
+            DEFINITIONS["ingestion.url"].retry(db_session, subject_key(request.job_id))
             is False
         )
 

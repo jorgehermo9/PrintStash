@@ -66,8 +66,8 @@ def _upload(
     collection: str | None = None,
     library: ExternalLibrary | None = None,
 ) -> str:
-    """Commit one staged G-code upload the way its ``ingest.upload`` Job does."""
-    job = build_job(session, kind="ingest.upload")
+    """Commit one staged G-code upload the way its ``ingestion.upload`` Job does."""
+    job = build_job(session, kind="ingestion.upload")
     ingest_staged_file(
         job_id=job.id,
         artifact=StagedArtifact(

@@ -57,11 +57,11 @@ class TestDefinitions:
         assert len(names) == len(set(names))
         assert {
             "work.housekeeping",
-            "ingest.upload",
-            "derive.mesh",
-            "notify.deliver",
-            "audit.run",
-            "backup.create",
+            "ingestion.upload",
+            "derivatives.mesh",
+            "notifications.deliver",
+            "administration.audit",
+            "backups.create",
             "printing.dispatch",
         } <= set(names)
 
@@ -248,12 +248,12 @@ class TestStart:
     ) -> None:
         # The mark says "a pass is already waiting", but the process that
         # queued it died, so that pass never runs.
-        db_session.add(ReconcileCursor(source="library.scan", pass_queued_at=utcnow()))
+        db_session.add(ReconcileCursor(source="sources.scan", pass_queued_at=utcnow()))
         db_session.commit()
 
         work_bootstrap.start(engine=work_engine, catalog=work_catalog)
         try:
-            assert "library.scan" in _passes(work_engine)
+            assert "sources.scan" in _passes(work_engine)
         finally:
             work_bootstrap.stop()
 
@@ -276,7 +276,7 @@ class TestStart:
         from app.modules.work.submission import nudge
 
         previous = make_work_executor("previous-api", role="all")
-        nudge("library.scan")
+        nudge("sources.scan")
         (lost,) = [
             execution
             for execution in work_engine.executions.values()
@@ -311,7 +311,7 @@ class TestStart:
             Submission(
                 execution_id="old-job:1",
                 job_id="old-job",
-                definition="ingest.upload",
+                definition="ingestion.upload",
                 subject_key="ingest_request/old-job",
                 lane=INGEST,
                 priority=WorkPriority.INTERACTIVE,
@@ -453,8 +453,8 @@ class TestAfterRestore:
         # The archive recorded "a pass is already waiting" for the engine of
         # the process that took it. That engine is gone, so the pass never runs.
         work_engine.drain()
-        cursor = db_session.get(ReconcileCursor, "library.scan") or ReconcileCursor(
-            source="library.scan"
+        cursor = db_session.get(ReconcileCursor, "sources.scan") or ReconcileCursor(
+            source="sources.scan"
         )
         cursor.pass_queued_at = utcnow()
         db_session.add(cursor)
@@ -462,7 +462,7 @@ class TestAfterRestore:
 
         work_bootstrap.after_restore()
 
-        assert "library.scan" in _passes(work_engine)
+        assert "sources.scan" in _passes(work_engine)
 
     def test_does_nothing_without_running_work(self) -> None:
         assert work_bootstrap.current() is None
@@ -489,7 +489,7 @@ class TestAfterRestore:
         self, make_job, db_session: Session
     ) -> None:
         # An API that runs no jobs still restores; the database fact holds.
-        snapshot = make_job(kind="backup.create", state=JobState.RUNNING, attempts=1)
+        snapshot = make_job(kind="backups.create", state=JobState.RUNNING, attempts=1)
 
         work_bootstrap.after_restore()
 

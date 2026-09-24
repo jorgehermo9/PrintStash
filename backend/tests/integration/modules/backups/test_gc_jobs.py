@@ -1,4 +1,4 @@
-"""``trash.gc``: the hourly trash-expiry and storage garbage-collection pass.
+"""``backups.trash_gc``: the hourly trash-expiry and storage garbage-collection pass.
 
 An unconfigured vault has no storage for garbage collection to reason about,
 so the schedule is off until setup completes. Each occurrence runs the

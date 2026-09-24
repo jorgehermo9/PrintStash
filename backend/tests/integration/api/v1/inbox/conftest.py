@@ -50,7 +50,7 @@ def _isolate_capture_slot_lifecycle_rows(db_session: Session) -> None:
 def no_egress(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Stop the source URL being resolved, and record what resolve ran for.
 
-    Resolving is the ``inbox.resolve`` Job's step, so the list fills when a test
+    Resolving is the ``ingestion.inbox_resolve`` Job's step, so the list fills when a test
     drains the engine. The stand-in moves the item on to review exactly as a
     real resolve does, or the resolve source would keep reporting it.
     """

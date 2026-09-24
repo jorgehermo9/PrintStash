@@ -1,4 +1,4 @@
-"""``library.scan``: one Job per library owed a scan.
+"""``sources.scan``: one Job per library owed a scan.
 
 A library is owed a scan when someone asked for one (interactive), its
 schedule boundary passed (backfill), or a dead process left it marked running.

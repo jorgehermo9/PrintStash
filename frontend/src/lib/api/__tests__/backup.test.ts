@@ -109,7 +109,7 @@ describe("backupFromJob", () => {
   };
 
   it("reads the new backup from a completed Job", () => {
-    expect(backupFromJob(aJob({ kind: "backup.create", result: RESULT }))).toMatchObject({
+    expect(backupFromJob(aJob({ kind: "backups.create", result: RESULT }))).toMatchObject({
       backup_id: RESULT.backup_id,
       file_count: 3,
       source_ref: "local-source",

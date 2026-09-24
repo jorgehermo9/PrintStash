@@ -71,7 +71,7 @@ def status(run_id: str, _user: User = Depends(require_superuser)):
 
 
 def _copying(result):
-    """The run is copying: its ``vault.migrate`` Job does the copy."""
+    """The run is copying: its ``storage.migrate`` Job does the copy."""
     from app.modules.storage.jobs import MIGRATE_DEFINITION
     from app.modules.work import nudge
 

@@ -224,7 +224,7 @@ class TestBackgroundWorkBoundaries:
             ("loop.ensure_future(work())", True),
             ("def route(tasks: BackgroundTasks): tasks.add_task(work)", True),
             ("asyncio.to_thread(work)", False),
-            ("nudge('derive.mesh')", False),
+            ("nudge('derivatives.mesh')", False),
         ],
         ids=["create-task", "ensure-future", "background-tasks", "to-thread", "nudge"],
     )

@@ -314,7 +314,7 @@ class TestAmbiguousJobLeases:
     ) -> tuple[InboxItem, Job, list[Path], User]:
         """One job holding two leases — the state a retried capture can leave."""
         owner = make_user("dismiss-ambiguous-job-leases")
-        job = make_job(kind="inbox.import", state=JobState.FAILED, owner=owner)
+        job = make_job(kind="ingestion.inbox_import", state=JobState.FAILED, owner=owner)
 
         paths: list[Path] = []
         for index, name in enumerate(("first.stl", "second.stl")):

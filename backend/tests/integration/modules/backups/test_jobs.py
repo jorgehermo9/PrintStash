@@ -1,8 +1,8 @@
 """Backups run as Jobs: manual ones on request, automatic ones on their schedule.
 
 A manual backup no longer holds an HTTP request open while the vault is
-archived; the route queues ``backup.create`` and the archive's metadata lands in
-the Job's result. The daily automatic backup is ``backup.automatic``, whose
+archived; the route queues ``backups.create`` and the archive's metadata lands in
+the Job's result. The daily automatic backup is ``backups.automatic``, whose
 schedule comes from the backup configuration and whose domain claim keeps a
 resubmitted occurrence from archiving twice in one day. If this goes red, a
 backup can silently not happen, happen twice, or report success it did not have.

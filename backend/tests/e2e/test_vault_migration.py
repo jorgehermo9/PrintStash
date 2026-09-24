@@ -31,7 +31,7 @@ async def ingest(api, headers, name: str, payload: bytes):
 
 
 async def copied(api, headers, base: str) -> dict:
-    """Let the ``vault.migrate`` Job copy what start queued; return the run."""
+    """Let the ``storage.migrate`` Job copy what start queued; return the run."""
     settle()
     state = await api.get(base, headers=headers)
     assert state.status_code == 200, state.text

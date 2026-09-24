@@ -1,4 +1,4 @@
-"""``auth.retention``: expired refresh tokens are pruned every hour.
+"""``identity.retention``: expired refresh tokens are pruned every hour.
 
 A refresh token past its expiry can never be exchanged again, so keeping it
 only grows the table every login writes to. The schedule runs whether or not

@@ -1,4 +1,4 @@
-"""The ``audit.run`` Job: vault audits, scheduled or requested.
+"""The ``administration.audit`` Job: vault audits, scheduled or requested.
 
 Audit policies already keep their own durable schedule (``next_due_at``,
 windows, jitter, launch-retry backoff) and admit a run with a claim that
@@ -31,7 +31,7 @@ from .vault_audit_observability import prune_details, refresh_metrics
 
 logger = get_logger(__name__)
 
-DEFINITION = "audit.run"
+DEFINITION = "administration.audit"
 
 
 def subject_key(run_id: int) -> str:

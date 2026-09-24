@@ -50,7 +50,7 @@ class TestCreate:
         job = db_session.get(Job, request.job_id)
         assert job is not None
         assert (job.kind, job.subject_key, job.state) == (
-            "ingest.url",
+            "ingestion.url",
             f"ingest_request/{request.job_id}",
             JobState.QUEUED,
         )

@@ -812,7 +812,7 @@ describe("SettingsPanel", () => {
         "GET /api/v1/jobs": json([
           aJob({
             job_id: jobId,
-            kind: "backup.create",
+            kind: "backups.create",
             result: {
               backup_id: BACKUP.backup_id,
               created_at: BACKUP.created_at,
@@ -1431,7 +1431,7 @@ describe("SettingsPanel", () => {
           "GET /api/v1/jobs": json([
             aJob({
               job_id: "backup-job-id-only",
-              kind: "backup.create",
+              kind: "backups.create",
               result: {
                 backup_id: "new-backup",
                 created_at: BACKUP.created_at,

@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
-/** The new backup, as the finished `backup.create` Job reports it. */
+/** The new backup, as the finished `backups.create` Job reports it. */
 export interface CreatedBackup {
   backup_id: string;
   source_ref: string;

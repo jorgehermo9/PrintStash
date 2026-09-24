@@ -1,6 +1,6 @@
 """Toolpath text: ASCII read straight from the Artifact, binary converted by libbgcode.
 
-Binary conversion is the ``derive.toolpath`` derivative's work: ``convert`` runs
+Binary conversion is the ``derivatives.toolpath`` derivative's work: ``convert`` runs
 the bounded official converter on a temporary copy, once per recipe, and never
 touches the original. ``read_ascii`` serves ASCII G-code, which already is its
 toolpath. If this goes red, a hostile or broken file can exhaust the host, a

@@ -166,10 +166,10 @@ class TestCreate:
     def test_one_subject_is_claimed_per_definition(
         self, store: JobStore, owner: User, make_job
     ) -> None:
-        make_job(kind="derive.mesh", subject="file/1")
+        make_job(kind="derivatives.mesh", subject="file/1")
 
         job_id = store.create(
-            definition="derive.gcode", subject_key="file/1", owner_user_id=None
+            definition="derivatives.gcode", subject_key="file/1", owner_user_id=None
         )
 
         assert store.get(job_id) is not None
@@ -237,11 +237,11 @@ class TestCreate:
     def test_reports_the_active_job_of_a_subject(
         self, store: JobStore, make_job
     ) -> None:
-        active = make_job(kind="library.scan", subject="library/3")
-        make_job(kind="library.scan", subject="library/4", state=JobState.FAILED)
+        active = make_job(kind="sources.scan", subject="library/3")
+        make_job(kind="sources.scan", subject="library/4", state=JobState.FAILED)
 
-        assert store.active_for_subject("library.scan", "library/3") == active.id
-        assert store.active_for_subject("library.scan", "library/4") is None
+        assert store.active_for_subject("sources.scan", "library/3") == active.id
+        assert store.active_for_subject("sources.scan", "library/4") is None
 
 
 class TestUpdate:
@@ -449,8 +449,8 @@ class TestFinish:
     def test_records_the_terminal_outcome_metric(
         self, store: JobStore, make_job
     ) -> None:
-        job = make_job(kind="backup.create", state=JobState.RUNNING)
-        counter = jobs_terminal.labels(kind="backup.create", result="complete")
+        job = make_job(kind="backups.create", state=JobState.RUNNING)
+        counter = jobs_terminal.labels(kind="backups.create", result="complete")
         before = counter._value.get()
 
         store.finish(job.id, state="completed")
@@ -484,7 +484,7 @@ class TestListForUser:
     ) -> None:
         # System Jobs (derivatives, scans) are high-volume; they would bury
         # every user's own imports in the Task Center.
-        system = make_job(kind="derive.mesh")
+        system = make_job(kind="derivatives.mesh")
 
         default = store.list_for_user(owner.id, is_superuser=True)  # type: ignore[arg-type]
         asked = store.list_for_user(owner.id, is_superuser=True, include_system=True)  # type: ignore[arg-type]
@@ -495,7 +495,7 @@ class TestListForUser:
     def test_a_user_never_sees_system_jobs(
         self, store: JobStore, owner: User, make_job
     ) -> None:
-        make_job(kind="derive.mesh")
+        make_job(kind="derivatives.mesh")
 
         assert store.list_for_user(owner.id, include_system=True) == []  # type: ignore[arg-type]
 
@@ -503,7 +503,7 @@ class TestListForUser:
         self, store: JobStore, owner: User, make_job
     ) -> None:
         wanted = make_job(kind="ingest.commit", owner=owner)
-        make_job(kind="backup.create", owner=owner)
+        make_job(kind="backups.create", owner=owner)
 
         listed = store.list_for_user(owner.id, kinds=["ingest.commit"])  # type: ignore[arg-type]
 
@@ -607,14 +607,14 @@ class TestFailed:
 
 class TestCounts:
     def test_counts_jobs_per_definition_state(self, store: JobStore, make_job) -> None:
-        make_job(kind="library.scan")
-        make_job(kind="library.scan", state=JobState.FAILED)
-        make_job(kind="library.scan", state=JobState.FAILED)
-        make_job(kind="backup.create", state=JobState.RUNNING)
+        make_job(kind="sources.scan")
+        make_job(kind="sources.scan", state=JobState.FAILED)
+        make_job(kind="sources.scan", state=JobState.FAILED)
+        make_job(kind="backups.create", state=JobState.RUNNING)
 
         assert store.counts_by_definition() == {
-            "library.scan": {"queued": 1, "failed": 2},
-            "backup.create": {"running": 1},
+            "sources.scan": {"queued": 1, "failed": 2},
+            "backups.create": {"running": 1},
         }
 
     def test_snapshot_counts_every_state(self, store: JobStore, make_job) -> None:
@@ -663,7 +663,7 @@ class TestPrune:
         day_old = utcnow() - timedelta(
             hours=settings.jobs_system_retention_hours, minutes=5
         )
-        make_job(kind="derive.mesh", state=JobState.FAILED, updated_at=day_old)
+        make_job(kind="derivatives.mesh", state=JobState.FAILED, updated_at=day_old)
         user = make_job(owner=owner, state=JobState.FAILED, updated_at=day_old).id
 
         store.prune()

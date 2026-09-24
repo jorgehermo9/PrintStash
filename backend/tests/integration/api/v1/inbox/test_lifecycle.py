@@ -452,7 +452,7 @@ class TestDismissItem:
             sha256="e" * 64,
         )
         job = build_job(
-            db_session, kind="inbox.import", state=JobState.COMPLETED, owner=owner
+            db_session, kind="ingestion.inbox_import", state=JobState.COMPLETED, owner=owner
         )
         db_session.add(artifact)
         db_session.commit()

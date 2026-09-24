@@ -203,16 +203,16 @@ def _definition(name: str, lane: str, step: Any, label: str) -> JobDefinition:
 
 def definitions() -> list[JobDefinition]:
     return [
-        _definition("ingest.upload", INGEST, _upload, "Uploads"),
-        _definition("ingest.url", NETWORK, _url, "URL imports"),
+        _definition("ingestion.upload", INGEST, _upload, "Uploads"),
+        _definition("ingestion.url", NETWORK, _url, "URL imports"),
         _definition(
-            "ingest.archive_inspect", INGEST, _archive_inspect, "Archive inspection"
+            "ingestion.archive_inspect", INGEST, _archive_inspect, "Archive inspection"
         ),
         _definition(
-            "ingest.archive_selection", INGEST, _archive_selection, "Archive imports"
+            "ingestion.archive_selection", INGEST, _archive_selection, "Archive imports"
         ),
         _definition(
-            "ingest.url_selection", NETWORK, _url_selection, "Model page imports"
+            "ingestion.url_selection", NETWORK, _url_selection, "Model page imports"
         ),
-        _definition("ingest.collection", NETWORK, _collection, "Collection imports"),
+        _definition("ingestion.collection", NETWORK, _collection, "Collection imports"),
     ]

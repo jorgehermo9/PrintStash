@@ -2,7 +2,7 @@
 
 ASCII G-code already *is* its toolpath: it is read, bounded, straight from the
 Artifact. Binary G-code (``.bgcode``) needs a conversion, which is a
-derivative: the ``derive.toolpath`` job runs ``convert`` once per recipe and
+derivative: the ``derivatives.toolpath`` job runs ``convert`` once per recipe and
 stores the result, so no request ever waits on a converter process. Originals
 never enter the converter; it works on a temporary copy.
 """

@@ -42,7 +42,7 @@ class TestHousekeeping:
 
         expired = utcnow() - timedelta(hours=settings.jobs_system_retention_hours + 1)
         old_id = make_job(
-            kind="derive.mesh", state=JobState.COMPLETED, updated_at=expired
+            kind="derivatives.mesh", state=JobState.COMPLETED, updated_at=expired
         ).id
         job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
 
@@ -76,7 +76,7 @@ class TestHousekeeping:
     ) -> None:
         from app.modules.work.submission import submit
 
-        earlier = make_job(kind="library.scan")
+        earlier = make_job(kind="sources.scan")
         submit(earlier.id)
         work_engine.drain()
         job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
@@ -93,7 +93,7 @@ class TestHousekeeping:
 
         job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
         submit(job.id)
-        queued = make_job(kind="ingest.upload")
+        queued = make_job(kind="ingestion.upload")
         submit(queued.id)
 
         work_engine.run_one()

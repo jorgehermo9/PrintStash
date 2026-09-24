@@ -22,12 +22,12 @@ from app.db.session import get_session_factory
 from app.modules.work import service as work_service
 
 DEFINITIONS: dict[IngestRequestKind, str] = {
-    IngestRequestKind.UPLOAD: "ingest.upload",
-    IngestRequestKind.URL: "ingest.url",
-    IngestRequestKind.ARCHIVE_INSPECT: "ingest.archive_inspect",
-    IngestRequestKind.ARCHIVE_SELECTION: "ingest.archive_selection",
-    IngestRequestKind.URL_SELECTION: "ingest.url_selection",
-    IngestRequestKind.COLLECTION: "ingest.collection",
+    IngestRequestKind.UPLOAD: "ingestion.upload",
+    IngestRequestKind.URL: "ingestion.url",
+    IngestRequestKind.ARCHIVE_INSPECT: "ingestion.archive_inspect",
+    IngestRequestKind.ARCHIVE_SELECTION: "ingestion.archive_selection",
+    IngestRequestKind.URL_SELECTION: "ingestion.url_selection",
+    IngestRequestKind.COLLECTION: "ingestion.collection",
 }
 
 

@@ -425,7 +425,7 @@ class TestParseRetryAfter:
 
 
 def _deliver_due() -> int:
-    """Run every due delivery through its ``notify.deliver`` Job; count the sends."""
+    """Run every due delivery through its ``notifications.deliver`` Job; count the sends."""
     from sqlmodel import select
 
     from app.db.models import Job

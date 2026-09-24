@@ -222,7 +222,7 @@ class TestRetryFileDerivative:
             headers=_headers(editor),
         )
 
-        assert "derive.mesh" in nudged
+        assert "derivatives.mesh" in nudged
 
     def test_a_ready_derivative_is_not_retryable(
         self, client: TestClient, db_session: Session, editor: User, mesh: File

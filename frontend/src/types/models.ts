@@ -399,7 +399,7 @@ export interface JobAccepted {
 /** One background Job, from `/api/v1/jobs`. */
 export interface JobStatus {
   job_id: string;
-  /** The job definition, e.g. `ingest.upload`, `backup.create`. */
+  /** The job definition, e.g. `ingestion.upload`, `backups.create`. */
   kind?: string;
   state: JobState;
   priority?: "interactive" | "backfill";
@@ -548,7 +548,7 @@ export interface IngestJobResult {
   created?: boolean;
   resumed?: boolean;
   name?: string;
-  // `backup.create`: the new backup as `GET /api/v1/backups` lists it.
+  // `backups.create`: the new backup as `GET /api/v1/backups` lists it.
   backup_id?: string;
   created_at?: string;
   size_bytes?: number;

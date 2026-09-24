@@ -219,7 +219,7 @@ test.describe("settings route", () => {
         (request) =>
           request.url().endsWith("/api/v1/admin/work/cancel-queued") &&
           request.method() === "POST" &&
-          request.postData() === JSON.stringify({ definition: "derive.mesh" }),
+          request.postData() === JSON.stringify({ definition: "derivatives.mesh" }),
       ),
       dialog.getByRole("button", { name: "Cancel queued" }).click(),
     ]);

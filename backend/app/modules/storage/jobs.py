@@ -1,6 +1,6 @@
 """Storage Jobs: vault migration copying and inventory sampling.
 
-``vault.migrate`` copies objects for a migration run that is ``copying``, as
+``storage.migrate`` copies objects for a migration run that is ``copying``, as
 one long step that holds the run's storage retention in its own process for
 the whole copy (a retention must not outlive its holder, and a slice-per-Job
 design would scatter it across workers). Its cutover stays a synchronous,
@@ -31,7 +31,7 @@ from app.modules.work.sources import (
 
 logger = get_logger(__name__)
 
-MIGRATE_DEFINITION = "vault.migrate"
+MIGRATE_DEFINITION = "storage.migrate"
 INVENTORY_DEFINITION = "storage.inventory"
 _BATCH = 4
 _MAX_CONSECUTIVE_ERRORS = 10

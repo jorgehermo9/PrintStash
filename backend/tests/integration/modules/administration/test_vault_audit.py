@@ -1325,7 +1325,7 @@ class TestCheckBackgroundJobs:
         run = _make_run(db_session, user)
         build_job(
             db_session,
-            kind="derive.mesh",
+            kind="derivatives.mesh",
             state=JobState.RUNNING,
             updated_at=utcnow() - timedelta(hours=2),
         )

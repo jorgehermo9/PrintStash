@@ -1,6 +1,6 @@
 """A verified resumable upload becomes an Artifact exactly through its Job.
 
-Finalizing an upload records a queued ``ingest.artifact_upload`` Job that owns the
+Finalizing an upload records a queued ``ingestion.artifact_upload`` Job that owns the
 verified staged bytes; the Job commits them (a new Model's Artifact, or a revision
 of an existing Model) and mirrors its outcome onto the upload session. If this goes
 red, a verified upload can be left ``ingesting`` forever, a failed commit can report

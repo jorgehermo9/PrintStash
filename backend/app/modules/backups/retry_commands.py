@@ -1,6 +1,6 @@
 """Retry a failed backup destination using its persisted execution state.
 
-A retry is a ``backup.retry_destination`` Job whose subject is the
+A retry is a ``backups.retry_destination`` Job whose subject is the
 destination result, so one retry of a destination runs at a time anywhere.
 Requesting it records the attempt (the intent) with its Job and returns; the
 Job publishes the exact archive from verified surviving bytes, never a
@@ -25,7 +25,7 @@ from app.db.session import get_session_factory
 
 from .backup_runs import finish_run, update_result
 
-RETRY_DEFINITION = "backup.retry_destination"
+RETRY_DEFINITION = "backups.retry_destination"
 _OPEN = ("queued", "running")
 
 

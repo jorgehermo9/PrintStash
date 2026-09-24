@@ -65,10 +65,10 @@ describe("cancelQueuedJobs", () => {
   it("names the definition whose queued Jobs to withdraw", async () => {
     respondWith({ cancelled: 2 });
 
-    await expect(cancelQueuedJobs("library.scan")).resolves.toEqual({ cancelled: 2 });
+    await expect(cancelQueuedJobs("sources.scan")).resolves.toEqual({ cancelled: 2 });
 
     expectRequest("/api/v1/admin/work/cancel-queued", "POST");
-    expect(lastBody()).toEqual({ definition: "library.scan" });
+    expect(lastBody()).toEqual({ definition: "sources.scan" });
   });
 });
 

@@ -1541,7 +1541,7 @@ def _zip_result_key(source_selection_id: str, entry_name: str) -> str:
 
 
 def run_import_job(item_id: int, job_id: str) -> None:
-    """The ``inbox.import`` step: rebuild the import from the item and run it.
+    """The ``ingestion.inbox_import`` step: rebuild the import from the item and run it.
 
     Everything is re-read from the Pending Import on every attempt, so a Job
     interrupted mid-import resumes it: files an earlier attempt committed are
@@ -1684,8 +1684,8 @@ async def _run_import(
         await asyncio.to_thread(_fail_import, item_id, exc, session_factory)
 
 
-IMPORT_DEFINITION = "inbox.import"
-RESOLVE_DEFINITION = "inbox.resolve"
+IMPORT_DEFINITION = "ingestion.inbox_import"
+RESOLVE_DEFINITION = "ingestion.inbox_resolve"
 
 
 def begin_import(
@@ -1695,7 +1695,7 @@ def begin_import(
 
     Records the selection on the item, the Job, and (for a browser capture)
     the transfer of its staged bytes to the Job, in one commit. The caller
-    nudges ``inbox.import``. ``None`` when the item's staged bytes have
+    nudges ``ingestion.inbox_import``. ``None`` when the item's staged bytes have
     expired: the item is failed instead, since an import without durable
     ownership of its bytes must not be dispatched.
     """

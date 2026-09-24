@@ -79,7 +79,7 @@ describe("subscribeEvents", () => {
       JSON.stringify({
         type: "job",
         job_id: "j1",
-        kind: "ingest.upload",
+        kind: "ingestion.upload",
         state: "running",
         progress: 40,
       }),
@@ -88,7 +88,7 @@ describe("subscribeEvents", () => {
     expect(heard).toHaveBeenCalledWith({
       type: "job",
       job_id: "j1",
-      kind: "ingest.upload",
+      kind: "ingestion.upload",
       state: "running",
       progress: 40,
     });

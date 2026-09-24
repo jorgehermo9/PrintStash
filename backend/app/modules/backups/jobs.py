@@ -1,7 +1,7 @@
 """Backup Jobs: manual backups, automatic daily backups, and retention.
 
 A manual backup no longer holds an HTTP request open while the vault is
-archived: the route records a queued ``backup.create`` Job and returns it.
+archived: the route records a queued ``backups.create`` Job and returns it.
 Automatic backups are a schedule declared in code, read from the backup
 configuration (``automatic_backup_time_utc``); the domain's own daily claim
 (``claim_due_backup``) still guarantees at most one automatic attempt per day,
@@ -10,7 +10,7 @@ so a resubmitted occurrence never archives twice.
 Each backup run records the Job that built it. That Job's next attempt, its
 failure or its cancellation settles a run it left running, so no reader ever
 has to guess whether a "running" run is still live. Retrying one failed
-destination is its own Job (``backup.retry_destination``), one per
+destination is its own Job (``backups.retry_destination``), one per
 destination at a time; its end settles the attempt and the destination.
 
 Restore is deliberately *not* a Job: it replaces the application database
@@ -36,8 +36,8 @@ from app.modules.work.catalog import MAINTENANCE
 from app.modules.work.contracts import JobContext, JobDefinition, Step
 from app.modules.work.sources import ScheduleSource
 
-CREATE_DEFINITION = "backup.create"
-AUTOMATIC_DEFINITION = "backup.automatic"
+CREATE_DEFINITION = "backups.create"
+AUTOMATIC_DEFINITION = "backups.automatic"
 # Every manual backup claims one subject, so a second request while one is
 # queued or running is refused rather than archiving the vault twice.
 MANUAL_SUBJECT = "backup/manual"

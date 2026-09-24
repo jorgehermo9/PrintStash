@@ -105,7 +105,7 @@ class TestOneActiveJobPerSubject:
         outcomes = _race(
             4,
             lambda _index: store.create(
-                definition="library.scan", subject_key="library/1", owner_user_id=None
+                definition="sources.scan", subject_key="library/1", owner_user_id=None
             ),
         )
 
@@ -118,10 +118,10 @@ class TestOneActiveJobPerSubject:
         )
 
     def test_a_finished_job_does_not_hold_its_subject(self, pg) -> None:
-        f.build_job(pg, kind="library.scan", subject="library/1", **_expired())
+        f.build_job(pg, kind="sources.scan", subject="library/1", **_expired())
 
         assert JobStore().create(
-            definition="library.scan", subject_key="library/1", owner_user_id=None
+            definition="sources.scan", subject_key="library/1", owner_user_id=None
         )
 
 

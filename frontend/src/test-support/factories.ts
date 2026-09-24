@@ -514,7 +514,7 @@ export function anExternalLibrary(override?: Partial<ExternalLibrary>): External
 export function aJob(override?: Partial<JobStatus>): JobStatus {
   return {
     job_id: "test-job",
-    kind: "ingest.upload",
+    kind: "ingestion.upload",
     state: "completed",
     model_id: 1,
     file_id: 1,
@@ -556,7 +556,7 @@ export function aWorkOverview(override?: Partial<WorkOverview>): WorkOverview {
     ],
     definitions: [
       {
-        name: "derive.mesh",
+        name: "derivatives.mesh",
         label: "Mesh derivatives",
         lane: "derive.native",
         queued: 0,

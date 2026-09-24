@@ -255,21 +255,21 @@ class _BrokenMetric:
 class TestRecordJobTerminal:
     def test_counts_a_terminal_job_by_definition(self) -> None:
         before = _sample(
-            "printstash_jobs_total", {"kind": "derive.mesh", "result": "completed"}
+            "printstash_jobs_total", {"kind": "derivatives.mesh", "result": "completed"}
         )
 
-        record_job_terminal("derive.mesh", "completed", 1.5)
+        record_job_terminal("derivatives.mesh", "completed", 1.5)
 
         after = _sample(
-            "printstash_jobs_total", {"kind": "derive.mesh", "result": "completed"}
+            "printstash_jobs_total", {"kind": "derivatives.mesh", "result": "completed"}
         )
         assert after == before + 1
 
     def test_observes_a_negative_duration_as_zero(self) -> None:
-        labels = {"kind": "ingest.upload", "result": "failed"}
+        labels = {"kind": "ingestion.upload", "result": "failed"}
         before = _sample("printstash_job_duration_seconds_sum", labels)
 
-        record_job_terminal("ingest.upload", "failed", -1.0)
+        record_job_terminal("ingestion.upload", "failed", -1.0)
 
         assert _sample("printstash_job_duration_seconds_sum", labels) == before
 
@@ -278,7 +278,7 @@ class TestRecordJobTerminal:
     ) -> None:
         monkeypatch.setattr(metrics, "jobs_terminal", _BrokenMetric())
 
-        assert record_job_terminal("ingest.upload", "completed", 1.5) is None
+        assert record_job_terminal("ingestion.upload", "completed", 1.5) is None
 
 
 class TestSetStuckJobs:
@@ -337,10 +337,10 @@ class TestSetLaneDepth:
 
 class TestRecordStep:
     def test_observes_a_step_attempt(self) -> None:
-        labels = {"kind": "derive.mesh", "step": "derive", "result": "ok"}
+        labels = {"kind": "derivatives.mesh", "step": "derive", "result": "ok"}
         before = _sample("printstash_job_step_duration_seconds_count", labels)
 
-        record_step("derive.mesh", "derive", "ok", 0.5)
+        record_step("derivatives.mesh", "derive", "ok", 0.5)
 
         assert (
             _sample("printstash_job_step_duration_seconds_count", labels) == before + 1
@@ -349,32 +349,32 @@ class TestRecordStep:
     def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(metrics, "step_duration", _BrokenMetric())
 
-        assert record_step("derive.mesh", "derive", "ok", 0.5) is None
+        assert record_step("derivatives.mesh", "derive", "ok", 0.5) is None
 
 
 class TestRecordResubmit:
     def test_counts_a_resubmitted_execution(self) -> None:
-        before = _sample("printstash_job_resubmits_total", {"kind": "backup.create"})
+        before = _sample("printstash_job_resubmits_total", {"kind": "backups.create"})
 
-        record_resubmit("backup.create")
+        record_resubmit("backups.create")
 
         assert (
-            _sample("printstash_job_resubmits_total", {"kind": "backup.create"})
+            _sample("printstash_job_resubmits_total", {"kind": "backups.create"})
             == before + 1
         )
 
     def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(metrics, "job_resubmits", _BrokenMetric())
 
-        assert record_resubmit("backup.create") is None
+        assert record_resubmit("backups.create") is None
 
 
 class TestRecordReconcilePass:
     def test_counts_each_outcome_of_a_pass(self) -> None:
-        labels = {"source": "derive.gcode", "outcome": "submitted"}
+        labels = {"source": "derivatives.gcode", "outcome": "submitted"}
         before = _sample("printstash_reconcile_outcomes_total", labels)
 
-        record_reconcile_pass("derive.gcode", 0.1, {"submitted": 3})
+        record_reconcile_pass("derivatives.gcode", 0.1, {"submitted": 3})
 
         assert _sample("printstash_reconcile_outcomes_total", labels) == before + 3
 
@@ -392,7 +392,7 @@ class TestRecordReconcilePass:
     def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(metrics, "reconcile_pass_duration", _BrokenMetric())
 
-        assert record_reconcile_pass("derive.gcode", 0.1, {"submitted": 1}) is None
+        assert record_reconcile_pass("derivatives.gcode", 0.1, {"submitted": 1}) is None
 
 
 class TestRecordFleetDispatch:

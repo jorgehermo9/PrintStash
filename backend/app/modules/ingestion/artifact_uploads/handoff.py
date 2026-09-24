@@ -1,4 +1,4 @@
-"""Verified upload handoff: the ``ingest.artifact_upload`` Job.
+"""Verified upload handoff: the ``ingestion.artifact_upload`` Job.
 
 Finalizing an upload session claims it (``INGESTING``), records a queued Job
 that owns the verified staged object through a staging lease, and nudges. This
@@ -34,7 +34,7 @@ from app.modules.work.jobs import jobs as registry
 
 from .manager import SqlArtifactUploadManager
 
-DEFINITION = "ingest.artifact_upload"
+DEFINITION = "ingestion.artifact_upload"
 
 
 def subject_key(upload_id: str) -> str:

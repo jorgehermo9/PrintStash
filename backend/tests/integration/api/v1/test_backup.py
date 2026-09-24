@@ -122,7 +122,7 @@ class TestCreateBackup:
 
         job = _backup_job(client, admin_headers)
 
-        assert (job["kind"], job["state"]) == ("backup.create", "completed")
+        assert (job["kind"], job["state"]) == ("backups.create", "completed")
         assert job["result"]["backup_id"]
         assert job["result"]["file_count"] == 1
         assert job["result"]["outcome"] == "completed"

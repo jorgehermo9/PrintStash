@@ -23,11 +23,11 @@ class TestExecutionId:
 
 class TestDedupeKey:
     def test_ignores_which_job_asks(self) -> None:
-        assert dedupe_key("derive.mesh", "file/1") == "derive.mesh|file/1"
+        assert dedupe_key("derivatives.mesh", "file/1") == "derivatives.mesh|file/1"
 
     def test_one_subject_is_distinct_per_definition(self) -> None:
-        assert dedupe_key("derive.mesh", "file/1") != dedupe_key(
-            "derive.gcode", "file/1"
+        assert dedupe_key("derivatives.mesh", "file/1") != dedupe_key(
+            "derivatives.gcode", "file/1"
         )
 
 

@@ -10,7 +10,7 @@ from .auth import prune_expired_refresh_tokens
 def definitions():
     return [
         scheduled(
-            "auth.retention",
+            "identity.retention",
             cron=fixed("45 * * * *"),
             run=prune_expired_refresh_tokens,
             label="Session token retention",

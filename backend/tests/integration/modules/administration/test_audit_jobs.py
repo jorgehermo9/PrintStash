@@ -1,4 +1,4 @@
-"""The ``audit.run`` Job: vault audits, scheduled or requested.
+"""The ``administration.audit`` Job: vault audits, scheduled or requested.
 
 The source reuses the policy's own durable schedule: a pass admits a due
 policy (one active audit at a time), offers every pending run, and asks to be

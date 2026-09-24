@@ -104,7 +104,7 @@ export function createBackup(): Promise<JobAccepted> {
   return sendJson<JobAccepted>("/api/v1/backups", "POST", undefined);
 }
 
-/** The backup a completed `backup.create` Job produced, or null if it produced none. */
+/** The backup a completed `backups.create` Job produced, or null if it produced none. */
 export function backupFromJob(job: JobStatus): BackupMeta | null {
   const result = job.result;
   if (

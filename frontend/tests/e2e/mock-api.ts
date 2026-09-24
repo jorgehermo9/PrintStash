@@ -249,7 +249,7 @@ function workOverview() {
     ],
     definitions: [
       {
-        name: "derive.mesh",
+        name: "derivatives.mesh",
         label: "Mesh previews and geometry",
         lane: "derive.native",
         queued: 4,
@@ -262,7 +262,7 @@ function workOverview() {
         last_finished_at: now,
       },
       {
-        name: "library.scan",
+        name: "sources.scan",
         label: "Library scans",
         lane: "maintenance",
         queued: 0,
@@ -290,7 +290,7 @@ function workOverview() {
     failed_jobs: [
       {
         job_id: "failed-mesh-1",
-        kind: "derive.mesh",
+        kind: "derivatives.mesh",
         state: "failed",
         label: "Mesh previews and geometry",
         model_id: null,

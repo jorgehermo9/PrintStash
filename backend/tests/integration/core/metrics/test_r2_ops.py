@@ -29,17 +29,17 @@ class TestMetricsEndpoint:
         self, client: TestClient
     ) -> None:
         job_id = jobs.create(
-            definition="ingest.upload", subject_key="metrics/1", owner_user_id=None
+            definition="ingestion.upload", subject_key="metrics/1", owner_user_id=None
         )
         jobs.finish(job_id, state=JobState.COMPLETED)
 
         body = client.get("/metrics").text
 
-        assert 'printstash_jobs_total{kind="ingest.upload",result="complete"}' in body
+        assert 'printstash_jobs_total{kind="ingestion.upload",result="complete"}' in body
 
     def test_metrics_reports_jobs_by_state(self, client: TestClient) -> None:
         jobs.create(
-            definition="ingest.upload", subject_key="metrics/2", owner_user_id=None
+            definition="ingestion.upload", subject_key="metrics/2", owner_user_id=None
         )
 
         body = client.get("/metrics").text

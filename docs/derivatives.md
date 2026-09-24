@@ -53,9 +53,9 @@ library at backfill priority while uploads keep interactive priority.
 
 | Definition | Lane | Kinds | Produced from |
 | --- | --- | --- | --- |
-| `derive.mesh` | `derive.native` | `metadata` (geometry), `thumbnail` | One native mesh load (also hands similarity its fingerprints) |
-| `derive.gcode` | `derive.light` | `metadata` (slicer facts, material requirements), `thumbnail` | One header read; no embedded image means `skipped` |
-| `derive.toolpath` | `derive.native` | `toolpath` | The binary G-code converter, under resource limits |
+| `derivatives.mesh` | `derive.native` | `metadata` (geometry), `thumbnail` | One native mesh load (also hands similarity its fingerprints) |
+| `derivatives.gcode` | `derive.light` | `metadata` (slicer facts, material requirements), `thumbnail` | One header read; no embedded image means `skipped` |
+| `derivatives.toolpath` | `derive.native` | `toolpath` | The binary G-code converter, under resource limits |
 
 A producer derives only the kinds still owed, records every outcome on the
 kind's row, and tells viewers of the Model on `model:<id>` so an open page
