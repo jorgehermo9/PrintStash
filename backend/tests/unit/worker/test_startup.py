@@ -9,6 +9,8 @@ error rather than running against a schema it was not written for.
 
 from __future__ import annotations
 
+import signal
+
 import pytest
 
 from app import worker
@@ -78,3 +80,44 @@ class TestMain:
             worker.main()
 
         assert waited == []
+
+    @pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+    def test_runs_jobs_until_signalled_then_stops_the_engine(
+        self, monkeypatch, signum: int
+    ) -> None:
+        from app.bootstrap import lifecycle, work
+        from app.runtime import realtime
+
+        _overlay["process_role"] = "worker"
+        steps: list[str] = []
+        handlers: dict[int, object] = {}
+        monkeypatch.setattr(work, "validate_topology", lambda: steps.append("check"))
+        monkeypatch.setattr(worker, "wait_for_schema", lambda: steps.append("schema"))
+        monkeypatch.setattr(
+            lifecycle, "prepare_process", lambda *, owner: steps.append(f"bind:{owner}")
+        )
+        monkeypatch.setattr(
+            realtime, "build_event_bus", lambda *, listen: f"bus:listen={listen}"
+        )
+        monkeypatch.setattr(
+            worker.signal,
+            "signal",
+            lambda sig, handler: handlers.__setitem__(sig, handler),
+        )
+
+        def start(*, publisher) -> None:
+            steps.append(f"start:{publisher}")
+            handlers[signum](signum, None)  # type: ignore[operator]
+
+        monkeypatch.setattr(work, "start", start)
+        monkeypatch.setattr(work, "stop", lambda: steps.append("stop"))
+
+        assert worker.main() == 0
+        assert steps == [
+            "check",
+            "schema",
+            "bind:False",
+            "start:bus:listen=False",
+            "stop",
+        ]
+        assert set(handlers) == {signal.SIGTERM, signal.SIGINT}
