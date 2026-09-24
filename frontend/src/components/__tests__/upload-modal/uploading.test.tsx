@@ -29,10 +29,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UploadModal } from "@/components/upload-modal";
 import type { ArtifactUploadCreate, ArtifactUploadStatus } from "@/lib/api/artifact-uploads";
 import { queryKeys } from "@/lib/query-client";
-import { listTasks, setIngestJobSource } from "@/lib/task-center";
+import { listTasks, setJobSource } from "@/lib/task-center";
 import { aCollection, aTag } from "@/test-support/factories";
 import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
-import type { ExternalLibrary, IngestJobStatus, ModelRead } from "@/types";
+import type { ExternalLibrary, JobStatus, ModelRead } from "@/types";
 
 const FROZEN_NOW = "2026-01-01T00:00:00Z";
 
@@ -43,9 +43,9 @@ const FROZEN_NOW = "2026-01-01T00:00:00Z";
  */
 let jobSeq = 0;
 const jobId = () => `job-${jobSeq}`;
-const queued = () => ({ job_id: jobId(), state: "pending", message: "queued" });
+const queued = () => ({ job_id: jobId(), state: "queued", message: "queued" });
 
-function aJob(over: Partial<IngestJobStatus> = {}): IngestJobStatus {
+function aJob(over: Partial<JobStatus> = {}): JobStatus {
   return {
     job_id: jobId(),
     state: "completed",
@@ -223,7 +223,7 @@ beforeEach(() => {
   jobSeq += 1;
   // Every ingestion waits on the task centre's job poll rather than starting a
   // second loop, so a test drives the whole pipeline by answering it.
-  setIngestJobSource(async () => [aJob()]);
+  setJobSource(async () => [aJob()]);
 });
 
 afterEach(async () => {
@@ -236,7 +236,7 @@ afterEach(async () => {
     },
     { timeout: 5000 },
   );
-  setIngestJobSource(async () => []);
+  setJobSource(async () => []);
   vi.unstubAllGlobals();
 });
 
@@ -377,7 +377,7 @@ describe("UploadModal ingestion", () => {
     it("does not refresh the vault when the job failed", async () => {
       // Reporting success for a job that failed produces a library with a model
       // that is not in it.
-      setIngestJobSource(async () => [aJob({ state: "failed", error: "unsupported_file_type" })]);
+      setJobSource(async () => [aJob({ state: "failed", error: "unsupported_file_type" })]);
       const user = userEvent.setup();
       const { container, onUploaded } = renderUpload();
       await screen.findByText(".stl .3mf .obj .step");
@@ -457,7 +457,7 @@ describe("UploadModal ingestion", () => {
     it("keeps going after a file the vault refused", async () => {
       // One bad file aborting the queue is the difference between losing one
       // model and losing a hundred.
-      setIngestJobSource(async () => [aJob({ state: "failed", error: "unsupported_file_type" })]);
+      setJobSource(async () => [aJob({ state: "failed", error: "unsupported_file_type" })]);
       const user = userEvent.setup();
       const { container, uploadRequests } = renderUpload();
       await user.click(screen.getByRole("button", { name: /\s*Bulk\s*/ }));
@@ -501,7 +501,7 @@ describe("UploadModal ingestion", () => {
 
     /** Pick a ZIP and inspect it, which is the only route to the entry list. */
     async function inspect(user: ReturnType<typeof userEvent.setup>, container: HTMLElement) {
-      setIngestJobSource(async () => [inspected()]);
+      setJobSource(async () => [inspected()]);
       await user.click(screen.getByRole("button", { name: /\s*From ZIP\s*/ }));
       await user.upload(fileInputs(container)[0], new File(["x"], "parts.zip"));
       await user.click(screen.getByRole("button", { name: "Inspect archive" }));

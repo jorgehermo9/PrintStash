@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GettingStartedPage from "@/pages/getting-started";
 import { usePathname } from "@/lib/navigation";
 import type { ArtifactUploadCreate, ArtifactUploadStatus } from "@/lib/api/artifact-uploads";
-import { aModelListItem, anExternalLibrary, anIngestJob } from "@/test-support/factories";
+import { aModelListItem, anExternalLibrary, aJob } from "@/test-support/factories";
 import {
   adminSession,
   json,
@@ -14,7 +14,7 @@ import {
   type RouteTable,
 } from "@/test-support/render";
 
-import { setIngestJobSource } from "@/lib/task-center";
+import { setJobSource } from "@/lib/task-center";
 
 function Path() {
   return <span data-testid="path">{usePathname()}</span>;
@@ -103,7 +103,7 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 afterEach(() => {
-  setIngestJobSource(async () => []);
+  setJobSource(async () => []);
   vi.unstubAllGlobals();
 });
 
@@ -246,8 +246,8 @@ describe("Getting started", () => {
   });
   it("shows background upload progress", async () => {
     let completed = false;
-    setIngestJobSource(async () => [
-      anIngestJob({ job_id: "guide-progress", state: completed ? "completed" : "running" }),
+    setJobSource(async () => [
+      aJob({ job_id: "guide-progress", state: completed ? "completed" : "running" }),
     ]);
     renderGuide();
     await userEvent.click(await screen.findByRole("button", { name: "Upload my first files" }));
@@ -280,12 +280,12 @@ describe("Getting started", () => {
     expect(screen.getByRole("link", { name: "Connect a printer" })).toBeVisible();
   });
   it("connects a mounted folder in one submission", async () => {
-    setIngestJobSource(async () => [anIngestJob({ job_id: "guide-folder-connect" })]);
+    setJobSource(async () => [aJob({ job_id: "guide-folder-connect" })]);
     const guide = renderGuide({
       "GET /api/v1/config": json({ external_libraries_enabled: false }),
       "PUT /api/v1/config": json({ external_libraries_enabled: true }),
       "POST /api/v1/libraries": json(anExternalLibrary()),
-      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-folder-connect", state: "pending" }),
+      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-folder-connect", state: "queued" }),
     });
     await userEvent.click(
       await screen.findByRole("button", { name: /^Connect an existing folder/ }),
@@ -315,7 +315,7 @@ describe("Getting started", () => {
     expect(guide.requestsWithMethod("POST").filter((r) => r.url.endsWith("/scan"))).toHaveLength(1);
   });
   it("retries a scan without creating another source", async () => {
-    setIngestJobSource(async () => [anIngestJob({ job_id: "guide-scan-retry" })]);
+    setJobSource(async () => [aJob({ job_id: "guide-scan-retry" })]);
     const guide = renderGuide({
       "GET /api/v1/config": json({ external_libraries_enabled: true }),
       "POST /api/v1/libraries": json(anExternalLibrary()),
@@ -330,7 +330,7 @@ describe("Getting started", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The folder is connected");
     expect(screen.getByLabelText("Folder path on the server")).toBeDisabled();
     guide.route({
-      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-scan-retry", state: "pending" }),
+      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-scan-retry", state: "queued" }),
     });
     await userEvent.click(screen.getByRole("button", { name: "Scan this folder again" }));
     await screen.findByText(/The scan finished, but no models/);
@@ -357,13 +357,11 @@ describe("Getting started", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
   it("explains an empty scan", async () => {
-    setIngestJobSource(async () => [
-      anIngestJob({ job_id: "guide-empty-scan", model_id: null, file_id: null }),
-    ]);
+    setJobSource(async () => [aJob({ job_id: "guide-empty-scan", model_id: null, file_id: null })]);
     renderGuide({
       "GET /api/v1/config": json({ external_libraries_enabled: true }),
       "POST /api/v1/libraries": json(anExternalLibrary()),
-      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-empty-scan", state: "pending" }),
+      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-empty-scan", state: "queued" }),
     });
     await userEvent.click(
       await screen.findByRole("button", { name: /^Connect an existing folder/ }),
@@ -378,13 +376,13 @@ describe("Getting started", () => {
     ).not.toBeInTheDocument();
   });
   it("keeps a partial scan visible for review", async () => {
-    setIngestJobSource(async () => [
-      anIngestJob({ job_id: "guide-partial-scan", completion: "partial", failed: 1 }),
+    setJobSource(async () => [
+      aJob({ job_id: "guide-partial-scan", completion: "partial", failed: 1 }),
     ]);
     const guide = renderGuide({
       "GET /api/v1/config": json({ external_libraries_enabled: true }),
       "POST /api/v1/libraries": json(anExternalLibrary()),
-      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-partial-scan", state: "pending" }),
+      "POST /api/v1/libraries/1/scan": json({ job_id: "guide-partial-scan", state: "queued" }),
     });
     await userEvent.click(
       await screen.findByRole("button", { name: /^Connect an existing folder/ }),

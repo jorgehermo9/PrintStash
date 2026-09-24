@@ -31,6 +31,7 @@ import {
   getJson,
   getAuthenticatedBlob,
   getAuthenticatedText,
+  getDerivedText,
   getUrl,
   getWsUrl,
   invalidateApiCache,
@@ -310,6 +311,45 @@ describe("getAuthenticatedBlob", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("getDerivedText", () => {
+  it("returns the text of a derived resource", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("G1 X10"));
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).resolves.toEqual({
+      ready: true,
+      text: "G1 X10",
+    });
+  });
+
+  it("reports the derivative's state while it is not ready", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ state: "running" }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).resolves.toEqual({
+      ready: false,
+      state: "running",
+    });
+  });
+
+  it("rejects a failed derivative with its reason", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "toolpath_invalid_bgcode" }), {
+        status: 422,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).rejects.toMatchObject({
+      status: 422,
+      code: "toolpath_invalid_bgcode",
+    });
   });
 });
 

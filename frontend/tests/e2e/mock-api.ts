@@ -331,7 +331,7 @@ function inboxItem() {
     },
     target_collection_id: inboxCollectionId,
     requested_tags: ["fixture"],
-    background_job_id: null,
+    job_id: null,
     resulting_model_id: null,
     results: [],
     error_code: null,

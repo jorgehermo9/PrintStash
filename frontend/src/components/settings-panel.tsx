@@ -91,7 +91,8 @@ import {
   downloadModelExport,
   downloadLibraryArchive,
   importLibraryArchive,
-  rebuildModelThumbnails,
+  regenerateDerivatives,
+  backupFromJob,
   getHealthDetails,
   getActiveGcPlan,
   getLatestRelease,
@@ -162,7 +163,7 @@ import {
   type PreviewQuality,
   type ScreenshotScale,
 } from "@/lib/preview-preferences";
-import { trackImportJob } from "@/lib/task-center";
+import { waitForImportJob } from "@/lib/task-center";
 import { prepareBrowserExtensionSetup } from "@/lib/browser-extension-setup";
 import type {
   ApiKeyRead,
@@ -890,9 +891,9 @@ export function SettingsPanel() {
   async function recreateModelImages() {
     setPreviewBusy("rebuild");
     try {
-      const response = await rebuildModelThumbnails();
-      trackImportJob(response.job_id, "Recreate Model preview images");
-      toast.success(uiText("Model preview recreation queued. Follow it in Tasks."));
+      // Every current preview stays visible until its replacement is ready.
+      await regenerateDerivatives("thumbnail", "all");
+      toast.success(uiText("Model preview recreation queued. Follow it in Background work."));
     } catch (e) {
       toast.error(e);
     } finally {
@@ -903,7 +904,10 @@ export function SettingsPanel() {
   async function handleBackupNow() {
     setBackingUp(true);
     try {
-      const meta = await createBackup();
+      const accepted = await createBackup();
+      const job = await waitForImportJob(accepted.job_id, "Backup");
+      const meta = backupFromJob(job);
+      if (!meta) throw new Error(job.error ?? "backup_failed");
       const mb = formatNumber(meta.size_bytes / 1024 / 1024, {
         maximumFractionDigits: 1,
         minimumFractionDigits: 1,

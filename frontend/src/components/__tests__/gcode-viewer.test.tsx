@@ -150,4 +150,52 @@ describe("GcodeViewer", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("could not be validated");
     expect(screen.queryByRole("slider")).not.toBeInTheDocument();
   });
+  it("waits for a binary toolpath still being derived instead of parsing the notice", async () => {
+    // The server converts binary G-code in the background and answers 202 with
+    // the derivative's state until it is ready; the notice is not G-code.
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ state: "running" }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    render(
+      <I18nProvider>
+        <GcodeViewer url="/api/v1/files/7/toolpath" canvasRenderer={TestCanvas} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Preparing toolpath");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+  it("shows the toolpath once its derivative is ready", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchMock
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ state: "pending" }), {
+            status: 202,
+            headers: { "content-type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(textResponse(TOOLPATH));
+      render(
+        <I18nProvider>
+          <GcodeViewer
+            url="/api/v1/files/7/toolpath"
+            canvasRenderer={TestCanvas}
+            toolpathParser={async (text) => parseGcode(text)}
+          />
+        </I18nProvider>,
+      );
+      await screen.findByRole("status");
+
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(await screen.findByRole("slider", { name: "Current layer" })).toBeVisible();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

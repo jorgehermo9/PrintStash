@@ -7,7 +7,7 @@ import {
   sendForm,
   sendJson,
 } from "@/lib/api/request";
-import type { StorageOperations } from "@/types";
+import type { JobAccepted, JobStatus, StorageOperations } from "@/types";
 
 export type BackupRunOutcome = "running" | "completed" | "partial" | "failed";
 
@@ -98,8 +98,38 @@ export interface BackupRestoreResult {
   restored_files: number;
 }
 
-export function createBackup(): Promise<BackupMeta> {
-  return sendJson<BackupMeta>("/api/v1/backups", "POST", undefined);
+/** Queue a manual backup; a second request while one runs is 409 `backup_in_progress`. */
+export function createBackup(): Promise<JobAccepted> {
+  return sendJson<JobAccepted>("/api/v1/backups", "POST", undefined);
+}
+
+/** The backup a completed `backup.create` Job produced, or null if it produced none. */
+export function backupFromJob(job: JobStatus): BackupMeta | null {
+  const result = job.result;
+  if (
+    job.state !== "completed" ||
+    !result?.backup_id ||
+    !result.created_at ||
+    result.size_bytes === undefined ||
+    result.file_count === undefined ||
+    !result.location
+  ) {
+    return null;
+  }
+  return {
+    backup_id: result.backup_id,
+    created_at: result.created_at,
+    size_bytes: result.size_bytes,
+    file_count: result.file_count,
+    storage_backend: result.storage_backend ?? "",
+    app_version: result.app_version ?? "",
+    location: result.location,
+    source_ref: result.source_ref ?? null,
+    provider_ref: result.provider_ref ?? null,
+    namespace: result.namespace ?? null,
+    run_id: result.run_id ?? null,
+    outcome: result.outcome ?? null,
+  };
 }
 
 export function uploadBackup(file: File): Promise<BackupMeta> {

@@ -11,12 +11,10 @@ import {
   sendJson,
 } from "@/lib/api/request";
 import {
-  ArchiveManifest,
   ArtifactOutcomeRead,
   FileRevisionUpdate,
   ImportedPrintJobRead,
-  IngestJobStatus,
-  IngestResponse,
+  JobAccepted,
   ListModelPageParams,
   ListModelsParams,
   ManualPrintJobCreate,
@@ -165,7 +163,7 @@ export async function downloadLibraryArchive(version: 1 | 2 = 2): Promise<void> 
   URL.revokeObjectURL(url);
 }
 
-export function importLibraryArchive(file: File): Promise<IngestResponse> {
+export function importLibraryArchive(file: File): Promise<JobAccepted> {
   const form = new FormData();
   form.append("file", file);
   return sendForm("/api/v1/models/library-import", form);
@@ -311,23 +309,12 @@ export function addGcodeRevision(modelId: number, formData: FormData): Promise<M
   return sendForm<ModelRead>(`/api/v1/models/${modelId}/gcode-revisions`, formData);
 }
 
-export function ingestOrca(formData: FormData): Promise<IngestResponse> {
-  return sendForm<IngestResponse>("/api/v1/ingest/orca", formData);
+export function ingestOrca(formData: FormData): Promise<JobAccepted> {
+  return sendForm<JobAccepted>("/api/v1/ingest/orca", formData);
 }
 
-export function ingestModel(formData: FormData): Promise<IngestResponse> {
-  return sendForm<IngestResponse>("/api/v1/ingest/model", formData);
-}
-
-export function getJobStatus(jobId: string): Promise<IngestJobStatus> {
-  return getJson<IngestJobStatus>(`/api/v1/ingest/jobs/${jobId}`, { fresh: true });
-}
-
-export function listIngestJobs(trackedJobIds: string[] = []): Promise<IngestJobStatus[]> {
-  const params = new URLSearchParams();
-  trackedJobIds.forEach((jobId) => params.append("tracked_job_id", jobId));
-  const query = params.size ? `?${params.toString()}` : "";
-  return getJson<IngestJobStatus[]>(`/api/v1/ingest/jobs${query}`, { fresh: true });
+export function ingestModel(formData: FormData): Promise<JobAccepted> {
+  return sendForm<JobAccepted>("/api/v1/ingest/model", formData);
 }
 
 export function ingestUrl(payload: {
@@ -335,39 +322,35 @@ export function ingestUrl(payload: {
   collection?: string;
   tags?: string;
   review?: boolean;
-}): Promise<IngestResponse> {
-  return sendJson<IngestResponse>("/api/v1/ingest/url", "POST", payload);
+}): Promise<JobAccepted> {
+  return sendJson<JobAccepted>("/api/v1/ingest/url", "POST", payload);
 }
 
 export function selectModelFiles(
   filesToken: string,
   payload: { file_ids: string[]; collection?: string; tags?: string },
-): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(`/api/v1/ingest/url/files/${filesToken}/select`, "POST", payload);
+): Promise<JobAccepted> {
+  return sendJson<JobAccepted>(`/api/v1/ingest/url/files/${filesToken}/select`, "POST", payload);
 }
 
 export function selectCollectionMembers(
   collectionToken: string,
   payload: { member_ids: string[]; collection?: string; tags?: string },
-): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(
+): Promise<JobAccepted> {
+  return sendJson<JobAccepted>(
     `/api/v1/ingest/collection/${collectionToken}/select`,
     "POST",
     payload,
   );
 }
 
-export function ingestArchive(formData: FormData): Promise<ArchiveManifest> {
-  return sendForm<ArchiveManifest>("/api/v1/ingest/archive", formData);
-}
-
-export function inspectArchive(formData: FormData): Promise<IngestResponse> {
-  return sendForm<IngestResponse>("/api/v1/ingest/archive/inspect", formData);
+export function inspectArchive(formData: FormData): Promise<JobAccepted> {
+  return sendForm<JobAccepted>("/api/v1/ingest/archive/inspect", formData);
 }
 
 export function selectArchiveEntries(
   archiveId: string,
   payload: { names: string[]; collection?: string; tags?: string },
-): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(`/api/v1/ingest/archive/${archiveId}/select`, "POST", payload);
+): Promise<JobAccepted> {
+  return sendJson<JobAccepted>(`/api/v1/ingest/archive/${archiveId}/select`, "POST", payload);
 }

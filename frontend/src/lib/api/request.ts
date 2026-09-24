@@ -66,6 +66,24 @@ export async function getAuthenticatedText(path: string, signal?: AbortSignal): 
   return res.text();
 }
 
+/**
+ * A resource served from a derivative: its text once derived, or the
+ * derivative's state while it is not (the server answers 202, never a body
+ * that could be mistaken for the resource).
+ */
+export type DerivedText = { ready: true; text: string } | { ready: false; state: string };
+
+export async function getDerivedText(path: string, signal?: AbortSignal): Promise<DerivedText> {
+  const res = await fetchArtifact(path, signal);
+  if (!res.ok) throw await parseError(res);
+  if (res.status === 202) {
+    // The 202 body is `{"state": "<derivative state>"}`, written by the server.
+    const body: { state?: string } = await res.json();
+    return { ready: false, state: body.state ?? "pending" };
+  }
+  return { ready: true, text: await res.text() };
+}
+
 const SAFE_DOWNLOAD_FALLBACK = "download";
 
 /** Remove path/control characters before assigning a server-provided filename. */
