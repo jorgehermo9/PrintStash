@@ -10,7 +10,6 @@ from app.db.models import (
     CapacityReservation,
     FileType,
     GeometryFingerprint,
-    NativeComputeSlot,
 )
 from app.db.session import get_session_factory
 from app.modules.media.thumbnail_engine import ThumbnailEngine
@@ -67,10 +66,6 @@ class TestRemoteProcessing:
             assert len(materialized) == 1
             assert not materialized[0].exists()
             assert db_session.exec(select(CapacityReservation)).all() == []
-            assert all(
-                row.lease_token is None
-                for row in db_session.exec(select(NativeComputeSlot))
-            )
             assert backend.read_bytes(file.path) == content
         finally:
             backend._client.delete_object(Bucket=backend._bucket, Key=file.path)

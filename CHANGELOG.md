@@ -11,7 +11,10 @@
   commit the Artifact and return; its metadata, thumbnail and binary G-code
   toolpath are derived afterwards and appear on an open page without a reload.
   A new kind or a renderer change re-derives the library in the background
-  while current previews stay visible.
+  while current previews stay visible. Native work is bounded by its lane, not
+  a database permit: indexing runs as similarity Jobs, and a semantic search
+  embeds its query inside the request, in a subprocess with its own memory and
+  time limits.
 - Follow any Job at `GET /api/v1/jobs/{id}` (cancel and retry beside it) and
   live changes on the `/api/v1/events/ws` socket. **Breaking:**
   `/api/v1/ingest/jobs`, `POST /api/v1/files/thumbnails/rebuild`, plain
@@ -68,9 +71,6 @@
   repeated exact comparisons reuse compatible proofs after checking source bytes.
   Capture and ingestion share these improvements, including bounded STEP output
   and Linux service memory-limit detection.
-
-- Concurrent thumbnail requests recover from transient SQLite contention after
-  reserving shared compute capacity.
 
 - Active print jobs no longer remain paused indefinitely after an out-of-band
   emergency stop. Authoritative idle printer updates now close interrupted jobs,

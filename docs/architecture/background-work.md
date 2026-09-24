@@ -137,6 +137,17 @@ is always on it; with local storage the vault and thumbnails are too.
 Administrators override lane concurrency at runtime on Settings → Background
 work; the override is stored in the database and applies to every process.
 
+Native memory is bounded by lanes alone: at most `derive.native` renders plus
+`similarity` indexing steps run at once per process, and each native child is
+killed past its memory budget. There is no separate permit. The one native
+call outside the engine is a semantic search embedding its query: it runs in
+the request, in its own subprocess under the same memory and time limits.
+
+A restarted API reruns what its predecessor left running at once, not after
+the stale window: holding the vault's API lock proves the earlier API process
+is gone, so its executor is marked stale at startup. Workers share no lock and
+are only ever recognised by their heartbeat going stale.
+
 ## Failure and recovery
 
 - **A process dies mid-step.** Its executor stops heartbeating; after

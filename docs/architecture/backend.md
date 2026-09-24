@@ -18,7 +18,7 @@ HTTP endpoint or persisted archive format.
 | `printing` | Printers, provider adapters, fleet scheduling, materials and print history | `dispatch`, `costing`, `printer_provider`, `printer_hub`, `fleet`, `materials`, `printer_files`, `printer_jobs`, `print_results`, `multipart_builds` |
 | `similarity` | Versioned geometric evidence, indexed retrieval, durable analysis runs and explicit review | `fingerprints`, `retrieval`, `processing`, `candidates`, `review`, `composition` |
 | `inference` | Local native embedding contracts, immutable index generations and authorized semantic queries | `local`, `manifest`, `store`, `search` |
-| `media` | Mesh processing, thumbnail rendering and publication, source covers and toolpath conversion | `mesh_operations`, `thumbnail_engine`, `thumbnail_publication`, `toolpath`, `source_cover_processing`, `compute_slots` |
+| `media` | Mesh processing, thumbnail rendering and publication, source covers and toolpath conversion | `mesh_operations`, `thumbnail_engine`, `thumbnail_publication`, `toolpath`, `source_cover_processing` |
 | `derivatives` | What each Artifact owes (metadata, thumbnail, toolpath), found by anti-join and produced by Jobs | `kinds`, `records`, `source`, `producers`, `repair`, `jobs` |
 | `work` | The engine-agnostic background work model: Jobs, definitions, sources, the reconciler, fences and realtime notices | `contracts`, `catalog`, `jobs`, `sources`, `reconciler`, `submission`, `runner`, `service`, `fences`, `executors`, `events` |
 | `identity` | Product identity, collection/printer authorization, sharing and tickets | `auth`, `oidc`, `rbac`, `printer_rbac`, `share`, `ws_tickets` |

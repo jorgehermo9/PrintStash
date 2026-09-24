@@ -84,24 +84,6 @@ class ArtifactDerivative(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class NativeComputeSlot(SQLModel, table=True):
-    """A database-backed native-memory permit shared by every process.
-
-    Job concurrency is the lane's business. This permit exists because native
-    work also runs on the request path (a semantic search embeds its query), and
-    request-path and job-path native processes share one memory budget.
-    """
-
-    __tablename__ = "native_compute_slots"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    slot_number: int = Field(unique=True, index=True)
-    lease_token: Optional[str] = Field(default=None, max_length=64, index=True)
-    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
 class DerivativeRegeneration(SQLModel, table=True):
     """An administrator's "regenerate all" for one derivative kind.
 

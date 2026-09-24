@@ -143,7 +143,6 @@ class TestEmbeddingRecovery:
     def test_contains_materialization_failure(
         self, db_session, embedding_unit, failure
     ):
-        from app.db.models import NativeComputeSlot
         from app.modules.storage import artifact_content
 
         _actor, file, fp, _provider, _generation, run = embedding_unit
@@ -160,10 +159,6 @@ class TestEmbeddingRecovery:
         assert json.loads(run.counters_json)["embedding_failed"] == 1
         assert json.loads(run.checkpoint_json)["embedding_fingerprint_id"] == fp.id
         assert db_session.exec(select(PassageVector)).all() == []
-        assert all(
-            row.lease_token is None
-            for row in db_session.exec(select(NativeComputeSlot))
-        )
 
     def test_skips_stale_source_without_embedding(self, db_session, embedding_unit):
         _actor, file, fp, _provider, _generation, run = embedding_unit
@@ -193,21 +188,6 @@ class TestEmbeddingRecovery:
             existing.id
         ]
 
-    def test_defers_when_geometry_slots_are_occupied(self, db_session, embedding_unit):
-        from app.core.config import settings
-        from app.modules.media import compute_slots
-
-        *_rest, run = embedding_unit
-        original = run.checkpoint_json
-        for index in range(settings.max_render_jobs):
-            assert compute_slots.acquire(db_session, f"preview-{index}") is not None
-        SimilarityProcessor(get_session_factory(), get_backend()).work_one()
-        db_session.refresh(run)
-        assert run.state == "running"
-        assert run.phase == "embeddings"
-        assert json.loads(run.checkpoint_json) == json.loads(original)
-        assert db_session.exec(select(PassageVector)).all() == []
-
     def test_preserves_geometry_when_embedding_configuration_changes(
         self, db_session, embedding_unit
     ):
@@ -224,27 +204,6 @@ class TestEmbeddingRecovery:
             json.loads(run.checkpoint_json)["embedding_failure_code"]
             == "embedding_configuration_changed"
         )
-        assert db_session.exec(select(PassageVector)).all() == []
-
-    def test_retries_native_capacity_without_skipping_unit(
-        self, db_session, embedding_unit, monkeypatch
-    ):
-        from printstash_core.inference import EmbeddingError
-
-        from app.modules.inference.local import LocalEmbeddingProvider
-
-        *_rest, run = embedding_unit
-        original = run.checkpoint_json
-
-        def busy(*args, **kwargs):
-            raise EmbeddingError("embedding_compute_busy")
-
-        monkeypatch.setattr(LocalEmbeddingProvider, "embed", busy)
-        SimilarityProcessor(get_session_factory(), get_backend()).work_one()
-        db_session.refresh(run)
-        assert run.state == "running"
-        assert run.phase == "embeddings"
-        assert json.loads(run.checkpoint_json) == json.loads(original)
         assert db_session.exec(select(PassageVector)).all() == []
 
 

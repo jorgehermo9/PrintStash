@@ -11,7 +11,6 @@ from sqlmodel import select
 from app.db.models import (
     FileType,
     GeometryFingerprint,
-    NativeComputeSlot,
     SimilarityCandidate,
     SimilarityRun,
 )
@@ -131,10 +130,6 @@ class TestProcessing:
         db_session.refresh(revision)
         assert revision.model_id == files[0].model_id
         assert revision.is_recommended
-        assert all(
-            row.lease_token is None
-            for row in db_session.exec(select(NativeComputeSlot))
-        )
 
     def test_cancel_stops_before_next_mesh(self, db_session, local_pair):
         actor, _ = local_pair
@@ -148,19 +143,6 @@ class TestProcessing:
         db_session.refresh(run)
         assert run.state == "cancelled"
         assert len(db_session.exec(select(GeometryFingerprint)).all()) == 2
-
-    def test_waits_for_shared_render_budget(self, db_session, local_pair):
-        from app.core.config import settings
-        from app.modules.media.compute_slots import acquire
-
-        actor, _ = local_pair
-        for index in range(settings.max_render_jobs):
-            assert acquire(db_session, f"thumbnail-{index}") is not None
-        run = runs.start(db_session, actor)
-        SimilarityProcessor(get_session_factory(), get_backend()).work_one()
-        db_session.refresh(run)
-        assert json.loads(run.checkpoint_json) == {}
-        assert db_session.exec(select(GeometryFingerprint)).one().state == "pending"
 
 
 class TestDisabledCancellation:
@@ -239,10 +221,6 @@ class TestProcessingFailures:
         assert json.loads(run.counters_json)["failed"] == 1
         fp = db_session.exec(select(GeometryFingerprint)).one()
         assert fp.failure_code == "source_changed"
-        assert all(
-            row.lease_token is None
-            for row in db_session.exec(select(NativeComputeSlot))
-        )
 
     def test_cancels_between_committed_verification_pairs(self, db_session, local_pair):
         actor, _ = local_pair
@@ -332,29 +310,6 @@ class TestPairRecovery:
             assert counts["verification_failed"] == 1
         assert counts.get("verified", 0) == 0
         assert db_session.exec(select(SimilarityCandidate)).all() == []
-        assert all(
-            row.lease_token is None
-            for row in db_session.exec(select(NativeComputeSlot))
-        )
-
-    def test_retries_pair_after_render_capacity_returns(self, db_session, local_pair):
-        from app.core.config import settings
-        from app.modules.media import compute_slots
-
-        actor, _ = local_pair
-        run = runs.start(db_session, actor)
-        worker = SimilarityProcessor(get_session_factory(), get_backend())
-        for _ in range(4):
-            worker.work_one()
-        db_session.refresh(run)
-        before = json.loads(run.checkpoint_json)
-        assert before["pending_pairs"]
-        for index in range(settings.max_render_jobs):
-            assert compute_slots.acquire(db_session, f"preview-{index}") is not None
-        assert worker.work_one()
-        db_session.refresh(run)
-        assert json.loads(run.checkpoint_json) == before
-        assert db_session.exec(select(SimilarityCandidate)).all() == []
 
 
 class TestUnexpectedAnalysisFailure:
@@ -392,10 +347,6 @@ class TestUnexpectedAnalysisFailure:
         assert json.loads(run.checkpoint_json) == {}
         assert "private" not in run.counters_json
         assert db_session.exec(select(SimilarityCandidate)).all() == []
-        assert all(
-            row.lease_token is None
-            for row in db_session.exec(select(NativeComputeSlot))
-        )
 
 
 @pytest.fixture

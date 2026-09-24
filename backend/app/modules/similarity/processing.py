@@ -12,7 +12,7 @@ from sqlmodel import Session, col, select
 from app.core.errors import OperationError
 from app.db.models import File, GeometryFingerprint, SimilarityRun, User
 from app.db.session import SessionFactory
-from app.modules.media import compute_slots, geometry_analysis
+from app.modules.media import geometry_analysis
 from app.modules.media.fingerprints import FingerprintResult
 from app.modules.media.thumbnail_engine import ThumbnailEngine, ThumbnailRequest
 from app.modules.similarity import (
@@ -166,11 +166,6 @@ class SimilarityProcessor:
                 return
             counters["cached"] = counters.get("cached", 0) + 1
         else:
-            slot = compute_slots.acquire(session, token)
-            if slot is None:
-                fingerprints.release(session, claimed[0], claimed[1])
-                runs.checkpoint(session, run, token)
-                return
             try:
                 try:
                     with artifact_content.resolve(
@@ -219,7 +214,6 @@ class SimilarityProcessor:
                 counters[state] = counters.get(state, 0) + 1
             finally:
                 fingerprints.release(session, claimed[0], claimed[1])
-                compute_slots.release(session, slot.id, token)
                 session.commit()
         progress["file_id"] = file.id
         counters["artifacts_processed"] = counters.get("artifacts_processed", 0) + 1
@@ -237,16 +231,11 @@ class SimilarityProcessor:
     ) -> None:
         pairs = progress.get("pending_pairs", [])
         if pairs:
-            slot = compute_slots.acquire(session, token)
-            if slot is None:
-                runs.checkpoint(session, run, token)
-                return
             try:
                 self._verify_pair(
                     session, run, token, actor, config, pairs[0], counters
                 )
             finally:
-                compute_slots.release(session, slot.id, token)
                 session.commit()
             progress["pending_pairs"] = pairs[1:]
             runs.checkpoint(session, run, token, progress=progress, counters=counters)

@@ -428,6 +428,16 @@ def _step_memory_budget_bytes() -> int | None:
     return max(int(limit * fraction / _render_jobs_limit()), 1)
 
 
+def process_rss_bytes(pid: int) -> int | None:
+    """A child process's resident set, for owners that police their own children."""
+    return _process_rss_bytes(pid)
+
+
+def step_memory_budget_bytes() -> int | None:
+    """The RSS one native render step may use; ``None`` when undetectable."""
+    return _step_memory_budget_bytes()
+
+
 def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):
     """Tessellate unknown-complexity STEP in a monitored child process (#72)."""
 

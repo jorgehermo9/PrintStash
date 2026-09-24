@@ -12,7 +12,7 @@ from app.db.models import File, GeometryFingerprint, SimilarityRun, User
 from app.db.session import SessionFactory
 from app.modules.inference import store
 from app.modules.inference.local import configured_provider
-from app.modules.media import compute_slots, geometry_analysis
+from app.modules.media import geometry_analysis
 from app.modules.similarity import fingerprints, runs
 from app.modules.similarity.configuration import SimilaritySettings
 from app.modules.storage import artifact_content
@@ -84,27 +84,19 @@ def work_one(
         elif store.has_unit(session, generation_id, key):
             counters["embedding_cached"] = counters.get("embedding_cached", 0) + 1
         else:
-            slot = compute_slots.acquire(session, token)
-            if slot is None:
-                runs.checkpoint(session, run, token)
-                return
-            try:
-                with ExitStack() as cleanup:
-                    path = cleanup.enter_context(
-                        artifact_content.resolve(file, backend=backend).materialize()
-                    )
-                    if fingerprints.source_digest(path) != fp.source_sha256:
-                        raise GeometryError("source_changed")
-                    views = geometry_analysis.embedding_views(
-                        path,
-                        file_type=file.file_type.value,
-                        component_index=fp.component_index,
-                        image_size=provider.manifest.image.image_size,
-                        triangle_cap=config.triangle_cap,
-                    )
-            finally:
-                compute_slots.release(session, slot.id, token)
-                session.commit()
+            with ExitStack() as cleanup:
+                path = cleanup.enter_context(
+                    artifact_content.resolve(file, backend=backend).materialize()
+                )
+                if fingerprints.source_digest(path) != fp.source_sha256:
+                    raise GeometryError("source_changed")
+                views = geometry_analysis.embedding_views(
+                    path,
+                    file_type=file.file_type.value,
+                    component_index=fp.component_index,
+                    image_size=provider.manifest.image.image_size,
+                    triangle_cap=config.triangle_cap,
+                )
             vectors = provider.embed(views, provider.space)
             pooled = np.mean(np.asarray(vectors, dtype=np.float64), axis=0)
             if store.publish(
@@ -128,9 +120,6 @@ def work_one(
             progress["embedding_fingerprint_id"] = fp.id
         runs.checkpoint(session, run, token, progress=progress, counters=counters)
     except EmbeddingError as exc:
-        if exc.code == "embedding_compute_busy":
-            runs.checkpoint(session, run, token)
-            return
         # Optional learned retrieval never invalidates completed geometry work.
         progress["embedding_failure_code"] = exc.code
         runs.checkpoint(

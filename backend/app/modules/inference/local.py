@@ -16,14 +16,25 @@ from pathlib import Path
 from printstash_core.inference import EmbeddingError, EmbeddingInput, EmbeddingSpace
 from printstash_core.inference.vectors import normalize
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlmodel import Session
 
 from app import __file__ as application_file
 from app.core.config import settings
 from app.db.session import SessionFactory
 from app.modules.inference.manifest import LocalModelManifest, read_manifest
-from app.modules.media import compute_slots
+from app.modules.media.mesh_processing import (
+    process_rss_bytes,
+    step_memory_budget_bytes,
+)
 from app.modules.storage.capacity import CapacityManager, CapacityResource
+
+
+def native_memory_budget_bytes() -> int:
+    """The render-step RSS policy, applied to one embedding subprocess.
+
+    Bounded even when automatic geometry RAM caps are disabled on a platform
+    where cgroup or host memory cannot be detected.
+    """
+    return min(step_memory_budget_bytes() or 1024**3, 2 * 1024**3)
 
 
 class WorkerResult(BaseModel):
@@ -67,23 +78,17 @@ class LocalEmbeddingProvider:
             raise EmbeddingError("embedding_text_unavailable")
         return self._execute(inputs)
 
-    @staticmethod
-    def _release_slot(session: Session, slot_id: int | None, token: str) -> None:
-        compute_slots.release(session, slot_id, token)
-        session.commit()
-
     def _execute(
         self, inputs: tuple[EmbeddingInput, ...]
     ) -> tuple[tuple[float, ...], ...]:
+        # Runs where it is called: a search request embeds its query inline,
+        # and indexing calls this from its similarity Job, whose lane bounds
+        # how many run at once. Each call is its own subprocess, killed past
+        # the native memory budget or the step timeout.
         if importlib.util.find_spec("onnxruntime") is None:
             raise EmbeddingError("embedding_runtime_unavailable")
         with ExitStack() as cleanup:
-            session = cleanup.enter_context(self.sessions.scoped_session())
             token = "embedding:" + secrets.token_hex(20)
-            slot = compute_slots.acquire(session, token)
-            if slot is None:
-                raise EmbeddingError("embedding_compute_busy")
-            cleanup.callback(self._release_slot, session, slot.id, token)
             temporary = Path(
                 cleanup.enter_context(
                     tempfile.TemporaryDirectory(prefix="printstash-embedding-")
@@ -141,10 +146,10 @@ class LocalEmbeddingProvider:
             )
             failure = None
             deadline = time.monotonic() + min(settings.mesh_step_timeout_seconds, 90)
-            budget = compute_slots.native_memory_budget_bytes()
+            budget = native_memory_budget_bytes()
             try:
                 while process.poll() is None:
-                    rss = compute_slots.native_process_rss_bytes(process.pid)
+                    rss = process_rss_bytes(process.pid)
                     if rss is not None and rss > budget:
                         failure = "embedding_worker_oom"
                         break

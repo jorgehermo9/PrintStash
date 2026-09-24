@@ -6,9 +6,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 from printstash_core.inference import EmbeddingError, EmbeddingInput
-from sqlmodel import select
 
-from app.db.models import NativeComputeSlot
 from app.db.session import get_session_factory
 from app.modules.inference.local import LocalEmbeddingProvider
 from tests.factories.embeddings import local_embedding_assets
@@ -32,11 +30,6 @@ class TestLocalProvider:
             provider.space,
         )
         np.testing.assert_allclose(vectors, [[1, 0, 0], [1, 0, 0]])
-        db_session.expire_all()
-        assert all(
-            slot.lease_token is None
-            for slot in db_session.exec(select(NativeComputeSlot)).all()
-        )
 
     def test_verifies_canaries_before_availability(self, db_session, assets):
         provider = LocalEmbeddingProvider(
@@ -99,22 +92,26 @@ class TestLocalProvider:
         with pytest.raises(EmbeddingError, match="batch_budget"):
             provider.embed((EmbeddingInput("text", text="red"),) * 9, provider.space)
 
-    def test_preserves_render_backpressure(self, db_session, assets):
-        from app.core.config import settings
-        from app.modules.media import compute_slots
+    def test_the_memory_budget_is_capped_at_two_gibibytes(self, monkeypatch) -> None:
+        from app.modules.inference import local
 
-        for index in range(settings.max_render_jobs):
-            assert compute_slots.acquire(db_session, f"busy-{index}") is not None
-        provider = LocalEmbeddingProvider(
-            get_session_factory(), assets, "two-tower-contract", 1
-        )
-        with pytest.raises(EmbeddingError, match="compute_busy"):
-            provider.validate()
+        monkeypatch.setattr(local, "step_memory_budget_bytes", lambda: 64 * 1024**3)
+
+        assert local.native_memory_budget_bytes() == 2 * 1024**3
+
+    def test_an_undetectable_budget_falls_back_to_one_gibibyte(
+        self, monkeypatch
+    ) -> None:
+        from app.modules.inference import local
+
+        monkeypatch.setattr(local, "step_memory_budget_bytes", lambda: None)
+
+        assert local.native_memory_budget_bytes() == 1024**3
 
     def test_contains_worker_memory_limit(self, db_session, assets, monkeypatch):
-        from app.modules.media import compute_slots
+        from app.modules.inference import local
 
-        monkeypatch.setattr(compute_slots, "native_memory_budget_bytes", lambda: 1)
+        monkeypatch.setattr(local, "native_memory_budget_bytes", lambda: 1)
         provider = LocalEmbeddingProvider(
             get_session_factory(), assets, "two-tower-contract", 1
         )
@@ -122,7 +119,6 @@ class TestLocalProvider:
             provider.validate()
 
     def test_contains_worker_deadline(self, db_session, assets, monkeypatch):
-
         from app.core.config import _overlay
 
         monkeypatch.setitem(_overlay, "mesh_step_timeout_seconds", 0.00001)

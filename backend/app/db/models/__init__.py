@@ -153,9 +153,6 @@ from .media import (
 from .media import (
     DerivativeRegeneration as DerivativeRegeneration,
 )
-from .media import (
-    NativeComputeSlot as NativeComputeSlot,
-)
 from .notifications import (
     NotificationChannel as NotificationChannel,
 )
