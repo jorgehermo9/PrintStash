@@ -1,7 +1,7 @@
 """Gap-fill for app.modules.printing.printer_jobs: transfer_artifact's storage-error
-branch, _dispatch_claimed's dependency/capability/readiness guards, and
-run_fleet_scheduler's tick loop (dispatch -> sleep(0)-continue vs
-work_wakeup wait, and surviving one bad tick).
+branch, _dispatch_claimed's dependency/capability/readiness guards, and one
+dispatch slice (drain until nothing is eligible, end on a bad claim, respect
+the slice budget).
 
 test_fleet_api.py already covers the happy path and the generic
 except-wraps-into-FAILED branch (a real connection failure to a fake host);
@@ -448,79 +448,88 @@ class TestDispatchClaimed:
         provider.start.assert_awaited_once()
 
 
-class TestRunFleetScheduler:
-    def test_run_fleet_scheduler_dispatches_then_waits_on_work_wakeup(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+class TestDrainDispatchQueue:
+    """One ``printing.dispatch`` slice: dispatch until nothing is eligible."""
+
+    def test_dispatches_until_nothing_is_eligible(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls: list[int | None] = []
+        queue = [41, 42, None]
 
         async def fake_dispatch_next(_provider_builder) -> int | None:
-            # First tick "dispatches" (truthy), every tick after reports nothing queued.
-            result = 42 if not calls else None
-            calls.append(result)
-            return result
-
-        class _NeverReadyQueue:
-            async def wait(self):  # noqa: ANN201 - never resolves before the 2s timeout
-                await asyncio.sleep(10)
+            return queue.pop(0)
 
         monkeypatch.setattr(printer_jobs, "dispatch_next", fake_dispatch_next)
-        printer_jobs.scheduler_status.running = False
         printer_jobs.scheduler_status.last_dispatch_at = None
 
-        async def _run() -> None:
-            task = asyncio.create_task(
-                printer_jobs.run_fleet_scheduler(
-                    _NeverReadyQueue(), _unused_provider_builder
-                )
+        dispatched = asyncio.run(
+            printer_jobs.drain_dispatch_queue(
+                _unused_provider_builder, budget_seconds=5
             )
-            # Let it dispatch once, then fall into the work_wakeup.wait() wait
-            # (2s timeout) at least once before cancelling.
-            await asyncio.sleep(0.05)
-            assert printer_jobs.scheduler_status.running is True
-            assert printer_jobs.scheduler_status.last_dispatch_at is not None
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        )
 
-        asyncio.run(_run())
-        assert printer_jobs.scheduler_status.running is False
-        assert len(calls) >= 2  # dispatched once, then at least one empty poll
+        assert dispatched == 2
+        assert queue == []
+        assert printer_jobs.scheduler_status.last_dispatch_at is not None
 
-    def test_run_fleet_scheduler_survives_a_bad_tick(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_a_bad_claim_ends_the_slice_and_is_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # The next slice starts from the database again; a failing claim must
+        # not spin inside this one.
+        calls: list[int] = []
+
         async def failing_dispatch_next(_provider_builder) -> int | None:
+            calls.append(1)
             raise RuntimeError("simulated tick failure")
 
-        class _NeverReadyQueue:
-            async def wait(self):  # noqa: ANN201
-                await asyncio.sleep(10)
-
         monkeypatch.setattr(printer_jobs, "dispatch_next", failing_dispatch_next)
-        printer_jobs.scheduler_status.running = False
         printer_jobs.scheduler_status.last_error = None
 
-        async def _run() -> None:
-            task = asyncio.create_task(
-                printer_jobs.run_fleet_scheduler(
-                    _NeverReadyQueue(), _unused_provider_builder
-                )
+        dispatched = asyncio.run(
+            printer_jobs.drain_dispatch_queue(
+                _unused_provider_builder, budget_seconds=5
             )
-            await asyncio.sleep(0.05)
-            assert printer_jobs.scheduler_status.last_error == "RuntimeError"
-            assert printer_jobs.scheduler_status.running is True  # loop kept going
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        )
 
-        asyncio.run(_run())
-        assert printer_jobs.scheduler_status.running is False
+        assert (dispatched, len(calls)) == (0, 1)
+        assert printer_jobs.scheduler_status.last_error == "RuntimeError"
+
+    def test_a_successful_claim_clears_the_last_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def nothing_queued(_provider_builder) -> int | None:
+            return None
+
+        monkeypatch.setattr(printer_jobs, "dispatch_next", nothing_queued)
+        printer_jobs.scheduler_status.last_error = "RuntimeError"
+
+        asyncio.run(
+            printer_jobs.drain_dispatch_queue(
+                _unused_provider_builder, budget_seconds=5
+            )
+        )
+
+        assert printer_jobs.scheduler_status.last_error is None
+
+    def test_stops_when_the_slice_budget_is_spent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A slice returns so the lane can run other Jobs; a queue that never
+        # empties is continued by the next slice, not by this one.
+        async def always_one(_provider_builder) -> int | None:
+            await asyncio.sleep(0.01)
+            return 7
+
+        monkeypatch.setattr(printer_jobs, "dispatch_next", always_one)
+
+        dispatched = asyncio.run(
+            printer_jobs.drain_dispatch_queue(
+                _unused_provider_builder, budget_seconds=0.05
+            )
+        )
+
+        assert 1 <= dispatched < 50
 
 
 class TestPrinter:

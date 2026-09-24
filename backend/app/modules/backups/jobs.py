@@ -31,6 +31,9 @@ from app.modules.work.sources import ScheduleSource
 
 CREATE_DEFINITION = "backup.create"
 AUTOMATIC_DEFINITION = "backup.automatic"
+# Every manual backup claims one subject, so a second request while one is
+# queued or running is refused rather than archiving the vault twice.
+MANUAL_SUBJECT = "backup/manual"
 
 
 def _meta(meta: backup_contracts.BackupMeta) -> dict[str, Any]:

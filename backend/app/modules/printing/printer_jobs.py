@@ -44,7 +44,6 @@ ProviderBuilder = Callable[[Printer], PrinterProviderClient]
 
 @dataclass
 class FleetSchedulerStatus:
-    running: bool = False
     last_tick_at: datetime | None = None
     last_dispatch_at: datetime | None = None
     last_error: str | None = None

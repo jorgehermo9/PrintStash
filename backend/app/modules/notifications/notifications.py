@@ -72,18 +72,16 @@ _SECRET_CONFIG_KEYS: Dict[NotificationTarget, set] = {
 _BACKOFF_SECONDS: List[int] = [30, 120, 600, 1800]
 _MAX_ATTEMPTS = len(_BACKOFF_SECONDS) + 1
 
-# Max deliveries processed per tick (bounds memory / burst load).
-_BATCH_SIZE = 50
 # Per-request network timeout.
 _REQUEST_TIMEOUT_S = 15.0
-# A delivery left in SENDING longer than this is assumed orphaned by a crashed
-# dispatcher and is reclaimed. Generous vs. the request timeout.
+# A delivery left in SENDING longer than this is assumed orphaned by a lost
+# delivery Job and is reported pending again. Generous vs. the request timeout.
 _STUCK_SENDING_SECONDS = 300
 # Cap on an honoured Retry-After so a hostile/huge value can't park a delivery.
 _MAX_RETRY_AFTER_SECONDS = 3600
 # Consecutive permanently-failed deliveries before a channel is auto-disabled.
 _CIRCUIT_BREAKER_THRESHOLD = 10
-# Delivered/failed rows older than this are pruned by the GC loop.
+# Delivered/failed rows older than this are pruned by ``notify.retention``.
 _DELIVERY_RETENTION_DAYS = 30
 
 
@@ -239,66 +237,6 @@ def enqueue_for_event(
 # --------------------------------------------------------------------------- #
 # Dispatcher (background loop)
 # --------------------------------------------------------------------------- #
-
-
-def _claim_due_deliveries() -> List[Dict[str, Any]]:
-    """Atomically claim due deliveries and return them as detached dicts.
-
-    A claim flips each eligible row ``PENDING → SENDING`` inside one
-    transaction, so a second dispatcher (another process, or the next tick)
-    won't grab the same row — `with_for_update(skip_locked=True)` makes this
-    safe under Postgres and is a harmless no-op on SQLite, whose writes already
-    serialise. Rows stuck in ``SENDING`` past ``_STUCK_SENDING_SECONDS`` (a
-    dispatcher crashed mid-send) are reclaimed. Returning plain dicts keeps ORM
-    objects off the async sender's thread.
-    """
-    now = utcnow()
-    stuck_cutoff = now - timedelta(seconds=_STUCK_SENDING_SECONDS)
-    out: List[Dict[str, Any]] = []
-    with get_session_factory().session() as session:
-        rows = session.exec(
-            select(NotificationDelivery, NotificationChannel)
-            .join(
-                NotificationChannel,
-                NotificationDelivery.channel_id == NotificationChannel.id,  # type: ignore[arg-type]
-            )
-            .where(
-                or_(
-                    (NotificationDelivery.status == NotificationDeliveryStatus.PENDING)
-                    & (NotificationDelivery.next_retry_at <= now),
-                    (NotificationDelivery.status == NotificationDeliveryStatus.SENDING)
-                    & (NotificationDelivery.updated_at < stuck_cutoff),
-                )
-            )
-            .order_by(NotificationDelivery.next_retry_at)  # type: ignore[attr-defined]
-            .limit(_BATCH_SIZE)
-            .with_for_update(skip_locked=True)
-        ).all()
-        for delivery, channel in rows:
-            delivery.status = NotificationDeliveryStatus.SENDING
-            delivery.updated_at = now
-            session.add(delivery)
-            try:
-                config = json.loads(channel.config_json or "{}")
-            except (TypeError, ValueError):
-                config = {}
-            try:
-                context = json.loads(delivery.context_json or "{}")
-            except (TypeError, ValueError):
-                context = {}
-            out.append(
-                {
-                    "delivery_id": delivery.id,
-                    "channel_id": channel.id,
-                    "target": channel.target,
-                    "config": config,
-                    "context": context,
-                    "attempts": delivery.attempts,
-                }
-            )
-        # Persist the claim (status → SENDING) so concurrent/next ticks skip them.
-        session.commit()
-    return out
 
 
 def _record_result(
@@ -474,15 +412,6 @@ async def _send_one(item: Dict[str, Any]) -> None:
         )
 
 
-async def dispatch_due() -> int:
-    """Process one batch of due deliveries. Returns how many were attempted."""
-    items = await asyncio.to_thread(_claim_due_deliveries)
-    if not items:
-        return 0
-    await asyncio.gather(*(_send_one(item) for item in items))
-    return len(items)
-
-
 DELIVER_DEFINITION = "notify.deliver"
 
 
@@ -541,10 +470,6 @@ def deliver(delivery_id: int) -> bool:
         return False
     run_async(_send_one(item))
     return True
-
-
-def _delivery_id(subject: str) -> int:
-    return int(subject.split("/", 1)[1])
 
 
 class DeliverySource:
@@ -641,7 +566,8 @@ def prune_deliveries(retention_days: int = _DELIVERY_RETENTION_DAYS) -> int:
     """Delete terminal (SENT/FAILED) deliveries older than ``retention_days``.
 
     Bounds unbounded growth of the outbox. PENDING/SENDING rows are never
-    pruned. Called from the app's GC loop. Returns the number deleted.
+    pruned. Run hourly by the ``notify.retention`` schedule. Returns the number
+    deleted.
     """
     cutoff = utcnow() - timedelta(days=max(1, retention_days))
     with get_session_factory().session() as session:

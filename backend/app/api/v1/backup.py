@@ -68,12 +68,13 @@ def create_backup(
         work_service.request(
             session,
             definition=backup_jobs.CREATE_DEFINITION,
-            subject_key=f"job/{job_id}",
+            subject_key=backup_jobs.MANUAL_SUBJECT,
             owner_user_id=current_user.id,
             job_id=job_id,
         )
         session.commit()
     except ActiveJobExists as exc:
+        session.rollback()
         raise HTTPException(status_code=409, detail="backup_in_progress") from exc
     nudge(backup_jobs.CREATE_DEFINITION)
     return JobAccepted(job_id=job_id, message="backup queued")

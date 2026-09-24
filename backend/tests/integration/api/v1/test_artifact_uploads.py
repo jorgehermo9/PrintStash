@@ -42,6 +42,7 @@ from app.modules.storage.storage_backend.contracts import (
 from app.schemas.artifact_uploads import ArtifactUploadCreate
 from tests._env import use_local_storage
 from tests.factories import content
+from tests.integration.api.v1._ingest_assertions import drain_work
 
 
 def _request(payload: bytes) -> dict[str, object]:
@@ -423,6 +424,7 @@ class TestArtifactUploads:
         )
 
         assert finalized.status_code == 200
+        drain_work()
         completed = client.get(
             f"/api/v1/artifact-uploads/{upload_id}", headers=auth_headers
         ).json()
@@ -489,6 +491,7 @@ class TestArtifactUploads:
             select(ArtifactUploadPart).where(ArtifactUploadPart.session_id == upload_id)
         ).all()
         assert len(rows) == 1
+        drain_work()
         completed = client.get(
             f"/api/v1/artifact-uploads/{upload_id}", headers=auth_headers
         )
@@ -571,6 +574,7 @@ class TestArtifactUploads:
         )
 
         assert response.status_code == 200
+        drain_work()
         completed = client.get(
             f"/api/v1/artifact-uploads/{upload_id}", headers=auth_headers
         ).json()
@@ -606,6 +610,7 @@ class TestArtifactUploads:
 
         assert finalized.status_code == 200
         assert finalized.json()["job_id"]
+        drain_work()
         assert (
             client.get(
                 f"/api/v1/artifact-uploads/{upload_id}", headers=auth_headers
@@ -645,6 +650,7 @@ class TestArtifactUploads:
         )
 
         assert response.status_code == 200
+        drain_work()
         completed = client.get(
             f"/api/v1/artifact-uploads/{upload_id}", headers=auth_headers
         ).json()
@@ -700,7 +706,7 @@ class TestArtifactUploads:
         upload = db_session.get(ArtifactUploadSession, upload_id)
         assert upload is not None
         assert str(upload.state) == "failed"
-        assert upload.background_job_id is None
+        assert upload.job_id is None
         assert not db_session.exec(
             select(File).where(File.sha256 == hashlib.sha256(payload).hexdigest())
         ).all()

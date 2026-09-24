@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import io
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,12 +36,17 @@ import app.modules.backups.backup.restore as backup_restore
 import app.modules.backups.backup.verification as backup_verification
 import app.modules.storage.storage_backend.local as storage_local
 from app.api.v1 import backup as backup_api
-from app.db.models import OwnedStorageObject
+from app.core.time import utcnow
+from app.db.models import IngestRequestKind, OwnedStorageObject, StagingLease
 from app.modules.backups import backup_destination
 from app.modules.backups.backup_catalogue import BackupIdentityConflictError
 from app.modules.backups.backup_destination import RemoteBackupDestination
 from app.modules.storage.storage_backend.contracts import StorageObjectInfo
-from tests.factories import build_owned_storage_object
+from tests.factories import (
+    build_ingest_request,
+    build_owned_storage_object,
+    build_user,
+)
 from tests.integration._backup_harness import (
     BackupEnv,
     backup_admin_headers,
@@ -48,6 +54,7 @@ from tests.integration._backup_harness import (
     store_owned_bytes,
     user_headers_in_env,
 )
+from tests.integration.api.v1._ingest_assertions import drain_work
 
 POSTGRES_URL = "postgresql://printstash:secret@database/printstash"
 
@@ -96,28 +103,55 @@ def a_backup(backup_env: BackupEnv):
     return backup_creation.create_backup()
 
 
+def _backup_job(client: TestClient, headers: dict[str, str]) -> dict:
+    """Queue a manual backup, run it, and return its finished Job."""
+    response = client.post("/api/v1/backups", headers=headers)
+    assert response.status_code == 202, response.text
+    drain_work()
+    job = client.get(f"/api/v1/jobs/{response.json()['job_id']}", headers=headers)
+    assert job.status_code == 200, job.text
+    return job.json()
+
+
 class TestCreateBackup:
-    def test_returns_the_new_backups_metadata(
+    def test_the_job_result_carries_the_new_backups_metadata(
         self, client: TestClient, backup_env: BackupEnv, admin_headers: dict[str, str]
     ) -> None:
         seed_model_with_blob(backup_env, name="Widget", content=b"x")
 
-        response = client.post("/api/v1/backups", headers=admin_headers)
+        job = _backup_job(client, admin_headers)
 
-        assert response.status_code == 202, response.text
-        body = response.json()
-        assert body["backup_id"]
-        assert body["file_count"] == 1
-        assert body["location"] == "local"
+        assert (job["kind"], job["state"]) == ("backup.create", "completed")
+        assert job["result"]["backup_id"]
+        assert job["result"]["file_count"] == 1
+        assert job["result"]["outcome"] == "completed"
 
     def test_writes_the_archive(
         self, client: TestClient, backup_env: BackupEnv, admin_headers: dict[str, str]
     ) -> None:
         seed_model_with_blob(backup_env, name="Widget", content=b"x")
 
-        client.post("/api/v1/backups", headers=admin_headers)
+        _backup_job(client, admin_headers)
 
         assert list(backup_env.backup_dir.glob("*.tar.gz"))
+
+    def test_a_second_backup_while_one_is_queued_is_refused(
+        self, client: TestClient, backup_env: BackupEnv, admin_headers: dict[str, str]
+    ) -> None:
+        first = client.post("/api/v1/backups", headers=admin_headers)
+
+        second = client.post("/api/v1/backups", headers=admin_headers)
+
+        assert first.status_code == 202, first.text
+        assert second.status_code == 409, second.text
+        assert second.json()["detail"] == "backup_in_progress"
+
+    def test_a_backup_after_the_last_one_finished_is_accepted(
+        self, client: TestClient, backup_env: BackupEnv, admin_headers: dict[str, str]
+    ) -> None:
+        _backup_job(client, admin_headers)
+
+        assert client.post("/api/v1/backups", headers=admin_headers).status_code == 202
 
     def test_refuses_on_a_database_it_cannot_back_up(
         self,
@@ -130,10 +164,12 @@ class TestCreateBackup:
 
         monkeypatch.setitem(_overlay, "db_url", POSTGRES_URL)
 
-        response = client.post("/api/v1/backups", headers=admin_headers)
+        job = _backup_job(client, admin_headers)
 
-        assert response.status_code == 501, response.text
-        assert response.json()["detail"] == "database_backup_not_supported"
+        assert (job["state"], job["error"]) == (
+            "failed",
+            "database_backup_not_supported",
+        )
 
     def test_writes_nothing_when_it_refuses(
         self,
@@ -146,48 +182,54 @@ class TestCreateBackup:
 
         monkeypatch.setitem(_overlay, "db_url", POSTGRES_URL)
 
-        client.post("/api/v1/backups", headers=admin_headers)
+        _backup_job(client, admin_headers)
 
         # A half-written archive would look restorable and is not.
         assert list(backup_env.backup_dir.glob("*.tar.gz")) == []
 
-    def test_reports_a_missing_destination_as_a_conflict(
+    def test_a_missing_destination_fails_the_job_without_a_retry(
         self,
         client: TestClient,
         backup_env: BackupEnv,
         admin_headers: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(
-            backup_creation,
-            "create_backup",
-            lambda: (_ for _ in ()).throw(RuntimeError("backup_destination_required")),
+        def refuse(**_kwargs):
+            raise RuntimeError("backup_destination_required")
+
+        monkeypatch.setattr(backup_creation, "create_backup", refuse)
+
+        job = _backup_job(client, admin_headers)
+
+        # No retry fixes a missing destination; configuring one does.
+        assert (job["state"], job["error"], job["retryable"]) == (
+            "failed",
+            "backup_destination_required",
+            False,
         )
 
-        response = client.post("/api/v1/backups", headers=admin_headers)
-
-        assert response.status_code == 409, response.text
-        assert response.json()["detail"] == "backup_destination_required"
-
-    def test_reports_failed_destinations_as_bad_gateway(
+    def test_failed_destinations_fail_the_job_as_retryable(
         self,
         client: TestClient,
         backup_env: BackupEnv,
         admin_headers: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(
-            backup_creation,
-            "create_backup",
-            lambda: (_ for _ in ()).throw(
-                RuntimeError("backup_all_destinations_failed")
-            ),
+        def unreachable(**_kwargs):
+            error = RuntimeError("backup_all_destinations_failed")
+            error.run_id = 41  # type: ignore[attr-defined]
+            raise error
+
+        monkeypatch.setattr(backup_creation, "create_backup", unreachable)
+
+        job = _backup_job(client, admin_headers)
+
+        assert (job["state"], job["error"], job["retryable"]) == (
+            "failed",
+            "backup_all_destinations_failed",
+            True,
         )
-
-        response = client.post("/api/v1/backups", headers=admin_headers)
-
-        assert response.status_code == 502, response.text
-        assert response.json()["detail"] == "backup_all_destinations_failed"
+        assert job["result"] == {"run_id": 41}
 
     def test_rejects_an_unauthenticated_caller(self, client: TestClient) -> None:
         assert client.post("/api/v1/backups").status_code == 401
@@ -580,16 +622,14 @@ class TestDownloadBackup:
             backup_catalogue, "get_backup_archive_path", lambda *_args, **_kwargs: cache
         )
 
-        tasks = BackgroundTasks()
-        response = backup_api.download_backup(
-            tasks, "idempotent", source_ref=meta.source_ref
-        )
+        response = backup_api.download_backup("idempotent", source_ref=meta.source_ref)
         assert response.filename == meta.path
         assert response.headers["content-disposition"].endswith(
             f'filename="{meta.path}"'
         )
 
-        asyncio.run(tasks())
+        assert response.background is not None
+        asyncio.run(response.background())
         backup_caches.cleanup_backup_cache(cache)
 
         assert not cache.exists()
@@ -635,24 +675,19 @@ class TestDownloadBackup:
             lambda backup_id, **_kwargs: paths[backup_id],
         )
 
-        def download(name: str) -> tuple[str | None, Path, BackgroundTasks]:
-            tasks = BackgroundTasks()
-            result = backup_api.download_backup(
-                tasks, name, source_ref=f"{name}-source"
-            )
-            return result.filename, result.path, tasks
+        def download(name: str):
+            return backup_api.download_backup(name, source_ref=f"{name}-source")
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(download, payloads))
 
-        assert {filename for filename, _path, _tasks in results} == {
+        assert {result.filename for result in results} == {
             meta.path for meta in metas.values()
         }
-        assert {path for _filename, path, _tasks in results} == {
-            path for path in paths.values()
-        }
-        for _filename, _path, tasks in results:
-            asyncio.run(tasks())
+        assert {result.path for result in results} == {path for path in paths.values()}
+        for result in results:
+            assert result.background is not None
+            asyncio.run(result.background())
         assert all(not path.exists() for path in paths.values())
 
     def test_reports_an_unknown_backup_as_not_found(
@@ -1051,24 +1086,61 @@ class TestRestoreBackup:
         assert response.status_code == 404, response.text
         assert response.json()["detail"] == "backup_not_found"
 
-    def test_refuses_while_ingestion_work_is_in_flight(
-        self, client: TestClient, admin_headers: dict[str, str], a_backup
+    def test_refuses_while_a_write_stays_admitted(
+        self,
+        client: TestClient,
+        admin_headers: dict[str, str],
+        a_backup,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from app.runtime.jobs import registry
+        # A job step mid-write is an admitted mutation: the restore waits for
+        # it to drain, and refuses rather than replacing the database under it.
+        from app.runtime import maintenance
 
-        job_id = registry.create()
-        registry.update(job_id, state="running")
+        monkeypatch.setattr(maintenance, "_RESTORE_DRAIN_TIMEOUT_S", 0.1)
+        assert maintenance.begin_mutating_operation() is True
         try:
             response = client.post(
                 f"/api/v1/backups/{a_backup.id}/restore", headers=admin_headers
             )
         finally:
-            registry.update(job_id, state="completed")
+            maintenance.end_mutating_operation()
 
         assert response.status_code == 409, response.text
-        assert response.json()["detail"] == (
-            "1 ingestion job(s) and 0 staging lease(s) active"
+
+    def test_refuses_while_an_import_owns_staged_bytes(
+        self,
+        client: TestClient,
+        backup_env: BackupEnv,
+        admin_headers: dict[str, str],
+        a_backup,
+    ) -> None:
+        staged = backup_env.root / "staged-import.stl"
+        staged.write_bytes(b"solid x\nendsolid x\n")
+        with backup_env.new_session() as session:
+            owner = build_user(session, "restore-importer")
+            request = build_ingest_request(
+                session, owner, kind=IngestRequestKind.UPLOAD
+            )
+            session.add(
+                StagingLease(
+                    id="restore-lease",
+                    path=str(staged),
+                    owner_user_id=owner.id,
+                    job_id=request.job_id,
+                    size_bytes=staged.stat().st_size,
+                    sha256="f" * 64,
+                    expires_at=utcnow() + timedelta(hours=1),
+                )
+            )
+            session.commit()
+
+        response = client.post(
+            f"/api/v1/backups/{a_backup.id}/restore", headers=admin_headers
         )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "1 staging lease(s) active"
 
     def test_refuses_on_a_database_it_cannot_restore(
         self,
@@ -1373,9 +1445,7 @@ class TestBackupRunAdministration:
     def test_create_exposes_durable_destination_results(
         self, client, backup_env, admin_headers
     ):
-        response = client.post("/api/v1/backups", headers=admin_headers)
-        assert response.status_code == 202
-        created = response.json()
+        created = _backup_job(client, admin_headers)["result"]
         assert created["outcome"] == "completed"
         result = created["destination_results"][0]
         assert result["outcome"] == "completed"
@@ -1426,12 +1496,13 @@ class TestBackupRunAdministration:
             profile.config_json = "{}"
             session.add(profile)
             session.commit()
-        response = client.post("/api/v1/backups", headers=admin_headers)
-        assert response.status_code == 502
-        body = response.json()
-        assert body["detail"] == "backup_all_destinations_failed"
+        job = _backup_job(client, admin_headers)
+        assert (job["state"], job["error"]) == (
+            "failed",
+            "backup_all_destinations_failed",
+        )
         detail = client.get(
-            f"/api/v1/backups/runs/{body['run_id']}", headers=admin_headers
+            f"/api/v1/backups/runs/{job['result']['run_id']}", headers=admin_headers
         )
         assert detail.status_code == 200
         assert detail.json()["outcome"] == "failed"

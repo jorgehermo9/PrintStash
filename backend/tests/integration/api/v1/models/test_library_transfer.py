@@ -10,8 +10,8 @@ caller and a full disk, and each answers with a **different** status so an opera
 tell them apart: the server is holding too many pending uploads (503), *this user* is
 holding too many (429), the staging quota or the free space is exhausted (507), and the
 body outgrew what was left while it was being written (507 again, but discovered
-mid-stream). Whatever happens, the partial file is removed and the job is marked failed
-and retryable rather than left pending forever.
+mid-stream). Whatever happens, the partial file is removed, and the import's Job exists
+only together with the staged bytes it owns, so nothing is left pending forever.
 """
 
 from __future__ import annotations
@@ -21,8 +21,11 @@ import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 from app.core.config import _overlay
+from app.db.models import Job
+from tests.integration.api.v1._ingest_assertions import completed_job, drain_work
 
 
 def _zip(entries: dict[str, str]) -> bytes:
@@ -42,11 +45,7 @@ def imported_model(client: TestClient, auth_headers, local_storage) -> None:
         files={"file": ("cube.stl", b"solid cube\nendsolid cube\n", "application/sla")},
         data={"model_name": "Archive Me"},
     )
-    assert uploaded.status_code == 202, uploaded.text
-    job = client.get(
-        f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=auth_headers
-    )
-    assert job.json()["state"] == "completed", job.json()
+    completed_job(client, uploaded)
 
 
 class TestExportLibraryArchive:
@@ -72,8 +71,9 @@ class TestExportLibraryArchive:
         )
 
         assert response.status_code == 202, response.text
+        drain_work()
         job = client.get(
-            f"/api/v1/ingest/jobs/{response.json()['job_id']}", headers=auth_headers
+            f"/api/v1/jobs/{response.json()['job_id']}", headers=auth_headers
         )
         assert job.json()["state"] == "completed", job.json()
 
@@ -167,8 +167,9 @@ class TestImportLibraryArchive:
         )
 
         assert response.status_code == 202, response.text
+        drain_work()
         job = client.get(
-            f"/api/v1/ingest/jobs/{response.json()['job_id']}", headers=auth_headers
+            f"/api/v1/jobs/{response.json()['job_id']}", headers=auth_headers
         )
         assert job.json()["state"] == "failed"
         assert job.json()["error"] == "portable_manifest_invalid"
@@ -273,22 +274,23 @@ class TestImportLibraryArchive:
 
         assert list(inbox.settings.incoming_dir.iterdir()) == []
 
-    def test_fails_the_job_when_staging_breaks_after_it_was_created(
+    def test_a_refused_lease_leaves_neither_a_job_nor_its_bytes(
         self,
         client: TestClient,
         auth_headers,
         local_storage,
+        db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        # The Job and its lease commit together: a Job without its staged bytes
+        # is a queue entry that can only ever fail.
         from app.api.v1 import models as models_api
-        from app.runtime.jobs import registry
+        from app.modules.ingestion import inbox
 
-        created = _record_created_jobs(monkeypatch)
-
-        def broken_clock():
+        def refused(*_args: object, **_kwargs: object):
             raise ValueError("staging_capacity_exceeded")
 
-        monkeypatch.setattr(models_api, "utcnow", broken_clock)
+        monkeypatch.setattr(models_api.staging_leases, "create_job_lease", refused)
 
         response = client.post(
             "/api/v1/models/library-import",
@@ -296,31 +298,28 @@ class TestImportLibraryArchive:
             files={"file": ("archive.zip", _zip({"a.txt": "a"}), "application/zip")},
         )
 
-        # A job left pending forever is a queue an operator cannot clear.
         assert response.status_code == 507, response.text
-        status = registry.get(created[0])
-        assert status is not None
-        assert status.state == "failed"
+        db_session.expire_all()
+        assert db_session.exec(select(Job)).all() == []
+        assert list(inbox.settings.incoming_dir.iterdir()) == []
 
-    def test_fails_the_job_when_taking_the_staging_lease_breaks(
+    def test_a_broken_staging_ledger_leaves_neither_a_job_nor_its_bytes(
         self,
         client: TestClient,
         auth_headers,
         local_storage,
+        db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.api.v1 import models as models_api
-        from app.runtime.jobs import registry
+        from app.modules.ingestion import inbox
 
-        created = _record_created_jobs(monkeypatch)
-
-        def broken_clock():
+        def unavailable(*_args: object, **_kwargs: object):
             raise RuntimeError("staging ledger unavailable")
 
-        # Anything that is not a ValueError takes the other arm: the job is still
-        # failed, but with the generic reason rather than the caller's.
-        monkeypatch.setattr(models_api, "utcnow", broken_clock)
+        monkeypatch.setattr(models_api.staging_leases, "create_job_lease", unavailable)
 
+        # Not a caller error: it surfaces as a server error rather than a 400.
         with pytest.raises(RuntimeError, match="staging ledger unavailable"):
             client.post(
                 "/api/v1/models/library-import",
@@ -330,10 +329,9 @@ class TestImportLibraryArchive:
                 },
             )
 
-        status = registry.get(created[0])
-        assert status is not None
-        assert status.state == "failed"
-        assert status.error == "staging_lease_failed"
+        db_session.expire_all()
+        assert db_session.exec(select(Job)).all() == []
+        assert list(inbox.settings.incoming_dir.iterdir()) == []
 
     def test_rejects_a_non_superuser(
         self, client: TestClient, user_headers, local_storage
@@ -355,22 +353,6 @@ class TestImportLibraryArchive:
         )
 
         assert response.status_code == 401, response.text
-
-
-def _record_created_jobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Capture the ids of jobs the import route creates, so their state can be read."""
-    from app.api.v1 import models as models_api
-
-    created: list[str] = []
-    real_create = models_api.registry.create
-
-    def recording_create(*args: object, **kwargs: object) -> str:
-        job_id = real_create(*args, **kwargs)
-        created.append(job_id)
-        return job_id
-
-    monkeypatch.setattr(models_api.registry, "create", recording_create)
-    return created
 
 
 def _leave_free_bytes(monkeypatch: pytest.MonkeyPatch, free: int) -> None:

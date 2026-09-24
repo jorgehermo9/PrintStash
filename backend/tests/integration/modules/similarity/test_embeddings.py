@@ -143,7 +143,7 @@ class TestEmbeddingRecovery:
     def test_contains_materialization_failure(
         self, db_session, embedding_unit, failure
     ):
-        from app.db.models import ThumbnailRenderSlot
+        from app.db.models import NativeComputeSlot
         from app.modules.storage import artifact_content
 
         _actor, file, fp, _provider, _generation, run = embedding_unit
@@ -162,7 +162,7 @@ class TestEmbeddingRecovery:
         assert db_session.exec(select(PassageVector)).all() == []
         assert all(
             row.lease_token is None
-            for row in db_session.exec(select(ThumbnailRenderSlot))
+            for row in db_session.exec(select(NativeComputeSlot))
         )
 
     def test_skips_stale_source_without_embedding(self, db_session, embedding_unit):
