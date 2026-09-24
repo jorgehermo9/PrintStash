@@ -1,4 +1,9 @@
-"""Native compute permits survive SQLite contention without admitting extra work."""
+"""Native compute permits: one host memory budget shared by every process.
+
+No more permits than the limit are ever held; a dead holder's lease expires
+and is taken over; a late owner cannot release its successor's permit; and
+SQLite contention is retried without admitting extra work.
+"""
 
 import pytest
 from sqlalchemy import text
@@ -63,6 +68,76 @@ class TestAcquire:
             compute_slots.acquire(db_session, token, lease_seconds=seconds)
 
         assert db_session.exec(select(NativeComputeSlot)).all() == []
+
+    def test_admits_no_more_than_the_limit(self, db_session, monkeypatch):
+        monkeypatch.setitem(_overlay, "max_render_jobs", 1)
+
+        assert compute_slots.acquire(db_session, "first") is not None
+        assert compute_slots.acquire(db_session, "second") is None
+
+    def test_an_expired_lease_is_taken_over(self, db_session, monkeypatch):
+        # Its holder died; the permit must not stay lost until a restart.
+        monkeypatch.setitem(_overlay, "max_render_jobs", 1)
+        compute_slots.acquire(db_session, "dead", lease_seconds=1)
+        db_session.execute(
+            text("UPDATE native_compute_slots SET lease_expires_at = '2000-01-01'")
+        )
+        db_session.commit()
+
+        permit = compute_slots.acquire(db_session, "successor")
+
+        assert permit is not None and permit.lease_token == "successor"
+
+
+class TestRelease:
+    def test_a_released_permit_admits_the_next(self, db_session, monkeypatch):
+        monkeypatch.setitem(_overlay, "max_render_jobs", 1)
+        permit = compute_slots.acquire(db_session, "first")
+        assert permit is not None
+
+        compute_slots.release(db_session, permit.id, "first")
+        db_session.commit()
+
+        assert compute_slots.acquire(db_session, "second") is not None
+
+    def test_a_late_owner_cannot_release_its_successor(self, db_session, monkeypatch):
+        monkeypatch.setitem(_overlay, "max_render_jobs", 1)
+        permit = compute_slots.acquire(db_session, "successor")
+        assert permit is not None
+
+        compute_slots.release(db_session, permit.id, "late-owner")
+        db_session.commit()
+
+        db_session.expire_all()
+        assert db_session.get(NativeComputeSlot, permit.id).lease_token == "successor"
+
+    def test_releasing_no_permit_is_a_no_op(self, db_session):
+        compute_slots.release(db_session, None, "never-acquired")
+
+
+class TestNativeMemory:
+    def test_the_budget_is_capped_at_two_gibibytes(self, monkeypatch):
+        from app.modules.media import mesh_processing
+
+        monkeypatch.setattr(
+            mesh_processing, "_step_memory_budget_bytes", lambda: 64 * 1024**3
+        )
+
+        assert compute_slots.native_memory_budget_bytes() == 2 * 1024**3
+
+    def test_an_undetectable_budget_falls_back_to_one_gibibyte(self, monkeypatch):
+        from app.modules.media import mesh_processing
+
+        monkeypatch.setattr(mesh_processing, "_step_memory_budget_bytes", lambda: None)
+
+        assert compute_slots.native_memory_budget_bytes() == 1024**3
+
+    def test_reads_a_process_rss(self, monkeypatch):
+        from app.modules.media import mesh_processing
+
+        monkeypatch.setattr(mesh_processing, "_process_rss_bytes", lambda pid: pid * 2)
+
+        assert compute_slots.native_process_rss_bytes(21) == 42
 
 
 class TestRetry:

@@ -51,7 +51,7 @@ MODULE_FLOOR = 90.0
 PINNED_BELOW_FLOOR = {
     "app/modules/library/source_covers.py": 76.5,
     "app/modules/ingestion/staging_leases.py": 79.0,
-    "app/modules/ingestion/inbox.py": 81.0,
+    "app/modules/ingestion/inbox.py": 84.0,
     "app/modules/library/provenance.py": 81.5,
     "app/modules/ingestion/library_transfer.py": 84.0,
     "app/modules/ingestion/ingestion.py": 85.5,
