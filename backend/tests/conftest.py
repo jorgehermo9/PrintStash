@@ -417,6 +417,9 @@ def work_engine(work_catalog, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     from app.modules.work.jobs import jobs
     from app.runtime.engine.inline import InlineJobEngine
 
+    # The catalog is built once, but a lane override replaces its lanes: each
+    # test gets its own copy so one test's override never reaches the next.
+    monkeypatch.setattr(work_catalog, "lanes", dict(work_catalog.lanes))
     engine = InlineJobEngine(work_catalog)
     engine.launch(listen_lanes=None)
     monkeypatch.setattr(work_bootstrap, "build_engine", lambda _catalog: engine)

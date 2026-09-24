@@ -419,6 +419,22 @@ class TestSubmittingFromInsideWork:
         assert outcome is SubmitOutcome.ACCEPTED
         assert harness.state(job_id) == "completed"
 
+    def test_a_step_may_drive_its_own_event_loop(self, harness: Harness) -> None:
+        # An SFTP listing runs its own loop inside a step. Work settled from an
+        # async flow must still not run that step on the flow's loop thread.
+        def own_loop(_ctx) -> None:
+            asyncio.run(asyncio.sleep(0))
+
+        job_id = harness.job(PLAIN, "loop/2", behaviour=own_loop)
+
+        async def flow() -> None:
+            work_submission.submit(job_id)
+            harness.settle()
+
+        asyncio.run(flow())
+
+        assert harness.state(job_id) == "completed"
+
 
 class TestReset:
     def test_reset_discards_every_execution(self, harness: Harness) -> None:

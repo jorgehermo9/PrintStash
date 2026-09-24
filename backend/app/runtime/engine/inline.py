@@ -10,8 +10,11 @@ blocking.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import itertools
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -36,6 +39,35 @@ _MAX_SLEEPS = 1000
 
 class InlineCancelled(BaseException):
     """Unwinds an execution whose cancellation the engine observed."""
+
+
+def _execute(submission: Submission, runner: _Runner) -> None:
+    if submission.definition == RECONCILE_DEFINITION:
+        from app.modules.work.reconciler import execute_pass
+
+        execute_pass(submission.subject_key, runner)
+    else:
+        from app.modules.work.runner import execute_job
+
+        execute_job(submission.job_id, submission.attempt, runner)
+
+
+def _off_loop(fn: Callable[[], None]) -> None:
+    """Run ``fn`` where the durable engine runs steps: never on an event loop.
+
+    DBOS executes steps on its own worker threads, so a step may drive its own
+    loop (an SFTP listing does). A test that drains from inside an async flow
+    would otherwise run the step on the test's loop thread, where that fails.
+    The caller's context goes along, so its settings and session factory hold.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        fn()
+        return
+    context = contextvars.copy_context()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="inline-step") as pool:
+        pool.submit(context.run, fn).result()
 
 
 @dataclass
@@ -235,14 +267,7 @@ class InlineJobEngine(JobEngine):
         runner = _Runner(self, execution)
         submission = execution.submission
         try:
-            if submission.definition == RECONCILE_DEFINITION:
-                from app.modules.work.reconciler import execute_pass
-
-                execute_pass(submission.subject_key, runner)
-            else:
-                from app.modules.work.runner import execute_job
-
-                execute_job(submission.job_id, submission.attempt, runner)
+            _off_loop(lambda: _execute(submission, runner))
         except InlineCancelled:
             execution.status = EngineStatus.CANCELLED
             return execution
