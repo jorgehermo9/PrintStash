@@ -10,7 +10,6 @@ without a reload.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,44 +29,13 @@ from app.db.models import (
 )
 from app.modules.derivatives import producers
 from app.modules.derivatives.kinds import METADATA, THUMBNAIL, TOOLPATH
+from app.modules.ingestion import extensions
 from app.modules.media import toolpath
 from app.modules.media.thumbnail_publication import ThumbnailPublicationError
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.work import events
-from tests.factories import build_file, build_model, content
+from tests.factories import content
 from tests.paths import FIXTURES_DIR
-
-
-@pytest.fixture
-def stored(db_session: Session):
-    """An Artifact whose bytes are on the backend, as ingestion leaves it."""
-
-    def build(filename: str, data: bytes, **fields) -> File:
-        model = build_model(db_session, filename)
-        row = build_file(
-            db_session,
-            model,
-            filename=filename,
-            size_bytes=len(data),
-            sha256=hashlib.sha256(data).hexdigest(),
-            **fields,
-        )
-        get_backend().write_bytes(data, row.path)
-        return row
-
-    return build
-
-
-@pytest.fixture
-def remove_blob_key():
-    """Empty a storage key, the way a delete outside PrintStash would."""
-
-    def remove(key: str) -> None:
-        direct = get_backend().direct_path(key)
-        assert direct is not None
-        direct.unlink(missing_ok=True)
-
-    return remove
 
 
 @pytest.fixture
@@ -83,6 +51,23 @@ def announced() -> Iterator[list[dict]]:
         yield notices
     finally:
         events.bind(None)
+
+
+class FingerprintSink:
+    """Similarity's side of the mesh load: asks for fingerprints, takes them."""
+
+    def __init__(self, *, broken: bool = False) -> None:
+        self.broken = broken
+        self.received: list[int] = []
+
+    def extraction_options(self, _sessions):
+        return {"include_fingerprint": True}
+
+    def after_commit(self, _sessions, file_id, _actor_id, _result):
+        if self.broken:
+            raise RuntimeError("similarity store unavailable")
+        self.received.append(file_id)
+        return "stored"
 
 
 def _rows(session: Session, file_id: int) -> dict[str, ArtifactDerivative]:
@@ -189,6 +174,29 @@ class TestDeriveMesh:
         assert all(row.failure_reason == "invalid_source" for row in rows.values())
         assert all(row.next_attempt_at is not None for row in rows.values())
 
+    def test_hands_geometry_fingerprints_to_similarity(self, stored) -> None:
+        artifact = stored("cube.stl", content.binary_stl())
+        similarity = FingerprintSink()
+        extensions.bind_derivatives(similarity)
+        try:
+            producers.derive_mesh(artifact.id)
+        finally:
+            extensions.bind_derivatives(None)
+
+        assert similarity.received == [artifact.id]
+
+    def test_a_similarity_failure_does_not_fail_the_geometry(self, stored) -> None:
+        # Fingerprints are evidence similarity can re-derive; the geometry the
+        # load produced is still good.
+        artifact = stored("cube.stl", content.binary_stl())
+        extensions.bind_derivatives(FingerprintSink(broken=True))
+        try:
+            outcome = producers.derive_mesh(artifact.id)
+        finally:
+            extensions.bind_derivatives(None)
+
+        assert outcome.kinds == {METADATA: "ready", THUMBNAIL: "ready"}
+
     def test_a_render_that_cannot_work_is_terminal(
         self, db_session: Session, stored
     ) -> None:
@@ -267,6 +275,80 @@ class TestDeriveGcode:
             )
         ).all()
         assert [req.tool_index for req in requirements] == [0]
+
+    def test_malformed_material_entries_are_dropped(
+        self, db_session: Session, stored, monkeypatch
+    ) -> None:
+        from app.db.models import ArtifactMaterialRequirement
+        from app.modules.media import gcode_parser
+
+        monkeypatch.setattr(
+            gcode_parser,
+            "parse",
+            lambda _path: {
+                "material_requirements": [
+                    "PLA",
+                    {"tool_index": 1, "material_type": "  "},
+                    {"tool_index": 2, "material_type": " PETG ", "color_hex": "#fff"},
+                ]
+            },
+        )
+        artifact = stored("multi.gcode", content.gcode(marker="multi"))
+
+        producers.derive_gcode(artifact.id)
+
+        (requirement,) = db_session.exec(
+            select(ArtifactMaterialRequirement).where(
+                ArtifactMaterialRequirement.file_id == artifact.id
+            )
+        ).all()
+        assert (requirement.tool_index, requirement.material_type) == (2, "PETG")
+
+    def test_derives_only_what_is_still_owed(
+        self, db_session: Session, stored, make_derivative
+    ) -> None:
+        artifact = stored("plain.gcode", content.gcode(marker="owed"))
+        make_derivative(artifact, METADATA)
+
+        assert producers.derive_gcode(artifact.id).kinds == {THUMBNAIL: "skipped"}
+        assert (
+            db_session.exec(
+                select(Metadata).where(Metadata.file_id == artifact.id)
+            ).first()
+            is None
+        )
+
+    def test_a_fully_derived_artifact_is_left_alone(
+        self, stored, make_derivative
+    ) -> None:
+        artifact = stored("plain.gcode", content.gcode(marker="done"))
+        make_derivative(artifact, METADATA)
+        make_derivative(artifact, THUMBNAIL)
+
+        assert producers.derive_gcode(artifact.id).kinds == {}
+
+    def test_a_trashed_artifact_is_not_derived(self, stored) -> None:
+        from app.core.time import utcnow
+
+        artifact = stored(
+            "plain.gcode", content.gcode(marker="trashed"), deleted_at=utcnow()
+        )
+
+        assert producers.derive_gcode(artifact.id).kinds == {}
+
+    def test_an_embedded_image_that_does_not_decode_is_terminal(
+        self, db_session: Session, stored, monkeypatch
+    ) -> None:
+        from app.modules.media import thumbnail
+
+        monkeypatch.setattr(thumbnail, "extract", lambda _path: b"not an image")
+        artifact = stored("plain.gcode", content.gcode(marker="garbled"))
+
+        outcome = producers.derive_gcode(artifact.id)
+
+        assert outcome.kinds[THUMBNAIL] == "failed"
+        row = _rows(db_session, artifact.id)[THUMBNAIL]
+        assert (row.failure_reason, row.next_attempt_at) == ("invalid_source", None)
 
     def test_a_profile_detection_failure_does_not_fail_the_metadata(
         self, db_session: Session, stored, monkeypatch
@@ -352,6 +434,32 @@ class TestDeriveToolpath:
         row = _rows(db_session, bgcode.id)[TOOLPATH]
         assert row.failure_reason == "file_blob_unavailable"
         assert row.next_attempt_at is not None
+
+    def test_unreadable_content_is_transient(
+        self, db_session: Session, bgcode, monkeypatch
+    ) -> None:
+        from app.modules.storage.artifact_content import ArtifactContentError
+
+        def unreadable(*_args):
+            raise ArtifactContentError("backend_unavailable")
+
+        monkeypatch.setattr(toolpath, "convert", unreadable)
+
+        assert producers.derive_toolpath(bgcode.id).kinds == {TOOLPATH: "failed"}
+        row = _rows(db_session, bgcode.id)[TOOLPATH]
+        assert (row.failure_reason, row.next_attempt_at is not None) == (
+            "invalid_source",
+            True,
+        )
+
+    def test_a_trashed_artifact_is_not_derived(self, stored) -> None:
+        from app.core.time import utcnow
+
+        artifact = stored(
+            "gone.bgcode", b"GCDE\x01\x00\x00\x00\x01\x00", deleted_at=utcnow()
+        )
+
+        assert producers.derive_toolpath(artifact.id).kinds == {}
 
     def test_a_missing_converter_is_transient(
         self, db_session: Session, bgcode
