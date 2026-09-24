@@ -14,7 +14,7 @@ import pytest
 from fastapi import APIRouter, HTTPException
 from fastapi.routing import APIRoute
 
-from app.api.v1 import files, inbox, jobs, models, provider_connections, work
+from app.api.v1 import backup, files, inbox, jobs, models, provider_connections, work
 from app.core.browser_device_auth import require_user_or_browser_import_user
 from app.core.security import require_auth
 from app.db.models import User
@@ -96,6 +96,7 @@ class TestRouteDependencies:
             (work.router, "/admin/work/cancel-queued", "POST"),
             (work.router, "/admin/work/derivatives/{kind}/regenerate", "POST"),
             (files.router, "/files/{file_id}/derivatives/{kind}/retry", "POST"),
+            (backup.router, "/backups/runs/destinations/{result_id}/retry", "POST"),
         ):
             _assert_read_token_is_rejected(_route(router, path, method))
 

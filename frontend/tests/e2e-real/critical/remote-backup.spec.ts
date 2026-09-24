@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import {
   backupFromAccepted,
   clickModelAction,
+  completedJob,
   gcodeFor,
   modelCard,
   uploadGcodeModel,
@@ -155,7 +156,9 @@ test.describe("partial backup recovery", () => {
           candidate.request().method() === "POST",
       );
       await article.getByRole("button", { name: "Retry this destination" }).click();
-      expect((await retried).status()).toBe(200);
+      // The retry is a Job: the POST queues it, and the copy is published
+      // when that Job completes.
+      await completedJob(page, await retried);
       const completed = page.getByRole("article", { name: `${meta.backup_id}: Completed` });
       await expect(completed.getByText(`${root} · Published`)).toBeVisible();
       await expect(completed.getByText(/Last verified:/)).toBeVisible();

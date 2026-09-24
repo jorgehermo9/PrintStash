@@ -1815,6 +1815,7 @@
   "settings.backupRetry": "Retry this destination",
   "settings.backupRetrying": "Retrying…",
   "settings.backupRetryDone": "Backup copy published.",
+  "settings.backupRetryTask": "Backup retry",
   "settings.backupNeverVerified": "Not verified yet",
   "settings.backupLastVerified": "Last verified",
   "settings.backupPartialNotice": "Backup created with destination failures. Review the run below.",

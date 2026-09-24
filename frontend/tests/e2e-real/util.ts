@@ -26,23 +26,32 @@ export async function backupFromAccepted(
   page: Page,
   accepted: Response | APIResponse,
 ): Promise<CreatedBackup> {
+  const backup = await completedJob<CreatedBackup>(page, accepted);
+  expect(backup).not.toBeNull();
+  return backup!;
+}
+
+/** Follow an accepted (202) request to its completed Job; returns the Job's result. */
+export async function completedJob<T>(
+  page: Page,
+  accepted: Response | APIResponse,
+): Promise<T | null> {
   expect(accepted.status()).toBe(202);
   const { job_id }: { job_id: string } = await accepted.json();
-  let backup: CreatedBackup | null = null;
+  let result: T | null = null;
   await expect
     .poll(
       async () => {
-        const job: { state: string; error: string | null; result: CreatedBackup | null } = await (
+        const job: { state: string; error: string | null; result: T | null } = await (
           await page.request.get(`/api/v1/jobs/${job_id}`)
         ).json();
-        if (job.state === "completed") backup = job.result;
+        if (job.state === "completed") result = job.result;
         return job.state === "failed" ? `failed: ${job.error}` : job.state;
       },
       { timeout: 120_000 },
     )
     .toBe("completed");
-  expect(backup).not.toBeNull();
-  return backup!;
+  return result;
 }
 
 /** Take a manual backup through the API and wait for it to exist. */

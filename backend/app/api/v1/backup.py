@@ -30,7 +30,7 @@ import app.modules.backups.backup.verification as backup_verification
 import app.runtime.maintenance as backup_maintenance
 from app.core.errors import OperationError
 from app.core.logging import get_logger
-from app.core.security import require_superuser
+from app.core.security import require_auth, require_superuser
 from app.db.models import User
 from app.db.session import get_session
 from app.modules.backups import jobs as backup_jobs
@@ -99,9 +99,8 @@ def list_backup_runs(
     summary="Inspect one backup execution",
 )
 def get_backup_run(run_id: str) -> dict:
-    from app.modules.backups.backup_runs import reconcile_interrupted_runs, run_detail
+    from app.modules.backups.backup_runs import run_detail
 
-    reconcile_interrupted_runs()
     try:
         return run_detail(run_id)
     except LookupError as exc:
@@ -110,21 +109,38 @@ def get_backup_run(run_id: str) -> dict:
 
 @router.post(
     "/runs/destinations/{result_id}/retry",
-    dependencies=[Depends(require_superuser)],
+    dependencies=[Depends(require_auth)],
+    status_code=202,
     summary="Retry one exact failed backup destination",
+    description=(
+        "Queues a Job that republishes the exact archive to this destination "
+        "from verified surviving bytes. Poll GET /api/v1/jobs/{job_id}; the "
+        "destination as it now stands is the Job's result, and a refused "
+        "retry ends the Job failed with its reason."
+    ),
 )
-def retry_backup_destination(result_id: str) -> dict:
+def retry_backup_destination(
+    result_id: str,
+    current_user: User = Depends(require_superuser),
+    session: Session = Depends(get_session),
+) -> JobAccepted:
     from app.modules.backups.backup_replica_retry import RetryRefused
-    from app.modules.backups.retry_commands import retry_destination
+    from app.modules.backups.retry_commands import RETRY_DEFINITION, request_retry
 
     try:
-        return retry_destination(result_id)
+        assert current_user.id is not None
+        job_id = request_retry(session, result_id, owner_user_id=current_user.id)
+        session.commit()
     except LookupError as exc:
+        session.rollback()
         raise HTTPException(
             status_code=404, detail="backup_destination_result_not_found"
         ) from exc
     except RetryRefused as exc:
+        session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    nudge(RETRY_DEFINITION)
+    return JobAccepted(job_id=job_id, message="backup retry queued")
 
 
 @router.post(

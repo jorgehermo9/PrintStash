@@ -35,8 +35,9 @@ export function listBackupRuns(): Promise<BackupRun[]> {
   return getJson<BackupRun[]>("/api/v1/backups/runs", { fresh: true });
 }
 
-export function retryBackupDestination(id: string): Promise<BackupDestinationResult> {
-  return sendJson<BackupDestinationResult>(
+/** Queues a retry Job for one failed destination; follow it by `job_id`. */
+export function retryBackupDestination(id: string): Promise<JobAccepted> {
+  return sendJson<JobAccepted>(
     `/api/v1/backups/runs/destinations/${encodeURIComponent(id)}/retry`,
     "POST",
     undefined,

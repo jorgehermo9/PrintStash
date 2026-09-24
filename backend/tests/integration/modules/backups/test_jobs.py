@@ -179,3 +179,197 @@ class TestAutomatic:
             ).one()
         assert config is not None and config.automatic_backup_last_attempt_at
         assert job.state == JobState.FAILED
+
+
+CREATE = next(
+    d for d in backup_jobs.definitions() if d.name == backup_jobs.CREATE_DEFINITION
+)
+RETRY = next(
+    d for d in backup_jobs.definitions() if d.name == backup_jobs.RETRY_DEFINITION
+)
+
+
+def _outcome(env: BackupEnv, model, row_id: str) -> str:
+    with env.new_session() as session:
+        row = session.get(model, row_id)
+        assert row is not None
+        return row.outcome
+
+
+class TestCreateHooks:
+    @pytest.mark.parametrize("hook", ["cancel", "on_failure"])
+    def test_an_ended_backup_job_settles_the_run_it_left(
+        self, backup_env: BackupEnv, make_job, hook: str
+    ) -> None:
+        from app.db.models import BackupDestinationResult
+        from tests.factories import build_backup_destination_result, build_backup_run
+
+        job = make_job(kind=backup_jobs.CREATE_DEFINITION, subject="backup/manual")
+        with backup_env.new_session() as session:
+            run = build_backup_run(session, job_id=job.id, outcome="running")
+            result = build_backup_destination_result(session, run, outcome="publishing")
+            run_id, result_id = run.id, result.id
+
+        with backup_env.new_session() as session:
+            if hook == "cancel":
+                CREATE.cancel(session, "backup/manual")
+            else:
+                CREATE.on_failure(session, "backup/manual", "boom")
+            session.commit()
+
+        assert _outcome(backup_env, BackupRun, run_id) == "failed"
+        assert _outcome(backup_env, BackupDestinationResult, result_id) == "failed"
+
+    def test_a_restore_settles_the_run_its_snapshot_shows_running(
+        self, backup_env: BackupEnv, make_job
+    ) -> None:
+        from tests.factories import build_backup_run
+
+        job = make_job(
+            kind=backup_jobs.CREATE_DEFINITION,
+            subject="backup/manual",
+            state=JobState.RUNNING,
+            attempts=1,
+        )
+        with backup_env.new_session() as session:
+            run_id = build_backup_run(session, job_id=job.id, outcome="running").id
+
+        assert work_service.supersede_restored() == 1
+
+        assert _outcome(backup_env, BackupRun, run_id) == "failed"
+
+
+class TestRetryDestination:
+    def _failed(self, env: BackupEnv):
+        from tests.factories import build_backup_destination_result, build_backup_run
+
+        with env.new_session() as session:
+            run = build_backup_run(session, outcome="partial")
+            build_backup_destination_result(session, run, outcome="completed")
+            failed = build_backup_destination_result(
+                session, run, kind="connection", name="Replica", outcome="failed"
+            )
+            return run.id, failed.id
+
+    def _request(self, env: BackupEnv, result_id: str) -> str:
+        from app.modules.backups.retry_commands import request_retry
+
+        with env.new_session() as session:
+            attempt_id = request_retry(session, result_id, owner_user_id=None)
+            session.commit()
+        return attempt_id
+
+    def test_a_request_queues_one_job_per_attempt(self, backup_env: BackupEnv) -> None:
+        from app.db.models import BackupRetryAttempt
+
+        _run, result_id = self._failed(backup_env)
+
+        attempt_id = self._request(backup_env, result_id)
+
+        status = jobs.get(attempt_id)
+        assert status is not None
+        assert (status.kind, status.state) == (backup_jobs.RETRY_DEFINITION, "queued")
+        assert _outcome(backup_env, BackupRetryAttempt, attempt_id) == "queued"
+
+    def test_a_destination_being_retried_is_refused(
+        self, backup_env: BackupEnv
+    ) -> None:
+        from app.modules.backups.backup_replica_retry import RetryRefused
+
+        _run, result_id = self._failed(backup_env)
+        self._request(backup_env, result_id)
+
+        with pytest.raises(RetryRefused, match="backup_retry_in_progress"):
+            self._request(backup_env, result_id)
+
+    def test_a_destination_that_did_not_fail_is_refused(
+        self, backup_env: BackupEnv
+    ) -> None:
+        from app.modules.backups.backup_replica_retry import RetryRefused
+        from tests.factories import build_backup_destination_result, build_backup_run
+
+        with backup_env.new_session() as session:
+            run = build_backup_run(session, outcome="completed")
+            done = build_backup_destination_result(session, run, outcome="completed")
+            done_id = done.id
+
+        with pytest.raises(RetryRefused, match="backup_retry_not_failed"):
+            self._request(backup_env, done_id)
+
+    def test_an_unknown_destination_cannot_be_retried(
+        self, backup_env: BackupEnv
+    ) -> None:
+        with pytest.raises(LookupError):
+            self._request(backup_env, "missing")
+
+    @pytest.mark.parametrize(
+        ("hook", "reason"),
+        [
+            ("cancel", "backup_retry_cancelled"),
+            ("on_failure", "backup_publication_interrupted"),
+        ],
+    )
+    def test_an_ended_retry_settles_its_attempt(
+        self, backup_env: BackupEnv, hook: str, reason: str
+    ) -> None:
+        from app.db.models import BackupDestinationResult, BackupRetryAttempt
+        from app.modules.backups.retry_commands import subject_key
+
+        run_id, result_id = self._failed(backup_env)
+        attempt_id = self._request(backup_env, result_id)
+        with backup_env.new_session() as session:
+            publishing = session.get(BackupDestinationResult, result_id)
+            publishing.outcome = "publishing"
+            session.add(publishing)
+            session.commit()
+
+        with backup_env.new_session() as session:
+            if hook == "cancel":
+                RETRY.cancel(session, subject_key(result_id))
+            else:
+                RETRY.on_failure(session, subject_key(result_id), "boom")
+            session.commit()
+
+        with backup_env.new_session() as session:
+            attempt = session.get(BackupRetryAttempt, attempt_id)
+            result = session.get(BackupDestinationResult, result_id)
+            run = session.get(BackupRun, run_id)
+        assert (attempt.outcome, attempt.error_code) == ("failed", reason)
+        assert (result.outcome, result.error_code) == ("failed", reason)
+        assert run.outcome == "partial"
+
+    def test_a_retry_that_published_before_it_was_lost_completes(
+        self, backup_env: BackupEnv
+    ) -> None:
+        # Its terminal write was lost; the destination already says so.
+        from app.db.models import BackupDestinationResult, BackupRetryAttempt
+        from app.modules.backups.retry_commands import run_retry
+
+        run_id, result_id = self._failed(backup_env)
+        attempt_id = self._request(backup_env, result_id)
+        with backup_env.new_session() as session:
+            published = session.get(BackupDestinationResult, result_id)
+            published.outcome = "completed"
+            session.add(published)
+            session.commit()
+
+        destination = run_retry(attempt_id)
+
+        assert destination["outcome"] == "completed"
+        assert _outcome(backup_env, BackupRetryAttempt, attempt_id) == "completed"
+        assert _outcome(backup_env, BackupRun, run_id) == "completed"
+
+    def test_a_settled_attempt_is_not_run_again(self, backup_env: BackupEnv) -> None:
+        from app.modules.backups.retry_commands import run_retry
+        from tests.factories import build_backup_retry_attempt
+
+        _run, result_id = self._failed(backup_env)
+        with backup_env.new_session() as session:
+            from app.db.models import BackupDestinationResult
+
+            result = session.get(BackupDestinationResult, result_id)
+            done = build_backup_retry_attempt(session, result, outcome="failed")
+            done_id = done.id
+
+        with pytest.raises(LookupError, match="not_open"):
+            run_retry(done_id)

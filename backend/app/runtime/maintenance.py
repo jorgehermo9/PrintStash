@@ -270,29 +270,6 @@ def exclusive_backup_operation(func: Callable[_P, _R]) -> Callable[_P, _R]:
     return serialized
 
 
-def backup_in_progress_elsewhere() -> bool:
-    """Whether a backup or restore holds the backup fence outside this thread.
-
-    Recovery that settles "running" backup rows may only run when no backup
-    is live anywhere; the calling thread's own exclusive operation does not
-    count against it.
-    """
-    from app.modules.work import fences
-
-    if getattr(_backup_depth, "value", 0) > 0:
-        return False
-    if not _shared_database():
-        # One process: a backup elsewhere is another thread holding the lock.
-        if backup_operation_lock.acquire(blocking=False):
-            backup_operation_lock.release()
-            return False
-        return True
-    try:
-        return fences.is_held(fences.BACKUP)
-    except Exception:  # noqa: BLE001 - an unreadable fence is not "free"
-        return True
-
-
 _retention_condition = threading.Condition(threading.RLock())
 _storage_retentions = 0
 _active_destructive = 0

@@ -7,6 +7,12 @@ configuration (``automatic_backup_time_utc``); the domain's own daily claim
 (``claim_due_backup``) still guarantees at most one automatic attempt per day,
 so a resubmitted occurrence never archives twice.
 
+Each backup run records the Job that built it. That Job's next attempt, its
+failure or its cancellation settles a run it left running, so no reader ever
+has to guess whether a "running" run is still live. Retrying one failed
+destination is its own Job (``backup.retry_destination``), one per
+destination at a time; its end settles the attempt and the destination.
+
 Restore is deliberately *not* a Job: it replaces the application database
 that every Job row lives in, so it runs on the API under the restore fence,
 which drains every executor first, and the engine is reset afterwards.
@@ -25,6 +31,7 @@ from app.db.models import SystemConfig
 from app.db.session import get_session_factory
 from app.modules.backups.backup_destination import BackupTrigger
 from app.modules.backups.backup_schedule import claim_due_backup, parse_backup_time
+from app.modules.backups.retry_commands import RETRY_DEFINITION
 from app.modules.work.catalog import MAINTENANCE
 from app.modules.work.contracts import JobContext, JobDefinition, Step
 from app.modules.work.sources import ScheduleSource
@@ -61,8 +68,13 @@ def _meta(meta: backup_contracts.BackupMeta) -> dict[str, Any]:
 
 
 def _archive(ctx: JobContext, trigger: BackupTrigger) -> None:
+    from app.modules.backups.backup_runs import settle_job_runs
+
+    # A run an earlier attempt of this Job left running was never finished:
+    # the engine runs one attempt at a time, so nothing is still writing it.
+    settle_job_runs(ctx.job_id)
     try:
-        meta = backup_creation.create_backup(trigger=trigger)
+        meta = backup_creation.create_backup(trigger=trigger, job_id=ctx.job_id)
     except backup_contracts.DatabaseBackupNotSupportedError as exc:
         ctx.finish("failed", error=str(exc) or "database_backup_not_supported")
         return
@@ -94,6 +106,41 @@ def _automatic(ctx: JobContext) -> None:
     _archive(ctx, BackupTrigger.AUTOMATIC)
 
 
+def _settle_runs_of(session: Session, subject: str) -> None:
+    """A backup Job failed or was cancelled: settle the runs it left running.
+
+    Any run of this subject's Jobs still running is one: a subject has at most
+    one active Job, and it is the one ending now.
+    """
+    from sqlmodel import col, select
+
+    from app.db.models import BackupRun, Job
+    from app.modules.backups.backup_runs import summarise_run
+
+    job_ids = select(Job.id).where(Job.subject_key == subject)
+    for run in session.exec(
+        select(BackupRun).where(
+            col(BackupRun.job_id).in_(job_ids), BackupRun.outcome == "running"
+        )
+    ).all():
+        summarise_run(session, run.id)
+
+
+def _retry_step(ctx: JobContext) -> None:
+    from app.modules.backups.retry_commands import run_retry
+
+    ctx.update(result=run_retry(ctx.job_id), processed=1, total=1, succeeded=1)
+
+
+def _settle_retry(reason: str):
+    def hook(session: Session, subject: str, *_: object) -> None:
+        from app.modules.backups.retry_commands import result_id_of, settle_open_retries
+
+        settle_open_retries(session, result_id_of(subject), reason)
+
+    return hook
+
+
 def _automatic_cron(session: Session) -> str | None:
     """The daily automatic backup as a cron expression, or ``None`` when off."""
     config = session.get(SystemConfig, 1)
@@ -109,8 +156,23 @@ def definitions() -> list[JobDefinition]:
             name=CREATE_DEFINITION,
             lane=MAINTENANCE,
             steps=(Step(f"{CREATE_DEFINITION}.archive", _create),),
+            cancel=_settle_runs_of,
+            on_failure=lambda session, subject, _reason: _settle_runs_of(
+                session, subject
+            ),
             survives_restore=False,
             label="Backups",
+        ),
+        JobDefinition(
+            name=RETRY_DEFINITION,
+            lane=MAINTENANCE,
+            steps=(Step(f"{RETRY_DEFINITION}.publish", _retry_step),),
+            cancel=_settle_retry("backup_retry_cancelled"),
+            on_failure=_settle_retry("backup_publication_interrupted"),
+            # A new retry is a new request: it re-checks the destination.
+            retry=lambda _session, _subject: False,
+            survives_restore=False,
+            label="Backup destination retries",
         ),
         JobDefinition(
             name=AUTOMATIC_DEFINITION,
@@ -118,6 +180,10 @@ def definitions() -> list[JobDefinition]:
             steps=(Step(f"{AUTOMATIC_DEFINITION}.archive", _automatic),),
             source=ScheduleSource(AUTOMATIC_DEFINITION, _automatic_cron),
             retry=lambda _session, _subject: False,
+            cancel=_settle_runs_of,
+            on_failure=lambda session, subject, _reason: _settle_runs_of(
+                session, subject
+            ),
             survives_restore=False,
             label="Automatic backups",
         ),

@@ -151,7 +151,7 @@ class TestRestoreMaintenance:
 
 @maintenance.exclusive_backup_operation
 def _backup() -> bool:
-    return maintenance.backup_in_progress_elsewhere()
+    return True
 
 
 class TestBackupFence:
@@ -175,21 +175,15 @@ class TestBackupFence:
 
         assert refused.value.code == "backup_operation_in_progress"
 
-    def test_a_backup_does_not_count_against_itself(self) -> None:
-        assert _backup() is False
+    def test_a_backup_nested_in_another_takes_the_fence_once(self) -> None:
+        # The outer operation holds the fence; the inner one must not try to
+        # take it again and refuse itself.
+        @maintenance.exclusive_backup_operation
+        def outer() -> bool:
+            return _backup()
 
-    def test_a_backup_elsewhere_is_seen(self, make_work_fence) -> None:
-        make_work_fence(fences.BACKUP)
-
-        assert maintenance.backup_in_progress_elsewhere() is True
-
-    def test_no_backup_anywhere_is_seen(self) -> None:
-        assert maintenance.backup_in_progress_elsewhere() is False
-
-    def test_an_unreadable_backup_fence_is_not_free(self, monkeypatch) -> None:
-        monkeypatch.setattr(fences, "is_held", _unreadable)
-
-        assert maintenance.backup_in_progress_elsewhere() is True
+        assert outer() is True
+        assert fences.is_held(fences.BACKUP) is False
 
 
 class TestStorageRetention:

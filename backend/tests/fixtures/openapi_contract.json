@@ -20697,6 +20697,7 @@
     },
     "/api/v1/backups/runs/destinations/{result_id}/retry": {
       "post": {
+        "description": "Queues a Job that republishes the exact archive to this destination from verified surviving bytes. Poll GET /api/v1/jobs/{job_id}; the destination as it now stands is the Job's result, and a refused retry ends the Job failed with its reason.",
         "operationId": "retry_backup_destination_api_v1_backups_runs_destinations__result_id__retry_post",
         "parameters": [
           {
@@ -20710,13 +20711,11 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Retry Backup Destination Api V1 Backups Runs Destinations  Result Id  Retry Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },

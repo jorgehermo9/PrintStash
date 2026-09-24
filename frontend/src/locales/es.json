@@ -1815,6 +1815,7 @@
   "settings.backupRetry": "Reintentar este destino",
   "settings.backupRetrying": "Reintentando…",
   "settings.backupRetryDone": "Copia de seguridad publicada.",
+  "settings.backupRetryTask": "Reintento de copia de seguridad",
   "settings.backupNeverVerified": "Aún no verificada",
   "settings.backupLastVerified": "Última verificación",
   "settings.backupPartialNotice": "Copia creada con fallos en algunos destinos. Revisa la ejecución abajo.",
