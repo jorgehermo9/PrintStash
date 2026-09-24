@@ -472,7 +472,7 @@ class TestDrainDispatchQueue:
         assert queue == []
         assert printer_jobs.scheduler_status.last_dispatch_at is not None
 
-    def test_a_bad_claim_ends_the_slice_and_is_recorded(
+    def test_a_bad_claim_ends_the_slice(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The next slice starts from the database again; a failing claim must

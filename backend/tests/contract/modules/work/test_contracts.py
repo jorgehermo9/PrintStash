@@ -25,7 +25,7 @@ from app.modules.work import submission as work_submission
 from app.modules.work.contracts import EngineStatus, Submission, SubmitOutcome
 from app.modules.work.jobs import jobs
 from app.modules.work.submission import dedupe_key, execution_id, nudge
-from tests.contract.runtime.engine._harness import (
+from tests.contract.modules.work._harness import (
     DISCOVERED,
     FAST,
     PLAIN,
@@ -36,6 +36,8 @@ from tests.contract.runtime.engine._harness import (
     Flaky,
     Harness,
     gated,
+    harness_for,
+    shared_app_db,
 )
 
 
@@ -62,7 +64,7 @@ class TestRunning:
         assert harness.state(job_id) == "completed"
         assert RECORD.steps == [("plain/1", "first"), ("plain/1", "second")]
 
-    def test_a_failing_step_fails_its_job_and_stops_the_rest(
+    def test_a_failing_step_fails_its_job_before_later_steps(
         self, harness: Harness
     ) -> None:
         def broken(_ctx):
@@ -259,7 +261,7 @@ class TestScheduling:
         assert len(RECORD.firsts()) == 3
         assert RECORD.peak == 1
 
-    def test_reports_queued_and_running_depth_per_lane(self, harness: Harness) -> None:
+    def test_reports_each_lanes_depth(self, harness: Harness) -> None:
         gate = threading.Event()
         work_submission.submit(
             harness.job(SERIAL_JOB, "depth/0", behaviour=gated(gate))
@@ -436,21 +438,22 @@ class TestReset:
         assert harness.state(job_id) == JobState.COMPLETED.value
 
 
-@pytest.mark.parametrize("kind", ["dbos"])
-def test_raising_a_lanes_concurrency_admits_more_at_once(kind, tmp_path) -> None:
-    """Only the durable engine runs executions concurrently."""
-    from tests.contract.runtime.engine._harness import harness_for, shared_app_db
+class TestLaneConcurrency:
+    @pytest.mark.parametrize("kind", ["dbos"])
+    def test_raising_a_lanes_concurrency_admits_more_at_once(
+        self, kind, tmp_path
+    ) -> None:
+        """Only the durable engine runs executions concurrently."""
+        with shared_app_db(), harness_for(kind, tmp_path) as harness:
+            harness.engine.set_lane_concurrency(SERIAL, 2)
+            gate = threading.Event()
+            for index in range(2):
+                work_submission.submit(
+                    harness.job(SERIAL_JOB, f"wide/{index}", behaviour=gated(gate))
+                )
+            harness.wait_for(lambda: RECORD.running == 2)
 
-    with shared_app_db(), harness_for(kind, tmp_path) as harness:
-        harness.engine.set_lane_concurrency(SERIAL, 2)
-        gate = threading.Event()
-        for index in range(2):
-            work_submission.submit(
-                harness.job(SERIAL_JOB, f"wide/{index}", behaviour=gated(gate))
-            )
-        harness.wait_for(lambda: RECORD.running == 2)
+            gate.set()
+            harness.settle()
 
-        gate.set()
-        harness.settle()
-
-        assert RECORD.peak == 2
+            assert RECORD.peak == 2

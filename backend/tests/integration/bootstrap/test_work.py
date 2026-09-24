@@ -200,7 +200,7 @@ def started(work_engine, work_catalog):
 
 
 class TestStart:
-    def test_binds_the_engine_and_registers_this_executor(
+    def test_makes_this_process_a_registered_executor(
         self, started, work_engine, db_session: Session
     ) -> None:
         assert work_bootstrap.current() is started
@@ -320,17 +320,32 @@ class TestStart:
 
 
 class TestStop:
-    def test_releases_fences_and_forgets_this_executor(
-        self, work_engine, work_catalog, db_session: Session
+    def test_releases_the_fences_this_executor_held(
+        self, work_engine, work_catalog
     ) -> None:
+        # Another process must not wait out a TTL for a fence nobody holds.
         work_bootstrap.start(engine=work_engine, catalog=work_catalog)
         fences.acquire("backup", holder=executors.executor_id(), reason="test")
 
         work_bootstrap.stop()
 
-        db_session.expire_all()
         assert fences.held_by(executors.executor_id()) == []
+
+    def test_forgets_this_executor(
+        self, work_engine, work_catalog, db_session: Session
+    ) -> None:
+        work_bootstrap.start(engine=work_engine, catalog=work_catalog)
+
+        work_bootstrap.stop()
+
+        db_session.expire_all()
         assert db_session.get(WorkExecutor, executors.executor_id()) is None
+
+    def test_unbinds_the_engine(self, work_engine, work_catalog) -> None:
+        work_bootstrap.start(engine=work_engine, catalog=work_catalog)
+
+        work_bootstrap.stop()
+
         assert not catalog_module.bound()
         assert work_engine.launched is False
 
@@ -353,7 +368,7 @@ class TestStop:
 
 
 class TestAfterRestore:
-    def test_discards_engine_state_and_reconciles_the_restored_vault(
+    def test_rebuilds_engine_state_from_the_restored_vault(
         self, started, work_engine, db_session: Session
     ) -> None:
         work_engine.drain()

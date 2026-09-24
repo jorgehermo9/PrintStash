@@ -403,7 +403,7 @@ def work_engine(work_catalog, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     calls ``work_engine.drain()``. That keeps "a route accepted the work" and
     "the work happened" separate assertions, and makes every run of a job an
     explicit step of the test rather than a race with it. The engine is the
-    same port the durable engine implements (``tests/contract/runtime/engine``
+    same port the durable engine implements (``tests/contract/modules/work/test_contracts.py``
     holds both to one contract), so what drains here is what DBOS runs.
 
     A test that boots the real lifespan gets this engine too: composition asks

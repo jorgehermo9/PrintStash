@@ -12,7 +12,8 @@ Design notes:
   a test calls ``tests.e2e._jobs.settle()`` to drain every Job the flow queued
   (and every Job those nudged), running the shipped definitions deterministically. The
   engine port itself is held to the same contract on DBOS in
-  ``tests/contract/runtime/engine``, and ``test_job_engine.py`` drives real DBOS.
+  ``tests/contract/modules/work/test_contracts.py``, and ``test_job_engine.py``
+  drives real DBOS.
 - The DB is the in-memory engine from the parent ``conftest`` (shared in-process
   via ``StaticPool``); ``data_dir`` and friends are redirected to a tmp dir
   through the ``_overlay`` (every ``Settings`` field is overlay-resolvable).

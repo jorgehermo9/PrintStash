@@ -152,7 +152,7 @@ class TestDispatchSource:
 
 
 class TestWakeDispatch:
-    def test_unparks_and_nudges_the_dispatcher(
+    def test_wakes_a_parked_dispatcher(
         self, db_session: Session, monkeypatch
     ) -> None:
         nudged: list[str] = []

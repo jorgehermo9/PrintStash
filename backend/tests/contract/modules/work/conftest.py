@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.contract.runtime.engine._harness import Harness, harness_for, shared_app_db
+from tests.contract.modules.work._harness import Harness, harness_for, shared_app_db
 
 
 @pytest.fixture(params=["inline", "dbos"])

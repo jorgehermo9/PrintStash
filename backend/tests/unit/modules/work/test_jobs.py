@@ -75,7 +75,7 @@ class TestSafeError:
 
 
 class TestSafeResult:
-    def test_strips_a_credential_and_path_from_nested_errors(self) -> None:
+    def test_sanitizes_nested_errors(self) -> None:
         result = _safe_result(
             {"errors": ["/srv/private/models/broken.stl: token=secret"]}
         )
@@ -173,7 +173,7 @@ class TestMerge:
 
         assert "secret" not in payload["failed_items"][0]["reason"]
 
-    def test_fills_a_failed_item_missing_its_name_and_reason(self) -> None:
+    def test_fills_in_a_bare_failed_item(self) -> None:
         payload = _merge({}, {"failed_items": [{}]})
 
         assert payload["failed_items"] == [
