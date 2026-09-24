@@ -38,6 +38,65 @@ async def copied(api, headers, base: str) -> dict:
     return state.json()
 
 
+async def _planned(api, headers, tmp_path: Path) -> tuple[str, dict]:
+    """A migration planned against a fresh backup; its base URL and plan."""
+    payload = (Path(__file__).parents[1] / "fixtures" / "sample.gcode").read_bytes()
+    await ingest(api, headers, "baseline", payload)
+    backup = await create_backup(api, headers)
+    data, thumbs = tmp_path / "destination", tmp_path / "destination-thumbs"
+    data.mkdir()
+    thumbs.mkdir()
+    preflight = await api.post(
+        "/api/v1/storage/migrations/preflight",
+        headers=headers,
+        json={
+            "destination": {
+                "provider": "local",
+                "data_dir": str(data),
+                "thumb_dir": str(thumbs),
+            },
+            "backup_id": backup["backup_id"],
+            "backup_source_ref": backup["source_ref"],
+        },
+    )
+    assert preflight.status_code == 200, preflight.text
+    plan = preflight.json()
+    return f"/api/v1/storage/migrations/{plan['id']}", plan
+
+
+class TestRestartMidCopy:
+    @pytest.mark.asyncio
+    async def test_a_copy_paused_before_a_restart_finishes_once_recovered(
+        self, api, superuser_headers, tmp_path, migration_runtime, work_catalog
+    ):
+        # The API restarts while a copy is paused: the next process finds the
+        # migration's journal unresolved, so it holds its background work.
+        # Recovering and resuming must run the copy on that same process.
+        from app.bootstrap import work as work_bootstrap
+        from app.modules.work import catalog as catalog_module
+        from app.runtime.engine.inline import InlineJobEngine
+
+        headers = superuser_headers
+        base, plan = await _planned(api, headers, tmp_path)
+        started = await api.post(
+            base + "/start", headers=headers, json={"plan_digest": plan["plan_digest"]}
+        )
+        assert started.status_code == 200, started.text
+        paused = await api.post(base + "/pause", headers=headers)
+        assert paused.status_code == 200, paused.text
+        # The restarted process: a new engine, held behind the journal.
+        catalog_module.bind(None, None)
+        assert migration_journal.inspect_before_writes()
+        work_bootstrap.hold(engine=InlineJobEngine(work_catalog), catalog=work_catalog)
+
+        recovered = await api.post(base + "/recover", headers=headers)
+        assert recovered.status_code == 200, recovered.text
+        resumed = await api.post(base + "/resume", headers=headers)
+        assert resumed.status_code == 200, resumed.text
+
+        assert (await copied(api, headers, base))["state"] == "ready"
+
+
 class TestVaultMigrationWorkflow:
     @pytest.mark.asyncio
     async def test_failed_candidate_never_replaces_source_downloads(

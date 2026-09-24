@@ -453,6 +453,20 @@ class TestReset:
         # is disposable, the Job row is not.
         assert harness.state(job_id) == JobState.COMPLETED.value
 
+    def test_the_same_engine_runs_new_work_after_a_reset(
+        self, harness: Harness
+    ) -> None:
+        # What a restore does: reset the engine it has, relaunch that same
+        # engine, and keep submitting to it.
+        harness.engine.reset()
+        harness.engine.launch(listen_lanes=None)
+        job_id = harness.job(PLAIN, "reset/2")
+
+        work_submission.submit(job_id)
+        harness.settle()
+
+        assert harness.state(job_id) == JobState.COMPLETED.value
+
 
 class TestLaneConcurrency:
     @pytest.mark.parametrize("kind", ["dbos"])

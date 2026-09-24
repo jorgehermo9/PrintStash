@@ -19,6 +19,12 @@ and prints one JSON line the parent reads:
     Boot as a build whose mesh thumbnail recipe is one version newer, record
     the thumbnail the Artifact showed while the new one was being derived,
     and wait for the new recipe to settle.
+``stall_backup``
+    Like ``stall``, and take a backup while the derivative is held, so the
+    archive's database records it running. Prints the backup's locator.
+``restore_converge``
+    Boot on an empty engine, restore that backup through the API, and wait
+    for the restored Artifact's derivatives to settle.
 ``split_api``
     Serve as an API that runs no jobs (``VAULT_API_RUNS_JOBS=false``): set the
     vault up, open the events socket, upload a mesh and print
@@ -101,6 +107,106 @@ def stall(marker: Path) -> None:
         _emit(file_id=int(marker.read_text()))
         while True:
             time.sleep(1)
+
+
+def _follow(client: TestClient, job_id: str) -> dict:
+    deadline = time.monotonic() + _DEADLINE_S
+    while True:
+        job = client.get(f"/api/v1/jobs/{job_id}").json()
+        if job["state"] in {"completed", "failed", "cancelled"}:
+            return job
+        assert time.monotonic() < deadline, f"job never settled: {job}"
+        time.sleep(0.25)
+
+
+def stall_backup(marker: Path) -> None:
+    """Back the vault up while its only Artifact's derivative is mid-step.
+
+    The archive's database therefore records the derivative Job as running.
+    Prints the backup's locator, then holds until the parent kills it.
+    """
+    from app.core.config import ensure_dirs
+    from app.main import app
+    from app.modules.derivatives import producers
+
+    def held(file_id: int):
+        marker.write_text(str(file_id))
+        while True:  # the parent kills this process here
+            time.sleep(1)
+
+    producers.derive_mesh = held
+    ensure_dirs()
+    with TestClient(app) as client:
+        _set_up(client)
+        uploaded = client.post(
+            "/api/v1/ingest/model",
+            files={"file": ("restored.stl", _STL, "application/sla")},
+        )
+        assert uploaded.status_code == 202, uploaded.text
+        deadline = time.monotonic() + _DEADLINE_S
+        while not marker.exists():
+            assert time.monotonic() < deadline, "derivative never started"
+            time.sleep(0.1)
+        accepted = client.post("/api/v1/backups")
+        assert accepted.status_code == 202, accepted.text
+        backup = _follow(client, accepted.json()["job_id"])
+        assert backup["state"] == "completed", backup
+        _emit(
+            file_id=int(marker.read_text()),
+            backup_id=backup["result"]["backup_id"],
+            source_ref=backup["result"]["source_ref"],
+        )
+        while True:
+            time.sleep(1)
+
+
+def restore_converge(backup_id: str, source_ref: str, file_id: int) -> None:
+    """Boot on an empty engine, restore the backup, and wait for its work.
+
+    Nothing in the engine knows the restored derivative: only the restored
+    application database says it is owed, so the reconciler must heal it.
+    """
+    from app.core.config import ensure_dirs
+    from app.main import app
+
+    ensure_dirs()
+    with TestClient(app) as client:
+        client.headers["Origin"] = "http://testserver"
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "owner", "password": "Password123"},
+        )
+        assert login.status_code == 200, login.text
+        client.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+        restored = client.post(
+            f"/api/v1/backups/{backup_id}/restore", params={"source_ref": source_ref}
+        )
+        assert restored.status_code == 200, restored.text
+        outcome = _settle(file_id)
+        from app.bootstrap.work import current
+        from app.runtime import maintenance
+
+        _emit(
+            restored=True,
+            jobs=_jobs(),
+            maintenance=maintenance.restore_in_progress(),
+            running_work=current() is not None,
+            **outcome,
+        )
+
+
+def _jobs() -> list[list]:
+    """Every Job row, for a failing assertion to show what the vault owed."""
+    from sqlmodel import select
+
+    from app.db.models import Job
+    from app.db.session import get_session_factory
+
+    with get_session_factory().scoped_session() as session:
+        return [
+            [job.kind, str(job.state), job.attempts, job.resubmits]
+            for job in session.exec(select(Job)).all()
+        ]
 
 
 def _settle(file_id: int) -> dict:
@@ -269,6 +375,11 @@ def split_api() -> None:
 
 
 if __name__ == "__main__":
+    import faulthandler
+
+    # No role may hang the suite: past twice the deadline it prints every
+    # thread's stack to stderr (which the parent shows) and exits.
+    faulthandler.dump_traceback_later(_DEADLINE_S * 2, exit=True)
     role = sys.argv[1]
     if role == "stall":
         stall(Path(sys.argv[2]))
@@ -276,6 +387,10 @@ if __name__ == "__main__":
         converge(int(sys.argv[2]))
     elif role == "upload":
         upload()
+    elif role == "stall_backup":
+        stall_backup(Path(sys.argv[2]))
+    elif role == "restore_converge":
+        restore_converge(sys.argv[2], sys.argv[3], int(sys.argv[4]))
     elif role == "rederive":
         rederive(int(sys.argv[2]))
     elif role == "split_api":

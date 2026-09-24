@@ -424,12 +424,43 @@ class TestAfterRestore:
         assert _passes(work_engine) == set(started.catalog.definitions)
         assert db_session.get(WorkExecutor, executors.executor_id()) is not None
 
+    def test_a_pass_the_snapshot_shows_queued_does_not_suppress_reconciling(
+        self, started, work_engine, db_session: Session
+    ) -> None:
+        # The archive recorded "a pass is already waiting" for the engine of
+        # the process that took it. That engine is gone, so the pass never runs.
+        work_engine.drain()
+        cursor = db_session.get(ReconcileCursor, "library.scan") or ReconcileCursor(
+            source="library.scan"
+        )
+        cursor.pass_queued_at = utcnow()
+        db_session.add(cursor)
+        db_session.commit()
+
+        work_bootstrap.after_restore()
+
+        assert "library.scan" in _passes(work_engine)
+
     def test_does_nothing_without_running_work(self) -> None:
         assert work_bootstrap.current() is None
 
         work_bootstrap.after_restore()
 
         assert work_bootstrap.current() is None
+
+    def test_starts_the_work_its_interrupted_predecessor_held(
+        self, work_engine, work_catalog
+    ) -> None:
+        # The process started under an interrupted restore's maintenance, so
+        # it held its work; the restore that replaces the vault ends that.
+        work_bootstrap.hold(engine=work_engine, catalog=work_catalog)
+        try:
+            work_bootstrap.after_restore()
+
+            assert work_bootstrap.current() is not None
+            assert _passes(work_engine) == set(work_catalog.definitions)
+        finally:
+            work_bootstrap.stop()
 
     def test_supersedes_restored_backups_without_running_work(
         self, make_job, db_session: Session
@@ -442,3 +473,58 @@ class TestAfterRestore:
         db_session.expire_all()
         row = db_session.get(Job, snapshot.id)
         assert row is not None and row.state == JobState.CANCELLED
+
+
+class TestHeldWork:
+    """Work an interrupted restore held at startup starts once it is resolved.
+
+    A process that starts while a restore's journal still governs holds its
+    background work. When recovery resolves that restore, nothing restarts
+    the process, so without releasing the held work every nudge would be a
+    no-op and nothing background would run until the next restart.
+    """
+
+    def test_starts_once_no_restore_governs(self, work_engine, work_catalog) -> None:
+        work_bootstrap.hold(engine=work_engine, catalog=work_catalog)
+        try:
+            assert work_bootstrap.release_held() is True
+
+            assert work_bootstrap.current() is not None
+            assert _passes(work_engine) == set(work_catalog.definitions)
+        finally:
+            work_bootstrap.stop()
+
+    def test_waits_while_a_restore_still_governs(
+        self, work_engine, work_catalog
+    ) -> None:
+        from app.runtime.maintenance import (
+            end_restore_maintenance,
+            hold_restore_maintenance,
+        )
+
+        work_bootstrap.hold(engine=work_engine, catalog=work_catalog)
+        hold_restore_maintenance()
+        try:
+            assert work_bootstrap.release_held() is False
+
+            assert work_bootstrap.current() is None
+        finally:
+            end_restore_maintenance()
+            work_bootstrap.release_held()
+            work_bootstrap.stop()
+
+    def test_starts_only_once(self, work_engine, work_catalog) -> None:
+        work_bootstrap.hold(engine=work_engine, catalog=work_catalog)
+        try:
+            work_bootstrap.release_held()
+            runtime = work_bootstrap.current()
+
+            assert work_bootstrap.release_held() is False
+            assert work_bootstrap.current() is runtime
+        finally:
+            work_bootstrap.stop()
+
+    def test_nothing_held_starts_nothing(self) -> None:
+        assert work_bootstrap.release_held() is False
+
+        assert work_bootstrap.current() is None

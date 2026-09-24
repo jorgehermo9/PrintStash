@@ -309,13 +309,17 @@ def prepare_process(*, owner: bool) -> PreparedProcess:
 
 
 def _start_work(prepared: PreparedProcess, *, publisher) -> None:
-    """Start background work unless an interrupted restore still governs."""
-    if prepared.restore_maintenance:
-        logger.warning("background work held: restore maintenance is active")
-        return
-    from app.bootstrap.work import start
+    """Start background work unless an interrupted restore still governs.
+
+    Held work starts when recovery resolves that restore (``release_held``).
+    """
+    from app.bootstrap.work import hold, start
 
     # Only the lifespan runs this, after it took the vault's API lock.
+    if prepared.restore_maintenance:
+        logger.warning("background work held: restore maintenance is active")
+        hold(publisher=publisher, sole_api=True)
+        return
     start(publisher=publisher, sole_api=True)
 
 

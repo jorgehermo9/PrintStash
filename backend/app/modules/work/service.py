@@ -120,14 +120,20 @@ def supersede_restored() -> int:
     if not superseded:
         return 0
     with get_session_factory().scoped_session() as session:
-        ids = list(
+        rows = list(
             session.exec(
-                select(Job.id).where(
+                select(Job.id, Job.kind, Job.subject_key).where(
                     col(Job.kind).in_(superseded),
                     col(Job.state).in_(ACTIVE_JOB_STATES),
                 )
             ).all()
         )
+        # Withdraw each one's intent the way a cancel does, so what it had
+        # started (a backup run, a destination retry) settles too.
+        for _job_id, kind, subject in rows:
+            catalog.definition(kind).cancel(session, subject)
+        session.commit()
+    ids = [job_id for job_id, _kind, _subject in rows]
     for job_id in ids:
         jobs.finish(
             job_id,

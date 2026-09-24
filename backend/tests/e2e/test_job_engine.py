@@ -26,6 +26,7 @@ import json
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -52,22 +53,34 @@ def vault_env(request, tmp_path: Path) -> dict[str, str]:
 
 
 def _stall(environment: dict[str, str], marker: Path) -> tuple[subprocess.Popen, int]:
+    process, held = _start(environment, "stall", str(marker))
+    return process, held["file_id"]
+
+
+def _start(environment: dict[str, str], *role: str) -> tuple[subprocess.Popen, dict]:
+    """Start a role that holds work mid-step; its first JSON line describes it.
+
+    Its log goes to a file, not a pipe: nobody reads stderr while the role
+    runs, and a full pipe would block the child on its next log line.
+    """
+    log = tempfile.TemporaryFile(mode="w+")
     process = subprocess.Popen(
-        [sys.executable, "-m", _ROLE, "stall", str(marker)],
+        [sys.executable, "-m", _ROLE, *role],
         cwd=BACKEND_DIR,
         env=environment,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=log,
         text=True,
     )
     assert process.stdout is not None
     deadline = time.monotonic() + 120
     for line in process.stdout:
         if line.startswith("{"):
-            return process, json.loads(line)["file_id"]
+            return process, json.loads(line)
         assert time.monotonic() < deadline
-    _, stderr = process.communicate(timeout=10)
-    raise AssertionError(f"stalling process exited early:\n{stderr}")
+    process.wait(timeout=10)
+    log.seek(0)
+    raise AssertionError(f"stalling process exited early:\n{log.read()[-6000:]}")
 
 
 def _kill(process: subprocess.Popen) -> None:
@@ -186,6 +199,58 @@ class TestEngineStateLoss:
         states = _converge(vault_env, file_id)
 
         assert states == {"metadata": "ready", "thumbnail": "ready"}
+
+
+def _lose_artifact_bytes(environment: dict[str, str], file_id: int) -> None:
+    """The disaster a restore recovers from: the Artifact's bytes are gone."""
+    engine = create_engine(normalize_database_url(environment["VAULT_DB_URL"]))
+    try:
+        with engine.connect() as connection:
+            key = connection.execute(
+                text("SELECT path FROM files WHERE id = :id"), {"id": file_id}
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    blob = Path(key)
+    if not blob.is_absolute():
+        blob = Path(environment["VAULT_DATA_DIR"]) / key
+    blob.unlink()
+
+
+class TestRestore:
+    """A backup restored through the API, on a real engine that starts empty.
+
+    SQLite only: PrintStash backs up a SQLite vault itself, while a PostgreSQL
+    vault is restored by the operator's own database tooling, which also
+    brings back (or drops) the engine's ``dbos`` schema. That case, a restored
+    application database with an empty engine schema, is
+    ``TestEngineStateLoss[postgresql]``.
+    """
+
+    @pytest.mark.critical
+    def test_a_restored_vault_heals_work_its_engine_never_knew(
+        self, tmp_path: Path
+    ) -> None:
+        # The backup's database says the derivative is running; the engine a
+        # restore starts with knows nothing about it. Only the reconciler,
+        # reading the restored database, can bring the work back.
+        vault_env = vault_environment(
+            tmp_path, f"sqlite:///{tmp_path / 'vault.sqlite'}"
+        )
+        process, held = _start(vault_env, "stall_backup", str(tmp_path / "running"))
+        _kill(process)
+        _discard_engine_state(vault_env)
+        _lose_artifact_bytes(vault_env, held["file_id"])
+
+        outcome = _run(
+            vault_env,
+            "restore_converge",
+            held["backup_id"],
+            held["source_ref"],
+            str(held["file_id"]),
+        )
+
+        assert outcome["states"] == {"metadata": "ready", "thumbnail": "ready"}
 
 
 @pytest.fixture

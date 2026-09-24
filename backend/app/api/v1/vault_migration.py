@@ -101,7 +101,13 @@ def recover(
     session: Session = Depends(get_session),
 ):
     session.close()
-    return invoke(lambda: owner().recover(run_id))
+    result = invoke(lambda: owner().recover(run_id))
+    # A process that started under this migration's interrupted cutover held
+    # its background work; recovery resolved it, so that work starts now.
+    from app.bootstrap.work import release_held
+
+    release_held()
+    return result
 
 
 @router.post("/{run_id}/cleanup", response_model=MigrationRunRead)

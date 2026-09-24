@@ -19,9 +19,20 @@
   live changes on the `/api/v1/events/ws` socket. **Breaking:**
   `/api/v1/ingest/jobs`, `POST /api/v1/files/thumbnails/rebuild`, plain
   `POST /api/v1/ingest/archive` and `POST /api/v1/storage/migrations/{id}/advance`
-  are removed; `POST /api/v1/backups` now answers 202 with a `job_id` and the new
-  backup is the Job's result; a binary toolpath still being derived answers 202;
-  Pending Imports expose `job_id` instead of `background_job_id`.
+  are removed; `POST /api/v1/backups` and
+  `POST /api/v1/backups/runs/destinations/{id}/retry` now answer 202 with a
+  `job_id`, and the backup (or the retried destination) is the Job's result; a
+  binary toolpath still being derived answers 202; Pending Imports expose
+  `job_id` instead of `background_job_id`; similarity runs no longer report
+  `last_activity_at`.
+- Similarity runs, backup runs and destination retries each follow their Job:
+  the engine, not a lease the run held, decides what is running, and the next
+  attempt of an interrupted Job settles what the previous one left open.
+  Upgrading settles backups an interrupted process left running.
+- Restoring a backup rebuilds the engine's state from the restored database:
+  work the snapshot shows as owed is found again even though the engine that
+  was running it is gone, and a backup the snapshot shows in progress no longer
+  blocks the next one.
 
 ### Added
 
@@ -53,6 +64,10 @@
   separate from verified geometry, and analysis never downloads model weights.
 
 ### Fixed
+
+- A process that started while an interrupted restore or Vault migration still
+  needed recovery now starts its background work once recovery resolves it,
+  instead of queueing work nothing ran until the next restart.
 
 - Browser Pending Imports accept signed-in session cookies while preserving bearer-token precedence and browser-device scope restrictions.
 

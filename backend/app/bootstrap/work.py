@@ -147,6 +147,10 @@ class WorkRuntime:
 
 
 _runtime: WorkRuntime | None = None
+# How ``start`` was called by a process that held its work at startup,
+# because an interrupted restore's maintenance still governed.
+_held: dict | None = None
+_held_lock = threading.Lock()
 
 
 def _heartbeat_loop(stop: threading.Event) -> None:
@@ -234,11 +238,42 @@ def start(
     return _runtime
 
 
+def hold(**start_kwargs) -> None:
+    """Defer ``start`` until an interrupted restore no longer governs.
+
+    Nothing restarts the process when recovery resolves the restore, so
+    whatever resolves it calls ``release_held``.
+    """
+    global _held
+    with _held_lock:
+        _held = start_kwargs
+
+
+def release_held() -> bool:
+    """Start the work this process held, once no restore governs it.
+
+    Returns whether it started now. Harmless when nothing is held, when the
+    work already runs, or while a restore still holds maintenance.
+    """
+    global _held
+    from app.runtime.maintenance import restore_in_progress
+
+    with _held_lock:
+        if _held is None or _runtime is not None or restore_in_progress():
+            return False
+        start_kwargs, _held = _held, None
+        start(**start_kwargs)
+    logger.info("background work started after restore recovery")
+    return True
+
+
 def stop() -> None:
     """Stop heartbeating, shut the engine down, and forget this executor."""
-    global _runtime
+    global _runtime, _held
     runtime = _runtime
     _runtime = None
+    with _held_lock:
+        _held = None
     if runtime is None:
         return
     runtime.stop.set()
@@ -270,20 +305,26 @@ def after_restore() -> None:
     definition reconciled, which resubmits whatever the restored database
     says is still owed. Jobs a restore supersedes are settled first, whether
     or not this process runs an engine: that is a fact about the database.
+    A process that held its work behind an interrupted restore starts it
+    now, on the restored database.
     """
     from app.modules.work.service import supersede_restored
-    from app.modules.work.submission import nudge_all
+    from app.modules.work.submission import forget_queued_passes, nudge_all
 
     superseded = supersede_restored()
     if superseded:
         logger.info("cancelled %d Job(s) a restore superseded", superseded)
     runtime = _runtime
     if runtime is None:
+        release_held()
         return
     runtime.engine.reset()
     catalog_module.bind(runtime.engine, runtime.catalog)
     runtime.engine.launch(listen_lanes=listen_lanes(runtime.catalog))
     executors.register(role=settings.process_role, lanes=sorted(runtime.catalog.lanes))
+    # The snapshot's "a pass is already queued" marks belong to the engine of
+    # the process that took it; the reset engine will never run those passes.
+    forget_queued_passes()
     nudge_all()
 
 

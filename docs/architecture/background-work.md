@@ -158,7 +158,23 @@ are only ever recognised by their heartbeat going stale.
   reruns them on the new code, without waiting for staleness.
 - **Restore.** A restore holds the restore fence, so no step starts; afterwards
   the engine's state is discarded and every definition reconciled against the
-  restored database.
+  restored database. The snapshot's Jobs describe an engine that no longer
+  exists: a Job whose definition sets `survives_restore=False` (a backup, which
+  the snapshot shows mid-archive) is cancelled through its cancel hook, and the
+  snapshot's queued-pass marks are forgotten so they cannot suppress the
+  reconcile. Everything else the snapshot says is owed is simply found again.
+  A PostgreSQL vault restored by the operator's own tooling, with the `dbos`
+  schema dropped or stale, converges the same way on its next start.
+- **Recovery resolves a restore.** A process that starts while an interrupted
+  restore or Vault migration journal still governs holds its background work
+  (`bootstrap.work.hold`). Recovery does not restart the process, so whatever
+  resolves the journal (`after_restore`, a migration's recover) calls
+  `release_held`, and the work starts in place.
+- **A run's own record.** A similarity run, backup run or destination retry is
+  one Job's subject. The engine alone decides what runs: the run keeps no lease,
+  only a write fence naming the execution allowed to publish (a similarity
+  run's `writer`), and the next attempt of an interrupted Job settles what the
+  previous attempt left open.
 - **A nudge is lost.** Nothing happens until the next tick or completion nudge;
   the intent is still in the database.
 - **A notice is dropped.** Clients also refresh on a slow interval and on

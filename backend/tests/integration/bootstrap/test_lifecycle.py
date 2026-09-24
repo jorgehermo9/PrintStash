@@ -767,6 +767,25 @@ class TestLifespan:
         # is about to be replaced or is mid-recovery.
         assert held is True
 
+    def test_lifespan_starts_held_work_once_recovery_resolves_the_restore(
+        self, _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Nothing restarts the process after recovery, so the work it held
+        # starts in place; otherwise every nudge would reach no engine.
+        from app.bootstrap import work as work_bootstrap
+        from app.main import app
+        from app.runtime.maintenance import end_restore_maintenance
+
+        monkeypatch.setattr(lifecycle, "inspect_restore_recovery", lambda: True)
+
+        with TestClient(app):
+            end_restore_maintenance()
+            released = work_bootstrap.release_held()
+            runtime = work_bootstrap.current()
+            launched = runtime is not None and runtime.engine.launched
+
+        assert (released, launched) == (True, True)
+
     def test_lifespan_finishes_starting_up_after_the_watcher_fails(
         self,
         _local_storage: None,
