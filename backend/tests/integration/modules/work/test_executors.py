@@ -118,3 +118,36 @@ class TestLiveness:
 
         db_session.expire_all()
         assert db_session.get(WorkExecutor, executors.executor_id()) is None
+
+
+class TestRetirePredecessors:
+    def test_a_previous_api_process_is_stale_at_once(self, make_work_executor) -> None:
+        previous = make_work_executor("previous-api", role="all")
+
+        assert executors.retire_predecessors() == 1
+
+        assert executors.stale_ids() == {previous.executor_id}
+
+    def test_a_worker_is_never_retired(self, make_work_executor) -> None:
+        # Workers share no lock with the API, so one may well be alive.
+        make_work_executor("busy-worker", role="worker")
+
+        assert executors.retire_predecessors() == 0
+        assert executors.stale_ids() == set()
+
+    def test_this_process_is_never_retired(self, db_session: Session) -> None:
+        executors.register(role="all", lanes=[])
+
+        assert executors.retire_predecessors() == 0
+        assert executors.executor_id() not in executors.stale_ids()
+
+    def test_an_already_stale_predecessor_keeps_its_heartbeat(
+        self, make_work_executor, db_session: Session
+    ) -> None:
+        gone = make_work_executor("gone-api", role="api", stale=True)
+        before = gone.heartbeat_at
+
+        assert executors.retire_predecessors() == 0
+
+        db_session.expire_all()
+        assert db_session.get(WorkExecutor, "gone-api").heartbeat_at == before

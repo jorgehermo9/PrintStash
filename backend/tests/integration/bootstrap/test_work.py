@@ -250,6 +250,29 @@ class TestStart:
         finally:
             work_bootstrap.stop()
 
+    def test_the_vaults_api_reruns_its_predecessors_work(
+        self, work_engine, work_catalog, make_work_executor
+    ) -> None:
+        previous = make_work_executor("previous-api", role="all")
+
+        work_bootstrap.start(engine=work_engine, catalog=work_catalog, sole_api=True)
+        try:
+            assert previous.executor_id in executors.stale_ids()
+        finally:
+            work_bootstrap.stop()
+
+    def test_a_process_without_the_api_lock_retires_nobody(
+        self, work_engine, work_catalog, make_work_executor
+    ) -> None:
+        # A worker cannot know whether the API it sees is alive.
+        make_work_executor("live-api", role="api")
+
+        work_bootstrap.start(engine=work_engine, catalog=work_catalog)
+        try:
+            assert executors.stale_ids() == set()
+        finally:
+            work_bootstrap.stop()
+
     def test_cancels_what_another_application_version_left_running(
         self, work_engine, work_catalog
     ) -> None:

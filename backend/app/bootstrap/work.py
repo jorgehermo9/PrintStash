@@ -167,11 +167,15 @@ def start(
     engine: JobEngine | None = None,
     catalog: WorkCatalog | None = None,
     publisher=None,
+    sole_api: bool = False,
 ) -> WorkRuntime:
     """Bind and launch this process's engine, then reconcile everything once.
 
     ``publisher`` is where Job and derivative notices go (the API's event
     bus, or a worker's NOTIFY publisher); ``None`` publishes nothing.
+    ``sole_api`` says this process holds the vault's API lock, so any earlier
+    API process is dead and its work is rerun now rather than after the
+    stale window.
     """
     global _runtime
     from app.modules.work import events
@@ -190,6 +194,10 @@ def start(
         role=settings.process_role,
         lanes=sorted(catalog.lanes) if lanes is None else lanes,
     )
+    if sole_api:
+        retired = executors.retire_predecessors()
+        if retired:
+            logger.warning("rerunning the work of %d previous API process(es)", retired)
     from app.modules.work.reconciler import sweep_foreign_versions
     from app.modules.work.submission import forget_queued_passes, nudge_all
 

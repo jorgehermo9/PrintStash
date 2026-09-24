@@ -315,7 +315,8 @@ def _start_work(prepared: PreparedProcess, *, publisher) -> None:
         return
     from app.bootstrap.work import start
 
-    start(publisher=publisher)
+    # Only the lifespan runs this, after it took the vault's API lock.
+    start(publisher=publisher, sole_api=True)
 
 
 @asynccontextmanager

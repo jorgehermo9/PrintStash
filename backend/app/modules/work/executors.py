@@ -13,7 +13,7 @@ import socket
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlmodel import col, select
 
 from app.core.config import settings
@@ -123,6 +123,36 @@ def all_executors() -> list[WorkExecutor]:
 def stale_ids(*, now: datetime | None = None) -> set[str]:
     now = now or utcnow()
     return {row.executor_id for row in all_executors() if is_stale(row, now=now)}
+
+
+API_ROLES = ("all", "api")
+
+
+def retire_predecessors(*, now: datetime | None = None) -> int:
+    """Mark every other API-process executor stale, now.
+
+    Only the process holding the vault's API lock may call this: one API per
+    vault means any other API-role executor is a process that already died
+    (a crash, an upgrade, a restart), so the work it held is rerun at once
+    instead of after the stale window. Workers are never touched; they share
+    no lock and may be alive. The rows stay, backdated, because an executor
+    only counts as lost while its row says so.
+    """
+    now = now or utcnow()
+    backdated = now - timedelta(seconds=settings.jobs_executor_stale_seconds + 1)
+    with get_session_factory().scoped_session() as session:
+        retired = affected(
+            session,
+            update(WorkExecutor)
+            .where(
+                col(WorkExecutor.role).in_(API_ROLES),
+                col(WorkExecutor.executor_id) != executor_id(),
+                col(WorkExecutor.heartbeat_at) > backdated,
+            )
+            .values(heartbeat_at=backdated),
+        )
+        session.commit()
+    return retired
 
 
 def forget_stale(*, now: datetime | None = None) -> int:
