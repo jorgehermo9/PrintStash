@@ -119,6 +119,36 @@ def _drain(ctx: JobContext) -> None:
     )
 
 
+def scheduler_snapshot() -> dict[str, object]:
+    """The dispatcher's state, read from the database so every process agrees.
+
+    ``running`` means dispatch Jobs can run (the engine is bound); ticks and
+    outcomes come from the dispatch definition's cursor and latest Job, not
+    from process memory, because the dispatch may run on another worker.
+    """
+    import json
+
+    from app.db.models import Job, ReconcileCursor
+    from app.db.session import get_session_factory
+    from app.modules.work import bound
+
+    with get_session_factory().scoped_session() as session:
+        cursor = session.get(ReconcileCursor, DISPATCH_DEFINITION)
+        latest = session.exec(
+            select(Job)
+            .where(Job.kind == DISPATCH_DEFINITION)
+            .order_by(col(Job.updated_at).desc())
+            .limit(1)
+        ).first()
+        result = json.loads(latest.status_json).get("result") or {} if latest else {}
+        return {
+            "running": bound(),
+            "last_tick_at": cursor.last_pass_finished_at if cursor else None,
+            "last_dispatch_at": result.get("last_dispatch_at"),
+            "last_error": result.get("last_error"),
+        }
+
+
 def definitions() -> list[JobDefinition]:
     return [
         JobDefinition(

@@ -179,6 +179,31 @@ def nudge_after_commit(session: Session, source: str) -> None:
     event.listen(session, "after_commit", _after_commit, once=True)
 
 
+def forget_queued_passes() -> int:
+    """Clear every cursor's queued-pass mark; returns how many were set.
+
+    The mark suppresses duplicate nudges while a pass waits in the engine. A
+    process that died (or an older version whose executions a startup sweep
+    cancelled) can leave marks for passes that will never run, which would
+    hold back this process's startup nudges for the whole grace window. The
+    pass claim is single-flight, so at worst this costs one extra pass.
+    """
+    from sqlalchemy import update
+    from sqlmodel import col
+
+    from app.db.affected import affected
+
+    with get_session_factory().scoped_session() as session:
+        cleared = affected(
+            session,
+            update(ReconcileCursor)
+            .where(col(ReconcileCursor.pass_queued_at).is_not(None))
+            .values(pass_queued_at=None),
+        )
+        session.commit()
+    return cleared
+
+
 def nudge_all(*, now: datetime | None = None) -> None:
     """The tick: nudge every definition. Each pass is cheap when idle."""
     if not catalog_module.bound():

@@ -222,7 +222,7 @@ def _refresh_fleet_gauges() -> None:
     from sqlalchemy import func
 
     from app.db.models import PrintJob
-    from app.modules.printing.printer_jobs import scheduler_snapshot
+    from app.modules.printing.jobs import scheduler_snapshot
 
     try:
         with get_session_factory().session() as session:

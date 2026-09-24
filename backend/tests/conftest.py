@@ -407,8 +407,8 @@ def work_engine(work_catalog, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     holds both to one contract), so what drains here is what DBOS runs.
 
     A test that boots the real lifespan gets this engine too: composition asks
-    ``build_engine`` for the process's engine, and the durable one belongs to
-    the e2e tier, which overrides this seam with a real DBOS engine.
+    ``build_engine`` for the process's engine. Real DBOS runs in the engine
+    contract suite and in the e2e tests that boot the app in a subprocess.
     """
     import app.bootstrap.work as work_bootstrap
     from app.modules.work import catalog as catalog_module

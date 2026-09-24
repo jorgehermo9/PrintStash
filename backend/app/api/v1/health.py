@@ -304,7 +304,7 @@ def _jobs_probe() -> dict:
 
 def _fleet_scheduler_probe() -> dict:
     from app.db.models import PrintJobState
-    from app.modules.printing.printer_jobs import scheduler_snapshot
+    from app.modules.printing.jobs import scheduler_snapshot
 
     try:
         with get_session_factory().session() as session:

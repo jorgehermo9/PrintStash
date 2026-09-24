@@ -16,6 +16,7 @@ workflow; its firing is unique across processes, so no role is special.
 
 from __future__ import annotations
 
+import contextvars
 import os
 import threading
 from dataclasses import dataclass
@@ -187,17 +188,26 @@ def start(
         lanes=sorted(catalog.lanes) if lanes is None else lanes,
     )
     from app.modules.work.reconciler import sweep_foreign_versions
-    from app.modules.work.submission import nudge_all
+    from app.modules.work.submission import forget_queued_passes, nudge_all
 
     swept = sweep_foreign_versions()
     if swept:
         logger.warning(
             "cancelled %d execution(s) of another application version", swept
         )
+    # Queued-pass marks may belong to passes a dead process (or the sweep
+    # above) will never run; without this the startup reconcile below would
+    # be suppressed until their grace expires.
+    forget_queued_passes()
     nudge_all()
     stop = threading.Event()
+    # In this process's context, so it heartbeats through the same session
+    # factory the rest of startup used.
     heartbeat = threading.Thread(
-        target=_heartbeat_loop, args=(stop,), name="work-heartbeat", daemon=True
+        target=contextvars.copy_context().run,
+        args=(_heartbeat_loop, stop),
+        name="work-heartbeat",
+        daemon=True,
     )
     heartbeat.start()
     _runtime = WorkRuntime(

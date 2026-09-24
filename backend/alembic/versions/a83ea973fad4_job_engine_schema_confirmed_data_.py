@@ -227,7 +227,7 @@ def upgrade() -> None:
     sa.Column('storage_key', sa.String(length=2048), nullable=True),
     sa.Column('output_json', sa.Text(), nullable=False),
     sa.Column('duration_ms', sa.Integer(), nullable=True),
-    sa.Column('peak_rss_bytes', sa.Integer(), nullable=True),
+    sa.Column('peak_rss_bytes', sa.BigInteger(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['file_id'], ['files.id'], name=op.f('fk_artifact_derivatives_file_id_files'), ondelete='CASCADE'),

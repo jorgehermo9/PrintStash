@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     ForeignKey,
     Index,
@@ -75,7 +76,10 @@ class ArtifactDerivative(SQLModel, table=True):
     # input: a re-derivation reads the Artifact, not this.
     output_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     duration_ms: Optional[int] = None
-    peak_rss_bytes: Optional[int] = None
+    # Bytes: a native render's resident set passes 2 GiB, beyond INTEGER.
+    peak_rss_bytes: Optional[int] = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

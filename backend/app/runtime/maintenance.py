@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Callable, Iterator, ParamSpec, TypeVar
 from app.core.errors import ErrorKind, OperationError
 from app.core.logging import get_logger
 from app.core.time import ensure_utc
+from app.db import admission as database_admission
 
 if TYPE_CHECKING:
     from sqlmodel import Session
@@ -299,7 +300,6 @@ _destructive_fences = threading.local()
 _activating_configuration: ContextVar[bool] = ContextVar(
     "vault_configuration_activation", default=False
 )
-_database_connections_fenced = threading.Event()
 _retained_destination: ContextVar[object | None] = ContextVar(
     "retained_migration_destination", default=None
 )
@@ -466,16 +466,15 @@ def guarded_storage_configuration(func: Callable[_P, _R]) -> Callable[_P, _R]:
 
 def fence_database_connections() -> None:
     """Reject fresh application sessions while database names are activated."""
-    _database_connections_fenced.set()
+    database_admission.fence()
 
 
 def release_database_connections() -> None:
-    _database_connections_fenced.clear()
+    database_admission.release()
 
 
 def require_database_connection_admission() -> None:
-    if _database_connections_fenced.is_set():
-        raise OperationError("database_activation_in_progress", kind=ErrorKind.BUSY)
+    database_admission.require()
 
 
 def reset_for_tests() -> None:
@@ -491,7 +490,7 @@ def reset_for_tests() -> None:
         _active_destructive = 0
     _destructive_fences.stack = []
     _backup_depth.value = 0
-    _database_connections_fenced.clear()
+    database_admission.release()
     _mutation_observer = None
 
 
