@@ -977,10 +977,7 @@ class TestDestructiveLifecycleFindings:
 
 
 class TestToolpathStorage:
-    @pytest.mark.asyncio
-    async def test_s3_toolpath_retains_original(
-        self, s3_backend, db_session, monkeypatch
-    ):
+    def test_s3_toolpath_retains_original(self, s3_backend, db_session, monkeypatch):
         from app.modules.media import toolpath
         from app.modules.storage import artifact_content
 
@@ -991,5 +988,5 @@ class TestToolpathStorage:
             db_session, build_model(db_session), path=key, size_bytes=len(content)
         )
         monkeypatch.setattr(artifact_content, "get_backend", lambda: s3_backend)
-        assert await toolpath.render(artifact) == content
+        assert toolpath.read_ascii(artifact) == content
         assert s3_backend.read_bytes(key) == content

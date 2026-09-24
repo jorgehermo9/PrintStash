@@ -20,6 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from sqlmodel import Session
+from starlette.websockets import WebSocketState
 
 from app.core.security import require_auth, require_user
 from app.db.models import CollectionRole, Model, User
@@ -177,7 +178,9 @@ async def events_ws(websocket: WebSocket) -> None:
     await sink({"type": "resync"})
     requests = 0
     try:
-        while True:
+        # A notice written from another task can find the client gone; the
+        # socket is then disconnected, and reading from it would raise.
+        while websocket.application_state == WebSocketState.CONNECTED:
             message = await websocket.receive_json()
             if not isinstance(message, dict):
                 continue

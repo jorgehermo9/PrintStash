@@ -15,16 +15,18 @@ when it is joined.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from app.api.v1.jobs import _may_subscribe
+from app.api.v1.jobs import _may_subscribe, events_ws
 from app.core.time import utcnow
 from app.db.models import (
     IngestRequest,
@@ -37,6 +39,7 @@ from app.db.models import (
 from app.modules.identity import ws_tickets
 from app.modules.identity.auth import create_access_token
 from app.modules.work.catalog import get_engine
+from app.runtime.realtime import InProcessBus
 from tests.factories import build_collection, build_user, grant_collection_role
 
 
@@ -577,6 +580,46 @@ class TestEventsSocket:
         while bus._subscribers.get(f"jobs:{owner.id}"):
             assert time.monotonic() < deadline
             time.sleep(0.01)
+
+    def test_a_notice_to_a_vanished_client_ends_the_stream_quietly(
+        self, client: TestClient, owner: User
+    ) -> None:
+        # The socket can die while a notice is being written to it; the
+        # stream must then end as a disconnect, not crash on its next read.
+        ticket = _ticket(client, owner)
+        bus = InProcessBus()
+        channel = f"jobs:{owner.id}"
+
+        async def scenario() -> None:
+            inbound: asyncio.Queue[dict] = asyncio.Queue()
+            inbound.put_nowait({"type": "websocket.connect"})
+            sends = 0
+
+            async def send(message: dict) -> None:
+                nonlocal sends
+                if message["type"] == "websocket.send":
+                    sends += 1
+                    if sends > 1:
+                        raise OSError("connection reset")
+
+            scope = {
+                "type": "websocket",
+                "path": "/api/v1/events/ws",
+                "query_string": f"ticket={ticket}".encode(),
+                "headers": [],
+                "app": SimpleNamespace(state=SimpleNamespace(event_bus=bus)),
+            }
+            stream = asyncio.create_task(events_ws(WebSocket(scope, inbound.get, send)))
+            while not bus._subscribers.get(channel):
+                await asyncio.sleep(0.01)
+            await bus.publish(channel, {"type": "job", "job_id": "j1"})
+            inbound.put_nowait({"type": "websocket.receive", "text": "{}"})
+
+            await asyncio.wait_for(stream, timeout=5)
+
+        asyncio.run(scenario())
+
+        assert not bus._subscribers.get(channel)
 
     def test_a_replayed_ticket_is_refused(
         self, client: TestClient, owner: User
