@@ -932,6 +932,23 @@ def release_job_staging(
         session.commit()
 
 
+def _committed_by_key(
+    ingestion_key: str, session_factory: SessionFactory | None
+) -> tuple[int, int] | None:
+    """The (model, file) an ingestion key already committed, if any."""
+    session_factory = session_factory or get_session_factory()
+    try:
+        with session_factory.scoped_session() as session:
+            row = session.exec(
+                select(File).where(File.ingestion_key == ingestion_key)
+            ).first()
+            if row is None or row.id is None:
+                return None
+            return row.model_id, row.id
+    except Exception:  # noqa: BLE001 - an unreadable DB is not proof of a commit
+        return None
+
+
 def ingest_staged_file(
     *,
     job_id: str,
@@ -944,6 +961,7 @@ def ingest_staged_file(
     """Commit one staged file on behalf of Job ``job_id`` and settle the Job."""
     from app.modules.work.jobs import jobs
 
+    key = ingestion_key or job_id
     jobs.update(
         job_id,
         state="running",
@@ -953,7 +971,7 @@ def ingest_staged_file(
     try:
         outcome = commit_staged_artifact(
             artifact,
-            ingestion_key=ingestion_key or job_id,
+            ingestion_key=key,
             actor_user_id=actor_user_id,
             session_factory=session_factory,
             provenance_context=provenance_context,
@@ -961,7 +979,25 @@ def ingest_staged_file(
         )
     except Exception as exc:  # noqa: BLE001 - the Job records the failure
         logger.exception("ingestion commit failed", extra={"job_id": job_id})
-        jobs.finish(job_id, state="failed", error=str(exc), retryable=True)
+        committed = _committed_by_key(key, session_factory)
+        if committed is None:
+            jobs.finish(job_id, state="failed", error=str(exc), retryable=True)
+            return None
+        # The Artifact is durable even though a later step failed: report what
+        # exists rather than a failure the user would retry into a duplicate.
+        model_id, file_id = committed
+        jobs.finish(
+            job_id,
+            state="completed",
+            completion="partial",
+            model_id=model_id,
+            file_id=file_id,
+            error=str(exc),
+            processed=1,
+            total=1,
+            succeeded=1,
+        )
+        release_job_staging(job_id, session_factory)
         return None
     _fault_injection_checkpoint("before_terminal", job_id)
     jobs.finish(

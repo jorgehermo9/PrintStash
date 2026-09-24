@@ -396,7 +396,7 @@ def work_catalog():
 
 
 @pytest.fixture(autouse=True)
-def work_engine(work_catalog) -> Iterator[Any]:
+def work_engine(work_catalog, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     """Bind a fresh deterministic engine for every test, and unbind it after.
 
     Production code only records intent and nudges; nothing runs until a test
@@ -405,7 +405,12 @@ def work_engine(work_catalog) -> Iterator[Any]:
     explicit step of the test rather than a race with it. The engine is the
     same port the durable engine implements (``tests/contract/runtime/engine``
     holds both to one contract), so what drains here is what DBOS runs.
+
+    A test that boots the real lifespan gets this engine too: composition asks
+    ``build_engine`` for the process's engine, and the durable one belongs to
+    the e2e tier, which overrides this seam with a real DBOS engine.
     """
+    import app.bootstrap.work as work_bootstrap
     from app.modules.work import catalog as catalog_module
     from app.modules.work import events
     from app.modules.work.executors import reset_executor_id
@@ -414,6 +419,7 @@ def work_engine(work_catalog) -> Iterator[Any]:
 
     engine = InlineJobEngine(work_catalog)
     engine.launch(listen_lanes=None)
+    monkeypatch.setattr(work_bootstrap, "build_engine", lambda _catalog: engine)
     jobs.clear_listeners()
     events.bind(None)
     reset_executor_id()
@@ -421,6 +427,10 @@ def work_engine(work_catalog) -> Iterator[Any]:
     try:
         yield engine
     finally:
+        # A lifespan the test left running (it raised inside the client block)
+        # must not leave its heartbeat thread or binding to the next test.
+        if work_bootstrap.current() is not None:
+            work_bootstrap.stop()
         catalog_module.bind(None, None)
         jobs.clear_listeners()
         events.bind(None)

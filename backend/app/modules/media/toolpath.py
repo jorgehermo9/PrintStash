@@ -87,7 +87,10 @@ def convert(file: File, directory: Path) -> Path:
     if file.file_type != FileType.GCODE:
         raise OperationError("toolpath_not_gcode", kind=ErrorKind.NOT_FOUND)
     incoming = directory / "input.bgcode"
-    _copy_input(file, incoming)
+    try:
+        _copy_input(file, incoming)
+    except ArtifactContentError as error:
+        raise OperationError("file_blob_unavailable", kind=ErrorKind.GONE) from error
     header = _is_binary(incoming)
     if not header.startswith(b"GCDE"):
         # Named .bgcode but plain text: the text is the toolpath.

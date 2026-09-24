@@ -21,6 +21,17 @@ from app.db.models import File, FileType, Metadata, Model
 from app.modules.storage.storage_backend.runtime import get_backend
 
 
+def drain_work() -> None:
+    """Run every Job the requests so far queued, and every Job those nudged.
+
+    That includes the derivative Jobs a commit nudges, so a drained ingest has
+    its metadata and thumbnail as well as its Artifact.
+    """
+    from app.modules.work.catalog import get_engine
+
+    get_engine().drain()  # type: ignore[attr-defined]
+
+
 def completed_job(client: TestClient, response) -> dict:
     """Drive an accepted ingest job to its terminal state and return it.
 
@@ -35,7 +46,8 @@ def completed_job(client: TestClient, response) -> dict:
     if authorization:
         headers["Authorization"] = authorization
 
-    job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
+    drain_work()
+    job = client.get(f"/api/v1/jobs/{job_id}", headers=headers)
 
     assert job.status_code == 200, job.text
     payload = job.json()
