@@ -147,7 +147,6 @@ services:
       VAULT_STAGING_MAX_ACTIVE_PER_USER: ${VAULT_STAGING_MAX_ACTIVE_PER_USER:-4}
       VAULT_STAGING_MAX_GB: ${VAULT_STAGING_MAX_GB:-4}
       VAULT_STAGING_MIN_FREE_GB: ${VAULT_STAGING_MIN_FREE_GB:-1}
-      VAULT_INGEST_WORKER_COUNT: ${VAULT_INGEST_WORKER_COUNT:-2}
       VAULT_MEDIA_WORKER_TIMEOUT_SECONDS: ${VAULT_MEDIA_WORKER_TIMEOUT_SECONDS:-180}
 
       # --- Background work ---
@@ -157,6 +156,11 @@ services:
       VAULT_PROCESS_ROLE: ${VAULT_PROCESS_ROLE:-all}
       VAULT_API_RUNS_JOBS: ${VAULT_API_RUNS_JOBS:-true}
       VAULT_SHARED_STORAGE: ${VAULT_SHARED_STORAGE:-false}
+      # Per process: mesh renders at once (each can peak hundreds of MB), and
+      # uploads committed at once. Settings → Background work overrides every
+      # lane's concurrency at runtime for all processes.
+      VAULT_MAX_RENDER_JOBS: ${VAULT_MAX_RENDER_JOBS:-1}
+      VAULT_JOBS_INGEST_CONCURRENCY: ${VAULT_JOBS_INGEST_CONCURRENCY:-2}
 
       # --- Runtime ---
       VAULT_LOG_LEVEL: ${VAULT_LOG_LEVEL:-INFO}

@@ -26,9 +26,13 @@ to be installed or configured for the default single-container deployment.
   answers `202` with `{"state": …}`. Pending Imports report `job_id`.
 - **Optional workers.** On PostgreSQL, with one volume every process mounts
   (`VAULT_SHARED_STORAGE=true`), you can add
-  `python -m app.worker` processes; see
-  [Background work](docs/architecture/background-work.md#topologies). A worker
-  never migrates; start the API (which migrates) first or alongside it.
+  `python -m app.worker` processes: `docker-compose.advanced.yml --profile workers`
+  runs them; see
+  [Background work and workers](docs/deployment.md#background-work-and-workers).
+  A worker never migrates; it waits for the API, which migrates on start.
+- **`VAULT_INGEST_WORKER_COUNT` is gone.** Nothing read it; uploads committed
+  at once are `VAULT_JOBS_INGEST_CONCURRENCY` (default 2), or Settings →
+  Background work.
 
 ## Unreleased: canonical Artifact downloads
 

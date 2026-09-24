@@ -275,7 +275,6 @@ on the API for your provider:
 | `VAULT_STAGING_MAX_ACTIVE_PER_USER` | `4` | Concurrent active staging operations per user. |
 | `VAULT_STAGING_MAX_GB` | `4` | Staging disk budget. |
 | `VAULT_STAGING_MIN_FREE_GB` | `1` | Minimum free disk space for staging. |
-| `VAULT_INGEST_WORKER_COUNT` | `2` | Ingestion worker count. |
 | `VAULT_MEDIA_WORKER_TIMEOUT_SECONDS` | `180` | Media worker timeout. |
 | `VAULT_SQLITE_SYNCHRONOUS` | `NORMAL` | SQLite durability mode. |
 | `VAULT_LOG_LEVEL` | `INFO` | API logging level. |
@@ -289,6 +288,12 @@ on the API for your provider:
 | `VAULT_PROCESS_ROLE` | `all` | `all` runs HTTP and every background Job; `api` is the one HTTP process of a deployment with [workers](#background-work-and-workers). |
 | `VAULT_API_RUNS_JOBS` | `true` | With `api`, whether the API also runs Jobs; `false` leaves them to the workers. |
 | `VAULT_SHARED_STORAGE` | `false` | Declares that every process mounts the same volumes; required with workers. |
+| `VAULT_MAX_RENDER_JOBS` | `1` | Mesh renders and local AI inference at once, per process; raise it on hosts with spare RAM. |
+| `VAULT_JOBS_INGEST_CONCURRENCY` | `2` | Uploads and imports committed at once. |
+
+Settings → Background work overrides each kind of work's concurrency at runtime,
+for every process. The other `VAULT_JOBS_*` defaults are in
+[Background work](architecture/background-work.md#configuration).
 
 Storage paths already match the persistent mounts. Leave `VAULT_DATA_DIR`,
 `VAULT_THUMB_DIR`, `VAULT_DB_URL`, `VAULT_STAGING_DIR`, and `VAULT_BACKUP_DIR` at
@@ -406,7 +411,9 @@ A worker runs the API image with `VAULT_PROCESS_ROLE=worker` and the command
 `/app/.venv/bin/python -m app.worker`. It serves no HTTP, never migrates (it
 waits for the API to), and stops cleanly on `SIGTERM`. Every process mounts the
 same `files`, `thumbs`, `staging` and `backups` volumes; uploads are staged on
-local disk and the worker that commits one reads what the API staged. A worker
+local disk and the worker that commits one reads what the API staged. With
+local AI Search models, mount their cache (`/data/ai-models`) in every process
+too: workers embed while indexing, and a download lands wherever its Job runs. A worker
 refuses to start on SQLite or without `VAULT_SHARED_STORAGE=true`, saying why.
 Keep exactly one API container per vault.
 
