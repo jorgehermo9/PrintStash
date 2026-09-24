@@ -258,6 +258,43 @@ class TestUpdate:
         assert status is not None
         assert (status.processed, status.total) == (1, 3)
 
+    @pytest.mark.parametrize(("reported", "shown"), [(150, 99), (100, 99), (-5, 0)])
+    def test_progress_stays_short_of_done_until_the_job_finishes(
+        self, store: JobStore, make_job, reported: float, shown: float
+    ) -> None:
+        # 100% is a promise that the work is over; only finishing makes it.
+        job = make_job()
+
+        store.update(job.id, state="running", progress=reported)
+
+        assert store.get(job.id).progress == shown  # type: ignore[union-attr]
+
+    def test_progress_never_moves_backwards(self, store: JobStore, make_job) -> None:
+        # Steps report independently; a late, lower report must not rewind the bar.
+        job = make_job()
+        store.update(job.id, state="running", progress=60)
+
+        store.update(job.id, progress=20)
+
+        assert store.get(job.id).progress == 60  # type: ignore[union-attr]
+
+    def test_a_finished_job_reads_as_complete(self, store: JobStore, make_job) -> None:
+        job = make_job()
+        store.update(job.id, state="running", progress=40)
+
+        store.finish(job.id, state=JobState.COMPLETED)
+
+        assert store.get(job.id).progress == 100  # type: ignore[union-attr]
+
+    def test_counts_are_never_negative(self, store: JobStore, make_job) -> None:
+        job = make_job()
+
+        store.update(job.id, state="running", processed=-3, failed=-1)
+
+        status = store.get(job.id)
+        assert status is not None
+        assert (status.processed, status.failed) == (0, 0)
+
     def test_running_stamps_the_start_once(
         self, store: JobStore, make_job, db_session: Session
     ) -> None:

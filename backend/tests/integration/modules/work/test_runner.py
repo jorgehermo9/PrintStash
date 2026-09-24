@@ -259,6 +259,52 @@ class TestExecuteJob:
         # Durable waits of 1s then 2s, not a failure.
         assert engine.clock - before == pytest.approx(3.0)
 
+    def test_a_mutating_step_counts_as_a_write_while_it_runs(
+        self, engine: InlineJobEngine, make_job
+    ) -> None:
+        # A restore drains every write before it replaces the database.
+        from app.runtime import maintenance
+
+        seen: list[int] = []
+        TRACE.behaviour["one"] = lambda _ctx: seen.append(
+            maintenance.active_mutations()
+        )
+        job = make_job(kind=MUTATING)
+
+        _run(engine, job)
+
+        assert seen == [1]
+        assert maintenance.active_mutations() == 0
+
+    def test_a_failing_step_releases_its_write(
+        self, engine: InlineJobEngine, make_job
+    ) -> None:
+        # A leaked write would hold every future restore waiting to drain.
+        from app.runtime import maintenance
+
+        TRACE.behaviour["one"] = lambda _ctx: (_ for _ in ()).throw(ValueError("bad"))
+        job = make_job(kind=MUTATING)
+
+        _run(engine, job)
+
+        assert _status(job.id).state == "failed"
+        assert maintenance.active_mutations() == 0
+
+    def test_a_read_only_step_is_not_a_write(
+        self, engine: InlineJobEngine, make_job
+    ) -> None:
+        from app.runtime import maintenance
+
+        seen: list[int] = []
+        TRACE.behaviour["look"] = lambda _ctx: seen.append(
+            maintenance.active_mutations()
+        )
+        job = make_job(kind=READ_ONLY)
+
+        _run(engine, job)
+
+        assert seen == [0]
+
     def test_a_read_only_definition_is_not_held_by_a_restore(
         self, engine: InlineJobEngine, make_job, monkeypatch
     ) -> None:
