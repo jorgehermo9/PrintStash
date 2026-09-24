@@ -22,7 +22,14 @@ from sqlmodel import Session
 import app.bootstrap.work as work_bootstrap
 from app.core.config import _overlay, settings
 from app.core.time import utcnow
-from app.db.models import ReconcileCursor, WorkExecutor, WorkLaneOverride, WorkPriority
+from app.db.models import (
+    Job,
+    JobState,
+    ReconcileCursor,
+    WorkExecutor,
+    WorkLaneOverride,
+    WorkPriority,
+)
 from app.modules.work import catalog as catalog_module
 from app.modules.work import executors, fences
 from app.modules.work.catalog import INGEST, RECONCILE_DEFINITION, WorkCatalog
@@ -423,3 +430,15 @@ class TestAfterRestore:
         work_bootstrap.after_restore()
 
         assert work_bootstrap.current() is None
+
+    def test_supersedes_restored_backups_without_running_work(
+        self, make_job, db_session: Session
+    ) -> None:
+        # An API that runs no jobs still restores; the database fact holds.
+        snapshot = make_job(kind="backup.create", state=JobState.RUNNING, attempts=1)
+
+        work_bootstrap.after_restore()
+
+        db_session.expire_all()
+        row = db_session.get(Job, snapshot.id)
+        assert row is not None and row.state == JobState.CANCELLED

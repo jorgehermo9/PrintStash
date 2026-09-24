@@ -95,6 +95,35 @@ class TestBackupRestore:
         assert restored_blob == FIXTURE.read_bytes()
 
     @pytest.mark.asyncio
+    async def test_a_backup_can_be_taken_after_restoring_one(
+        self, api, tmp_path, e2e_db
+    ):
+        # The archive's database was captured while its own backup Job was
+        # running. Restoring it must not bring that Job back as a backup that
+        # is forever in progress.
+        headers = await _setup_and_login(api, tmp_path)
+        model = await _upload_and_wait(api, headers, model_name="Restored Benchy")
+        created = await create_backup(api, headers)
+        detail = (
+            await api.get(f"/api/v1/models/{model['id']}", headers=headers)
+        ).json()
+        artifact = e2e_db.get(File, detail["files"][0]["id"])
+        assert artifact is not None
+        Path(artifact.path).unlink()
+        e2e_db.exec(delete(Metadata).where(Metadata.file_id == artifact.id))
+        e2e_db.exec(delete(File).where(File.id == artifact.id))
+        e2e_db.exec(delete(Model).where(Model.id == model["id"]))
+        e2e_db.commit()
+        restored = await api.post(
+            f"/api/v1/backups/{created['backup_id']}/restore", headers=headers
+        )
+        assert restored.status_code == 200, restored.text
+
+        again = await create_backup(api, headers)
+
+        assert again["backup_id"] != created["backup_id"]
+
+    @pytest.mark.asyncio
     async def test_restore_of_unknown_backup_id_is_404(self, api, tmp_path, e2e_db):
         headers = await _setup_and_login(api, tmp_path)
         resp = await api.post(

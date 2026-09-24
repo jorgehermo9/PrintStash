@@ -109,6 +109,7 @@ def definitions() -> list[JobDefinition]:
             name=CREATE_DEFINITION,
             lane=MAINTENANCE,
             steps=(Step(f"{CREATE_DEFINITION}.archive", _create),),
+            survives_restore=False,
             label="Backups",
         ),
         JobDefinition(
@@ -117,6 +118,7 @@ def definitions() -> list[JobDefinition]:
             steps=(Step(f"{AUTOMATIC_DEFINITION}.archive", _automatic),),
             source=ScheduleSource(AUTOMATIC_DEFINITION, _automatic_cron),
             retry=lambda _session, _subject: False,
+            survives_restore=False,
             label="Automatic backups",
         ),
     ]

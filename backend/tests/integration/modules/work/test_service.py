@@ -225,6 +225,39 @@ class TestCancelQueued:
             service.cancel_queued("not.a.definition", actor=admin)
 
 
+class TestSupersedeRestored:
+    def test_cancels_a_backup_the_restored_database_shows_running(
+        self, db_session: Session, make_job
+    ) -> None:
+        # The archive captured its own backup Job mid-run.
+        snapshot = make_job(kind="backup.create", state=JobState.RUNNING, attempts=1)
+
+        assert service.supersede_restored() == 1
+
+        db_session.expire_all()
+        row = db_session.get(Job, snapshot.id)
+        assert row is not None and row.state == JobState.CANCELLED
+        assert status_of(row).error == "superseded_by_restore"
+
+    def test_leaves_work_the_restore_still_owes(
+        self, db_session: Session, make_job
+    ) -> None:
+        scan = make_job(kind="library.scan", state=JobState.RUNNING, attempts=1)
+
+        assert service.supersede_restored() == 0
+
+        assert _state(db_session, scan.id) == JobState.RUNNING
+
+    def test_leaves_a_finished_backup_alone(
+        self, db_session: Session, make_job
+    ) -> None:
+        done = make_job(kind="backup.create", state=JobState.COMPLETED)
+
+        assert service.supersede_restored() == 0
+
+        assert _state(db_session, done.id) == JobState.COMPLETED
+
+
 class TestRetry:
     def test_queues_the_same_job_again(
         self, db_session: Session, make_job, owner, mesh, make_derivative, nudged

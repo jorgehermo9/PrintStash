@@ -229,6 +229,11 @@ class JobDefinition:
     # restore, deferred while one holds the fence). Only work that itself takes
     # the restore fence (a vault migration's cutover) opts out and gates itself.
     mutating: bool = True
+    # Whether a Job still in flight in a restored database is owed afterwards.
+    # Most work is (an import, a derivative), so the reconciler reruns it. A
+    # backup request is not: the restored database is its own snapshot, taken
+    # while that very request ran, and a restore supersedes it.
+    survives_restore: bool = True
     label: str = ""
 
     def __post_init__(self) -> None:

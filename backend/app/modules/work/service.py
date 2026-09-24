@@ -103,6 +103,41 @@ def cancel(job_id: str, *, actor: User) -> JobStatus:
     return result
 
 
+def supersede_restored() -> int:
+    """Settle restored Jobs whose work a restore replaced.
+
+    The restored database still shows the Jobs that were in flight when it
+    was captured. Most are owed again and the reconciler reruns them; the
+    ones whose definition does not survive a restore are cancelled here, so
+    the snapshot's own backup request is not mistaken for one in progress.
+    """
+    catalog = catalog_module.get_catalog()
+    superseded = [
+        name
+        for name, definition in catalog.definitions.items()
+        if not definition.survives_restore
+    ]
+    if not superseded:
+        return 0
+    with get_session_factory().scoped_session() as session:
+        ids = list(
+            session.exec(
+                select(Job.id).where(
+                    col(Job.kind).in_(superseded),
+                    col(Job.state).in_(ACTIVE_JOB_STATES),
+                )
+            ).all()
+        )
+    for job_id in ids:
+        jobs.finish(
+            job_id,
+            state=JobState.CANCELLED,
+            error="superseded_by_restore",
+            retryable=False,
+        )
+    return len(ids)
+
+
 def cancel_queued(definition: str, *, actor: User) -> int:
     """Withdraw every queued (not yet running) Job of one definition."""
     if not actor.is_superuser:

@@ -268,8 +268,15 @@ def after_restore() -> None:
     The engine's executions described Jobs of the database that no longer
     exists. Its state is discarded, the engine relaunched, and every
     definition reconciled, which resubmits whatever the restored database
-    says is still owed.
+    says is still owed. Jobs a restore supersedes are settled first, whether
+    or not this process runs an engine: that is a fact about the database.
     """
+    from app.modules.work.service import supersede_restored
+    from app.modules.work.submission import nudge_all
+
+    superseded = supersede_restored()
+    if superseded:
+        logger.info("cancelled %d Job(s) a restore superseded", superseded)
     runtime = _runtime
     if runtime is None:
         return
@@ -277,8 +284,6 @@ def after_restore() -> None:
     catalog_module.bind(runtime.engine, runtime.catalog)
     runtime.engine.launch(listen_lanes=listen_lanes(runtime.catalog))
     executors.register(role=settings.process_role, lanes=sorted(runtime.catalog.lanes))
-    from app.modules.work.submission import nudge_all
-
     nudge_all()
 
 
