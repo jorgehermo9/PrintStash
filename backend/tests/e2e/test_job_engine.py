@@ -113,9 +113,10 @@ class TestCrashRecovery:
         new = {
             **vault_env,
             "VAULT_APP_VERSION": "0.0.2-new",
-            # Long enough that only the version sweep can explain recovery.
+            # Long enough that only the version sweep can explain recovery;
+            # the harness deadline stays generous so a loaded runner is not
+            # mistaken for a missed sweep.
             "VAULT_JOBS_EXECUTOR_STALE_SECONDS": "3600",
-            "JOB_ENGINE_DEADLINE_S": "60",
         }
 
         states = _converge(new, file_id)
