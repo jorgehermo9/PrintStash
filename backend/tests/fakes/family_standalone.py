@@ -1,9 +1,15 @@
-"""Public-API scenario run in an installation with related packages removed."""
+"""Public-API scenario run in an installation with related packages removed.
+
+This process runs the production composition end to end, including the real
+DBOS job engine, so every accepted request is followed to its Job's outcome
+the way a client does: by polling ``GET /jobs/{id}``.
+"""
 
 import hashlib
 import io
 import json
 import struct
+import time
 import zipfile
 from importlib.util import find_spec
 
@@ -12,6 +18,8 @@ from fastapi.testclient import TestClient
 from app.core.config import ensure_dirs, settings
 from app.main import app
 from tests.paths import BACKEND_DIR, TESTDATA_DIR, require_fixtures
+
+_DEADLINE_S = 90.0
 
 
 def run() -> None:
@@ -24,12 +32,36 @@ def run() -> None:
     require_fixtures(*meshes)
     ensure_dirs()
     with TestClient(app) as client:
-        assert app.state.similarity_task is None
+        from app.modules.work.catalog import get_catalog
+
+        # Without the package, similarity work is not even defined.
+        assert not any(
+            name.startswith("similarity.") for name in get_catalog().definitions
+        )
 
         def request(method, path, *, status=200, **kwargs):
             response = client.request(method, f"/api/v1{path}", **kwargs)
             assert response.status_code == status, response.text
             return response
+
+        def finished(job_id: str) -> dict:
+            deadline = time.monotonic() + _DEADLINE_S
+            while True:
+                job = request("GET", f"/jobs/{job_id}").json()
+                if job["state"] in {"completed", "failed", "cancelled"}:
+                    return job
+                assert time.monotonic() < deadline, job
+                time.sleep(0.1)
+
+        def derived(file_id: int) -> None:
+            deadline = time.monotonic() + _DEADLINE_S
+            while True:
+                rows = request("GET", f"/files/{file_id}/derivatives").json()
+                if all(row["state"] in {"ready", "skipped"} for row in rows):
+                    return
+                assert not any(row["state"] == "failed" for row in rows), rows
+                assert time.monotonic() < deadline, rows
+                time.sleep(0.1)
 
         client.headers["Origin"] = "http://testserver"
         preparation = request("POST", "/setup/session").json()
@@ -58,8 +90,9 @@ def run() -> None:
                     "file": (mesh.name, mesh.read_bytes(), "application/octet-stream")
                 },
             ).json()
-            job = request("GET", f"/ingest/jobs/{uploaded['job_id']}").json()
+            job = finished(uploaded["job_id"])
             assert job["state"] == "completed", job
+            derived(job["file_id"])
             model_ids.append(job["model_id"])
             gcode = (
                 (
@@ -74,7 +107,7 @@ def run() -> None:
                 data={"source_hash": hashlib.sha256(mesh.read_bytes()).hexdigest()},
                 files={"file": (f"{mesh.stem}.gcode", gcode, "text/plain")},
             ).json()
-            revision = request("GET", f"/ingest/jobs/{sliced['job_id']}").json()
+            revision = finished(sliced["job_id"])
             assert revision["state"] == "completed", revision
             assert revision["model_id"] == job["model_id"]
             revisions[job["model_id"]] = (revision["file_id"], gcode)
@@ -174,7 +207,7 @@ def run() -> None:
                 "file": ("library.zip", archive, "application/zip"),
             },
         ).json()
-        job = request("GET", f"/ingest/jobs/{imported['job_id']}").json()
+        job = finished(imported["job_id"])
         assert job["state"] == "completed", job
         assert request("GET", "/families").json()["total"] == 1
         assert request("GET", path).json()["canonical_model_id"] == model_ids[1]

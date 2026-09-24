@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e._backup_helpers import setup_and_login
+from tests.e2e._jobs import create_backup
 
 
 class TestReplicaRunRecovery:
@@ -34,9 +35,7 @@ class TestReplicaRunRecovery:
             },
         )
         assert connection.status_code == 201, connection.text
-        created = await api.post("/api/v1/backups", headers=headers)
-        assert created.status_code == 202, created.text
-        body = created.json()
+        body = await create_backup(api, headers)
         assert body["outcome"] == "partial"
         failed = next(
             row for row in body["destination_results"] if row["kind"] == "connection"

@@ -37,7 +37,16 @@ MANUAL_SUBJECT = "backup/manual"
 
 
 def _meta(meta: backup_contracts.BackupMeta) -> dict[str, Any]:
+    """The new backup as ``GET /backups/{id}`` shows it, plus its run outcome.
+
+    ``source_ref`` is what every later operation on this exact archive needs,
+    so a client can act on the backup without listing sources first.
+    """
     return {
+        "location": meta.location,
+        "source_ref": meta.source_ref,
+        "provider_ref": meta.provider_ref,
+        "namespace": meta.namespace,
         "run_id": meta.run_id,
         "outcome": meta.outcome,
         "destination_results": meta.destination_results,

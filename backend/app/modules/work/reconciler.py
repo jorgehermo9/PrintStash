@@ -230,7 +230,7 @@ def _submit(job_id: str, result: PassResult) -> None:
     try:
         outcome = submit(job_id)
     except Exception:  # noqa: BLE001 - the Job stays queued for the next pass
-        logger.warning("job submission failed", extra={"job_id": job_id})
+        logger.exception("job submission failed", extra={"job_id": job_id})
         result.deferred += 1
         return
     if outcome is None:

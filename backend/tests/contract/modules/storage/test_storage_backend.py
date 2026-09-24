@@ -30,8 +30,7 @@ from sqlmodel import Session
 
 from app.core.config import _overlay, settings
 from app.db.models import LibrarySourceKind, StorageConnection
-from app.modules.media.thumbnail_engine import ThumbnailStrategy
-from app.modules.media.thumbnail_generations import publish_precomputed_thumbnail
+from app.modules.media.thumbnail_publication import point_at, publish_thumbnail
 from app.modules.sources.library_source import source_from_connection
 from app.modules.storage.storage_backend.contracts import (
     NativeMultipartPart,
@@ -293,37 +292,38 @@ class TestThumbnailLifecycle:
             sha256="a" * 64,
         )
         image = io.BytesIO()
-        Image.new("RGBA", (80, 60), (80, 140, 220, 255)).save(image, format="PNG")
+        Image.new("RGBA", (80, 60), (80, 140, 220, 255)).save(image, format="WEBP")
+        encoded = image.getvalue()
 
-        publish_precomputed_thumbnail(
-            db_session,
-            file_row,
-            image.getvalue(),
-            strategy=ThumbnailStrategy.FULL,
-            complete=True,
-            promote=True,
-            backend=s3_backend,
+        first = publish_thumbnail(
+            db_session, s3_backend, file_row, encoded, recipe_tag="mesh:1"
         )
-        first_key = file_row.thumbnail_path
-        assert first_key is not None
-        assert s3_backend.read_bytes(first_key).startswith(b"RIFF")
+        point_at(db_session, file_row, first.key)
+        db_session.commit()
+        assert file_row.thumbnail_path == first.key
+        assert s3_backend.read_bytes(first.key).startswith(b"RIFF")
+
+        # Re-publishing identical bytes meets the store's conditional write and
+        # resolves to the same object rather than failing or duplicating it.
+        again = publish_thumbnail(
+            db_session, s3_backend, file_row, encoded, recipe_tag="mesh:1"
+        )
+        assert again.key == first.key
 
         file_row.sha256 = "b" * 64
         db_session.add(file_row)
         db_session.commit()
-        publish_precomputed_thumbnail(
-            db_session,
-            file_row,
-            image.getvalue(),
-            strategy=ThumbnailStrategy.FULL,
-            complete=True,
-            promote=True,
-            backend=s3_backend,
+        second = publish_thumbnail(
+            db_session, s3_backend, file_row, encoded, recipe_tag="mesh:1"
         )
+        point_at(db_session, file_row, second.key)
+        db_session.commit()
 
-        assert file_row.thumbnail_path is not None
-        assert file_row.thumbnail_path != first_key
-        assert s3_backend.exists(file_row.thumbnail_path)
+        # New content gets a new immutable object; the one a reader may still
+        # be serving is never overwritten.
+        assert file_row.thumbnail_path == second.key != first.key
+        assert s3_backend.exists(second.key)
+        assert s3_backend.read_bytes(first.key) == encoded
 
 
 class TestMove:

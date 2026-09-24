@@ -15,8 +15,11 @@ every in-flight Job from the application database.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import threading
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -66,6 +69,44 @@ _STATUS = {
 _ACTIVE = ["ENQUEUED", "DELAYED", "PENDING"]
 _SETTLED = ["SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED"]
 _PRUNE_BATCH = 500
+
+
+_client_pool: ThreadPoolExecutor | None = None
+_client_pool_lock = threading.Lock()
+
+
+def _off_loop(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    global _client_pool
+    with _client_pool_lock:
+        if _client_pool is None:
+            _client_pool = ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="dbos-client"
+            )
+    return _client_pool.submit(fn, *args, **kwargs).result()
+
+
+def _detached(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Call the DBOS client API as a caller outside any workflow would.
+
+    Two callers need this. A route handler nudges from the event loop's
+    thread, where DBOS's synchronous API refuses to run; the call moves to a
+    worker thread, which also starts with an empty context. And submissions
+    happen inside executions: a reconcile pass submits the Jobs it found from
+    within its step, and a Job's step nudges other sources. DBOS treats a
+    workflow started from inside a workflow as its child, and refuses one
+    started from inside a step. Ours are independent top-level executions
+    keyed by their own ids, so the call runs in an empty context, where DBOS
+    sees no enclosing workflow.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        return _off_loop(fn, *args, **kwargs)
+    if DBOS.workflow_id is None:
+        return fn(*args, **kwargs)
+    return contextvars.Context().run(fn, *args, **kwargs)
 
 
 def system_database_url(db_url: str) -> tuple[str, str | None]:
@@ -208,6 +249,10 @@ class DbosJobEngine(JobEngine):
         options: dict[str, Any] = {
             "polling_interval_sec": self.polling,
             "on_conflict": "always_update",
+            # Without it DBOS ignores every submission's priority, and a
+            # backfill (a startup reconcile, a regenerate-all) runs ahead of
+            # the upload a user is waiting on.
+            "priority_enabled": True,
         }
         if lane.partitioned:
             options["partition_concurrency"] = lane.concurrency
@@ -236,6 +281,9 @@ class DbosJobEngine(JobEngine):
     # -- submission ----------------------------------------------------------
 
     def submit(self, submission: Submission) -> SubmitOutcome:
+        return _detached(self._submit, submission)
+
+    def _submit(self, submission: Submission) -> SubmitOutcome:
         queue = self._queues[submission.lane]
         if DBOS.get_workflow_status(submission.execution_id) is not None:
             return SubmitOutcome.EXISTING
@@ -259,11 +307,14 @@ class DbosJobEngine(JobEngine):
         return SubmitOutcome.ACCEPTED
 
     def cancel(self, execution_id: str) -> None:
-        DBOS.cancel_workflow(execution_id)
+        _detached(DBOS.cancel_workflow, execution_id)
 
     # -- evidence ------------------------------------------------------------
 
     def evidence(self, execution_ids: Sequence[str]) -> dict[str, EngineEvidence]:
+        return _detached(self._evidence, execution_ids)
+
+    def _evidence(self, execution_ids: Sequence[str]) -> dict[str, EngineEvidence]:
         found = {execution_id: EngineEvidence(None) for execution_id in execution_ids}
         ids = list(execution_ids)
         for offset in range(0, len(ids), _PRUNE_BATCH):
@@ -279,6 +330,9 @@ class DbosJobEngine(JobEngine):
         return found
 
     def active(self) -> list[ActiveExecution]:
+        return _detached(self._active)
+
+    def _active(self) -> list[ActiveExecution]:
         return [
             ActiveExecution(
                 execution_id=status.workflow_id,
@@ -296,6 +350,9 @@ class DbosJobEngine(JobEngine):
         ]
 
     def lane_depth(self, lane: str) -> LaneDepth:
+        return _detached(self._lane_depth, lane)
+
+    def _lane_depth(self, lane: str) -> LaneDepth:
         queued = running = 0
         for status in DBOS.list_workflows(
             queue_name=lane, status=_ACTIVE, load_input=False, load_output=False
@@ -326,6 +383,9 @@ class DbosJobEngine(JobEngine):
         ]
 
     def prune_history(self, *, older_than: datetime) -> int:
+        return _detached(self._prune_history, older_than)
+
+    def _prune_history(self, older_than: datetime) -> int:
         cutoff = older_than.astimezone(timezone.utc).isoformat()
         removed = 0
         while True:

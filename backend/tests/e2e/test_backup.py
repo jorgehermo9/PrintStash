@@ -10,7 +10,6 @@ the service call succeeded.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -18,6 +17,7 @@ from sqlmodel import delete
 
 from app.db.models import File, Metadata, Model
 from tests.e2e._backup_helpers import setup_and_login as _setup_and_login
+from tests.e2e._jobs import completed_job, create_backup
 from tests.paths import FIXTURES_DIR
 
 FIXTURE = FIXTURES_DIR / "real_orca_ender3_benchy.gcode"
@@ -30,16 +30,7 @@ async def _upload_and_wait(api, headers, *, model_name: str) -> dict:
         data={"model_name": model_name},
         headers=headers,
     )
-    assert up.status_code == 202, up.text
-    job_id = up.json()["job_id"]
-    for _ in range(50):
-        status = (
-            await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-        ).json()
-        if status["state"] in ("completed", "failed", "duplicate"):
-            break
-        await asyncio.sleep(0.05)
-    assert status["state"] == "completed", status
+    await completed_job(api, up, headers)
     models = (await api.get("/api/v1/models", headers=headers)).json()
     return next(m for m in models if m["name"] == model_name)
 
@@ -61,10 +52,9 @@ class TestBackupRestore:
         ).content
         assert original_blob == FIXTURE.read_bytes()
 
-        created = await api.post("/api/v1/backups", headers=headers)
-        assert created.status_code == 202, created.text
-        backup_id = created.json()["backup_id"]
-        assert created.json()["file_count"] >= 1
+        created = await create_backup(api, headers)
+        backup_id = created["backup_id"]
+        assert created["file_count"] >= 1
 
         listed = await api.get("/api/v1/backups", headers=headers)
         assert any(b["backup_id"] == backup_id for b in listed.json())
@@ -120,8 +110,7 @@ class TestDelete:
         headers = await _setup_and_login(api, tmp_path)
         await _upload_and_wait(api, headers, model_name="Deletable Backup Benchy")
 
-        created = await api.post("/api/v1/backups", headers=headers)
-        backup_id = created.json()["backup_id"]
+        backup_id = (await create_backup(api, headers))["backup_id"]
 
         deleted = await api.delete(f"/api/v1/backups/{backup_id}", headers=headers)
         assert deleted.status_code == 200, deleted.text

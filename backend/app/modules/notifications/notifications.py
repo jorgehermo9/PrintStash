@@ -997,4 +997,8 @@ def enqueue_storage_event(
                 context_json=json.dumps(context),
             )
         )
+    if matching:
+        from app.modules.work.submission import nudge_after_commit
+
+        nudge_after_commit(session, DELIVER_DEFINITION)
     return len(matching)

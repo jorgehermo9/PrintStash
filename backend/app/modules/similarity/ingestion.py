@@ -9,7 +9,7 @@ from app.modules.ingestion.extensions import MeshExtractionOptions
 from app.modules.media.fingerprints import FingerprintResult
 from app.modules.similarity.configuration import read_settings
 from app.modules.similarity.fingerprints import publish_precomputed
-from app.modules.similarity.runs import start
+from app.modules.similarity.runs import start, system_actor
 
 
 def extraction_options(sessions: SessionFactory) -> MeshExtractionOptions:
@@ -37,7 +37,8 @@ def after_commit(
         if file is None:
             return "stale"
         state = publish_precomputed(session, file, result)
-        actor = session.get(User, actor_id) if actor_id else None
+        # A derivative has no requesting user; its run is a system run.
+        actor = session.get(User, actor_id) if actor_id else system_actor(session)
         if state in ("ready", "partial") and actor is not None and actor.is_active:
             try:
                 start(
@@ -54,4 +55,9 @@ def after_commit(
                     "similarity_scope_unavailable",
                 ):
                     raise
+            else:
+                from app.modules.similarity.jobs import DEFINITION
+                from app.modules.work import nudge
+
+                nudge(DEFINITION)
         return state

@@ -7,7 +7,6 @@ through the same operator-facing endpoints.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,6 +25,7 @@ from app.modules.storage.storage_providers import (
     split_provider_config,
 )
 from tests.containers import S3_ACCESS_KEY, S3_SECRET_KEY, openssh_endpoint, s3_endpoint
+from tests.e2e._jobs import completed_job, create_backup
 from tests.fixtures.storage_presets import real_preset_configuration
 from tests.paths import FIXTURES_DIR
 
@@ -169,16 +169,7 @@ class TestRemoteBackup:
             files={"file": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")},
             data={"model_name": "Remote recovery"},
         )
-        assert uploaded.status_code == 202, uploaded.text
-        job_id = uploaded.json()["job_id"]
-        for _ in range(50):
-            job = (
-                await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-            ).json()
-            if job["state"] in {"completed", "failed", "duplicate"}:
-                break
-            await asyncio.sleep(0.05)
-        assert job["state"] == "completed", job
+        await completed_job(api, uploaded, headers)
         model = next(
             item
             for item in (await api.get("/api/v1/models", headers=headers)).json()
@@ -188,10 +179,7 @@ class TestRemoteBackup:
             await api.get(f"/api/v1/models/{model['id']}", headers=headers)
         ).json()
         file_id = detail["files"][0]["id"]
-        created = await api.post("/api/v1/backups", headers=headers)
-
-        assert created.status_code == 202, created.text
-        metadata = created.json()
+        metadata = await create_backup(api, headers)
         assert metadata["location"] == f"opendal:{remote_backup_profile['kind']}"
         assert not list(Path(settings.backup_dir).glob("*.tar.gz"))
         listed = await api.get("/api/v1/backups/sources", headers=headers)

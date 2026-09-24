@@ -8,12 +8,11 @@ than create a second model.
 
 from __future__ import annotations
 
-import asyncio
 import io
+import json
 import math
 import struct
 import zipfile
-from datetime import timedelta
 
 import numpy as np
 import pytest
@@ -22,9 +21,8 @@ from PIL import Image
 from sqlmodel import select
 
 from app.core.config import _overlay, settings
-from app.core.time import utcnow
-from app.db.models import BackgroundJob, InboxItem, InboxItemState, User
-from app.runtime.jobs import registry
+from app.db.models import ArtifactDerivative
+from tests.e2e._jobs import settle
 from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 from tests.paths import FIXTURES_DIR
 
@@ -62,14 +60,28 @@ async def _upload(api, headers, *, model_name: str) -> dict:
 
 
 async def _await_job(api, headers, job_id: str) -> dict:
-    for _ in range(50):
-        r = await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-        assert r.status_code == 200, r.text
-        job = r.json()
-        if job["state"] in ("completed", "failed", "duplicate"):
-            return job
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"job {job_id} did not finish: {job}")
+    settle()
+    r = await api.get(f"/api/v1/jobs/{job_id}", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _thumbnail_derivative(api, headers, file_id: int) -> dict:
+    """The thumbnail's derivative row as the public API reports it."""
+    listed = await api.get(f"/api/v1/files/{file_id}/derivatives", headers=headers)
+    assert listed.status_code == 200, listed.text
+    return next(row for row in listed.json() if row["kind"] == "thumbnail")
+
+
+def _thumbnail_output(session, file_id: int) -> dict:
+    """How the published thumbnail was made: its strategy and completeness."""
+    row = session.exec(
+        select(ArtifactDerivative).where(
+            ArtifactDerivative.file_id == file_id,
+            ArtifactDerivative.kind == "thumbnail",
+        )
+    ).one()
+    return json.loads(row.output_json)
 
 
 def _microfaceted_stl(columns: int = 420, rows: int = 420) -> bytes:
@@ -245,25 +257,6 @@ class TestMetadata:
         monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
         stl = _microfaceted_stl()
         headers = await _setup_and_login(api, tmp_path)
-        owner = e2e_db.exec(select(User).where(User.username == "owner")).one()
-        expired_job = BackgroundJob(
-            id="issue-67-expired-inbox-job",
-            owner_user_id=owner.id,
-            state="completed",
-            status_json='{"state":"completed"}',
-            finished_at=utcnow() - timedelta(hours=2),
-        )
-        e2e_db.add(expired_job)
-        e2e_db.flush()
-        e2e_db.add(
-            InboxItem(
-                owner_user_id=owner.id,
-                state=InboxItemState.COMPLETED,
-                background_job_id=expired_job.id,
-            )
-        )
-        e2e_db.commit()
-        monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
 
         uploaded = await api.post(
             "/api/v1/ingest/model",
@@ -275,8 +268,13 @@ class TestMetadata:
         job = await _await_job(api, headers, uploaded.json()["job_id"])
 
         assert job["state"] == "completed", job
-        assert job["thumbnail_status"] == "fallback_generated", job
         file_id = job["file_id"]
+        assert (await _thumbnail_derivative(api, headers, file_id))["state"] == "ready"
+        # Over the render cap, the thumbnail is a bounded fallback, not a full render.
+        assert _thumbnail_output(e2e_db, file_id)["strategy"] in {
+            "streaming",
+            "fallback",
+        }
         thumbnail = await api.get(f"/api/v1/files/{file_id}/thumbnail", headers=headers)
         assert thumbnail.status_code == 200, thumbnail.text
         assert thumbnail.headers["content-type"] == "image/webp"
@@ -309,7 +307,9 @@ class TestMetadata:
         job = await _await_job(api, headers, uploaded.json()["job_id"])
 
         assert job["state"] == "completed", job
-        assert job["thumbnail_status"] == "generated", job
+        derivative = await _thumbnail_derivative(api, headers, job["file_id"])
+        assert derivative["state"] == "ready", derivative
+        assert _thumbnail_output(e2e_db, job["file_id"])["strategy"] == "embedded"
         thumbnail = await api.get(
             f"/api/v1/files/{job['file_id']}/thumbnail", headers=headers
         )

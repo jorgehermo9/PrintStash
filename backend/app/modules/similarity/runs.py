@@ -275,6 +275,22 @@ def source_query(session: Session, run: SimilarityRun, actor: User):
     return query.order_by(File.id)
 
 
+def system_actor(session: Session) -> User | None:
+    """The account a run no user asked for runs as: the first active admin.
+
+    Scheduled and derivative-triggered runs have no requesting user. Running
+    them as an administrator lets them see the whole library; what each
+    viewer sees of the resulting candidates is still filtered by their own
+    permissions when they read them.
+    """
+    return session.exec(
+        select(User)
+        .where(col(User.is_superuser).is_(True), col(User.is_active).is_(True))
+        .order_by(User.id)
+        .limit(1)
+    ).first()
+
+
 def schedule_due(session: Session) -> SimilarityRun | None:
     """Opt-in local cadence; the durable active-scope constraint deduplicates it."""
     from app.core.time import ensure_utc
@@ -292,12 +308,7 @@ def schedule_due(session: Session) -> SimilarityRun | None:
         hours=config.schedule_hours
     ):
         return None
-    actor = session.exec(
-        select(User)
-        .where(col(User.is_superuser).is_(True), col(User.is_active).is_(True))
-        .order_by(User.id)
-        .limit(1)
-    ).first()
+    actor = system_actor(session)
     if actor is None:
         return None
     try:

@@ -24,6 +24,7 @@ from app.modules.identity.auth import create_api_key
 from app.modules.ingestion import import_resolvers, inbox
 from app.modules.storage.hashing import sha256_file
 from app.modules.storage.storage_backend.runtime import get_backend
+from tests.e2e._jobs import settle
 from tests.paths import FIXTURES_DIR, TESTDATA_DIR
 
 
@@ -131,6 +132,7 @@ class TestBrowserCapture:
             json={"selected_ids": ["spatula"]},
         )
         assert imported.status_code == 200, imported.text
+        settle()
 
         completed = await api.get(f"/api/v1/inbox/{item_id}", headers=superuser_headers)
         assert completed.json()["state"] == "completed", completed.text
@@ -170,6 +172,7 @@ class TestBrowserCapture:
         )
 
         assert captured.status_code == 202, captured.text
+        settle()
         detail = await api.get(
             f"/api/v1/inbox/{captured.json()['id']}", headers=superuser_headers
         )
@@ -233,12 +236,14 @@ class TestBrowserCapture:
             )
             assert captured.status_code == 202, captured.text
             item_id = captured.json()["id"]
+            settle()
             imported = await api.post(
                 f"/api/v1/inbox/{item_id}/import",
                 headers=superuser_headers,
                 json={"selected_ids": ["stl-1"]},
             )
             assert imported.status_code == 200, imported.text
+            settle()
             return (
                 await api.get(f"/api/v1/inbox/{item_id}", headers=superuser_headers)
             ).json()
@@ -341,15 +346,15 @@ class TestBrowserCapture:
                 )
             ]
 
-        original_ingest = inbox.importer.ingest_orca_gcode
+        original_commit = inbox.importer.commit_staged_artifact
         fail_bad = True
 
-        def _one_bad_file(*args, **kwargs) -> None:
+        def _one_bad_file(staged, **kwargs):
             nonlocal fail_bad
-            if kwargs["original_filename"] == "bad.gcode" and fail_bad:
+            if staged.original_filename == "bad.gcode" and fail_bad:
                 fail_bad = False
                 raise RuntimeError("fixture_child_failure")
-            original_ingest(*args, **kwargs)
+            return original_commit(staged, **kwargs)
 
         monkeypatch.setattr(
             inbox.import_resolvers, "resolve_capture_manifest", _fixture_capture
@@ -358,7 +363,7 @@ class TestBrowserCapture:
             inbox.import_resolvers, "resolve_selected_assets", _fixture_resolved
         )
         monkeypatch.setattr(inbox, "_download_resolved_asset", _fixture_stage)
-        monkeypatch.setattr(inbox.importer, "ingest_orca_gcode", _one_bad_file)
+        monkeypatch.setattr(inbox.importer, "commit_staged_artifact", _one_bad_file)
 
         captured = await api.post(
             "/api/v1/inbox",
@@ -366,12 +371,14 @@ class TestBrowserCapture:
             json={"url": "https://www.printables.com/model/3161-3d-benchy"},
         )
         item_id = captured.json()["id"]
+        settle()
         first = await api.post(
             f"/api/v1/inbox/{item_id}/import",
             headers=superuser_headers,
             json={"selected_ids": ["good", "bad"]},
         )
         assert first.status_code == 200, first.text
+        settle()
         partial = (
             await api.get(f"/api/v1/inbox/{item_id}", headers=superuser_headers)
         ).json()
@@ -388,6 +395,7 @@ class TestBrowserCapture:
         )
         assert retried.status_code == 200, retried.text
         assert retried.json()["manifest"]["selected_ids"] == ["bad"]
+        settle()
         assert resolution_calls == [["good", "bad"], ["bad"]]
         completed = (
             await api.get(f"/api/v1/inbox/{item_id}", headers=superuser_headers)

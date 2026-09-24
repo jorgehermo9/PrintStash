@@ -923,6 +923,75 @@ class TestDeliverySource:
         assert notifications.DeliverySource().next_due(db_session, now=utcnow()) is None
 
 
+class TestEnqueueStorageEvent:
+    """Audit outcomes reach the channels subscribed to them, and leave promptly."""
+
+    def _enqueue(self, session, event=NotificationEventType.STORAGE_REGRESSION, **kw):
+        return notifications.enqueue_storage_event(
+            session,
+            event,
+            run_id=7,
+            mode="quick",
+            summary={"new": 2, "bogus": 9},
+            duration_s=-1,
+            **kw,
+        )
+
+    def test_a_storage_event_is_delivered_once_its_transaction_commits(
+        self, db_session
+    ):
+        # Regression: the storage outbox recorded deliveries without nudging
+        # delivery, so an alert waited for the next periodic reconcile.
+        from tests.integration.api.v1._ingest_assertions import drain_work
+
+        set_notifications_enabled(db_session, True)
+        ch = _channel(db_session, events=[NotificationEventType.STORAGE_REGRESSION])
+
+        assert self._enqueue(db_session) == 1
+        db_session.commit()
+        client = _http_returning(204)
+        with patch.object(notifications, "_client_for", new=_client_factory(client)):
+            drain_work()
+
+        db_session.expire_all()
+        (delivery,) = _deliveries(db_session, ch.id)
+        assert delivery.status == NotificationDeliveryStatus.SENT
+        context = json.loads(delivery.context_json)
+        assert (context["audit_run_id"], context["audit_mode"]) == (7, "quick")
+        # Only the known summary buckets, and never a negative duration.
+        assert context["summary"]["new"] == 2
+        assert "bogus" not in context["summary"]
+        assert context["duration_s"] == 0
+
+    def test_reaches_only_channels_subscribed_to_the_event(self, db_session):
+        set_notifications_enabled(db_session, True)
+        _channel(db_session, events=[NotificationEventType.STORAGE_RECOVERY])
+
+        assert self._enqueue(db_session) == 0
+
+    def test_can_be_limited_to_named_channels(self, db_session):
+        set_notifications_enabled(db_session, True)
+        wanted = _channel(
+            db_session, events=[NotificationEventType.STORAGE_REGRESSION], name="a"
+        )
+        _channel(
+            db_session, events=[NotificationEventType.STORAGE_REGRESSION], name="b"
+        )
+
+        assert self._enqueue(db_session, channel_ids=[wanted.id]) == 1
+        db_session.commit()
+        assert [d.channel_id for d in _deliveries(db_session)] == [wanted.id]
+
+    def test_is_silent_while_notifications_are_off(self, db_session):
+        _channel(db_session, events=[NotificationEventType.STORAGE_REGRESSION])
+
+        assert self._enqueue(db_session) == 0
+
+    def test_refuses_an_event_that_is_not_a_storage_event(self, db_session):
+        with pytest.raises(ValueError, match="storage_event_required"):
+            self._enqueue(db_session, NotificationEventType.PRINT_COMPLETED)
+
+
 class TestPruneDeliveries:
     def test_prune_deliveries_removes_old_terminal_rows(self, db_session):
         from datetime import timedelta

@@ -9,6 +9,7 @@ and is the same in every process; nothing here starts a loop.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from contextlib import asynccontextmanager
@@ -351,7 +352,9 @@ async def lifespan(app: FastAPI):
     app.state.printer_hub = hub
     watcher = LibraryWatcher()
     app.state.library_watcher = watcher
-    _start_work(prepared, publisher=bus)
+    # Off the event loop: the engine refuses to register its queues from a
+    # running loop, and the startup reconcile is blocking database work.
+    await asyncio.to_thread(_start_work, prepared, publisher=bus)
     await hub.start_all()
     # Real-time folder watching is best-effort: never let it block startup.
     try:
@@ -366,7 +369,7 @@ async def lifespan(app: FastAPI):
     logger.info("shutting down printer hub")
     await watcher.stop_all()
     await hub.stop_all()
-    stop_work()
+    await asyncio.to_thread(stop_work)
     await bus.stop()
     try:
         await _close_outbound_clients()

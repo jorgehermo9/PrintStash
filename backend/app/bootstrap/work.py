@@ -43,11 +43,17 @@ def definitions() -> list[JobDefinition]:
     from app.modules.ingestion.artifact_uploads import handoff
     from app.modules.notifications import notifications
     from app.modules.printing import jobs as printing_jobs
-    from app.modules.similarity import jobs as similarity_jobs
     from app.modules.sources import external_library
     from app.modules.storage import jobs as storage_jobs
     from app.modules.work import housekeeping
 
+    optional: list[JobDefinition] = []
+    if similarity_available():
+        # An installation may ship without the similarity package at all, so
+        # it is imported only once it is known to be present.
+        from app.modules.similarity import jobs as similarity_jobs
+
+        optional.extend(similarity_jobs.definitions())
     return [
         housekeeping.definition(),
         *ingest_jobs.definitions(),
@@ -55,8 +61,7 @@ def definitions() -> list[JobDefinition]:
         *library_transfer.definitions(),
         *inbox.definitions(),
         *derivative_jobs.definitions(),
-        # Similarity needs the optional native analysis stack.
-        *(similarity_jobs.definitions() if similarity_available() else []),
+        *optional,
         *external_library.definitions(),
         *backup_jobs.definitions(),
         *gc_jobs.definitions(),

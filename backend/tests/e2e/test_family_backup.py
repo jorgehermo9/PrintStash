@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.db.models import ModelFamily, ModelFamilyMember
 from app.db.session import get_session_factory
 from app.modules.storage.storage_backend.runtime import get_backend, init_backend
+from tests.e2e._jobs import create_backup
 from tests.factories import build_external_library, build_file, build_model
 from tests.factories.content import png
 from tests.fakes.s3_delivery import browser_s3
@@ -125,10 +126,9 @@ class TestFamilyBackup:
                     headers=headers,
                 )
                 assert trashed_family.status_code == 204, trashed_family.text
-                created = await api.post("/api/v1/backups", headers=headers)
-                assert created.status_code == 202, created.text
-                backup_id = created.json()["backup_id"]
-                assert created.json()["file_count"] >= 2
+                created = await create_backup(api, headers)
+                backup_id = created["backup_id"]
+                assert created["file_count"] >= 2
 
                 # Simulate accidental Family purge through the real API. Source
                 # Models remain independent, and their read-only bytes survive.

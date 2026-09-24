@@ -9,6 +9,7 @@ nothing is lost with it.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta
 
@@ -103,13 +104,20 @@ def _cursor(session: Session, source: str) -> ReconcileCursor:
 
 
 def nudge(
-    source: str, *, now: datetime | None = None, delay: float | None = None
+    source: str,
+    *,
+    now: datetime | None = None,
+    delay: float | None = None,
+    priority: WorkPriority = WorkPriority.INTERACTIVE,
 ) -> None:
     """Ask for ``source``'s reconcile pass soon. Never raises into the caller.
 
-    The dirty stamp is written first. A pass is enqueued only when none is
-    already queued; a pass that is running will see the stamp when it tries to
-    release its claim and run again.
+    The dirty stamp is written first. A pass is enqueued only when none of at
+    least this priority is already queued; a pass that is running will see the
+    stamp when it tries to release its claim and run again. A hot path's nudge
+    is interactive; the tick's sweep of every source is backfill. So an upload
+    arriving just after startup gets its own interactive pass rather than
+    waiting behind the backfill pass the sweep queued for the same source.
     """
     if not catalog_module.bound():
         return
@@ -119,18 +127,24 @@ def nudge(
         stamp = now + timedelta(seconds=delay) if delay else now
         with get_session_factory().scoped_session() as session:
             cursor = _cursor(session, source)
+            state = json.loads(cursor.state_json or "{}")
             if delay is None:
                 cursor.nudged_at = now
-            grace = timedelta(seconds=settings.jobs_submit_grace_seconds)
-            queued = cursor.pass_queued_at is not None and (
-                ensure_utc(cursor.pass_queued_at) > now - grace
-            )
-            if queued and delay is None:
-                session.add(cursor)
-                session.commit()
-                return
-            if delay is None:
+                grace = timedelta(seconds=settings.jobs_submit_grace_seconds)
+                queued = cursor.pass_queued_at is not None and (
+                    ensure_utc(cursor.pass_queued_at) > now - grace
+                )
+                covered = queued and (
+                    priority is WorkPriority.BACKFILL
+                    or state.get("queued_priority") == WorkPriority.INTERACTIVE.value
+                )
+                if covered:
+                    session.add(cursor)
+                    session.commit()
+                    return
                 cursor.pass_queued_at = now
+                state["queued_priority"] = priority.value
+                cursor.state_json = json.dumps(state, separators=(",", ":"))
             session.add(cursor)
             session.commit()
         catalog_module.get_engine().submit(
@@ -141,13 +155,13 @@ def nudge(
                 definition=catalog_module.RECONCILE_DEFINITION,
                 subject_key=source,
                 lane=catalog_module.RECONCILE,
-                priority=WorkPriority.INTERACTIVE,
+                priority=priority,
                 delay_seconds=delay,
                 metadata={"due_at": stamp.isoformat()},
             )
         )
     except Exception:  # noqa: BLE001 - the tick recovers a lost nudge
-        logger.warning("reconciler nudge failed", extra={"source": source})
+        logger.exception("reconciler nudge failed", extra={"source": source})
 
 
 def nudge_after_commit(session: Session, source: str) -> None:
@@ -170,4 +184,4 @@ def nudge_all(*, now: datetime | None = None) -> None:
     if not catalog_module.bound():
         return
     for name in sorted(catalog_module.get_catalog().definitions):
-        nudge(name, now=now)
+        nudge(name, now=now, priority=WorkPriority.BACKFILL)

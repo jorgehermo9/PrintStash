@@ -2,8 +2,8 @@
 
 This is the keystone of the E2E layer. It drives the *real* app — enable the
 master switch and create channels through the public REST API — fires a real
-``print_completed`` event through the same enqueue path the printer hub uses, runs
-the real dispatcher, and asserts each fake provider received a payload it would
+``print_completed`` event through the same enqueue path the printer hub uses, lets
+the ``notify.deliver`` Jobs that enqueue nudged run, and asserts each fake provider received a payload it would
 actually accept.
 
 Two assertions here fail against the pre-fix renderers, which is the point:
@@ -29,6 +29,7 @@ from app.db.models import (
     PrintJobState,
 )
 from app.modules.notifications import notifications
+from tests.e2e._jobs import settle
 from tests.factories import build_file, build_model, build_print_job, build_printer
 
 NOTIF_BASE = "/api/v1/notifications"
@@ -136,12 +137,13 @@ class TestNotificationDelivery:
         e2e_db.commit()
         assert enqueued == 4
 
-        sent = await notifications.dispatch_due()
-        assert sent == 4
+        # The enqueue nudged delivery after the commit; the Jobs send for real.
+        settle()
 
         # Every delivery succeeded (no 400 / encoding failure).
         e2e_db.expire_all()
         deliveries = e2e_db.exec(select(NotificationDelivery)).all()
+        assert len(deliveries) == 4
         statuses = {d.event_type: d.status for d in deliveries}
         assert all(d.status == NotificationDeliveryStatus.SENT for d in deliveries), [
             (d.id, d.status, d.last_error) for d in deliveries
@@ -189,7 +191,7 @@ class TestNotificationDelivery:
         )
         e2e_db.commit()
 
-        await notifications.dispatch_due()
+        settle()
 
         e2e_db.expire_all()
         d = e2e_db.exec(select(NotificationDelivery)).one()
@@ -219,7 +221,7 @@ class TestNotificationDelivery:
         )
         e2e_db.commit()
 
-        await notifications.dispatch_due()
+        settle()
 
         e2e_db.expire_all()
         d = e2e_db.exec(select(NotificationDelivery)).one()
