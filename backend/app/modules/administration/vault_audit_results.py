@@ -342,20 +342,14 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
                 finding.repair_action == "reparse_metadata"
                 and finding.code == "metadata_missing"
             ):
-                if (
-                    session.exec(
-                        select(Metadata).where(Metadata.file_id == file.id)
-                    ).first()
-                    is None
-                ):
-                    session.add(Metadata(file_id=file.id))
-                    session.commit()
-                    rederive_now(file.id, [METADATA])
+                present = session.exec(
+                    select(Metadata).where(Metadata.file_id == file.id)
+                ).first()
+                # Verified by the derivation itself: a metadata row alone proves
+                # nothing, since the producer is what fills it.
                 ok = (
-                    session.exec(
-                        select(Metadata).where(Metadata.file_id == file.id)
-                    ).first()
-                    is not None
+                    present is not None
+                    or rederive_now(file.id, [METADATA]).get(METADATA) == "ready"
                 )
             elif finding.repair_action == "regenerate_thumbnail" and finding.code in {
                 "thumbnail_missing",

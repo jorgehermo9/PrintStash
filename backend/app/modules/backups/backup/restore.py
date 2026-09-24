@@ -120,7 +120,19 @@ def restore_backup(backup_id: str, *, source_ref: str | None = None) -> dict:
     restore_cache_path: Path | None = None
 
     capacity_claim = None
-    begin_restore_maintenance()
+    try:
+        begin_restore_maintenance()
+    except RestoreConflictError as exc:
+        # Refused before it began: write work (a job step, a request) did not
+        # drain in time. Nothing was touched, but the refusal is still audited.
+        with get_session_factory().session() as session:
+            audit.record(
+                session,
+                action="restore.failed",
+                resource_type="backup",
+                diff={"backup_id": backup_id, "reason": "writes_active"},
+            )
+        raise exc
     try:
         with get_session_factory().session() as session:
             audit.record(

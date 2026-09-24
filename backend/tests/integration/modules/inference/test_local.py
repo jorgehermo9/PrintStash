@@ -8,7 +8,7 @@ import pytest
 from printstash_core.inference import EmbeddingError, EmbeddingInput
 from sqlmodel import select
 
-from app.db.models import ThumbnailRenderSlot
+from app.db.models import NativeComputeSlot
 from app.db.session import get_session_factory
 from app.modules.inference.local import LocalEmbeddingProvider
 from tests.factories.embeddings import local_embedding_assets
@@ -35,7 +35,7 @@ class TestLocalProvider:
         db_session.expire_all()
         assert all(
             slot.lease_token is None
-            for slot in db_session.exec(select(ThumbnailRenderSlot)).all()
+            for slot in db_session.exec(select(NativeComputeSlot)).all()
         )
 
     def test_verifies_canaries_before_availability(self, db_session, assets):

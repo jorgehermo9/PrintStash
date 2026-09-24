@@ -1,8 +1,14 @@
 """Maintenance exclusion and draining of mutating operations, across processes.
 
-The public operations are unchanged from the single-process implementation;
-what changed is that every exclusion that must hold across processes is now a
-database fence (``app.modules.work.fences``):
+The public operations are unchanged from the single-process implementation.
+Every exclusion is enforced in-process first (the counters and gates below).
+When the database is shared with other processes (PostgreSQL: the split
+topologies), each exclusion that must hold across processes is *also* a
+database fence (``app.modules.work.fences``). On SQLite exactly one process
+runs (the process lock and topology validation guarantee it), so the fences
+would guard nothing; worse, a fence written on a second connection from a
+request that already holds SQLite's single write lock would wait on itself.
+The fences are:
 
 - **restore**: an exclusive fence. While it is held, no process admits a new
   write-capable operation. Taking it drains this process *and* every other
@@ -29,11 +35,14 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
-from typing import Callable, Iterator, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Callable, Iterator, ParamSpec, TypeVar
 
 from app.core.errors import ErrorKind, OperationError
 from app.core.logging import get_logger
 from app.core.time import ensure_utc
+
+if TYPE_CHECKING:
+    from sqlmodel import Session
 
 logger = get_logger(__name__)
 
@@ -63,6 +72,26 @@ def _holder() -> str:
     return executor_id()
 
 
+def _shared_database() -> bool:
+    """Whether other processes can share this database (anything but SQLite)."""
+    from app.core.config import settings
+
+    return _backend_name(str(settings.db_url)) != "sqlite"
+
+
+def _backend_name(url: str) -> str:
+    cached = _BACKENDS.get(url)
+    if cached is None:
+        from sqlalchemy.engine import make_url
+
+        cached = make_url(url).get_backend_name()
+        _BACKENDS[url] = cached
+    return cached
+
+
+_BACKENDS: dict[str, str] = {}
+
+
 def observe_mutations(observer: Callable[[], None] | None) -> None:
     """Composition hook for a durable activation owner's first-write marker."""
     global _mutation_observer
@@ -75,22 +104,29 @@ def active_mutations() -> int:
         return _active_mutations
 
 
-def _foreign_restore_fence() -> bool:
+def _foreign_restore_fence(session: Session | None = None) -> bool:
     """Whether another process holds the restore fence. Fails closed."""
     from app.modules.work import fences
 
+    if not _shared_database():
+        return False
     try:
-        fence = fences.get(fences.RESTORE)
+        fence = fences.get(fences.RESTORE, session=session)
     except Exception:  # noqa: BLE001 - an unreadable fence table is not "free"
         logger.warning("restore fence unreadable; refusing new mutations")
         return True
     return fence is not None and fence.holder != _holder()
 
 
-def restore_in_progress() -> bool:
+def restore_in_progress(session: Session | None = None) -> bool:
+    """Whether a restore (here or in another process) holds maintenance.
+
+    Pass ``session`` from inside an open transaction so the fence read joins
+    it rather than opening another connection mid-transaction.
+    """
     if _restore_gate.is_set():
         return True
-    return _foreign_restore_fence()
+    return _foreign_restore_fence(session)
 
 
 def begin_mutating_operation() -> bool:
@@ -126,6 +162,8 @@ def _others_drained(acquired_at) -> bool:
     """Every other live executor heartbeated after the fence with nothing active."""
     from app.modules.work import executors
 
+    if not _shared_database():
+        return True
     me = _holder()
     for row in executors.live():
         if row.executor_id == me:
@@ -139,20 +177,24 @@ def _others_drained(acquired_at) -> bool:
 
 def begin_restore_maintenance() -> None:
     """Block new mutations everywhere and wait for admitted ones to drain."""
+    from app.core.time import utcnow
     from app.modules.work import fences
 
-    try:
-        fence = fences.acquire(fences.RESTORE, holder=_holder(), reason="restore")
-    except fences.FenceHeld as exc:
-        raise RestoreConflictError("restore_in_progress") from exc
-    deadline = time.monotonic() + _RESTORE_DRAIN_TIMEOUT_S
+    acquired_at = utcnow()
+    if _shared_database():
+        try:
+            fence = fences.acquire(fences.RESTORE, holder=_holder(), reason="restore")
+        except fences.FenceHeld as exc:
+            raise RestoreConflictError("restore_in_progress") from exc
+        acquired_at = fence.acquired_at
     with _mutation_condition:
         _restore_gate.set()
+    deadline = time.monotonic() + _RESTORE_DRAIN_TIMEOUT_S
     try:
         while True:
             with _mutation_condition:
                 local = _active_mutations
-            if local == 0 and _others_drained(fence.acquired_at):
+            if local == 0 and _others_drained(acquired_at):
                 return
             if time.monotonic() >= deadline:
                 raise RestoreConflictError(
@@ -172,6 +214,8 @@ def end_restore_maintenance() -> None:
     with _mutation_condition:
         _restore_gate.clear()
         _mutation_condition.notify_all()
+    if not _shared_database():
+        return
     try:
         fences.release(fences.RESTORE, holder=_holder())
     except Exception:  # noqa: BLE001 - an unreleased fence expires on its own
@@ -189,6 +233,8 @@ def hold_restore_maintenance() -> None:
 
     with _mutation_condition:
         _restore_gate.set()
+    if not _shared_database():
+        return
     try:
         fences.acquire(fences.RESTORE, holder=_holder(), reason="restore_recovery")
     except Exception:  # noqa: BLE001 - the local gate still holds this process
@@ -204,7 +250,8 @@ def exclusive_backup_operation(func: Callable[_P, _R]) -> Callable[_P, _R]:
 
         with backup_operation_lock:
             depth = getattr(_backup_depth, "value", 0)
-            if depth == 0:
+            fenced = depth == 0 and _shared_database()
+            if fenced:
                 try:
                     fences.acquire(fences.BACKUP, holder=_holder(), reason="backup")
                 except fences.FenceHeld as exc:
@@ -216,7 +263,7 @@ def exclusive_backup_operation(func: Callable[_P, _R]) -> Callable[_P, _R]:
                 return func(*args, **kwargs)
             finally:
                 _backup_depth.value -= 1
-                if _backup_depth.value == 0:
+                if fenced:
                     fences.release(fences.BACKUP, holder=_holder())
 
     return serialized
@@ -233,6 +280,12 @@ def backup_in_progress_elsewhere() -> bool:
 
     if getattr(_backup_depth, "value", 0) > 0:
         return False
+    if not _shared_database():
+        # One process: a backup elsewhere is another thread holding the lock.
+        if backup_operation_lock.acquire(blocking=False):
+            backup_operation_lock.release()
+            return False
+        return True
     try:
         return fences.is_held(fences.BACKUP)
     except Exception:  # noqa: BLE001 - an unreadable fence is not "free"
@@ -264,11 +317,12 @@ def retain_storage_objects() -> Iterator[None]:
         _storage_retentions += 1
     name: str | None = None
     try:
-        name = fences.acquire_shared(
-            fences.RETENTION_PREFIX, holder=_holder(), reason="snapshot"
-        )
-        if fences.any_held(fences.DESTRUCTIVE_PREFIX, except_holder=_holder()):
-            raise OperationError("storage_cleanup_in_progress", kind=ErrorKind.BUSY)
+        if _shared_database():
+            name = fences.acquire_shared(
+                fences.RETENTION_PREFIX, holder=_holder(), reason="snapshot"
+            )
+            if fences.any_held(fences.DESTRUCTIVE_PREFIX, except_holder=_holder()):
+                raise OperationError("storage_cleanup_in_progress", kind=ErrorKind.BUSY)
         yield
     finally:
         if name is not None:
@@ -310,8 +364,9 @@ def begin_destructive_operation(*, _backend: object | None = None) -> bool:
         if _storage_retentions and not isolated:
             return False
         _active_destructive += 1
-    if isolated:
-        # An isolated migration candidate is not what any snapshot retains.
+    if isolated or not _shared_database():
+        # An isolated migration candidate is not what any snapshot retains;
+        # on an unshared database the counters above are the whole exclusion.
         _fence_stack().append(None)
         return True
     name = fences.acquire_shared(

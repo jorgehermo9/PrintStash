@@ -2879,7 +2879,7 @@ class TestDownloadBackupEndpoints:
         assert Path(meta.path).name in resp.headers["content-disposition"]
 
     def test_download_then_restore_endpoint_round_trip(
-        self, client: TestClient, backup_env: BackupEnv
+        self, client: TestClient, backup_env: BackupEnv, work_engine
     ):
         content = b"solid endpoint widget\nendsolid\n"
         _model_id, key = seed_model_with_blob(
@@ -2889,7 +2889,9 @@ class TestDownloadBackupEndpoints:
 
         create = client.post("/api/v1/backups", headers=headers)
         assert create.status_code == 202, create.text
-        backup_id = create.json()["backup_id"]
+        work_engine.drain()
+        job = client.get(f"/api/v1/jobs/{create.json()['job_id']}", headers=headers)
+        backup_id = job.json()["result"]["backup_id"]
 
         download = client.get(f"/api/v1/backups/{backup_id}/download", headers=headers)
         assert download.status_code == 200, download.text
@@ -4840,19 +4842,21 @@ class TestRestoreDatabase:
 
         assert result["restored_files"] == 1
 
-    def test_restore_rejected_while_job_running(self, backup_env: BackupEnv):
-        from app.runtime.jobs import registry
-
+    def test_restore_rejected_while_a_write_stays_admitted(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ):
         model_id, _key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
         meta = backup_creation.create_backup()
+        # A job step mid-write is an admitted mutation; the restore waits for
+        # it to drain and gives up when it does not.
+        monkeypatch.setattr(backup_maintenance, "_RESTORE_DRAIN_TIMEOUT_S", 0.1)
 
-        job_id = registry.create()
-        registry.update(job_id, state="running")
+        assert backup_maintenance.begin_mutating_operation() is True
         try:
             with pytest.raises(backup_maintenance.RestoreConflictError):
                 backup_restore.restore_backup(meta.id)
         finally:
-            registry.update(job_id, state="completed")
+            backup_maintenance.end_mutating_operation()
 
         assert not backup_maintenance.restore_in_progress()
         with backup_env.new_session() as session:
@@ -5132,28 +5136,27 @@ class TestDocument:
 
 
 class TestStart:
-    def test_a_restore_refused_for_a_running_job_is_audited(
+    def test_a_restore_refused_for_an_admitted_write_is_audited(
         self,
         backup_env: BackupEnv,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         from app.db.models import AuditLog
-        from app.runtime.jobs import registry
 
         seed_model_with_blob(backup_env, name="Widget", content=b"x")
         meta = backup_creation.create_backup()
+        monkeypatch.setattr(backup_maintenance, "_RESTORE_DRAIN_TIMEOUT_S", 0.1)
 
-        job_id = registry.create()
-        registry.update(job_id, state="running")
+        assert backup_maintenance.begin_mutating_operation() is True
         try:
             with pytest.raises(backup_maintenance.RestoreConflictError):
                 backup_restore.restore_backup(meta.id)
         finally:
-            registry.update(job_id, state="completed")
+            backup_maintenance.end_mutating_operation()
 
-        # No DB swap happened, so both rows survive in the current database.
+        # Refused before it began, so no DB swap happened and nothing started.
         with backup_env.new_session() as session:
             actions = {row.action for row in session.exec(select(AuditLog)).all()}
-        assert "restore.start" in actions
         assert "restore.failed" in actions
 
 

@@ -6,7 +6,7 @@ import pytest
 from sqlmodel import select
 
 from app.core.errors import OperationError
-from app.db.models import AuditLog, VaultAuditMode
+from app.db.models import AuditLog, FileType, VaultAuditMode
 from app.modules.administration.vault_audit_policy import update_policy
 
 NOW = datetime(2026, 9, 6, 2, 30, tzinfo=UTC)
@@ -273,14 +273,17 @@ class TestVaultAuditPolicyControls:
         from app.core.time import utcnow
         from app.db.models import VaultAuditEvent, VaultAuditFindingState
         from app.modules.administration.vault_audit_results import repair_safe_findings
-        from app.modules.ingestion import ingestion
+        from app.modules.derivatives import producers
 
         path = local_storage / "safe-derived-source.stl"
         path.parent.mkdir(parents=True, exist_ok=True)
         content = b"source remains intact"
         path.write_bytes(content)
         file = make_file(
-            make_model(), path=str(path), sha256=hashlib.sha256(content).hexdigest()
+            make_model(),
+            file_type=FileType.STL,
+            path=str(path),
+            sha256=hashlib.sha256(content).hexdigest(),
         )
         run = make_audit_run(
             make_user(),
@@ -294,13 +297,11 @@ class TestVaultAuditPolicyControls:
             details_json=f'{{"file_id":{file.id}}}',
         )
 
-        class BrokenParser:
-            def process(self, *args):
+        class BrokenRenderer:
+            def generate(self, *args):
                 raise ValueError("private-path-token-must-not-leak")
 
-        monkeypatch.setattr(
-            ingestion, "strategy_for_artifact", lambda _kind: BrokenParser()
-        )
+        monkeypatch.setattr(producers, "ThumbnailEngine", BrokenRenderer)
         repair_safe_findings(db_session, run)
         assert path.read_bytes() == content
         db_session.refresh(finding)

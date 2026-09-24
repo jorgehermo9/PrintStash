@@ -11,9 +11,9 @@ from sqlmodel import select
 from app.db.models import (
     FileType,
     GeometryFingerprint,
+    NativeComputeSlot,
     SimilarityCandidate,
     SimilarityRun,
-    ThumbnailRenderSlot,
 )
 from app.db.session import get_session_factory
 from app.modules.similarity import configuration, runs
@@ -133,7 +133,7 @@ class TestProcessing:
         assert revision.is_recommended
         assert all(
             row.lease_token is None
-            for row in db_session.exec(select(ThumbnailRenderSlot))
+            for row in db_session.exec(select(NativeComputeSlot))
         )
 
     def test_cancel_stops_before_next_mesh(self, db_session, local_pair):
@@ -241,7 +241,7 @@ class TestProcessingFailures:
         assert fp.failure_code == "source_changed"
         assert all(
             row.lease_token is None
-            for row in db_session.exec(select(ThumbnailRenderSlot))
+            for row in db_session.exec(select(NativeComputeSlot))
         )
 
     def test_cancels_between_committed_verification_pairs(self, db_session, local_pair):
@@ -334,7 +334,7 @@ class TestPairRecovery:
         assert db_session.exec(select(SimilarityCandidate)).all() == []
         assert all(
             row.lease_token is None
-            for row in db_session.exec(select(ThumbnailRenderSlot))
+            for row in db_session.exec(select(NativeComputeSlot))
         )
 
     def test_retries_pair_after_render_capacity_returns(self, db_session, local_pair):
@@ -394,7 +394,7 @@ class TestUnexpectedAnalysisFailure:
         assert db_session.exec(select(SimilarityCandidate)).all() == []
         assert all(
             row.lease_token is None
-            for row in db_session.exec(select(ThumbnailRenderSlot))
+            for row in db_session.exec(select(NativeComputeSlot))
         )
 
 

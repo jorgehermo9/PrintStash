@@ -288,7 +288,7 @@ def _cancelled(session: Session, run: VaultAuditRun) -> bool:
     session.refresh(run)
     from app.runtime.maintenance import restore_in_progress
 
-    maintenance = restore_in_progress()
+    maintenance = restore_in_progress(session)
     expired = run.deadline_at is not None and utcnow() >= ensure_utc(run.deadline_at)
     if not run.cancel_requested and not expired and not maintenance:
         return False
@@ -977,7 +977,7 @@ def _execute_run(
             session.add(run)
             session.commit()
         except Exception:
-            logger.error("vault audit %s failed", run_id)
+            logger.exception("vault audit %s failed", run_id)
             session.rollback()
             run = session.get(VaultAuditRun, run_id)
             if run is not None:
@@ -1041,6 +1041,28 @@ def _restore_recommended(session: Session, model_id: int) -> bool:
     return True
 
 
+def _source_readable(row: File) -> bool:
+    """Whether the Artifact's bytes can be read at all, reading one chunk.
+
+    A repair only queues the re-derivation, so without this check a finding
+    whose source is gone would be reported repaired while its Job can only
+    fail.
+    """
+    from app.modules.storage.artifact_content import ArtifactContentError, resolve
+
+    try:
+        chunks = resolve(row).stream()
+        try:
+            next(iter(chunks), None)
+        finally:
+            close = getattr(chunks, "close", None)
+            if close is not None:
+                close()
+    except (ArtifactContentError, OSError):
+        return False
+    return True
+
+
 def _reparse_metadata(session: Session, file_id: int) -> bool:
     """Queue the metadata derivative again; the Job re-derives it off the request."""
     from app.modules.derivatives import repair
@@ -1049,11 +1071,11 @@ def _reparse_metadata(session: Session, file_id: int) -> bool:
     row = session.get(File, file_id)
     if row is None or row.deleted_at is not None:
         return False
-    if (
-        session.exec(select(Metadata).where(Metadata.file_id == file_id)).first()
-        is None
-    ):
-        session.add(Metadata(file_id=file_id))
+    if session.exec(select(Metadata).where(Metadata.file_id == file_id)).first():
+        # Metadata arrived since the audit looked: nothing is missing any more.
+        return True
+    if not _source_readable(row):
+        return False
     return repair.request(session, row, [METADATA])
 
 

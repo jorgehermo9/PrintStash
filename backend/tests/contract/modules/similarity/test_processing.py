@@ -10,7 +10,7 @@ from app.db.models import (
     CapacityReservation,
     FileType,
     GeometryFingerprint,
-    ThumbnailRenderSlot,
+    NativeComputeSlot,
 )
 from app.db.session import get_session_factory
 from app.modules.media.thumbnail_engine import ThumbnailEngine
@@ -69,7 +69,7 @@ class TestRemoteProcessing:
             assert db_session.exec(select(CapacityReservation)).all() == []
             assert all(
                 row.lease_token is None
-                for row in db_session.exec(select(ThumbnailRenderSlot))
+                for row in db_session.exec(select(NativeComputeSlot))
             )
             assert backend.read_bytes(file.path) == content
         finally:

@@ -130,13 +130,25 @@ def heartbeat(holder: str, *, now: datetime | None = None) -> int:
     return renewed
 
 
-def get(name: str, *, now: datetime | None = None) -> WorkFence | None:
+def get(
+    name: str, *, now: datetime | None = None, session: Session | None = None
+) -> WorkFence | None:
+    """The live fence ``name``, or ``None``.
+
+    A caller inside an open transaction passes its ``session`` so the read
+    joins it instead of opening a second connection mid-transaction.
+    """
     now = now or utcnow()
-    with get_session_factory().scoped_session() as session:
+    if session is not None:
         fence = session.get(WorkFence, name)
         if fence is None or ensure_utc(fence.expires_at) <= now:
             return None
-        session.expunge(fence)
+        return fence
+    with get_session_factory().scoped_session() as own:
+        fence = own.get(WorkFence, name)
+        if fence is None or ensure_utc(fence.expires_at) <= now:
+            return None
+        own.expunge(fence)
         return fence
 
 

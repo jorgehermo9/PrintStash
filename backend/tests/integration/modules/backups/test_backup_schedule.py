@@ -1,15 +1,18 @@
-"""The automatic backup claim is durable across scheduler ticks and failures."""
+"""The automatic backup claim is durable across scheduler ticks and failures.
+
+The claim is what lets the ``backup.automatic`` schedule be resubmitted after a
+crash without archiving twice in one day; the Job itself is defended in
+``test_jobs.py``.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
 from sqlmodel import Session
 
 from app.db.models import SystemConfig
 from app.modules.backups import backup_schedule
-from app.modules.backups.backup_destination import BackupTrigger
 
 
 class TestClaimDueBackup:
@@ -27,53 +30,6 @@ class TestClaimDueBackup:
 
         assert first is True
         assert second is False
-        stored = db_session.get(SystemConfig, 1)
-        assert stored is not None
-        assert stored.automatic_backup_last_attempt_at == now.replace(tzinfo=None)
-
-
-class TestRunDueBackup:
-    def test_creates_with_the_automatic_destination_policy(
-        self,
-        make_system_config,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        make_system_config(
-            automatic_backups_enabled=True,
-            automatic_backup_time_utc="02:00",
-        )
-        now = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
-        triggers: list[BackupTrigger] = []
-
-        def create_backup(*, trigger: BackupTrigger) -> None:
-            triggers.append(trigger)
-
-        monkeypatch.setattr(backup_schedule.backup_creation, "create_backup", create_backup)
-
-        assert backup_schedule.run_due_backup(now=now) is True
-        assert triggers == [BackupTrigger.AUTOMATIC]
-
-    def test_records_a_failed_attempt(
-        self,
-        db_session: Session,
-        make_system_config,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        make_system_config(
-            automatic_backups_enabled=True,
-            automatic_backup_time_utc="02:00",
-        )
-        now = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
-
-        def fail_backup(**_kwargs: object) -> None:
-            raise RuntimeError("archive failed")
-
-        monkeypatch.setattr(backup_schedule.backup_creation, "create_backup", fail_backup)
-
-        with pytest.raises(RuntimeError, match="archive failed"):
-            backup_schedule.run_due_backup(now=now)
-
-        db_session.expire_all()
         stored = db_session.get(SystemConfig, 1)
         assert stored is not None
         assert stored.automatic_backup_last_attempt_at == now.replace(tzinfo=None)

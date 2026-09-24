@@ -21,18 +21,18 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.core.time import utcnow
 from app.db.models import (
-    BackgroundJob,
     File,
     FileType,
     InboxItem,
     InboxItemResult,
     InboxItemResultState,
     InboxItemState,
+    Job,
+    JobState,
     Model,
 )
-from tests.factories import build_file, build_model
+from tests.factories import build_file, build_job, build_model
 
 
 class TestUpdateItem:
@@ -76,7 +76,13 @@ class TestUpdateItem:
 
 class TestResolveItem:
     def test_schedules_a_failed_item_to_be_resolved_again(
-        self, client: TestClient, make_user, headers_for, make_item, no_egress
+        self,
+        client: TestClient,
+        make_user,
+        headers_for,
+        make_item,
+        no_egress,
+        work_engine,
     ) -> None:
         owner = make_user("resolve-failed")
         row = make_item(owner, state=InboxItemState.FAILED)
@@ -86,9 +92,10 @@ class TestResolveItem:
         )
 
         assert response.status_code == 200, response.text
+        work_engine.drain()
         assert no_egress == [row.id]
 
-    def test_leaves_the_state_alone_until_the_background_work_runs(
+    def test_hands_the_item_back_to_the_resolve_source(
         self, client: TestClient, make_user, headers_for, make_item, no_egress
     ) -> None:
         owner = make_user("resolve-state")
@@ -98,7 +105,8 @@ class TestResolveItem:
             f"/api/v1/inbox/{row.id}/resolve", headers=headers_for(owner)
         )
 
-        assert response.json()["state"] == "failed"
+        # Captured is what the resolve source pulls; nothing has resolved yet.
+        assert (response.json()["state"], no_egress) == ("captured", [])
 
     def test_refuses_an_item_that_is_already_in_review(
         self, client: TestClient, make_user, headers_for, make_item
@@ -135,9 +143,9 @@ class TestResolveItem:
 
 class TestImportItem:
     def test_schedules_the_import_of_the_selected_files(
-        self, client: TestClient, make_user, headers_for, make_item, imports_run
+        self, client: TestClient, make_user, headers_for, make_item, queued_imports
     ) -> None:
-        owner = make_user("import-schedules")
+        owner = make_user("import-schedules", superuser=True)
         row = make_item(
             owner,
             state=InboxItemState.REVIEW,
@@ -151,7 +159,26 @@ class TestImportItem:
         )
 
         assert response.status_code == 200, response.text
-        assert imports_run == [(row.id, ["a"])]
+        assert queued_imports() == [(row.id, ["a"])]
+
+    def test_refuses_a_root_import_for_an_account_that_is_not_an_admin(
+        self, client: TestClient, make_user, headers_for, make_item, queued_imports
+    ) -> None:
+        owner = make_user("import-root-denied")
+        row = make_item(
+            owner,
+            state=InboxItemState.REVIEW,
+            manifest_json='{"kind": "direct", "title": "x"}',
+        )
+
+        response = client.post(
+            f"/api/v1/inbox/{row.id}/import",
+            headers=headers_for(owner),
+            json={"selected_ids": []},
+        )
+
+        assert response.status_code == 403, response.text
+        assert queued_imports() == []
 
     def test_refuses_an_item_that_is_not_in_review(
         self, client: TestClient, make_user, headers_for, make_item
@@ -177,10 +204,10 @@ class TestImportItem:
         make_user,
         headers_for,
         make_item,
-        imports_run,
+        queued_imports,
         requested: list[str],
     ) -> None:
-        owner = make_user(f"import-selection-{len(requested)}")
+        owner = make_user(f"import-selection-{len(requested)}", superuser=True)
         row = make_item(
             owner,
             state=InboxItemState.REVIEW,
@@ -200,9 +227,9 @@ class TestImportItem:
         assert response.json()["detail"] == "file_selection_invalid"
 
     def test_schedules_nothing_when_it_refuses_the_selection(
-        self, client: TestClient, make_user, headers_for, make_item, imports_run
+        self, client: TestClient, make_user, headers_for, make_item, queued_imports
     ) -> None:
-        owner = make_user("import-selection-unscheduled")
+        owner = make_user("import-selection-unscheduled", superuser=True)
         row = make_item(
             owner,
             state=InboxItemState.REVIEW,
@@ -219,7 +246,7 @@ class TestImportItem:
         )
 
         # A background task that discovers the ids are bogus fails out of sight.
-        assert imports_run == []
+        assert queued_imports() == []
 
     def test_refuses_another_accounts_item(
         self, client: TestClient, make_user, make_item, user_headers
@@ -248,7 +275,13 @@ class TestImportItem:
 
 class TestRetryItem:
     def test_returns_an_item_with_no_manifest_to_captured(
-        self, client: TestClient, make_user, headers_for, make_item, no_egress
+        self,
+        client: TestClient,
+        make_user,
+        headers_for,
+        make_item,
+        no_egress,
+        work_engine,
     ) -> None:
         owner = make_user("retry-captured")
         row = make_item(
@@ -263,7 +296,13 @@ class TestRetryItem:
         assert response.json()["state"] == "captured"
 
     def test_schedules_a_fresh_resolve_for_an_item_with_no_manifest(
-        self, client: TestClient, make_user, headers_for, make_item, no_egress
+        self,
+        client: TestClient,
+        make_user,
+        headers_for,
+        make_item,
+        no_egress,
+        work_engine,
     ) -> None:
         owner = make_user("retry-resolves")
         row = make_item(
@@ -272,6 +311,7 @@ class TestRetryItem:
 
         client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers_for(owner))
 
+        work_engine.drain()
         assert no_egress == [row.id]
 
     def test_reimports_only_the_files_that_failed(
@@ -281,9 +321,9 @@ class TestRetryItem:
         make_user,
         headers_for,
         make_item,
-        imports_run,
+        queued_imports,
     ) -> None:
-        owner = make_user("retry-partial")
+        owner = make_user("retry-partial", superuser=True)
         row = make_item(
             owner,
             state=InboxItemState.COMPLETED,
@@ -309,13 +349,13 @@ class TestRetryItem:
         )
 
         # Re-importing the files that worked would duplicate them.
-        assert response.json()["state"] == "review"
-        assert imports_run == [(row.id, ["bad"])]
+        assert response.json()["state"] == "importing"
+        assert queued_imports() == [(row.id, ["bad"])]
 
     def test_refuses_a_retry_whose_stored_selection_no_longer_matches_the_manifest(
-        self, client: TestClient, make_user, headers_for, make_item, imports_run
+        self, client: TestClient, make_user, headers_for, make_item, queued_imports
     ) -> None:
-        owner = make_user("retry-selection-invalid")
+        owner = make_user("retry-selection-invalid", superuser=True)
         row = make_item(
             owner,
             state=InboxItemState.FAILED,
@@ -340,9 +380,9 @@ class TestRetryItem:
         make_user,
         headers_for,
         make_item,
-        imports_run,
+        queued_imports,
     ) -> None:
-        owner = make_user("retry-selection-unscheduled")
+        owner = make_user("retry-selection-unscheduled", superuser=True)
         row = make_item(
             owner,
             state=InboxItemState.FAILED,
@@ -352,12 +392,12 @@ class TestRetryItem:
                 ' "files": [{"id": "ok", "name": "ok.stl"}]}'
             ),
         )
-        jobs_before = db_session.exec(select(BackgroundJob)).all()
+        jobs_before = db_session.exec(select(Job)).all()
 
         client.post(f"/api/v1/inbox/{row.id}/retry", headers=headers_for(owner))
 
-        assert imports_run == []
-        assert db_session.exec(select(BackgroundJob)).all() == jobs_before
+        assert queued_imports() == []
+        assert db_session.exec(select(Job)).all() == jobs_before
 
     def test_refuses_another_accounts_item(
         self, client: TestClient, make_user, make_item, user_headers
@@ -411,22 +451,17 @@ class TestDismissItem:
             size_bytes=4,
             sha256="e" * 64,
         )
-        job = BackgroundJob(
-            id="completed-dismiss-job",
-            owner_user_id=owner.id,
-            state="completed",
-            status_json='{"state":"completed"}',
-            finished_at=utcnow(),
+        job = build_job(
+            db_session, kind="inbox.import", state=JobState.COMPLETED, owner=owner
         )
         db_session.add(artifact)
-        db_session.add(job)
         db_session.commit()
         db_session.refresh(artifact)
         row = make_item(
             owner,
             source_kind="BROWSER",
             state=InboxItemState.COMPLETED,
-            background_job_id=job.id,
+            job_id=job.id,
             resulting_model_id=model.id,
         )
 
