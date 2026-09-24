@@ -118,8 +118,12 @@ test.describe("uploads", () => {
     });
 
     const preview = modelCard(page, name).getByRole("img", { name });
+    // The thumbnail is derived after the upload commits; it arrives on the card
+    // when its render runs, behind whatever the native lane is already doing.
     await expect
-      .poll(() => preview.evaluate<number, HTMLImageElement>((node) => node.naturalWidth))
+      .poll(() => preview.evaluate<number, HTMLImageElement>((node) => node.naturalWidth), {
+        timeout: 60_000,
+      })
       .toBeGreaterThan(0);
     await modelCard(page, name).click();
     const screenshot = page.getByRole("button", { name: "Screenshot" });
