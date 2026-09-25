@@ -43,7 +43,10 @@ from app.modules.media.mesh_processing import FallbackThumbnail
 from app.modules.printing.profile_detection import upsert_detected_profiles
 from app.modules.storage import storage
 from app.modules.storage.hashing import sha256_file
-from app.modules.storage.storage_backend.contracts import StorageCollisionError
+from app.modules.storage.storage_backend.contracts import (
+    StagedRemoteObject,
+    StorageCollisionError,
+)
 from app.modules.storage.storage_backend.local import LocalStorageBackend
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_ownership import provider_ref_for_backend, publish_file
@@ -393,9 +396,13 @@ def persist_artifact(
     ingestion_key: str | None = None,
     provenance_context: ProvenanceContext | None = None,
     session_factory: SessionFactory | None = None,
+    staged_origin: StagedRemoteObject | None = None,
 ) -> File:
     """Persist a parsed, staged artifact onto *model* — the deep core shared
     by background ingestion and synchronous revision attachment.
+
+    *staged_origin* is the same bytes already in the vault's store (a direct
+    browser upload), which a vault publish copies server-side when it can.
 
     Owns: version allocation, the canonical blob move, the File row, the
     thumbnail write (+ model thumbnail selection), and the Metadata row.
@@ -519,6 +526,7 @@ def persist_artifact(
                     object_kind="artifact",
                     sha256=blob_hash,
                     move=True,
+                    remote_source=staged_origin,
                 )
         if blob_receipt is not None:
             size_bytes = blob_receipt.size
@@ -843,6 +851,7 @@ def run_ingestion_pipeline(
     source_url: Optional[str] = None,
     target_library_id: int | None = None,
     provenance_context: ProvenanceContext | None = None,
+    staged_origin: StagedRemoteObject | None = None,
 ) -> None:
     """Full ingestion pipeline.
 
@@ -1047,6 +1056,7 @@ def run_ingestion_pipeline(
                 ingestion_key=job_id,
                 provenance_context=provenance_context,
                 session_factory=session_factory,
+                staged_origin=staged_origin,
             )
             assert file_row.id is not None
             durable_ids = (model.id, file_row.id)
@@ -1243,6 +1253,7 @@ def ingest_orca_gcode(
     source_url: Optional[str] = None,
     target_library_id: int | None = None,
     provenance_context: ProvenanceContext | None = None,
+    staged_origin: StagedRemoteObject | None = None,
 ) -> None:
     """Public entry point for G-code ingestion (called from the OrcaSlicer router)."""
     run_ingestion_pipeline(
@@ -1259,6 +1270,7 @@ def ingest_orca_gcode(
         source_url=source_url,
         target_library_id=target_library_id,
         provenance_context=provenance_context,
+        staged_origin=staged_origin,
     )
 
 
@@ -1277,6 +1289,7 @@ def ingest_mesh(
     source_url: Optional[str] = None,
     target_library_id: int | None = None,
     provenance_context: ProvenanceContext | None = None,
+    staged_origin: StagedRemoteObject | None = None,
 ) -> None:
     """Public entry point for mesh ingestion (called from the model upload router)."""
     run_ingestion_pipeline(
@@ -1293,6 +1306,7 @@ def ingest_mesh(
         source_url=source_url,
         target_library_id=target_library_id,
         provenance_context=provenance_context,
+        staged_origin=staged_origin,
     )
 
 
@@ -1306,6 +1320,7 @@ def add_gcode_revision_to_model(
     revision_status: FileRevisionStatus | None,
     revision_notes: str | None,
     is_recommended: bool,
+    staged_origin: StagedRemoteObject | None = None,
 ) -> File:
     """Attach a staged G-code file as a new revision of an existing model."""
     assert model.id is not None
@@ -1343,6 +1358,7 @@ def add_gcode_revision_to_model(
         is_external=dest.is_external,
         external_library_id=dest.external_library_id,
         source_mtime=dest.source_mtime,
+        staged_origin=staged_origin,
     )
     assert file_row.id is not None
 

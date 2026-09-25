@@ -26,6 +26,7 @@ from app.modules.ingestion.ingestion import (
 from app.runtime.jobs import registry
 
 from .manager import SqlArtifactUploadManager
+from .native_parts import NativeMultipartUploadAdapter
 
 
 def run_verified_upload_ingestion(
@@ -45,11 +46,19 @@ def run_verified_upload_ingestion(
         purpose = upload.purpose
         filename = upload.filename
         owner_user_id = upload.owner_user_id
+        # A direct-to-store upload is already in the store: publication copies
+        # it there server-side rather than uploading the downloaded copy.
+        staged_origin = (
+            NativeMultipartUploadAdapter.staged_origin(upload)
+            if upload.adapter_id == NativeMultipartUploadAdapter.adapter_id
+            else None
+        )
 
     suffix = Path(filename).suffix.lower()
     common = {
         "job_id": job_id,
         "staged_path": staged_path,
+        "staged_origin": staged_origin,
         "original_filename": filename,
         "model_name": str(options.get("model_name") or Path(filename).stem),
         "collection": options.get("collection"),
@@ -74,6 +83,7 @@ def run_verified_upload_ingestion(
                     session=session,
                     model=model,
                     staged_path=staged_path,
+                    staged_origin=staged_origin,
                     original_filename=filename,
                     revision_label=options.get("revision_label"),
                     revision_status=FileRevisionStatus(
