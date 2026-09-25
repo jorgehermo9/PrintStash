@@ -280,7 +280,7 @@ describe("the default connection", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens the events socket with a ticket and relays its frames", async () => {
+  it("relays frames from a ticketed events socket", async () => {
     const heard = vi.fn<(notice: EventNotice) => void>();
     events.subscribeEvents(heard);
     events.followModel(3, vi.fn<(notice: EventNotice) => void>());

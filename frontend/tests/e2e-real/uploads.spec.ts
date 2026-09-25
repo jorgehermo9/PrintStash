@@ -120,11 +120,29 @@ test.describe("uploads", () => {
     const preview = modelCard(page, name).getByRole("img", { name });
     // The thumbnail is derived after the upload commits; it arrives on the card
     // when its render runs, behind whatever the native lane is already doing.
-    await expect
-      .poll(() => preview.evaluate<number, HTMLImageElement>((node) => node.naturalWidth), {
-        timeout: 60_000,
-      })
-      .toBeGreaterThan(0);
+    try {
+      await expect
+        .poll(() => preview.evaluate<number, HTMLImageElement>((node) => node.naturalWidth), {
+          timeout: 60_000,
+        })
+        .toBeGreaterThan(0);
+    } catch (error) {
+      // TEMPORARY diagnostic: where the thumbnail derivative stands.
+      const listing = await (
+        await page.request.get("/api/v1/models/page?limit=5&sort=date-desc")
+      ).json();
+      const model = listing.items.find((item: { name: string }) => item.name === name);
+      const detail = await (await page.request.get(`/api/v1/models/${model?.id}`)).json();
+      const derivatives = await Promise.all(
+        (detail.files ?? []).map(async (file: { id: number }) =>
+          (await page.request.get(`/api/v1/files/${file.id}/derivatives`)).json(),
+        ),
+      );
+      const work = await (await page.request.get("/api/v1/admin/work")).json();
+      throw new Error(
+        `${String(error)}\nmodel=${JSON.stringify(model)}\nderivatives=${JSON.stringify(derivatives)}\nwork=${JSON.stringify(work)}`,
+      );
+    }
     await modelCard(page, name).click();
     const screenshot = page.getByRole("button", { name: "Screenshot" });
     await expect(screenshot).toBeEnabled({ timeout: 60_000 });
