@@ -12,6 +12,14 @@ import { followModel } from "@/lib/events";
 export const MAX_FOLLOWED = 24;
 
 /**
+ * How long arrivals are gathered into one refresh. Following a page of
+ * placeholders is acknowledged once per Model, and a bulk upload settles its
+ * thumbnails together; each refresh refetches every list query, so a burst
+ * must cost one.
+ */
+export const ARRIVAL_COALESCE_MS = 250;
+
+/**
  * Refresh a list when a thumbnail it is waiting for lands.
  *
  * A fresh upload's Model appears before its thumbnail is derived; the card
@@ -46,14 +54,25 @@ export function useThumbnailArrivals(
 
   useEffect(() => {
     if (!waiting) return;
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const arrived = () => {
+      if (pending !== null) return;
+      pending = setTimeout(() => {
+        pending = null;
+        latest.current();
+      }, ARRIVAL_COALESCE_MS);
+    };
     const stops = waiting.split(",").map((id) =>
       followModel(Number(id), (notice) => {
-        if (notice.type === "resync" || notice.type === "subscribed") return latest.current();
+        if (notice.type === "resync" || notice.type === "subscribed") return arrived();
         if (notice.type === "derivative" && notice.kind === "thumbnail") {
-          if (notice.state === "ready" || notice.state === "skipped") latest.current();
+          if (notice.state === "ready" || notice.state === "skipped") arrived();
         }
       }),
     );
-    return () => stops.forEach((stop) => stop());
+    return () => {
+      if (pending !== null) clearTimeout(pending);
+      stops.forEach((stop) => stop());
+    };
   }, [waiting]);
 }

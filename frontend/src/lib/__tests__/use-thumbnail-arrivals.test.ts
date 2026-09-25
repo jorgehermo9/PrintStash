@@ -11,7 +11,11 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setEventSocketFactory, type EventSocket } from "@/lib/events";
-import { MAX_FOLLOWED, useThumbnailArrivals } from "@/lib/use-thumbnail-arrivals";
+import {
+  ARRIVAL_COALESCE_MS,
+  MAX_FOLLOWED,
+  useThumbnailArrivals,
+} from "@/lib/use-thumbnail-arrivals";
 
 class FakeSocket implements EventSocket {
   onopen: (() => void) | null = null;
@@ -36,6 +40,11 @@ function card(id: number, thumbnail: string | null = null) {
 async function opened(): Promise<void> {
   await waitFor(() => expect(socket.onmessage).not.toBeNull());
   socket.onopen?.();
+}
+
+/** Wait out the coalescing window, so an arrival that was coming has come. */
+async function settled(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ARRIVAL_COALESCE_MS + 50));
 }
 
 function deliver(frame: { type: string; model_id?: number; kind?: string; state?: string }) {
@@ -82,7 +91,7 @@ describe("useThumbnailArrivals", () => {
 
     deliver({ type: "derivative", model_id: 1, kind: "thumbnail", state });
 
-    expect(onArrival).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onArrival).toHaveBeenCalledTimes(1));
   });
 
   it.each([
@@ -95,6 +104,7 @@ describe("useThumbnailArrivals", () => {
 
     deliver({ type: "derivative", model_id: 1, kind, state });
 
+    await settled();
     expect(onArrival).not.toHaveBeenCalled();
   });
 
@@ -105,7 +115,7 @@ describe("useThumbnailArrivals", () => {
 
     deliver({ type: "resync" });
 
-    expect(onArrival).toHaveBeenCalled();
+    await waitFor(() => expect(onArrival).toHaveBeenCalled());
   });
 
   it("refreshes once the server confirms it follows the Model", async () => {
@@ -117,6 +127,21 @@ describe("useThumbnailArrivals", () => {
 
     socket.onmessage?.({ data: JSON.stringify({ type: "subscribed", channel: "model:1" }) });
 
+    await waitFor(() => expect(onArrival).toHaveBeenCalledTimes(1));
+  });
+
+  it("refreshes a page of placeholders once for its burst of confirmations", async () => {
+    // Every followed Model is acknowledged; a refresh per acknowledgement
+    // would refetch every list query once per placeholder on the page.
+    const onArrival = vi.fn<() => void>();
+    renderHook(() => useThumbnailArrivals([card(1), card(2), card(3)], onArrival));
+    await opened();
+
+    for (const id of [1, 2, 3]) {
+      socket.onmessage?.({ data: JSON.stringify({ type: "subscribed", channel: `model:${id}` }) });
+    }
+
+    await settled();
     expect(onArrival).toHaveBeenCalledTimes(1);
   });
 
@@ -127,6 +152,7 @@ describe("useThumbnailArrivals", () => {
 
     socket.onmessage?.({ data: JSON.stringify({ type: "subscribed", channel: "model:2" }) });
 
+    await settled();
     expect(onArrival).not.toHaveBeenCalled();
   });
 
