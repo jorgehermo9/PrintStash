@@ -314,6 +314,74 @@ class TestVaultAuditPolicyControls:
             == 3
         )
 
+    def test_retention_never_touches_an_active_run(
+        self, db_session, make_user, make_audit_run, make_audit_finding
+    ):
+        from app.db.models import VaultAuditFinding, VaultAuditRunState
+        from app.modules.administration.vault_audit_observability import (
+            prune_details,
+        )
+
+        run = make_audit_run(
+            make_user(),
+            state=VaultAuditRunState.RUNNING,
+            finished_at=NOW - timedelta(days=200),
+        )
+        make_audit_finding(run, code="thumbnail_missing")
+
+        assert prune_details(db_session, now=NOW) == 0
+        assert len(db_session.exec(select(VaultAuditFinding)).all()) == 1
+
+    def test_metrics_export_deferrals_notifications_and_repairs(
+        self,
+        db_session,
+        make_user,
+        make_audit_run,
+        make_audit_policy,
+        make_audit_event,
+    ):
+        import json
+
+        from app.core.metrics import registry
+        from app.db.models import AuditLog
+        from app.modules.administration.vault_audit_observability import (
+            refresh_metrics,
+        )
+
+        user = make_user()
+        run = make_audit_run(user)
+        make_audit_policy(user, mode="quick", deferred_reason="maintenance")
+        # A reason outside the bounded set is reported as ``other``, never as a
+        # new label value.
+        make_audit_policy(user, mode="full", deferred_reason="novel_reason")
+        make_audit_event(run, event_type="storage_regression")
+        make_audit_event(run, event_type="not_a_storage_event")
+        for verified in (True, False, True):
+            db_session.add(
+                AuditLog(
+                    action="audit.auto_repair",
+                    resource_type="vault_audit",
+                    diff_json=json.dumps({"verified": verified}),
+                )
+            )
+        db_session.commit()
+
+        refresh_metrics(db_session)
+
+        def sample(name: str, **labels: str) -> float | None:
+            return registry.get_sample_value(name, labels)
+
+        assert sample("printstash_audit_deferred", reason="maintenance") == 1
+        assert sample("printstash_audit_deferred", reason="other") == 1
+        assert sample("printstash_audit_deferred", reason="novel_reason") is None
+        assert sample("printstash_audit_notifications", event="storage_regression") == 1
+        assert (
+            sample("printstash_audit_notifications", event="not_a_storage_event")
+            is None
+        )
+        assert sample("printstash_audit_repairs", result="verified") == 2
+        assert sample("printstash_audit_repairs", result="failed") == 1
+
     def test_failed_repair_is_recorded_safely(
         self,
         db_session,

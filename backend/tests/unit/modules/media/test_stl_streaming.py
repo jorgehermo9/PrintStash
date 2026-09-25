@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 
-import app.modules.media.mesh_operations as mesh_operations
 from app.core.config import _overlay
 from app.modules.media import mesh_processing, mesh_render, stl_streaming
 from app.modules.media.stl_streaming import (
@@ -22,6 +21,7 @@ from app.modules.media.stl_streaming import (
     STLStreamingResult,
     render_stl_preview_isolated,
 )
+from tests.fixtures.mesh_analysis import analyze, is_partial_render
 
 _RECORD = struct.Struct("<12fH")
 
@@ -719,10 +719,11 @@ class TestRenderStlPreviewIsolated:
             lambda _path: (_ for _ in ()).throw(AssertionError("must not load")),
         )
 
-        geometry, thumbnail = mesh_operations.analyze_mesh(path, width=96, height=72)
+        result = analyze(path, width=96, height=72)
+        geometry = result.geometry
 
-        assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
-        assert thumbnail.complete is True
+        assert is_partial_render(result)
+        assert result.complete is True
         assert geometry["triangle_count"] == 2
 
     @pytest.mark.parametrize(
@@ -1098,10 +1099,11 @@ class TestMeshProcessing:
         path = tmp_path / "over-cap.stl"
         _binary_triangle_stl(path)
         monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1)
-        geometry, thumbnail = mesh_operations.analyze_mesh(path, width=96, height=72)
+        result = analyze(path, width=96, height=72)
+        geometry = result.geometry
 
-        assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
-        assert thumbnail.complete is True
+        assert is_partial_render(result)
+        assert result.complete is True
         assert geometry["triangle_count"] == 12
 
 
@@ -1163,10 +1165,10 @@ class TestRender:
             ),
         )
 
-        _geometry, thumbnail = mesh_operations.analyze_mesh(path, width=96, height=72)
+        result = analyze(path, width=96, height=72)
 
-        assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
-        assert thumbnail.complete is True
+        assert is_partial_render(result)
+        assert result.complete is True
 
 
 class TestDecode:

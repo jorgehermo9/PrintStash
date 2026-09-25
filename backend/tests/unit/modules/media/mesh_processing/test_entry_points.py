@@ -40,9 +40,9 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
-import app.modules.media.mesh_operations as mesh_operations
 from app.core.config import _overlay
 from app.modules.media import mesh_processing, mesh_render
+from tests.fixtures.mesh_analysis import analyze, is_partial_render
 from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 
 from .._meshes import (
@@ -71,7 +71,8 @@ class TestAnalyzeMesh:
             lambda *a, **k: b"PNGDATA",
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
 
         assert geometry["triangle_count"] == 500
         assert thumb == b"PNGDATA"
@@ -80,7 +81,8 @@ class TestAnalyzeMesh:
         p = tmp_path / "cube.stl"
         _real_binary_stl_cube(p)
         labels: list[str] = []
-        geometry, thumb = mesh_operations.analyze_mesh(p, report=labels.append)
+        result = analyze(p, report=labels.append)
+        geometry, thumb = result.geometry, result.image
         assert labels == ["loading_mesh", "extracting_geometry", "rendering_thumbnail"]
         assert geometry["triangle_count"] is not None
         assert thumb is not None
@@ -102,7 +104,8 @@ class TestAnalyzeMesh:
             lambda *args, **kwargs: b"RENDERED-MESH",
         )
 
-        _geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        _geometry, thumb = result.geometry, result.image
         assert thumb == png
 
     def test_reports_an_incomplete_fallback_thumbnail_as_incomplete(
@@ -127,13 +130,13 @@ class TestAnalyzeMesh:
         )
         monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: None)
 
-        geometry, thumbnail = mesh_operations.analyze_mesh(path)
+        result = analyze(path)
 
         # The fallback ran out of scan budget, so the thumbnail shows part of the
         # model. Passing `complete=False` up is what lets the UI say so instead
         # of presenting a partial render as the whole thing.
-        assert isinstance(thumbnail, mesh_processing.FallbackThumbnail)
-        assert thumbnail.complete is False
+        assert is_partial_render(result)
+        assert result.complete is False
 
     def test_measures_no_geometry_from_a_file_it_could_not_load(
         self, tmp_path: Path, monkeypatch
@@ -157,7 +160,8 @@ class TestAnalyzeMesh:
         )
         monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: None)
 
-        geometry, _thumbnail = mesh_operations.analyze_mesh(path)
+        result = analyze(path)
+        geometry, _thumbnail = result.geometry, result.image
 
         # A thumbnail sampled from part of a file says nothing about the model's
         # real dimensions, so no measurement is reported rather than one derived
@@ -175,7 +179,8 @@ class TestAnalyzeMesh:
 
         monkeypatch.setattr(mesh_processing, "_load_mesh", _boom)
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
 
         # Indexed, but with no geometry/thumbnail — and crucially, no load attempt.
         assert geometry["triangle_count"] is None
@@ -195,11 +200,12 @@ class TestAnalyzeMesh:
             ),
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(path)
+        result = analyze(path)
+        geometry, thumb = result.geometry, result.image
 
-        assert isinstance(thumb, mesh_processing.FallbackThumbnail)
+        assert is_partial_render(result)
         assert thumb.startswith(mesh_processing._PNG_MAGIC)
-        assert thumb.complete is True
+        assert result.complete is True
         assert geometry["triangle_count"] == 1_001
         assert geometry["bbox_x_mm"] == 99.8
         assert geometry["bbox_y_mm"] == 10.8
@@ -222,7 +228,8 @@ class TestAnalyzeMesh:
             lambda _p: (_ for _ in ()).throw(AssertionError("must not load")),
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
 
         assert geometry["triangle_count"] is None  # mesh skipped
         assert thumb == png
@@ -241,7 +248,8 @@ class TestAnalyzeMesh:
             lambda _p: (_ for _ in ()).throw(AssertionError("large 3MF must not load")),
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] is None  # never loaded
         assert thumb == png
 
@@ -257,7 +265,8 @@ class TestAnalyzeMesh:
             lambda _p: (_ for _ in ()).throw(AssertionError("large 3MF must not load")),
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] is None
         assert thumb is None
 
@@ -280,7 +289,8 @@ class TestAnalyzeMesh:
             ),
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] is None
         assert thumb is None
 
@@ -306,7 +316,8 @@ class TestAnalyzeMesh:
             ),
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] is None
         assert thumb == png
 
@@ -325,7 +336,8 @@ class TestAnalyzeMesh:
             mesh_render, "render_mesh_thumbnail", lambda *a, **k: b"PNG"
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] == 42_000
         assert thumb == b"PNG"
 
@@ -350,7 +362,8 @@ class TestAnalyzeMesh:
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not render")),
         )
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
 
         assert geometry["triangle_count"] == 99  # cheap geometry kept
         assert thumb is None
@@ -374,7 +387,7 @@ class TestAnalyzeMesh:
             lambda: calls.__setitem__("n", calls["n"] + 1),
         )
 
-        mesh_operations.analyze_mesh(p)
+        analyze(p)
         assert calls["n"] == 1
 
     def test_skipped_mesh_does_not_reclaim(self, tmp_path: Path, monkeypatch) -> None:
@@ -396,7 +409,7 @@ class TestAnalyzeMesh:
             lambda _p: (_ for _ in ()).throw(AssertionError("must not load")),
         )
 
-        mesh_operations.analyze_mesh(p)
+        analyze(p)
         assert calls["n"] == 0
 
 
@@ -498,12 +511,12 @@ class TestRenderThumbnail:
             lambda _p: (_ for _ in ()).throw(AssertionError("must not load")),
         )
 
-        assert mesh_operations.render_thumbnail(p) == png
+        assert analyze(p, include_geometry=False, reason="repair").image == png
 
     def test_render_thumbnail_real_mesh_renders_png(self, tmp_path: Path) -> None:
         p = tmp_path / "cube.stl"
         _real_binary_stl_cube(p)
-        thumb = mesh_operations.render_thumbnail(p)
+        thumb = analyze(p, include_geometry=False, reason="repair").image
         assert thumb is not None
         assert thumb.startswith(mesh_processing._PNG_MAGIC)
 
@@ -518,7 +531,7 @@ class TestRenderThumbnail:
 
         monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: _fake_mesh(10))
         monkeypatch.setattr(mesh_render, "render_mesh_thumbnail", lambda *a, **k: None)
-        assert mesh_operations.render_thumbnail(p) == png
+        assert analyze(p, include_geometry=False, reason="repair").image == png
 
     def test_render_thumbnail_is_none_when_nothing_can_be_rendered(
         self, tmp_path: Path, monkeypatch
@@ -527,7 +540,7 @@ class TestRenderThumbnail:
         _write_binary_stl(p, 10)
         monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: _fake_mesh(10))
         monkeypatch.setattr(mesh_render, "render_mesh_thumbnail", lambda *a, **k: None)
-        assert mesh_operations.render_thumbnail(p) is None
+        assert analyze(p, include_geometry=False, reason="repair").image is None
 
     def test_render_thumbnail_over_cap_with_embedded_fallback_disabled_returns_none(
         self, tmp_path: Path, monkeypatch
@@ -543,7 +556,7 @@ class TestRenderThumbnail:
             "_load_mesh",
             lambda _p: (_ for _ in ()).throw(AssertionError("over-cap must not load")),
         )
-        assert mesh_operations.render_thumbnail(p) is None
+        assert analyze(p, include_geometry=False, reason="repair").image is None
 
 
 class TestToStlBytes:

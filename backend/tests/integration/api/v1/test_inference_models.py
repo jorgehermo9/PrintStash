@@ -252,3 +252,117 @@ class TestTokenScope:
         assert response.status_code == 401, response.text
         assert directory.exists()
         assert model_cache.inspect(directory).id == identity
+
+
+_OPTED_IN = {"enabled": True, "local_models_enabled": True, "download_enabled": True}
+_DOWNLOAD = "/api/v1/inference/models/bge-small-en-v1.5/download"
+
+
+class TestModelDownloads:
+    """A download is a Job: the route queues it, and cancels only its own kind."""
+
+    @pytest.fixture
+    def opted_in(self, client, auth_headers, tmp_path, monkeypatch) -> None:
+        monkeypatch.setitem(_overlay, "embedding_cache_dir", tmp_path / "cache")
+        response = client.put(
+            "/api/v1/config/ai-search", headers=auth_headers, json=_OPTED_IN
+        )
+        assert response.status_code == 200, response.text
+
+    def test_queues_a_download_job(self, client, auth_headers, opted_in) -> None:
+        from app.db.models import JobKind
+        from app.modules.work.jobs import jobs
+
+        response = client.post(_DOWNLOAD, headers=auth_headers)
+
+        assert response.status_code == 202, response.text
+        status = jobs.get(response.json()["job_id"])
+        assert status is not None
+        assert (status.kind, status.state) == (
+            JobKind.INFERENCE_MODEL_DOWNLOAD,
+            "queued",
+        )
+
+    def test_refuses_a_second_download_while_one_is_active(
+        self, client, auth_headers, opted_in
+    ) -> None:
+        assert client.post(_DOWNLOAD, headers=auth_headers).status_code == 202
+
+        response = client.post(_DOWNLOAD, headers=auth_headers)
+
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "embedding_download_busy"
+
+    def test_refuses_a_model_outside_the_catalog(
+        self, client, auth_headers, opted_in
+    ) -> None:
+        response = client.post(
+            "/api/v1/inference/models/not-a-curated-model/download",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+
+    def test_cancels_a_queued_download(self, client, auth_headers, opted_in) -> None:
+        from app.modules.work.jobs import jobs
+
+        job_id = client.post(_DOWNLOAD, headers=auth_headers).json()["job_id"]
+
+        response = client.post(
+            f"/api/v1/inference/models/downloads/{job_id}/cancel",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 204, response.text
+        status = jobs.get(job_id)
+        assert status is not None and status.state == "cancelled"
+
+    def test_cancelling_a_finished_download_is_not_found(
+        self, client, auth_headers, opted_in
+    ) -> None:
+        job_id = client.post(_DOWNLOAD, headers=auth_headers).json()["job_id"]
+        url = f"/api/v1/inference/models/downloads/{job_id}/cancel"
+        assert client.post(url, headers=auth_headers).status_code == 204
+
+        response = client.post(url, headers=auth_headers)
+
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "embedding_download_not_running"
+
+    def test_only_cancels_a_download_job(self, client, auth_headers, make_job) -> None:
+        # The route names downloads; any other Job is cancelled through /jobs.
+        from app.db.models import JobKind
+
+        other = make_job(kind=JobKind.SOURCES_SCAN)
+
+        response = client.post(
+            f"/api/v1/inference/models/downloads/{other.id}/cancel",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404, response.text
+
+    def test_an_unknown_job_is_not_found(self, client, auth_headers) -> None:
+        response = client.post(
+            "/api/v1/inference/models/downloads/no-such-job/cancel",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 404, response.text
+
+
+class TestModelValidation:
+    def test_validates_a_preplaced_model(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ) -> None:
+        directory = text_embedding_assets(tmp_path / "cache" / "preplaced")
+        monkeypatch.setitem(_overlay, "embedding_cache_dir", directory.parent)
+        monkeypatch.setitem(_overlay, "embedding_local_model_dir", "")
+        identity = model_cache.inspect(directory).id
+
+        response = client.post(
+            f"/api/v1/inference/models/{identity}/validate", headers=auth_headers
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"id": identity, "ready": True}
