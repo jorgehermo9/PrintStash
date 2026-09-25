@@ -15,6 +15,25 @@ from app.db.models.search import SearchPassage
 from app.modules.search.passages import PassageChanges, sync_subject
 
 
+def _index_passes(engine) -> int:
+    from app.db.models import JobKind
+    from app.modules.work.contracts import PassSubmission
+
+    return sum(
+        isinstance(execution.submission, PassSubmission)
+        and execution.submission.source is JobKind.SEARCH_INDEX
+        for execution in engine.executions.values()
+    )
+
+
+
+def _forget_queued(engine) -> None:
+    """Start from no queued pass, so a nudge here submits a fresh one."""
+    from app.modules.work.submission import forget_queued_passes
+
+    forget_queued_passes()
+    engine.executions.clear()
+
 @pytest.fixture
 def indexed_model(
     db_session,
@@ -80,6 +99,33 @@ class TestSyncSubject:
         assert (
             db_session.get(PassageVector, vector_id, populate_existing=True) is not None
         )
+
+    def test_changed_text_makes_indexing_prompt_once_committed(
+        self, db_session, indexed_model, work_engine
+    ):
+        # A caption edit rewrites passages inside the request; without this
+        # the new text waited for the tick before it was searchable.
+        model, subject, _ = indexed_model
+        _forget_queued(work_engine)
+        model.description = "Changed source text"
+        db_session.add(model)
+
+        sync_subject(db_session, subject)
+        assert _index_passes(work_engine) == 0
+        db_session.commit()
+
+        assert _index_passes(work_engine) == 1
+
+    def test_unchanged_text_owes_no_indexing(
+        self, db_session, indexed_model, work_engine
+    ):
+        _, subject, _ = indexed_model
+        _forget_queued(work_engine)
+
+        sync_subject(db_session, subject)
+        db_session.commit()
+
+        assert _index_passes(work_engine) == 0
 
     def test_persists_model_text(self, db_session, make_model):
         model = make_model("Dragon", description="No supports")
