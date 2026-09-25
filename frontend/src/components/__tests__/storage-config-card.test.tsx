@@ -271,6 +271,21 @@ describe("StorageConfigCard", () => {
       expect(alert).toHaveTextContent("Do not acknowledge this warning");
     });
 
+    it("warns that imports copy when staging cannot hard-link", async () => {
+      renderCard({
+        storageHealth: {
+          ok: true,
+          provider: "local",
+          tier: "verified",
+          diagnostics: { staged_hardlink: false },
+        },
+      });
+
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "Imports are copied, not hard-linked",
+      );
+    });
+
     it("offers explicit enrollment for a missing legacy marker", async () => {
       const user = userEvent.setup();
       const { requestsWithMethod } = renderCard({

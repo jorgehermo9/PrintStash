@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session
 
-from app.core.config import _overlay
+from app.core.config import _overlay, settings
 from app.modules.administration import runtime_config
 from app.modules.storage.storage_providers import SFTPProviderConfig
 
@@ -286,7 +286,7 @@ class TestUpdateConfig:
 
         runtime_config.update_config(db_session, data_dir="")
 
-        assert isinstance(_overlay["data_dir"], Path)
+        assert _overlay["data_dir"] == settings.frozen.data_dir
 
     def test_update_config_can_persist_without_applying_the_runtime_overlay(
         self, db_session: Session, monkeypatch: pytest.MonkeyPatch

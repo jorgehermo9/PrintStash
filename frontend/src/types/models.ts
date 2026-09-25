@@ -857,6 +857,8 @@ export interface CollectionRead {
   model_count: number;
   effective_role: CollectionRole | null;
   tags: string[];
+  /** False lets a folder view skip the readme request entirely. */
+  has_readme: boolean;
 }
 
 export interface CollectionPermissionRead {

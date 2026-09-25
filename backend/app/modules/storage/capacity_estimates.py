@@ -27,7 +27,7 @@ def vault_allocation(size_bytes: int, *, role: str = "vault") -> CapacityResourc
 def archive_import(size_bytes: int) -> list[CapacityResource]:
     return [
         CapacityResource.for_path(
-            Path(tempfile.gettempdir()), size_bytes, role="archive extraction"
+            settings.staging_dir, size_bytes, role="archive extraction"
         ),
         vault_allocation(size_bytes),
     ]

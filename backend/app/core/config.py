@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from printstash_core.mesh.similarity.budgets import MAX_ANALYSIS_FACES
-from pydantic import Field, SecretStr, model_validator
+from pydantic import (
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine.url import make_url
 
@@ -44,6 +50,21 @@ DEFAULT_JWT_SECRET = "changeme_jwt_secret_please_change"
 # make the process buffer.
 MULTIPART_OVERHEAD_BYTES = 16 * 1024 * 1024
 
+# Every app-owned path defaults to a fixed child of ``data_root``, so a
+# deployment mounts one volume. That single mount is also what lets an import
+# publish its staged file into the library by hard link: link(2) fails across
+# mount points even on the same disk, and the import then copies every byte.
+DATA_ROOT_LAYOUT: dict[str, str] = {
+    "data_dir": "files",
+    "thumb_dir": "thumbs",
+    "staging_dir": "staging",
+    "backup_dir": "backups",
+    "artifact_cache_root": "artifact-cache",
+    "embedding_cache_dir": "ai-models",
+    "secrets_key_file": "db/.printstash-secrets-key",
+}
+SQLITE_DATABASE_PATH = "db/printstash.sqlite"
+
 
 class ProcessRole(StrEnum):
     """What one process of a deployment does (``VAULT_PROCESS_ROLE``).
@@ -71,6 +92,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Declared first: the paths in ``DATA_ROOT_LAYOUT`` and ``db_url`` default
+    # under it, and a field validator only sees fields declared before it.
+    data_root: Path = Path("/data")
+
     storage_backend: str = "local"
     storage_provider: str = ""
     storage_provider_config: str = ""
@@ -89,15 +114,15 @@ class Settings(BaseSettings):
     sftp_private_key_path: str = ""
     sftp_passphrase: str = ""
     storage_allow_unverified: bool = False
-    data_dir: Path = Path("/data/files")
-    thumb_dir: Path = Path("/data/thumbs")
+    data_dir: Path = Field(default=None, validate_default=True)
+    thumb_dir: Path = Field(default=None, validate_default=True)
     storage_min_free_bytes: int = Field(default=1024**3, ge=0)
     storage_min_free_percent: float = Field(
         default=0, ge=0, le=100, allow_inf_nan=False
     )
-    staging_dir: Path = Path("/data/staging")
+    staging_dir: Path = Field(default=None, validate_default=True)
     artifact_cache_enabled: bool = False
-    artifact_cache_root: Path = Path("/data/artifact-cache")
+    artifact_cache_root: Path = Field(default=None, validate_default=True)
     artifact_cache_max_bytes: int = Field(default=10 * 1024**3, ge=0)
     artifact_cache_max_entries: int = Field(default=10000, ge=0)
     artifact_cache_max_fills: int = Field(default=2, ge=1, le=64)
@@ -117,7 +142,7 @@ class Settings(BaseSettings):
     s3_presigned_url_expire_seconds: int = Field(default=900, gt=0)
     s3_multipart_threshold_mb: int = Field(default=50, gt=0)
 
-    db_url: str = "sqlite:////data/db/printstash.sqlite"
+    db_url: str = Field(default=None, validate_default=True)
     sqlite_synchronous: str = "NORMAL"
     sqlite_busy_timeout_ms: int = Field(default=30_000, ge=1)
 
@@ -128,7 +153,7 @@ class Settings(BaseSettings):
     # Credentials persisted in the database are encrypted with this external
     # key. Empty uses a generated 0600 key file beside the SQLite database.
     secrets_key: str = ""
-    secrets_key_file: Path = Path("/data/db/.printstash-secrets-key")
+    secrets_key_file: Path = Field(default=None, validate_default=True)
     session_cookie_secure: bool = False
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = Field(default=60, gt=0)
@@ -305,7 +330,7 @@ class Settings(BaseSettings):
     embedding_model_key: str = ""
     embedding_onnx_threads: int = Field(default=1, ge=1, le=4)
     embedding_batch_size: int = Field(default=8, ge=1, le=8)
-    embedding_cache_dir: Path = Path("/data/ai-models")
+    embedding_cache_dir: Path = Field(default=None, validate_default=True)
     embedding_cache_max_bytes: int = Field(
         default=4294967296, ge=1048576, le=1099511627776
     )
@@ -394,7 +419,7 @@ class Settings(BaseSettings):
     # browser extension and this value is never used for network requests.
     makerworld_cookie: str = ""
 
-    backup_dir: Path = Path("/data/backups")
+    backup_dir: Path = Field(default=None, validate_default=True)
     # Zero means eligible for cleanup immediately; negative retention is invalid.
     backup_retention_days: int = Field(default=30, ge=0)
     trash_retention_days: int = Field(default=30, ge=0)
@@ -410,6 +435,21 @@ class Settings(BaseSettings):
 
     app_name: str = "PrintStash"
     app_version: str = "0.13.0"
+
+    @field_validator(*DATA_ROOT_LAYOUT, "db_url", mode="before")
+    @classmethod
+    def default_under_data_root(cls, value: object, info: ValidationInfo) -> object:
+        # An empty override (``VAULT_DATA_DIR=``, as an unset Compose variable
+        # renders) means "use the layout", never ``Path("")``, the working dir.
+        if value is not None and value != "":
+            return value
+        root = info.data.get("data_root")
+        if not isinstance(root, Path):
+            # data_root failed its own validation, which already reports it.
+            return value
+        if info.field_name == "db_url":
+            return f"sqlite:///{root / SQLITE_DATABASE_PATH}"
+        return root / DATA_ROOT_LAYOUT[str(info.field_name)]
 
     @model_validator(mode="after")
     def validate_numeric_relationships(self) -> Settings:
@@ -456,6 +496,11 @@ class ConfigResolver:
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise TypeError("ConfigResolver is read-only — use overlay dict for mutations")
+
+    @property
+    def frozen(self) -> Settings:
+        """The environment-time settings, before any runtime override."""
+        return self._frozen
 
     @property
     def incoming_dir(self) -> Path:

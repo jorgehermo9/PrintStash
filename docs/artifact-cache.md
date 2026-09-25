@@ -37,7 +37,7 @@ own capacity admission; cache fallback cannot bypass disk headroom.
 | Environment setting | Default | Meaning |
 |---|---|---|
 | `VAULT_ARTIFACT_CACHE_ENABLED` | `false` | Enable cache reads and fills |
-| `VAULT_ARTIFACT_CACHE_ROOT` | `/data/artifact-cache` | Dedicated private cache directory |
+| `VAULT_ARTIFACT_CACHE_ROOT` | `/data/artifact-cache` | Dedicated private cache directory, on the `/data` volume by default |
 | `VAULT_ARTIFACT_CACHE_MAX_BYTES` | `10737418240` | Published and reserved bytes limit |
 | `VAULT_ARTIFACT_CACHE_MAX_ENTRIES` | `10000` | Published and reserved entry limit |
 | `VAULT_ARTIFACT_CACHE_MAX_FILLS` | `2` | Concurrent fill limit |

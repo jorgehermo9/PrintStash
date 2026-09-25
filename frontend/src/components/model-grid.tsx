@@ -99,6 +99,7 @@ import {
 import {
   useCollections,
   useModelFacets,
+  useLibraryPrefetch,
   useModelList,
   useMultipartModels,
   useOutlinerModels,
@@ -891,12 +892,30 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     uploaded_after: searchParams.get("uploaded_after") || undefined,
     uploaded_before: searchParams.get("uploaded_before") || undefined,
   };
-  const facetQuery = useModelFacets({
+  // One builder per folder-scoped query, shared by the live queries and the
+  // hover prefetch so a warmed folder fills exactly the entries it will read.
+  // They default to the current folder rather than taking it as an argument:
+  // the compiler would otherwise treat the call as able to mutate it and drop
+  // the memoization of everything derived from it below.
+  const folderModelFilters = (
+    collection: string | null = selectedCollection,
+  ): ModelListFilters => ({
     ...baseFilters,
-    collection: selectedCollection ?? undefined,
+    collection: collection ?? undefined,
+    // A search spans the whole library; a folder view lists only its direct
+    // children so subfolders' models don't leak into the parent (#30).
     direct: !searchQuery,
     q: searchQuery,
   });
+  const folderMultipartFilters = (collection: string | null = selectedCollection) => ({
+    collection: collection ?? undefined,
+    direct: !searchQuery,
+    q: searchQuery,
+    tag: selectedTags.length ? selectedTags : undefined,
+    favorites: favoritesOnly || undefined,
+    limit: 500,
+  });
+  const facetQuery = useModelFacets(folderModelFilters());
 
   function writeFilterUrl(filters: SavedViewRead["filters"]) {
     const params = new URLSearchParams();
@@ -1024,30 +1043,12 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // The paginated grid. `keepPreviousData` (in the hook) holds the current page
   // on screen while a new search/folder loads, and results are cached per filter
   // set so backspacing a query or re-entering a folder is instant.
-  const modelQuery = useModelList(
-    {
-      ...baseFilters,
-      collection: selectedCollection ?? undefined,
-      // A search spans the whole library; a folder view lists only its direct
-      // children so subfolders' models don't leak into the parent (#30).
-      direct: !searchQuery,
-      q: searchQuery,
-    },
-    PAGE_SIZE,
-    sortKey,
-    true,
-  );
-  const multipartQuery = useMultipartModels(
-    {
-      collection: selectedCollection ?? undefined,
-      direct: !searchQuery,
-      q: searchQuery,
-      tag: selectedTags.length ? selectedTags : undefined,
-      favorites: favoritesOnly || undefined,
-      limit: 500,
-    },
-    { enabled: libraryView !== "components" },
-  );
+  const multipartListEnabled = libraryView !== "components";
+  const modelQuery = useModelList(folderModelFilters(), PAGE_SIZE, sortKey, true);
+  const multipartQuery = useMultipartModels(folderMultipartFilters(), {
+    enabled: multipartListEnabled,
+  });
+  const libraryPrefetch = useLibraryPrefetch();
   const multipartMembershipQuery = useMultipartModels(
     { limit: 500 },
     { enabled: libraryView === "components" },
@@ -1522,6 +1523,16 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     () => collections.find((c) => c.path === selectedCollection) ?? null,
     [collections, selectedCollection],
   );
+  // Warm a folder on hover/focus: the pointer's travel to the click hides most
+  // of the round-trip, so entering the folder renders from cache.
+  function prefetchFolder(path: string) {
+    if (path === selectedCollection) return;
+    void libraryPrefetch.modelList(folderModelFilters(path), PAGE_SIZE, sortKey);
+    if (multipartListEnabled) void libraryPrefetch.multipartModels(folderMultipartFilters(path));
+    void libraryPrefetch.modelFacets(folderModelFilters(path));
+    const target = collections.find((collection) => collection.path === path);
+    if (target?.has_readme) void libraryPrefetch.collectionReadme(target.id);
+  }
   const canAdminSelectedCollection =
     user?.is_superuser || selectedCollectionRow?.effective_role === "admin";
   const hasWritableCollection = collections.some(canWriteCollection);
@@ -1859,6 +1870,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           selectedPrinterId={selectedPrinterId}
           selectedPrinterPresence={selectedPrinterPresence}
           onCollectionChange={handleCollectionChange}
+          onCollectionIntent={prefetchFolder}
           onTagsChange={setSelectedTags}
           onPrinterChange={setSelectedPrinterId}
           onPrinterPresenceChange={setSelectedPrinterPresence}
@@ -2314,6 +2326,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
               <CollectionReadme
                 key={selectedCollectionRow.id}
                 collectionId={selectedCollectionRow.id}
+                hasReadme={selectedCollectionRow.has_readme}
                 canEdit={!!user?.is_superuser || canWriteCollection(selectedCollectionRow)}
               />
             </div>
@@ -2625,6 +2638,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                         key={collection.id}
                         collection={collection}
                         onSelect={handleCollectionChange}
+                        onIntent={prefetchFolder}
                         onDropModel={canUploadToVault ? handleMoveModel : undefined}
                         selectable={selectMode}
                         selected={selectedCollectionIds.has(collection.id)}
@@ -2681,6 +2695,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                         collection={collection}
                         displayPath={collectionDisplayPath(collections, collection.path)}
                         onSelect={handleCollectionChange}
+                        onIntent={prefetchFolder}
                         onDropModel={canUploadToVault ? handleMoveModel : undefined}
                         selectable={selectMode}
                         selected={selectedCollectionIds.has(collection.id)}
@@ -2787,6 +2802,7 @@ function useModelDropTarget(path: string, onDropModel?: (modelId: number, path: 
 function CollectionFolderCard({
   collection,
   onSelect,
+  onIntent,
   onDropModel,
   selectable,
   selected,
@@ -2794,6 +2810,8 @@ function CollectionFolderCard({
 }: {
   collection: CollectionRead;
   onSelect: (path: string) => void;
+  /** The user is about to open this folder (hover or focus): warm its data. */
+  onIntent?: (path: string) => void;
   onDropModel?: (modelId: number, path: string) => void;
   selectable?: boolean;
   selected?: boolean;
@@ -2807,6 +2825,8 @@ function CollectionFolderCard({
         role="button"
         tabIndex={0}
         data-collection-path={collection.path}
+        onPointerEnter={() => !selectable && onIntent?.(collection.path)}
+        onFocus={() => !selectable && onIntent?.(collection.path)}
         onClick={() => (selectable ? onToggleSelect?.(collection.id) : onSelect(collection.path))}
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget) return;
@@ -2856,6 +2876,7 @@ function CollectionListRow({
   collection,
   displayPath,
   onSelect,
+  onIntent,
   onDropModel,
   selectable,
   selected,
@@ -2864,6 +2885,8 @@ function CollectionListRow({
   collection: CollectionRead;
   displayPath: string | null;
   onSelect: (path: string) => void;
+  /** The user is about to open this folder (hover or focus): warm its data. */
+  onIntent?: (path: string) => void;
   onDropModel?: (modelId: number, path: string) => void;
   selectable?: boolean;
   selected?: boolean;
@@ -2877,6 +2900,8 @@ function CollectionListRow({
         role="button"
         tabIndex={0}
         data-collection-path={collection.path}
+        onPointerEnter={() => !selectable && onIntent?.(collection.path)}
+        onFocus={() => !selectable && onIntent?.(collection.path)}
         onClick={() => (selectable ? onToggleSelect?.(collection.id) : onSelect(collection.path))}
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget) return;

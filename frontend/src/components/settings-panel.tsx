@@ -65,6 +65,7 @@ import { ExternalLibrariesPanel } from "@/components/external-libraries-panel";
 import { StorageInventoryPanel } from "@/components/storage-inventory-panel";
 import { ArtifactCacheCard } from "@/components/artifact-cache-card";
 import { StorageConfigCard } from "@/components/storage-config-card";
+import { ImportCopyWarning } from "@/components/import-copy-warning";
 import { VaultMigrationPanel } from "@/components/vault-migration-panel";
 import { RemoteStorageConnections } from "@/components/remote-storage-connections";
 import { MakerWorldConnectCard } from "@/components/makerworld-connect-card";
@@ -1888,6 +1889,7 @@ export function SettingsPanel() {
                     </div>
                   </div>
                 )}
+                <ImportCopyWarning storageHealth={storageHealth} />
                 {/* KPI tiles */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   {kpiItems.map((item) => {

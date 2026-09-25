@@ -107,11 +107,12 @@ class TestWithWorkers:
         assert worker == api
 
     def test_every_process_mounts_the_same_volumes(self, split: dict[str, Any]) -> None:
-        # A worker committing an upload reads the bytes the API staged.
+        # A worker committing an upload reads the bytes the API staged, which
+        # live with everything else under the one data volume.
         api = _mounts(split["api"])
 
         assert api == _mounts(split["worker"])
-        assert any(target == "/data/staging" for _, target in api)
+        assert any(target == "/data" for _, target in api)
 
     def test_a_worker_starts_after_the_api_migrated(
         self, split: dict[str, Any]

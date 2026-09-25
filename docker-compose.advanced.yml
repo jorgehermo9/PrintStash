@@ -31,11 +31,11 @@ x-logging: &default-logging
 # The API's volumes, shared by the workers: an upload the API stages is
 # committed by whichever process runs its Job.
 x-vault-volumes: &vault-volumes
-  - printstash_data:/data/files
-  - printstash_thumbs:/data/thumbs
-  - printstash_db:/data/db
-  - printstash_staging:/data/staging
-  - printstash_backups:/data/backups
+  # Everything PrintStash keeps. A host folder works too:
+  # /srv/printstash:/data (set PUID/PGID to its owner).
+  - printstash:/data
+  # An extra disk for a moved directory (see the api storage comments):
+  # - /mnt/hdd/printstash:/mnt/hdd/printstash
 
 services:
   frontend:
@@ -79,15 +79,27 @@ services:
     environment: &api-environment
       # --- Storage ---
       VAULT_STORAGE_BACKEND: ${VAULT_STORAGE_BACKEND:-local}
-      VAULT_DATA_DIR: /data/files
-      VAULT_THUMB_DIR: /data/thumbs
-      VAULT_STAGING_DIR: /data/staging
-      # DB path must always point at the persistent volume — never use ${VAULT_DB_URL}
-      # here because a local-dev shell export (e.g. sqlite:///./dev.sqlite) would
-      # silently redirect the DB outside the volume and wipe state on every rebuild.
-      # PostgreSQL (with --profile postgres): replace the value with
-      # postgresql+psycopg://printstash:<POSTGRES_PASSWORD>@postgres:5432/printstash
-      VAULT_DB_URL: sqlite:////data/db/printstash.sqlite
+      # Every app-owned path lives under the one volume mounted at /data (see
+      # `volumes` below): files, thumbs, staging, backups, db, artifact-cache
+      # and ai-models. The SQLite database defaults to /data/db/printstash.sqlite.
+      #
+      # Each directory can move on its own, e.g. files onto a large HDD while
+      # the database stays on an SSD. Mount the other disk inside the
+      # container and point one of these at it:
+      #   VAULT_DATA_DIR: /mnt/hdd/printstash/files
+      #   VAULT_THUMB_DIR: /mnt/ssd/printstash/thumbs
+      #   VAULT_STAGING_DIR: /mnt/hdd/printstash/staging
+      #   VAULT_BACKUP_DIR: /mnt/backups/printstash
+      #   VAULT_ARTIFACT_CACHE_ROOT: /mnt/ssd/printstash/artifact-cache
+      #   VAULT_EMBEDDING_CACHE_DIR: /mnt/ssd/printstash/ai-models
+      # Keep VAULT_STAGING_DIR on the same mount as VAULT_DATA_DIR: imports
+      # publish staged files into the library by hard link, which only works
+      # within one mount. Split them, or map a second volume onto a subfolder
+      # of /data (e.g. `- hdd:/data/files`), and every import copies its file;
+      # Settings then warns. docs/deployment.md#hard-linked-imports
+      #
+      # PostgreSQL (with --profile postgres) instead of SQLite:
+      #   VAULT_DB_URL: postgresql+psycopg://printstash:<POSTGRES_PASSWORD>@postgres:5432/printstash
       VAULT_SQLITE_SYNCHRONOUS: ${VAULT_SQLITE_SYNCHRONOUS:-NORMAL}
       # S3-compatible primary storage (VAULT_STORAGE_BACKEND=s3). With
       # --profile s3 the endpoint is http://seaweedfs:8333.
@@ -100,7 +112,6 @@ services:
       VAULT_S3_MULTIPART_THRESHOLD_MB: ${VAULT_S3_MULTIPART_THRESHOLD_MB:-50}
 
       # --- Backups ---
-      VAULT_BACKUP_DIR: /data/backups
       VAULT_BACKUP_RETENTION_DAYS: ${VAULT_BACKUP_RETENTION_DAYS:-30}
       VAULT_BACKUP_S3_BUCKET: ${VAULT_BACKUP_S3_BUCKET:-}
       VAULT_BACKUP_S3_ENDPOINT_URL: ${VAULT_BACKUP_S3_ENDPOINT_URL:-}
@@ -267,10 +278,6 @@ networks:
     driver: bridge
 
 volumes:
-  printstash_data:
-  printstash_thumbs:
-  printstash_db:
-  printstash_staging:
-  printstash_backups:
+  printstash:
   printstash_postgres:
   printstash_seaweedfs:

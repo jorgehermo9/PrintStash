@@ -165,6 +165,8 @@ export interface StorageHealthRead {
     root_bindings?: Record<string, string>;
     roots_ready?: boolean;
     probed?: boolean;
+    /** Local storage only: whether staged imports reach the library by hard link. */
+    staged_hardlink?: boolean;
   };
 }
 

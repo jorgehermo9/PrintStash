@@ -25,7 +25,7 @@ from sqlmodel import Session, select
 
 from app.api import setup_session
 from app.api.session_cookie import set_session_cookie
-from app.core.config import FrozenSettings, ensure_dirs, settings
+from app.core.config import ensure_dirs, settings
 from app.core.logging import get_logger
 from app.core.ratelimit import rate_limit
 from app.core.security import require_auth, require_superuser
@@ -60,13 +60,6 @@ from app.schemas.setup import (
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/setup", tags=["setup"])
-
-
-# Pydantic Settings exposes its defaults via ``model_fields``. We pull the
-# *original* env-time defaults so the wizard can show the user what they'd
-# get if they left the field blank, even after a later edit mutates them.
-_DEFAULT_DATA_DIR = str(FrozenSettings.model_fields["data_dir"].default)
-_DEFAULT_THUMB_DIR = str(FrozenSettings.model_fields["thumb_dir"].default)
 
 
 def _validate_writable_dir(
@@ -161,8 +154,10 @@ def get_status(
         configured=False,
         setup_available=True,
         user_count=user_count,
-        default_data_dir=_DEFAULT_DATA_DIR,
-        default_thumb_dir=_DEFAULT_THUMB_DIR,
+        # The deployment's own paths (VAULT_DATA_ROOT and any override), not a
+        # later runtime edit: what a blank field means on a fresh install.
+        default_data_dir=str(settings.frozen.data_dir),
+        default_thumb_dir=str(settings.frozen.thumb_dir),
         current_data_dir=str(settings.data_dir),
         current_thumb_dir=str(settings.thumb_dir),
         current_storage_backend=str(settings.storage_backend),

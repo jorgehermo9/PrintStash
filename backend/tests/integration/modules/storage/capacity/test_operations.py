@@ -97,6 +97,22 @@ class TestOperationAdmission:
                 stream=BytesIO(b"solid"),
             )
 
+    def test_reserves_archive_extraction_on_the_staging_volume(self, db_session):
+        # Entries are extracted under staging, on the library's mount, so each
+        # is published by hard link; the space must be checked where it lands.
+        from pathlib import Path
+
+        from app.core.config import settings
+        from app.modules.storage import capacity_estimates
+
+        extraction = next(
+            resource
+            for resource in capacity_estimates.archive_import(83)
+            if resource.role == "archive extraction"
+        )
+
+        assert extraction.path == str(Path(settings.staging_dir).absolute())
+
     def test_reserves_remote_backup_source_volume(
         self, db_session, monkeypatch, tmp_path
     ):

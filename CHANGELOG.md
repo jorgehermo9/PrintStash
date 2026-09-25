@@ -6,7 +6,18 @@
 `docker-compose.advanced.yml`; `docker-compose.yml` now runs the single-container
 image. See UPGRADE.md before pulling.**
 
+**Compose installs: both Compose files now mount one `printstash` volume at
+`/data` instead of five. Copy your data into it before starting the new file
+(one command, in UPGRADE.md), or the app starts empty at first-run setup.**
+
 ### Changed
+
+- **One data volume.** Every path PrintStash writes (database, files,
+  thumbnails, staging, backups, caches) lives under `VAULT_DATA_ROOT`, `/data`
+  in the container, so a deployment mounts one volume. Each directory can still
+  be moved on its own with its existing variable. The artifact cache and
+  downloaded AI search models, previously left in the container's own layer,
+  now persist across updates.
 
 - Model Families have been removed. Existing Models, files, G-code revisions and
   print history remain independent; existing Family relationships and covers
@@ -60,6 +71,18 @@ image. See UPGRADE.md before pulling.**
   the active search is clearly separate from a new index build. Specialist index
   tuning has its own view; server editing and custom model choices no longer
   depend on nested dropdown sections.
+
+### Performance
+
+- **Imports no longer copy files into local storage.** A staged upload, URL
+  import, library-transfer archive entry or Bambu print capture
+  becomes its library file by hard link when staging shares the library's
+  mount, which the single `/data` volume guarantees: instant, whatever the file
+  size, with no second copy on disk. Local backups publish their archive the
+  same way when no remote replica needs it. Where a link is impossible (another
+  mount, or a filesystem without hard links) the file is copied as before, and
+  Settings warns "Imports are copied, not hard-linked" with a link to the
+  storage layout guide, which lists the layouts that keep hard links.
 
 ### Added
 
@@ -121,6 +144,12 @@ image. See UPGRADE.md before pulling.**
 - A process that started while an interrupted restore or Vault migration still
   needed recovery now starts its background work once recovery resolves it,
   instead of queueing work nothing ran until the next restart.
+- Opening a folder in the library no longer swaps the grid for a loading
+  skeleton; the current folder stays on screen until the next one is ready.
+  Folders are also prefetched when the pointer rests on them or they receive
+  keyboard focus, and a folder's readme is requested only when it has one and
+  is cached for later visits (`CollectionRead` gains `has_readme`).
+
 - Mounted Library source folders keep their exact capitalization and spaces in
   collection labels and write-back destinations. Case- or punctuation-distinct
   folders remain separate, including on rescan of previously indexed sources.

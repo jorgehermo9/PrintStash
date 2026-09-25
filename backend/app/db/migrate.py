@@ -28,7 +28,7 @@ from sqlalchemy import CheckConstraint, UniqueConstraint, create_engine, inspect
 from sqlmodel import SQLModel
 
 from alembic import command
-from app.core.config import settings
+from app.core.config import ensure_dirs, settings
 from app.core.logging import get_logger
 from app.db.url import normalize_database_url
 
@@ -338,6 +338,10 @@ def run_migrations(database_url: str | None = None) -> None:
 
 
 def main() -> None:  # pragma: no cover - thin CLI wrapper, exercised via entrypoint
+    # This is the first step of every boot (the container entrypoint runs it
+    # before the server), so it prepares the VAULT_DATA_ROOT layout the way the
+    # server would: a fresh root has no db/ for the default SQLite file yet.
+    ensure_dirs()
     run_migrations()
 
 

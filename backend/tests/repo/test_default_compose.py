@@ -42,6 +42,15 @@ def _render(directory: Path, **environment: str) -> dict[str, Any]:
     return json.loads(result.stdout)
 
 
+def _documented_fragments() -> list[str]:
+    """Every Compose fragment the deployment guide tells users to merge in."""
+    return re.findall(
+        r"```yaml\n(services:\n.*?)```",
+        (REPO_ROOT / "docs/deployment.md").read_text(),
+        re.DOTALL,
+    )
+
+
 @pytest.fixture
 def default_config(compose_dir: Path) -> dict[str, Any]:
     return _render(compose_dir)
@@ -58,24 +67,31 @@ class TestDefaultCompose:
         assert not service.get("entrypoint")
         assert not service.get("command")
 
-    @pytest.mark.parametrize(
-        ("volume", "target"),
-        [
-            pytest.param("printstash_data", "/data/files", id="uploads"),
-            pytest.param("printstash_thumbs", "/data/thumbs", id="thumbnails"),
-            pytest.param("printstash_db", "/data/db", id="database-credentials"),
-            pytest.param("printstash_staging", "/data/staging", id="pending-imports"),
-            pytest.param("printstash_backups", "/data/backups", id="backups"),
-        ],
-    )
-    def test_persists_application_state(
-        self, default_config: dict[str, Any], volume: str, target: str
+    def test_persists_application_state_in_one_volume(
+        self, default_config: dict[str, Any]
     ) -> None:
+        # One mount is what lets an import hard-link its staged file into the
+        # library: link(2) fails across mount points, even on the same disk.
         mounts = default_config["services"]["printstash"]["volumes"]
-        mount = next(mount for mount in mounts if mount["target"] == target)
 
-        assert (mount["type"], mount["source"]) == ("volume", volume)
-        assert volume in default_config["volumes"]
+        assert [(m["type"], m["source"], m["target"]) for m in mounts] == [
+            ("volume", "printstash", "/data")
+        ]
+
+    def test_declares_the_data_volume(self, default_config: dict[str, Any]) -> None:
+        assert "printstash" in default_config["volumes"]
+
+    def test_documented_host_folder_replaces_the_volume_with_one_mount(
+        self, compose_dir: Path
+    ) -> None:
+        fragment = next(
+            fragment for fragment in _documented_fragments() if "PUID" in fragment
+        )
+        (compose_dir / "docker-compose.override.yml").write_text(fragment)
+
+        mounts = _render(compose_dir)["services"]["printstash"]["volumes"]
+
+        assert [(m["type"], m["target"]) for m in mounts] == [("bind", "/data")]
 
     def test_gives_both_processes_time_to_stop(
         self, default_config: dict[str, Any]
@@ -89,12 +105,8 @@ class TestDefaultCompose:
 
     @pytest.mark.parametrize(
         "fragment",
-        re.findall(
-            r"```yaml\n(services:\n.*?)```",
-            (REPO_ROOT / "docs/deployment.md").read_text(),
-            re.DOTALL,
-        ),
-        ids=["session-lifetime", "setup-host", "host-folders", "upload-limit"],
+        _documented_fragments(),
+        ids=["session-lifetime", "setup-host", "host-folder", "upload-limit"],
     )
     def test_documented_overrides_preserve_startup(
         self, compose_dir: Path, fragment: str

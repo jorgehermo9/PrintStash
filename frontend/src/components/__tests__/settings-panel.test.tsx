@@ -369,6 +369,27 @@ describe("SettingsPanel", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Do not acknowledge this warning");
     });
 
+    it("warns when imports copy every file instead of hard-linking", async () => {
+      renderSettings({
+        routes: {
+          "GET /api/v1/health/details": json({
+            ...HEALTH,
+            components: {
+              database: { ok: true },
+              storage: {
+                ok: true,
+                provider: "local",
+                tier: "verified",
+                diagnostics: { staged_hardlink: false },
+              },
+            },
+          }),
+        },
+      });
+
+      expect(await screen.findByText("Imports are copied, not hard-linked")).toBeInTheDocument();
+    });
+
     it("re-checks for a release when asked", async () => {
       const user = userEvent.setup();
       const { requests } = renderSettings();

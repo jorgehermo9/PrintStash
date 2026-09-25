@@ -74,9 +74,13 @@ export function json<T>(payload: T, status = 200): Response {
 
 /**
  * What a stubbed route answers with: a response, or a function of the request
- * for a route whose answer depends on what was asked.
+ * for a route whose answer depends on what was asked. A function may answer
+ * with a promise, to hold a request in flight while the test looks at the
+ * screen it leaves behind.
  */
-export type RouteAnswer = Response | ((url: string, init?: RequestInit) => Response);
+export type RouteAnswer =
+  | Response
+  | ((url: string, init?: RequestInit) => Response | Promise<Response>);
 
 /**
  * `"<METHOD> <path prefix>"` → answer. The longest matching prefix wins, so a

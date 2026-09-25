@@ -62,8 +62,9 @@ Open **[http://localhost:3000](http://localhost:3000)** (or
 3. **Explore the Model.** Inspect its preview, open a file in your slicer, and
    add G-code as a Revision. Connect a printer when you want to send a print.
 
-It runs one container (web UI and full API) with SQLite and persistent Docker
-volumes. No `.env`, build step, PostgreSQL, or S3 service is needed.
+It runs one container (web UI and full API) with SQLite and one persistent
+Docker volume at `/data`. No `.env`, build step, PostgreSQL, or S3 service is
+needed.
 Images support `linux/amd64` and `linux/arm64`. Start with 1 GB RAM; 2 GB or
 more helps with large meshes.
 

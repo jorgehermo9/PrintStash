@@ -71,6 +71,7 @@ const collection: CollectionRead = {
   model_count: 4,
   effective_role: "admin",
   tags: [],
+  has_readme: false,
 };
 
 function aListItem(over: Partial<MultipartModelListItem> = {}): MultipartModelListItem {

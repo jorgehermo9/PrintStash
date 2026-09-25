@@ -18,6 +18,7 @@ Probe error branches — the ones a real dependency cannot produce on demand —
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -41,6 +42,7 @@ from app.db.models import (
     PrinterStatus,
     PrintJobState,
 )
+from app.modules.storage.storage_backend.runtime import get_backend
 from tests.factories import (
     build_file,
     build_model,
@@ -222,6 +224,16 @@ class TestHealthDetails:
             "active_reservations": 0,
             "recent_admission_failures": 0,
         }
+
+    def test_reports_whether_imports_hard_link(
+        self, client: TestClient, auth_headers: dict[str, str], local_storage: Path
+    ) -> None:
+        # Settings warns that imports copy every file from exactly this flag.
+        get_backend().ensure_setup()
+
+        body = client.get("/api/v1/health/details", headers=auth_headers).json()
+
+        assert body["components"]["storage"]["diagnostics"]["staged_hardlink"] is True
 
     def test_mirrors_database_counts_into_metrics(
         self, client: TestClient, auth_headers: dict[str, str], db_session: Session

@@ -482,12 +482,7 @@ jobs:
           echo "PRINTSTASH_EXTENSION_CAPTURE_BASE_URL=http://127.0.0.1:8765" >> "$GITHUB_ENV"
           echo "PRINTSTASH_EXTENSION_CAPTURE_ROOT=$capture_root" >> "$GITHUB_ENV"
           VAULT_SETUP_MODE=trusted_network \
-          VAULT_DB_URL="sqlite:///${capture_root}/printstash.sqlite" \
-          VAULT_DATA_DIR="$capture_root/files" \
-          VAULT_THUMB_DIR="$capture_root/thumbs" \
-          VAULT_STAGING_DIR="$capture_root/staging" \
-          VAULT_BACKUP_DIR="$capture_root/backups" \
-          VAULT_SECRETS_KEY_FILE="$capture_root/secrets-key" \
+          VAULT_DATA_ROOT="$capture_root" \
           uv run uvicorn app.main:app --host 127.0.0.1 --port 8765 \
             >"${RUNNER_TEMP}/printstash-capture-backend.log" 2>&1 &
           echo $! >"${RUNNER_TEMP}/printstash-capture-backend.pid"

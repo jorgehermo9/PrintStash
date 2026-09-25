@@ -58,6 +58,59 @@ This guide covers supported self-hosted upgrades. SQLite plus local filesystem
 storage remains the default. Always upgrade from a fresh backup and retain the
 previous application image until validation is complete.
 
+## Unreleased: one data volume
+
+Both Compose files now mount **one** volume, `printstash`, at `/data` instead of
+five (`printstash_data`, `printstash_thumbs`, `printstash_db`,
+`printstash_staging`, `printstash_backups`). With staging and the library on one
+mount, imports publish by hard link instead of copying every file; see
+[Data and host folders](docs/deployment.md#data-and-host-folders). PrintStash
+does not migrate the old volumes itself: a new `docker-compose.yml` against old
+volumes starts **empty, at first-run setup**, while the old volumes stay
+untouched. Move the data once, before starting the new file.
+
+**Unraid, CasaOS and other dashboards** that map one folder to `/data`: nothing
+to do.
+
+**Host folders** that were already `<folder>/files`, `<folder>/thumbs`,
+`<folder>/db`, `<folder>/staging` and `<folder>/backups`: replace the five
+mounts with `<folder>:/data`. Nothing is copied.
+
+**Named volumes** (the default files): copy them into the new volume once. This
+needs free space equal to your data.
+
+```bash
+# In your install directory, with the old docker-compose.yml still in place:
+docker compose down             # never `down -v`
+docker volume ls --filter name=printstash_
+
+# Replace docker-compose.yml with the new file, then create (not start) the
+# stack so Compose owns the new volume:
+docker compose up --no-start
+
+P=printstash    # your project name: the prefix `docker volume ls` showed
+docker run --rm \
+  -v "${P}_printstash_db:/from/db:ro" \
+  -v "${P}_printstash_data:/from/files:ro" \
+  -v "${P}_printstash_thumbs:/from/thumbs:ro" \
+  -v "${P}_printstash_staging:/from/staging:ro" \
+  -v "${P}_printstash_backups:/from/backups:ro" \
+  -v "${P}_printstash:/to" \
+  alpine sh -c 'cp -a /from/. /to/'
+
+docker compose up -d
+```
+
+`cp -a` keeps owners, permissions and timestamps, and the storage-root markers
+travel with the files, so the library opens as the same installation. Check
+that your models, thumbnails and backups are there, then remove the five old
+volumes with `docker volume rm`. For `docker-compose.advanced.yml`, add
+`-f docker-compose.advanced.yml` to each `docker compose` command.
+
+If you set `VAULT_DATA_DIR`, `VAULT_THUMB_DIR`, `VAULT_STAGING_DIR` or
+`VAULT_BACKUP_DIR` yourself, they still work as per-directory overrides. Keep
+staging on the same mount as the library, or imports fall back to copying.
+
 ## Unreleased: fewer Compose files
 
 The repository root now has two Compose files. `docker-compose.yml` runs
@@ -79,8 +132,10 @@ pulling:
 | `docker-compose.unified.yml` | `docker-compose.yml` (same content) |
 | `docker-compose.migrate-minio.yml` | `deploy/minio-migration/compose.yml` together with `docker-compose.advanced.yml` |
 
-Every file keeps the same volume keys, so data is found as long as the Compose
-project name (normally the directory name) stays the same. Stop the old stack
+Both files mount the same `printstash` volume, so data is found as long as the
+Compose project name (normally the directory name) stays the same; coming from
+the five older volumes, first follow [one data volume](#unreleased-one-data-volume).
+Stop the old stack
 with `docker compose -f <old file> down` (never `down -v`) before starting the
 new one. Moving from two containers to the single container, run
 `docker compose up -d --remove-orphans` so the old `frontend` and `api` containers

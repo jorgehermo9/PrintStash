@@ -39,7 +39,14 @@ library/trash/storage code.
 `backend/app/core/config.py` `Settings` is the source of truth for every env
 var; prefix is `VAULT_` (e.g. `VAULT_DB_URL`, `VAULT_DATA_DIR`). Add new
 settings there with a safe local-first default; document user-facing ones in
-the in-repository README/docs. If the public site also needs an update, identify
+the in-repository README/docs.
+
+Every app-owned path is a child of `VAULT_DATA_ROOT` (`/data`, one volume):
+a new directory setting joins `DATA_ROOT_LAYOUT` rather than taking its own
+absolute default. A file that will be published into storage is written under
+`settings.staging_dir` (never `tempfile`'s system temp dir) and handed over with
+`move_in` / `publish_file(move=True)`: on the library's mount that is a hard
+link, not a copy. If the public site also needs an update, identify
 the separate `printstash-landing` change without widening scope implicitly.
 Compose files: `docker-compose.yml` (default, minimal, single-container unified image),
 `docker-compose.advanced.yml` (every setting wired, postgres/s3 profiles,

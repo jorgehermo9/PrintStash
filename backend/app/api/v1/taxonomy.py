@@ -127,6 +127,7 @@ def _collection_read(
             session, current_user, collection.id
         ),
         tags=tags.get(collection.id or 0, []),
+        has_readme=bool(collection.readme),
     )
 
 
@@ -202,6 +203,7 @@ def list_collections(
             ),
             effective_role=roles.get(c.id),
             tags=tags_by_collection.get(c.id or 0, []),
+            has_readme=bool(c.readme),
         )
         for c in cats
     ]

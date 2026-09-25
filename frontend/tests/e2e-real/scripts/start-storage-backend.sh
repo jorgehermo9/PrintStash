@@ -19,21 +19,17 @@ mkdir -p \
   "$DATA_ROOT/backups" \
   "$DATA_ROOT/webdav"
 
-export VAULT_DB_URL="sqlite:///$DATA_ROOT/test.sqlite"
-export VAULT_DATA_DIR="$DATA_ROOT/files"
-export VAULT_THUMB_DIR="$DATA_ROOT/thumbs"
-export VAULT_STAGING_DIR="$DATA_ROOT/staging"
-export VAULT_BACKUP_DIR="$DATA_ROOT/backups"
+unset VAULT_DB_URL VAULT_DATA_DIR VAULT_THUMB_DIR VAULT_STAGING_DIR VAULT_BACKUP_DIR
+export VAULT_DATA_ROOT="$DATA_ROOT"
 export VAULT_JWT_SECRET="e2e-storage-secret-at-least-32-bytes"
 export VAULT_SECRETS_KEY="e2e-storage-provider-secrets"
 export VAULT_STORAGE_ALLOW_UNVERIFIED="true"
 
 cd "$BACKEND_DIR"
 PY=(.venv/bin/python)
-ALEMBIC=(.venv/bin/alembic)
 WSGIDAV=(.venv/bin/wsgidav)
 
-"${ALEMBIC[@]}" upgrade head
+"${PY[@]}" -m app.db.migrate
 "${WSGIDAV[@]}" \
   --host=127.0.0.1 \
   --port="$WEBDAV_PORT" \

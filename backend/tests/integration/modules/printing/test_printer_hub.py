@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlmodel import Session, select
 
-from app.core.config import _overlay
+from app.core.config import _overlay, settings
 from app.db.models import (
     MaterialSlotState,
     MaterialSource,
@@ -66,12 +66,12 @@ def _spoolman_runtime(*, enabled: bool, config: dict | None = None):
 
 @contextmanager
 def _capture_limit_mb(limit: int):
-    """Pin `bambu_external_capture_max_mb`, which gates external capture entirely."""
-    with patch.object(
-        printer_hub_module,
-        "settings",
-        SimpleNamespace(bambu_external_capture_max_mb=limit),
-    ):
+    """Pin `bambu_external_capture_max_mb`, which gates external capture entirely.
+
+    Through the overlay, so every other setting (the staging path the capture
+    downloads into, above all) stays the real one.
+    """
+    with patch.dict(_overlay, {"bambu_external_capture_max_mb": limit}):
         yield
 
 
@@ -1328,11 +1328,7 @@ class TestPrinterHubSyncActiveJob:
         )
         assert job.id is not None
 
-        with patch.object(
-            printer_hub_module,
-            "settings",
-            SimpleNamespace(bambu_external_capture_max_mb=0),
-        ):
+        with _capture_limit_mb(0):
             asyncio.run(
                 hub._capture_external_artifact(
                     printer.id, job.id, "/cache/external.gcode", MagicMock()
@@ -1356,11 +1352,7 @@ class TestPrinterHubSyncActiveJob:
 
         client = MagicMock()
         client.download_artifact = AsyncMock(side_effect=DownloadError())
-        with patch.object(
-            printer_hub_module,
-            "settings",
-            SimpleNamespace(bambu_external_capture_max_mb=1),
-        ):
+        with _capture_limit_mb(1):
             asyncio.run(
                 hub._capture_external_artifact(
                     printer.id, job.id, "/cache/external.gcode", client
@@ -1401,6 +1393,29 @@ class TestPrinterHubSyncActiveJob:
             )
 
         persist.assert_called_once()
+
+    def test_external_capture_downloads_beside_the_library(
+        self, printer: Printer, hub: PrinterHub
+    ) -> None:
+        # On the library's mount the capture is then published by hard link;
+        # the system temp dir sits outside the data volume, so it never can be.
+        requested: list[Path] = []
+
+        async def download(_remote: str, staged: Path, *, max_bytes: int) -> None:
+            requested.append(staged)
+            staged.write_bytes(b"; generated")
+
+        client = MagicMock()
+        client.download_artifact = AsyncMock(side_effect=download)
+
+        with _capture_limit_mb(1), patch.object(hub, "_persist_external_artifact"):
+            asyncio.run(
+                hub._capture_external_artifact(
+                    printer.id, 2, "/cache/external.gcode", client
+                )
+            )
+
+        assert requested[0].parent.parent == Path(settings.staging_dir)
 
     def test_external_capture_reserves_before_download(
         self, printer: Printer, hub: PrinterHub, db_session, monkeypatch

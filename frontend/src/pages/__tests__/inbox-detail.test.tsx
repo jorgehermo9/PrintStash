@@ -107,6 +107,7 @@ describe("InboxDetailPage", () => {
       parent_id: null,
       model_count: 0,
       tags: [],
+      has_readme: false,
       effective_role: "admin",
     });
     vi.mocked(api.dismissPendingImport).mockResolvedValue();
@@ -155,6 +156,7 @@ describe("InboxDetailPage", () => {
       model_count: 2,
       effective_role: "edit",
       tags: [],
+      has_readme: false,
     };
     vi.mocked(api.getPendingImport).mockResolvedValue(reviewItem);
     vi.mocked(api.importPendingImport).mockResolvedValue({

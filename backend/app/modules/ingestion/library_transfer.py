@@ -20,6 +20,7 @@ from pydantic import Field as PydanticField
 from sqlmodel import Session, delete, select
 
 import app.modules.library.model_views.access as models_access
+from app.core.config import settings
 from app.core.time import utcnow
 from app.db.models import (
     ArtifactProvenanceLink,
@@ -1818,7 +1819,11 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
                     sum(item.file_size for item in infos)
                 ),
             ),
-            tempfile.TemporaryDirectory(prefix="printstash-import-") as tempdir,
+            # Extract under staging, not the system temp dir: on the library's
+            # mount, persist_artifact publishes each entry by hard link.
+            tempfile.TemporaryDirectory(
+                prefix="printstash-import-", dir=settings.staging_dir
+            ) as tempdir,
         ):
             for model_data in manifest["models"]:
                 model = session.exec(

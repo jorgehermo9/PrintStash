@@ -6,9 +6,8 @@ uv = "latest"
 
 [env]
 # Backend
-VAULT_DB_URL = "sqlite:///./dev.sqlite"
-VAULT_DATA_DIR = "./_data/files"
-VAULT_THUMB_DIR = "./_data/thumbs"
+# Every app path (SQLite database included) lives under this one directory.
+VAULT_DATA_ROOT = "./_data"
 VAULT_API_KEY = "devkey"
 VAULT_JWT_SECRET = "dev-jwt-secret"
 VAULT_LOG_LEVEL = "DEBUG"
@@ -52,8 +51,8 @@ description = "Start optional postgres (port 5432)"
 run = "docker compose --profile postgres up -d postgres"
 
 [tasks."db:migrate"]
-description = "Run alembic migrations"
-run = "cd backend && uv run alembic upgrade head"
+description = "Prepare the data root and migrate the database to head"
+run = "cd backend && uv run python -m app.db.migrate"
 
 [tasks."db:revision"]
 description = "Generate alembic migration"
@@ -123,6 +122,6 @@ run = """
 description = "First-run: install tools + deps + db + browsers"
 depends = ["install"]
 run = """
-  cd backend && uv run alembic upgrade head
+  cd backend && uv run python -m app.db.migrate
   echo "Setup complete. Run 'mise run dev' to start."
   """

@@ -29,6 +29,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import os
+import subprocess
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -46,7 +49,7 @@ from app.db import migrate as migrate_mod
 from app.db.session import _is_alembic_managed, init_db
 from tests.factories import build_user
 from tests.factories.migration_rows import seed_released_v0121_rows, seed_schema_row
-from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
+from tests.paths import ALEMBIC_DIR, ALEMBIC_INI, BACKEND_DIR
 
 
 def _seeded_duplicate_defaults(tmp_path: Path) -> str:
@@ -841,6 +844,31 @@ def _rewrite_sqlite_table_definition(
             connection.exec_driver_sql("PRAGMA writable_schema=OFF")
     finally:
         engine.dispose()
+
+
+class TestMain:
+    """`python -m app.db.migrate` is every installation's first boot step.
+
+    The container entrypoint runs it before the server, so it meets a data root
+    nothing has prepared yet: <VAULT_DATA_ROOT>/db does not exist.
+    """
+
+    def test_migrates_a_fresh_data_root_to_head(self, tmp_path: Path) -> None:
+        root = tmp_path / "data"
+
+        result = subprocess.run(
+            [sys.executable, "-m", "app.db.migrate"],
+            cwd=BACKEND_DIR,
+            env={**os.environ, "VAULT_DATA_ROOT": str(root)},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert _current(f"sqlite:///{root / 'db' / 'printstash.sqlite'}") == (
+            _head_revision()
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -43,13 +43,10 @@ services:
       - "127.0.0.1:${PRINTSTASH_API_PORT:-8100}:8000"
     environment:
       VAULT_STORAGE_BACKEND: "${VAULT_STORAGE_BACKEND:-s3}"
-      VAULT_DATA_DIR: /data/files
-      VAULT_THUMB_DIR: /data/thumbs
-      VAULT_STAGING_DIR: /data/staging
+      # Every app path lives under the one /data volume below.
       # PostgreSQL is the default. Set VAULT_DB_URL in deploy/manual-testing/.env
       # to sqlite:////data/db/printstash.sqlite for the SQLite backup/restore mode.
       VAULT_DB_URL: "${VAULT_DB_URL:-postgresql+psycopg://printstash:printstash-manual-db@printstash-db:5432/printstash}"
-      VAULT_BACKUP_DIR: /data/backups
       VAULT_BACKUP_RETENTION_DAYS: "${VAULT_BACKUP_RETENTION_DAYS:-30}"
       VAULT_S3_BUCKET: "${VAULT_S3_BUCKET:-printstash-manual}"
       VAULT_S3_ENDPOINT_URL: "${VAULT_S3_ENDPOINT_URL:-http://seaweedfs.localhost:8333}"
@@ -84,11 +81,7 @@ services:
       PGID: "${PGID:-10001}"
       TZ: UTC
     volumes:
-      - printstash_manual_files:/data/files
-      - printstash_manual_thumbs:/data/thumbs
-      - printstash_manual_staging:/data/staging
-      - printstash_manual_backups:/data/backups
-      - printstash_manual_db:/data/db
+      - printstash_manual_data:/data
       - ${MANUAL_EXTERNAL_LIBRARY_PATH:-./external-library}:/manual-external
     depends_on:
       printstash-db:
@@ -315,11 +308,7 @@ networks:
     driver: bridge
 
 volumes:
-  printstash_manual_files:
-  printstash_manual_thumbs:
-  printstash_manual_staging:
-  printstash_manual_backups:
-  printstash_manual_db:
+  printstash_manual_data:
   printstash_manual_postgres:
   printstash_manual_seaweedfs:
   printstash_manual_spoolman:

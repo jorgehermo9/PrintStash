@@ -102,6 +102,11 @@ def publish_archive(
                     str(archive_path),
                     archive_temp,
                     object_kind="backup",
+                    sha256=archive_sha256,
+                    # The build temp sits beside the archive, so a move is a
+                    # hard link. Replicas below still read the temp; keep it
+                    # for them and copy only then.
+                    move=not target and not remote_destinations,
                 )
                 publish_session.commit()
             created_sources.append(

@@ -249,6 +249,7 @@ function CollectionTreeRow({
   node,
   selected,
   onSelect,
+  onIntent,
   expanded,
   toggle,
   modelsByCollection,
@@ -262,6 +263,7 @@ function CollectionTreeRow({
   node: CollectionNode;
   selected: string | null;
   onSelect: (path: string | null) => void;
+  onIntent?: (path: string) => void;
   expanded: Set<string>;
   toggle: (path: string) => void;
   modelsByCollection: Map<string, OutlinerModelRead[]>;
@@ -419,6 +421,8 @@ function CollectionTreeRow({
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
+              onPointerEnter={() => onIntent?.(node.cat.path)}
+              onFocus={() => onIntent?.(node.cat.path)}
               onClick={() => onSelect(node.cat.path)}
               className="flex flex-1 min-w-0 items-center gap-1.5 text-left text-sm font-medium truncate"
               title={node.cat.name}
@@ -473,6 +477,7 @@ function CollectionTreeRow({
                 node={child}
                 selected={selected}
                 onSelect={onSelect}
+                onIntent={onIntent}
                 expanded={expanded}
                 toggle={toggle}
                 modelsByCollection={modelsByCollection}
@@ -599,6 +604,7 @@ export function FilterSidebarContent({
   selectedPrinterId,
   selectedPrinterPresence,
   onCollectionChange,
+  onCollectionIntent,
   onTagsChange,
   onPrinterChange,
   onPrinterPresenceChange,
@@ -972,6 +978,7 @@ export function FilterSidebarContent({
                         node={node}
                         selected={selectedCollection}
                         onSelect={onCollectionChange}
+                        onIntent={onCollectionIntent}
                         expanded={expanded}
                         toggle={toggleExpanded}
                         modelsByCollection={modelsByCollection}
@@ -1202,6 +1209,8 @@ export interface FilterSidebarProps {
   selectedPrinterId: number | null;
   selectedPrinterPresence: "any" | "none" | null;
   onCollectionChange: (path: string | null) => void;
+  /** Hover/focus on a folder: the parent may warm that folder's data. */
+  onCollectionIntent?: (path: string) => void;
   onTagsChange: (tags: string[]) => void;
   onPrinterChange: (printerId: number | null) => void;
   onPrinterPresenceChange: (presence: "any" | "none" | null) => void;

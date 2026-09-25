@@ -34,6 +34,7 @@ function collection(over: Partial<CollectionRead> = {}): CollectionRead {
     model_count: 3,
     effective_role: "edit",
     tags: [],
+    has_readme: false,
     ...over,
   };
 }

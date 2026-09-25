@@ -56,15 +56,19 @@ PGID=$(canonicalize_id "$PGID")
 if [ "$(id -u)" = "0" ]; then
   requested_identity="$PUID:$PGID"
 
+  # One volume at the data root holds every app-owned path, each at the same
+  # child the app derives (app/core/config.py DATA_ROOT_LAYOUT). A directory
+  # can still be moved with its own variable; an empty one means the default.
+  data_root=${VAULT_DATA_ROOT:-/data}
+  files_dir=${VAULT_DATA_DIR:-$data_root/files}
+  thumb_dir=${VAULT_THUMB_DIR:-$data_root/thumbs}
+  staging_dir=${VAULT_STAGING_DIR:-$data_root/staging}
+  backup_dir=${VAULT_BACKUP_DIR:-$data_root/backups}
+
   # Named volumes are created by Docker, while bind mounts may not exist yet.
   # Creating the configured roots here keeps the ownership repair below
   # deterministic and preserves the local-first defaults.
-  mkdir -p \
-    "${VAULT_DATA_DIR:-/data/files}" \
-    "${VAULT_THUMB_DIR:-/data/thumbs}" \
-    "${VAULT_STAGING_DIR:-/data/staging}" \
-    "${VAULT_BACKUP_DIR:-/data/backups}" \
-    /data/db
+  mkdir -p "$data_root/db" "$files_dir" "$thumb_dir" "$staging_dir" "$backup_dir"
 
   # Numeric ownership works for host-created bind mounts even when the
   # requested uid/gid has no matching /etc/passwd entry in the image. Inspect
@@ -72,13 +76,16 @@ if [ "$(id -u)" = "0" ]; then
   # that actually differ: even a no-op chown changes ctime and would invalidate
   # PrintStash's inode-bound ownership receipts. `find` does not follow symlinks
   # and `chown -h` changes a mismatched symlink itself, never its target.
-  for managed_root in \
-    "${VAULT_DATA_DIR:-/data/files}" \
-    "${VAULT_THUMB_DIR:-/data/thumbs}" \
-    "${VAULT_STAGING_DIR:-/data/staging}" \
-    "${VAULT_BACKUP_DIR:-/data/backups}" \
-    /data/db
-  do
+  #
+  # The root pass prunes the four directories that may be separate mounts, so
+  # the loop walks each exactly once: `-xdev` stops at a mount point, and a
+  # directory on the root's own mount would otherwise be walked twice.
+  find "$data_root" -xdev \
+    \( -path "$files_dir" -o -path "$thumb_dir" \
+       -o -path "$staging_dir" -o -path "$backup_dir" \) -prune \
+    -o \( ! -uid "$PUID" -o ! -gid "$PGID" \) \
+    -exec chown -h "$requested_identity" {} +
+  for managed_root in "$files_dir" "$thumb_dir" "$staging_dir" "$backup_dir"; do
     find "$managed_root" -xdev \
       \( ! -uid "$PUID" -o ! -gid "$PGID" \) \
       -exec chown -h "$requested_identity" {} +

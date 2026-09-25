@@ -21,10 +21,7 @@ Backend:
 cd backend
 uv sync --extra dev
 
-VAULT_DB_URL=sqlite:///./dev.sqlite \
-VAULT_DATA_DIR=./_data/files \
-VAULT_THUMB_DIR=./_data/thumbs \
-uv run uvicorn app.main:app --reload
+VAULT_DATA_ROOT=./_data uv run uvicorn app.main:app --reload
 ```
 
 Frontend:

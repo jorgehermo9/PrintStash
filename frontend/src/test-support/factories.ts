@@ -183,6 +183,7 @@ export function aCollection(override?: Partial<CollectionRead>): CollectionRead 
     model_count: 2,
     effective_role: "admin",
     tags: [],
+    has_readme: false,
     ...override,
   };
 }

@@ -17,12 +17,11 @@ from sqlalchemy.pool import NullPool, StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 # Settings() (app.core.config) reads VAULT_* env vars once at import time, so
-# these must land before that import. Local dev shells export their own
-# VAULT_DATA_DIR/VAULT_DB_URL (relative, resolve fine anywhere) — setdefault
-# leaves those alone. Without them (CI, a bare shell) the frozen defaults are
-# absolute container paths (/data/...), which a non-root process can't create,
-# breaking real-storage and real-lifespan tests. `_data/` and `*.sqlite` are
-# gitignored, so this needs no cleanup.
+# the suite's data root must land before that import. Every app path derives
+# from it, so the suite owns its whole layout: a developer shell's own root or
+# per-directory override would otherwise point tests at real data. Without it
+# the frozen default is the container path /data, which a non-root process
+# can't create. `_data/` is gitignored, so this needs no cleanup.
 _xdist_worker = os.environ.get("PYTEST_XDIST_WORKER")
 _xdist_run_uid = os.environ.get("PYTEST_XDIST_TESTRUNUID")
 _TEST_STORAGE_ROOT = Path(__file__).parent / "_data"
@@ -32,29 +31,20 @@ if _xdist_worker:
     # two concurrent pytest sessions both have a gw0, gw1, etc.
     _xdist_namespace = f"{_xdist_run_uid or 'xdist'}-{_xdist_worker}"
     _TEST_STORAGE_ROOT /= _xdist_namespace
-for _var, _path in (
-    ("VAULT_DATA_DIR", _TEST_STORAGE_ROOT / "files"),
-    ("VAULT_THUMB_DIR", _TEST_STORAGE_ROOT / "thumbs"),
-    ("VAULT_STAGING_DIR", _TEST_STORAGE_ROOT / "staging"),
-    ("VAULT_BACKUP_DIR", _TEST_STORAGE_ROOT / "backups"),
+os.environ["VAULT_DATA_ROOT"] = str(_TEST_STORAGE_ROOT)
+for _override in (
+    "VAULT_DATA_DIR",
+    "VAULT_THUMB_DIR",
+    "VAULT_STAGING_DIR",
+    "VAULT_BACKUP_DIR",
+    "VAULT_ARTIFACT_CACHE_ROOT",
+    "VAULT_EMBEDDING_CACHE_DIR",
+    "VAULT_SECRETS_KEY_FILE",
+    "VAULT_DB_URL",
 ):
-    if _xdist_worker:
-        # The xdist controller imports this conftest first, so workers inherit
-        # its serial path. Worker processes must replace that test-owned value.
-        os.environ[_var] = str(_path)
-    else:
-        os.environ.setdefault(_var, str(_path))
-    _path.mkdir(parents=True, exist_ok=True)
-_db_dir = _TEST_STORAGE_ROOT / "db"
-_db_dir.mkdir(parents=True, exist_ok=True)
-_test_db_url = f"sqlite:///{_db_dir / 'printstash.sqlite'}"
-_test_secrets_key_file = str(_db_dir / ".printstash-secrets-key")
-if _xdist_worker:
-    os.environ["VAULT_DB_URL"] = _test_db_url
-    os.environ["VAULT_SECRETS_KEY_FILE"] = _test_secrets_key_file
-else:
-    os.environ.setdefault("VAULT_DB_URL", _test_db_url)
-    os.environ.setdefault("VAULT_SECRETS_KEY_FILE", _test_secrets_key_file)
+    os.environ.pop(_override, None)
+for _directory in ("files", "thumbs", "staging", "backups", "db"):
+    (_TEST_STORAGE_ROOT / _directory).mkdir(parents=True, exist_ok=True)
 
 from app.core.config import _overlay, settings  # noqa: E402
 from app.db.session import (  # noqa: E402

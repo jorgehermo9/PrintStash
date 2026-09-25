@@ -719,8 +719,12 @@ def _env_or_default(field_name: str) -> object:
     """Return the effective env-var value for *field_name* or its model default."""
     import os
 
-    from app.core.config import Settings
+    from app.core.config import DATA_ROOT_LAYOUT, Settings
 
+    if field_name in DATA_ROOT_LAYOUT:
+        # Already resolved from VAULT_DATA_ROOT and any per-directory
+        # override, where an empty override also means the layout default.
+        return getattr(settings.frozen, field_name)
     env_key = f"VAULT_{field_name.upper()}"
     env_val = os.environ.get(env_key)
     if env_val is not None:

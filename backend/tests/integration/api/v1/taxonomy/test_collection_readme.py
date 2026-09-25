@@ -142,3 +142,69 @@ class TestCollectionReadme:
             ).status_code
             == 404
         )
+
+
+class TestHasReadme:
+    """`CollectionRead.has_readme` lets a folder view skip the readme request.
+
+    Most folders have no readme, so the flag decides whether opening one costs a
+    round-trip. A stale `False` hides a readme; a stale `True` costs a request.
+    """
+
+    @staticmethod
+    def _listed(
+        client: TestClient, headers: dict[str, str], collection_id: int
+    ) -> dict:
+        rows = client.get("/api/v1/collections", headers=headers).json()
+        return next(row for row in rows if row["id"] == collection_id)
+
+    def test_the_list_flags_a_collection_with_a_readme(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        collection, headers = _editable_collection(db_session, tmp_path)
+        client.put(
+            f"/api/v1/collections/{collection.id}/readme",
+            json={"readme": "# Notes"},
+            headers=headers,
+        )
+
+        assert self._listed(client, headers, collection.id)["has_readme"] is True
+
+    def test_the_list_leaves_a_collection_without_one_unflagged(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        collection, headers = _editable_collection(db_session, tmp_path)
+
+        assert self._listed(client, headers, collection.id)["has_readme"] is False
+
+    def test_emptying_the_readme_clears_the_flag(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        collection, headers = _editable_collection(db_session, tmp_path)
+        url = f"/api/v1/collections/{collection.id}/readme"
+        client.put(url, json={"readme": "# Notes"}, headers=headers)
+
+        client.put(url, json={"readme": ""}, headers=headers)
+
+        assert self._listed(client, headers, collection.id)["has_readme"] is False
+
+    def test_a_single_collection_read_carries_the_flag(
+        self, db_session: Session, client: TestClient, tmp_path: Path
+    ) -> None:
+        # Rename answers with one CollectionRead built outside the list query.
+        collection, _ = _editable_collection(db_session, tmp_path)
+        admin = build_user(db_session, "admin", superuser=True)
+        client.put(
+            f"/api/v1/collections/{collection.id}/readme",
+            json={"readme": "# Notes"},
+            headers=bearer(admin),
+        )
+
+        renamed = client.patch(
+            f"/api/v1/collections/{collection.id}",
+            json={"name": "Shelf brackets"},
+            headers=bearer(admin),
+        )
+
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["has_readme"] is True

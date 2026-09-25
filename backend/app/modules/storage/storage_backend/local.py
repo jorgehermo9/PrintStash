@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -11,7 +12,7 @@ import tempfile
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import BinaryIO, Callable, Iterator
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -36,6 +37,47 @@ from .contracts import (
 from .io import _copy_stream_create_only, _fsync_directory
 
 logger = get_logger(__name__)
+
+# link(2) cannot place the staged file, but a copy can: the destination is on
+# another mount, the filesystem has no hard links, or the inode is at its limit.
+_LINK_UNAVAILABLE = frozenset(
+    {errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK}
+)
+
+
+def _open_linkable(src: Path) -> int | None:
+    """Open a staged regular file for linking and make it private.
+
+    The caller holds the descriptor until the link is verified: an open inode
+    cannot be freed, so its number cannot be handed to a file swapped in at the
+    staged path (ext4 reuses a freed number at once, which would let an
+    inode-number comparison accept the swap). A linked object keeps its inode's
+    mode while a copied or created one is published 0600, so the inode is
+    narrowed first. ``None`` (a symlink, a missing file, one this process cannot
+    re-mode) leaves the copy path.
+    """
+    try:
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        if stat_module.S_ISREG(os.fstat(fd).st_mode):
+            os.fchmod(fd, 0o600)
+            return fd
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
+def _withdraw_link(
+    parent_fd: int, name: str, expected: os.stat_result, dest: Path
+) -> None:
+    """Remove a name this publication just linked, only while it is still ours."""
+    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+        raise StorageCollisionError(str(dest))
+    os.unlink(name, dir_fd=parent_fd)
 
 
 class LocalStorageBackend(StorageBackend):
@@ -840,6 +882,132 @@ class LocalStorageBackend(StorageBackend):
                     "storage create temp cleanup failed", extra={"path": str(temp)}
                 )
 
+    def move_in(self, src: Path, dest_key: str) -> CreationReceipt:
+        """Publish a staged file by hard link, copying only when no link is possible.
+
+        When staging shares the destination's mount, link(2) turns the staged
+        inode into the vault object: atomic, create-only and O(1) whatever the
+        file's size, with no second copy on disk even briefly. Another mount
+        (EXDEV), a filesystem without hard links, or a staged path that is not
+        a regular file takes the generic stream copy instead.
+        """
+        if (
+            self.direct_path(dest_key) is None
+            or not self.capabilities.conditional_create
+        ):
+            return super().move_in(src, dest_key)
+        dest = Path(dest_key)
+        self._assert_root_binding_for(dest)
+        staged_fd = _open_linkable(src)
+        if staged_fd is not None:
+            try:
+                receipt = self._link_in(src, os.fstat(staged_fd), dest)
+            finally:
+                os.close(staged_fd)
+            if receipt is not None:
+                return receipt
+        # The copy path also reports a missing staged file precisely.
+        return super().move_in(src, dest_key)
+
+    def _link_in(
+        self, src: Path, staged: os.stat_result, dest: Path
+    ) -> CreationReceipt | None:
+        pinned = self._open_pinned_parent(dest)
+        if pinned is not None:
+            root_fd, parent_fd, dest_name, root, role = pinned
+
+            def revalidate() -> None:
+                self._assert_pinned_root_current(root_fd, root)
+                if role == "external":
+                    self._assert_external_binding_pinned(root_fd, root)
+                elif not self._bind_root(role, root):
+                    raise StorageConfigurationError("storage_root_changed")
+
+        else:
+            # Backup archives and other unmanaged local destinations have no
+            # enrolled root to pin; the binding check is a no-op outside one.
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            root_fd = None
+            parent_fd = os.open(
+                dest.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            )
+            dest_name = dest.name
+
+            def revalidate() -> None:
+                self._assert_root_binding_for(dest)
+
+        try:
+            return self._link_staged(
+                src, staged, dest, parent_fd, dest_name, revalidate
+            )
+        finally:
+            os.close(parent_fd)
+            if root_fd is not None:
+                os.close(root_fd)
+
+    def _link_staged(
+        self,
+        src: Path,
+        staged: os.stat_result,
+        dest: Path,
+        parent_fd: int,
+        dest_name: str,
+        revalidate: Callable[[], None],
+    ) -> CreationReceipt | None:
+        try:
+            os.link(src, dest_name, dst_dir_fd=parent_fd, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise StorageCollisionError(str(dest)) from exc
+        except OSError as exc:
+            if exc.errno in _LINK_UNAVAILABLE:
+                return None
+            raise
+        linked = os.stat(dest_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat_module.S_ISREG(linked.st_mode) or (
+            linked.st_dev,
+            linked.st_ino,
+        ) != (staged.st_dev, staged.st_ino):
+            # The staged path was replaced after it was inspected, so the new
+            # name holds an inode nobody hashed. Withdraw it and copy instead.
+            _withdraw_link(parent_fd, dest_name, linked, dest)
+            return None
+        # A root replaced during link(2) fails here while the staged name still
+        # holds the bytes, so the import stays retryable.
+        revalidate()
+        try:
+            os.unlink(src)
+        except OSError:
+            # A surviving staged name would alias the vault object: writing
+            # through it would change library bytes, and removing it later
+            # would change the ctime this receipt proves. Publish an
+            # independent inode instead.
+            _withdraw_link(parent_fd, dest_name, linked, dest)
+            logger.warning(
+                "staged file could not be released after linking; publishing by copy",
+                extra={"source": str(src), "destination": str(dest)},
+            )
+            return None
+        os.fsync(parent_fd)
+        try:
+            _fsync_directory(src.parent)
+        except OSError:
+            logger.warning(
+                "staging directory fsync failed after publication",
+                extra={"source": str(src)},
+            )
+        published = os.stat(dest_name, dir_fd=parent_fd, follow_symlinks=False)
+        return CreationReceipt(
+            key=str(dest),
+            size=published.st_size,
+            token=uuid.uuid4().hex,
+            backend="local",
+            namespace=self._owned_namespace(dest)
+            or f"external:{dest.parent.resolve(strict=False)}",
+            device=published.st_dev,
+            inode=published.st_ino,
+            ctime_ns=published.st_ctime_ns,
+        )
+
     def _quarantine_owned(self, receipt: CreationReceipt) -> Path | None:
         """Move the current exact inode aside before any unlink or replacement.
 
@@ -1153,13 +1321,45 @@ class LocalStorageBackend(StorageBackend):
             namespace_ownership=True,
             direct_path=True,
         )
+        staged_hardlink = self._probe_staged_hardlink()
+        if not staged_hardlink:
+            logger.warning(
+                "imports copy every staged file: staging (%s) cannot hard-link "
+                "into the library (%s). Keep both on one mount, the single "
+                "VAULT_DATA_ROOT volume, to publish imports without copying.",
+                settings.staging_dir,
+                self.data_dir,
+            )
         self._probe_diagnostics = {
             "probed": True,
             "roots_ready": True,
             "directory_fsync": directory_fsync,
+            "staged_hardlink": staged_hardlink,
             "root_bindings": self._root_binding_diagnostics,
             "roots": [root.as_dict() for root in roots],
         }
+
+    def _probe_staged_hardlink(self) -> bool:
+        """Whether ``move_in`` can publish a staged file without copying it."""
+        staging = Path(settings.staging_dir).expanduser()
+        try:
+            staging.mkdir(parents=True, exist_ok=True)
+            fd, source_name = tempfile.mkstemp(
+                prefix=".printstash-staged-link-probe-", dir=staging
+            )
+        except OSError:
+            return False
+        os.close(fd)
+        source = Path(source_name)
+        target = Path(self.data_dir) / f"{source.name}.link"
+        try:
+            os.link(source, target, follow_symlinks=False)
+            return True
+        except OSError:
+            return False
+        finally:
+            target.unlink(missing_ok=True)
+            source.unlink(missing_ok=True)
 
     @guarded_storage_destruction
     def delete(self, key: str) -> None:

@@ -15,6 +15,7 @@ from pathlib import Path
 import uvicorn
 from sqlmodel import SQLModel
 
+from app.core.config import ensure_dirs
 from app.db.session import get_session_factory
 from app.main import app
 from app.modules.identity.auth import create_access_token
@@ -30,6 +31,9 @@ FILENAME = "Piñón 🦾.stl"
 def main() -> None:
     root = Path(os.environ["PLAYWRIGHT_DELIVERY_DATA_DIR"])
     root.mkdir(parents=True, exist_ok=True)
+    # The schema is built directly below, without migrations or the app's
+    # startup, so prepare the VAULT_DATA_ROOT layout (db/ included) here.
+    ensure_dirs()
     port = int(os.environ.get("PLAYWRIGHT_DELIVERY_API_PORT", "8435"))
     origin = os.environ.get("PLAYWRIGHT_DELIVERY_ORIGIN", "http://127.0.0.1:3335")
     observations = root / "responses.jsonl"

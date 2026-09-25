@@ -1198,7 +1198,7 @@ class PrinterHub:
             maximum = max_mb * 1024 * 1024
             resources = [
                 CapacityResource.for_path(
-                    Path(tempfile.gettempdir()),
+                    settings.staging_dir,
                     maximum,
                     role="printer capture staging",
                 ),
@@ -1207,7 +1207,10 @@ class PrinterHub:
             with CapacityManager(self._session_factory).hold(
                 f"printer-capture:{job_id}", resources
             ):
-                with tempfile.TemporaryDirectory(prefix="printstash-bambu-") as tmp:
+                # Staged beside the library so the capture publishes by hard link.
+                with tempfile.TemporaryDirectory(
+                    prefix="printstash-bambu-", dir=settings.staging_dir
+                ) as tmp:
                     leaf = (
                         Path(unquote(urlparse(remote_path).path)).name or "external.3mf"
                     )

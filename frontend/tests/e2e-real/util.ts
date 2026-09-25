@@ -66,20 +66,20 @@ export async function createBackupViaApi(page: Page): Promise<CreatedBackup> {
 export async function seedExpiredStaging(): Promise<{ itemId: number; path: string }> {
   const backend = resolve("../backend");
   const root = resolve(process.env.PLAYWRIGHT_REAL_DATA_DIR ?? "tests/e2e-real/.data");
+  // The same single root the backend launcher uses, so the seed reaches its
+  // database and staging; per-directory overrides would point elsewhere.
+  const {
+    VAULT_DB_URL: _db,
+    VAULT_DATA_DIR: _files,
+    VAULT_THUMB_DIR: _thumbs,
+    VAULT_STAGING_DIR: _staging,
+    VAULT_BACKUP_DIR: _backups,
+    ...inherited
+  } = process.env;
   const { stdout } = await promisify(execFile)(
     resolve(backend, ".venv/bin/python"),
     ["-m", "tests.fakes.storage_cleanup_seed"],
-    {
-      cwd: backend,
-      env: {
-        ...process.env,
-        VAULT_DB_URL: `sqlite:///${root}/test.sqlite`,
-        VAULT_DATA_DIR: resolve(root, "files"),
-        VAULT_THUMB_DIR: resolve(root, "thumbs"),
-        VAULT_STAGING_DIR: resolve(root, "staging"),
-        VAULT_BACKUP_DIR: resolve(root, "backups"),
-      },
-    },
+    { cwd: backend, env: { ...inherited, VAULT_DATA_ROOT: root } },
   );
   return JSON.parse(stdout);
 }

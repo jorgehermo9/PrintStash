@@ -6,21 +6,32 @@ import { useUiLocale } from "@/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { FileText, Loader2, Pencil } from "lucide-react";
 
-import { getCollectionReadme, setCollectionReadme, uploadCollectionImage } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+
+import { setCollectionReadme, uploadCollectionImage } from "@/lib/api";
 import { invalidateCachedAsset } from "@/lib/asset-cache";
+import { useCollectionReadme } from "@/lib/queries";
+import { queryKeys } from "@/lib/query-client";
 import { MarkdownView } from "@/components/markdown-view";
 import { toast } from "@/lib/toast";
 
 export function CollectionReadme({
   collectionId,
   canEdit,
+  hasReadme,
 }: {
   collectionId: number;
   canEdit: boolean;
+  /** From `CollectionRead.has_readme`; false skips the request entirely. */
+  hasReadme: boolean;
 }) {
   useUiLocale();
-  const [readme, setReadme] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  // Cached per folder, so revisiting one shows its readme with no request. A
+  // readme that cannot be read is treated as absent: the folder is still usable.
+  const readmeQuery = useCollectionReadme(collectionId, { enabled: hasReadme });
+  const readme = readmeQuery.data ?? null;
+  const loading = readmeQuery.isLoading;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -39,26 +50,14 @@ export function CollectionReadme({
     setExpanded(false);
   }, [readme]);
 
-  // Switching collections restarts the fetch, so the loader (and a dropped edit)
-  // belong to the render that first sees the new id — React's "adjust state when
-  // a prop changes", not an effect that repaints the previous readme first.
+  // Switching collections drops an open edit in the render that first sees the
+  // new id — React's "adjust state when a prop changes". The readme itself is
+  // keyed by id in the query cache, so it can never show the previous folder's.
   const [shownCollectionId, setShownCollectionId] = useState(collectionId);
   if (shownCollectionId !== collectionId) {
     setShownCollectionId(collectionId);
-    setLoading(true);
     setEditing(false);
   }
-
-  useEffect(() => {
-    let alive = true;
-    getCollectionReadme(collectionId)
-      .then((r) => alive && setReadme(r.readme))
-      .catch(() => alive && setReadme(null))
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, [collectionId]);
 
   function startEdit() {
     setDraft(readme ?? "");
@@ -70,7 +69,7 @@ export function CollectionReadme({
     try {
       const trimmed = draft.trim();
       const res = await setCollectionReadme(collectionId, trimmed || null);
-      setReadme(res.readme);
+      queryClient.setQueryData<string | null>(queryKeys.collectionReadme(collectionId), res.readme);
       setEditing(false);
     } catch (err) {
       toast.error(err);

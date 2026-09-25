@@ -900,6 +900,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
             model_count: 0,
             effective_role: "admin",
             tags: [],
+            has_readme: false,
           },
           201,
         );
@@ -916,6 +917,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
         model_count: 1,
         effective_role: "admin",
         tags: [],
+        has_readme: false,
       },
     ];
     if (inboxCollectionId !== null) {
@@ -928,6 +930,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
         model_count: 0,
         effective_role: "admin",
         tags: [],
+        has_readme: false,
       });
     }
     sendJson(res, collections);
