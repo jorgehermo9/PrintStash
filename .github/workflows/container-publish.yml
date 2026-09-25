@@ -16,7 +16,7 @@ jobs:
   build:
     name: Build ${{ matrix.image }} (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.image == 'printstash' && 45 || 30 }}
+    timeout-minutes: ${{ startsWith(matrix.image, 'printstash-api') && 60 || matrix.image == 'printstash' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +109,31 @@ jobs:
           build-args: ${{ matrix.build-args }}
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }},mode=max,ignore-error=true
+
+      - name: Install uv for backend image smoke
+        if: startsWith(matrix.image, 'printstash-api')
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python for backend image smoke
+        if: startsWith(matrix.image, 'printstash-api')
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Test backend image before exporting digest
+        if: startsWith(matrix.image, 'printstash-api')
+        working-directory: backend
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VARIANT: ${{ matrix.image == 'printstash-api' && 'full' || 'lite' }}
+        run: |
+          uv sync --extra dev --extra full --frozen
+          image="${IMAGE,,}@${DIGEST}"
+          docker pull "$image"
+          ./scripts/test.sh image --image "$image" --variant "$VARIANT"
 
       - name: Normalize unified image name
         if: matrix.image == 'printstash'

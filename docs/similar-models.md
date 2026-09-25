@@ -24,8 +24,7 @@ files.
 Confirmation is a recorded judgment, not a file operation. A matching component
 or a plate can also create a Multipart Model or add parts to an existing
 editable Multipart Model. Existing part choices and quantities are preserved;
-conflicting names or repeated choices must be resolved explicitly. Family
-creation is unavailable until the separate Family owner is integrated.
+conflicting names or repeated choices must be resolved explicitly.
 
 ## Understand the evidence
 

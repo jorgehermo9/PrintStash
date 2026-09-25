@@ -47,7 +47,6 @@ def status(session: Session, actor: User) -> dict:
         "embeddings_enabled": config.embeddings_enabled,
         "algorithm_version": ALGORITHM_VERSION,
         "capabilities": {
-            "family_resolution": False,
             "multipart_resolution": True,
             "step": importlib.util.find_spec("OCP") is not None,
             **embedding_capabilities,

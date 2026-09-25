@@ -223,6 +223,10 @@ it as the highest-yield target in the frontend, not the smallest.
 ```bash
 cd frontend
 pnpm lint && pnpm format:check && pnpm typecheck
-pnpm test                      # root + @printstash/ui + @printstash/domain
-pnpm coverage                  # two-sided floors in scripts/coverage-gate.mjs
+pnpm exec vitest run <affected-test-paths>
 ```
+
+Select the files by the changed behavior using [running tests](../running-tests.md).
+CI runs `pnpm test` and `pnpm coverage` across the app and workspace packages;
+use those full commands locally for release validation, an explicit request,
+or work on the suite or coverage floors.

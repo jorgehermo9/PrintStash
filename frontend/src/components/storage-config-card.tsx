@@ -1,6 +1,6 @@
 "use client";
 
-import { uiText } from "@/lib/locale";
+import { knownUiText, uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 
 import { providerFormError } from "@/lib/storage-provider-form";
@@ -121,7 +121,7 @@ export function StorageConfigCard({
         <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b border-border">
             <h3 className="text-sm font-semibold text-foreground">
-              {uiText("Storage configuration")}
+              {t("settings.currentStorage")}
             </h3>
           </div>
           <div className="p-3 sm:p-4 lg:p-6 text-sm text-muted-foreground">
@@ -179,7 +179,7 @@ export function StorageConfigCard({
         <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b border-border flex items-center justify-between gap-2">
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">
-              {uiText("Storage configuration")}
+              {t("settings.currentStorage")}
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               {t("settings.storageConfigDescription")}
@@ -269,7 +269,24 @@ export function StorageConfigCard({
           {migrationManaged ? (
             <div className="space-y-4">
               {currentProvider && (
-                <StorageProviderSummary provider={currentProvider} activeTier={cfg?.storage_tier} />
+                <>
+                  <p className="text-sm font-medium">
+                    {t("settings.storageCurrentLocation", {
+                      location: knownUiText(currentProvider.label),
+                    })}
+                  </p>
+                  <details className="text-sm">
+                    <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      {t("settings.storageConnectionDetails")}
+                    </summary>
+                    <div className="mt-3">
+                      <StorageProviderSummary
+                        provider={currentProvider}
+                        activeTier={cfg?.storage_tier}
+                      />
+                    </div>
+                  </details>
+                </>
               )}
               <p className="text-xs text-muted-foreground">{t("migration.changeHelp")}</p>
               <dl className="grid gap-2 text-xs sm:grid-cols-2">

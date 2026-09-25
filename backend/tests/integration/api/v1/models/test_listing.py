@@ -29,6 +29,13 @@ PRINTER_FILTERS = [
 ]
 
 
+class TestRemovedGroupingRoute:
+    def test_is_unavailable(self, client: TestClient, auth_headers) -> None:
+        response = client.get("/api/v1/families", headers=auth_headers)
+
+        assert response.status_code == 404
+
+
 @pytest.fixture
 def make_model(db_session: Session):
     made = {"n": 0}
@@ -47,6 +54,15 @@ def make_model(db_session: Session):
 
 
 class TestListModels:
+    @pytest.mark.parametrize("query", ["family_id=1", "browse=families_collapsed"])
+    def test_rejects_retired_group_queries(
+        self, client: TestClient, auth_headers, query: str
+    ) -> None:
+        response = client.get(f"/api/v1/models?{query}", headers=auth_headers)
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == "model_filters_invalid"
+
     def test_lists_the_library(
         self, client: TestClient, auth_headers, make_model
     ) -> None:

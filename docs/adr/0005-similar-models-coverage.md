@@ -1,6 +1,6 @@
 # Similar Models — implementation coverage
 
-Tracking the complete independent [#154 plan](https://github.com/xiao-villamor/PrintStash/issues/154#issuecomment-5622781316). Geometry, durable review, components, STEP, local ONNX, and UI are implemented on this branch. This matrix records the implemented assertions for the standalone scope; final suite and security results are attached to the pull request. Family integration remains conditional on its separate owner. This document describes unreleased development work.
+Tracking the complete independent [#154 plan](https://github.com/xiao-villamor/PrintStash/issues/154#issuecomment-5622781316). Geometry, durable review, components, STEP, local ONNX, and UI are implemented on this branch. This matrix records the implemented assertions for the standalone scope; final suite and security results are attached to the pull request. This document describes unreleased development work.
 
 ## Coverage matrix
 
@@ -39,8 +39,7 @@ These rows record the initial fingerprint contract; the full-plan matrix below t
 
 ## Full-plan tracking
 
-The independent public plan was updated on 2026-09-10. Conditional C-FAMILY
-integration is separate from the independent release gates below.
+The independent public plan was updated on 2026-09-10.
 
 ✅ names an implemented assertion with a passing focused run; ❌ remains incomplete or awaits the specified verification; ⏭️ is an explicitly conditional integration, excluded from standalone completion. Final complete-suite and CI results are recorded separately. Paths below are repository-relative.
 
@@ -106,20 +105,9 @@ integration is separate from the independent release gates below.
 | S058 | protects_content_during_gc | Edge | GC concurrente con lectura | Contenido no desaparece mientras lease vigente | Integration | ✅ `backend/tests/integration/runtime/test_similarity.py::TestSimilarityRuntime::test_retains_storage_while_worker_executes` |
 | S059 | discards_stale_worker_publication | Edge | Source cambia tras claim | Resultado viejo no marca fuente current | Integration | ✅ `backend/tests/integration/modules/similarity/test_fingerprints.py::TestFingerprintLeases::test_discards_publication_after_source_change` |
 | S060 | invalidates_candidates_on_source_lifecycle | Edge | Edit/trash/tombstone/purge parametrizados | freshness stale con razón correcta | Integration | ✅ `backend/tests/integration/modules/similarity/candidates/test_publication.py::TestPublication::test_source_lifecycle_preserves_confirmed_evidence` |
-| S061 | preserves_confirmed_relationship_when_stale | Edge | C-FAMILY: Fuente confirmada cambia | Family/Multipart y decisión conservadas | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
 | S062 | suppresses_rejected_pair_for_same_algorithm | Edge | Rerun/threshold/Space nuevo mismo algoritmo | Par rechazado no reaparece abierto | Integration | ✅ `backend/tests/integration/modules/similarity/candidates/test_publication.py::TestPublication::test_rejected_pair_stays_rejected_for_same_algorithm` |
 | S063 | labels_reconsidered_pair_on_new_algorithm | Edge | Algoritmo cambia | Nueva propuesta enlaza decisión anterior | Integration | ✅ `backend/tests/integration/modules/similarity/candidates/test_publication.py::TestPublication::test_new_algorithm_links_preceding_decision` |
-| S064 | confirms_family_atomically | Happy | C-FAMILY: Par sin Family y roles elegidos | Relación y decisión en un commit | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S065 | extends_existing_family | Happy | C-FAMILY: Solo un Model agrupado | Otro miembro añadido por owner #155 | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S066 | replays_candidate_confirmation | Edge | C-FAMILY: Mismo request id repetido | Sin segunda Family/Member/decisión | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S067 | rejects_conflicting_existing_families | Error | C-FAMILY: Models en Families distintas | 409; no merge automático | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S068 | rolls_back_failed_confirmation | Error | C-FAMILY: Falla auditoría o permiso | Sin relación o decisión parcial | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S069 | routes_composition_to_multipart | Happy | component_of/plate_of confirmado | Choices/cantidades creadas; no Family | Integration | ✅ `backend/tests/integration/modules/similarity/test_review.py::TestReview::test_preserves_existing_multipart_choices` |
-| S070 | rejects_stale_bulk_confirmation | Error | C-FAMILY: Candidate se invalida tras preview | Lote no aplicado | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S071 | restricts_bulk_to_verified_exact | Error | C-FAMILY: Remesh/0.999/partial seleccionado | Bulk denegado | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S072 | avoids_transitive_bulk_grouping | Edge | C-FAMILY: A-B y B-C sin evidencia A-C suficiente | No agrupación implícita fuera del preview | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
 | S073 | hides_candidates_without_edit_on_both | Error | Usuario no edita un extremo | Par y contadores ausentes | Integration | ✅ `backend/tests/integration/modules/similarity/test_review.py::TestReview::test_requires_edit_on_both_endpoints` |
-| S074 | rechecks_family_permissions_at_confirm | Error | C-FAMILY: Hermano oculto sin EDIT en destino | Confirm rechazado sin efectos | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
 | S075 | sanitizes_run_failures | Error | Error con path/filename/secret | No información sensible en logs/status | Integration | ✅ `backend/tests/integration/runtime/test_similarity.py::TestSimilarityRuntime::test_reports_worker_failure_without_paths` |
 | S076 | keeps_ingest_success_when_fingerprint_fails | Error | Derivative falla después de primary persist | Upload exitoso y fingerprint_status failed | Integration | ✅ `backend/tests/integration/modules/similarity/test_ingestion.py::TestIngestDerivative::test_persists_failed_derivative_without_starting_run` |
 | S077 | serves_progressive_find_similar | Happy | Cached verified más faltantes | Respuesta inicial útil y job bounded | Integration | ✅ `backend/tests/integration/modules/similarity/test_service.py::TestQueryModel::test_returns_cached_evidence_before_analysis` |
@@ -136,15 +124,9 @@ integration is separate from the independent release gates below.
 | S088 | disables_learned_leg_without_disabling_geometry | Edge | AI off o lite sin ONNX | T0-T3 siguen funcionales | Integration | ✅ `backend/tests/integration/modules/similarity/test_embeddings.py::TestEmbeddingRun::test_unavailable_embeddings_leave_geometry_enabled` |
 | S089 | runs_optional_onnx_cpu_adapter | Happy | Model preplaced amd64/arm64 | Vectores compatibles con Space; lane opt-in | Integration | ✅ `backend/tests/integration/modules/inference/preplaced_clip.py::TestPreplacedClip::test_runs_compatible_native_towers` — native amd64 and arm64 passed |
 | S090 | enforces_remote_modality_consent | Error | Integración opcional: proveedor remoto disponible sin consentimiento visual | No egress de renders ni geometría | Integration | ⏭️ Conditional integration; unavailable in this standalone feature |
-| S091 | preserves_three_variants_after_family_review | Happy | C-FAMILY: resolver real disponible; tres uploads/revisions y confirmación | Family creada; cada Model y Revision intactos | Playwright | ⏭️ Conditional integration; unavailable in this standalone feature |
 | S092 | localizes_similarity_states | Edge | en/es; partial/stale/unsupported/empty | Mensajes traducidos y accesibles | Frontend unit | ✅ `frontend/src/components/__tests__/similarity-settings-panel.test.tsx::Localized analysis outcomes + similarity-queue.test.tsx::Spanish review states + frontend/src/lib/__tests__/similarity.test.ts` |
-| S093 | delivers_similarity_without_related_features | Happy | Standalone build without Family | Upload, find, compare, confirm, reload; each Model and Artifact hash preserved | Playwright | ✅ `frontend/tests/e2e-real/similarity.spec.ts` (real backend) |
-| S094 | confirms_evidence_without_creating_relationship | Happy | Candidato fresco y editable; resolver Family ausente | review_state confirmed con resolution_kind evidence_only y auditoría; ninguna agrupación creada | Integration | ✅ `backend/tests/integration/modules/similarity/test_review.py::TestReview::test_confirms_evidence_without_family` |
-| S095 | refuses_family_action_when_resolver_absent | Error | confirm_family directo sin capability | 409 family_resolution_unavailable sin cambios; UI no ofrece acción | Integration | ✅ `backend/tests/integration/modules/similarity/test_review.py::TestReview::test_refuses_family_without_resolver` |
 | S096 | queries_local_clip_without_ai_search | Happy | Full con modelo CLIP preplaced y sin buscador híbrido | Consulta text-to-shape devuelve vecinos autorizados por la ruta local | Integration | ✅ `backend/tests/integration/modules/inference/preplaced_clip.py::TestPreplacedClip::test_queries_text_through_standalone_index` |
 | S097 | preserves_minimal_vectors_for_platform_adoption | Edge | Space/Generation/vectores locales creados según §3.1 | Identidad de unidad y BLOBs sobreviven la ampliación de esquema sin re-embedding | Integration | ✅ `backend/tests/integration/modules/similarity/test_vector_sources.py::TestGenerationLifecycle::test_adopts_persisted_native_vectors_through_shared_contract` |
-| S098 | migrates_without_family_tables | Happy | SQLite/PostgreSQL con Model/Artifact pero sin Family | Upgrade/downgrade válido sin FK a tabla ausente ni DDL dependiente de instalación | Integration | ✅ `backend/tests/integration/db/migrations/test_similarity.py::TestSimilarityMigration::test_preserves_existing_postgres_library` |
-| S099 | preserves_stale_evidence_only_confirmation | Edge | Source hash cambia tras confirm_evidence | Decisión humana conservada; freshness stale; ninguna Family ficticia | Integration | ✅ `backend/tests/integration/modules/similarity/candidates/test_publication.py::TestPublication::test_source_lifecycle_preserves_confirmed_evidence` |
 
 Frontend acceptance details (the S081–S090 rows above are refined here):
 

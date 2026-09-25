@@ -76,7 +76,6 @@ quality evaluation; implementation alone does not mark them complete.
 | A065 | runs captions with natural-language parsing disabled | Edge | one generative use on, the other off | Caption generado sin invocar parsing de consultas | Integration | ✅ `integration/modules/search/test_captions.py::TestCaptions::test_keeps_generated_text_separate_from_human_description` |
 | A066 | honours a per-user opt-out of query parsing | Error | user preference off, instance on | no parse for that user; others unaffected | Integration | ✅ `integration/modules/search/test_parsing.py::TestParse::test_requires_both_optins_before_egress[user]; TestPreferences::test_keeps_personal_preferences_isolated` |
 | A067 | retains_all_four_subject_types | Happy | Model/Collection/Multipart/Document | Resultados discriminados y autorizados por owner | E2E | ✅ `e2e/test_search_independence.py::TestSearchIndependence::test_runs_without_related_feature_packages` |
-| A068 | indexes_every_model_context_field | Happy | Nombre/desc/tags/path/files/Revision/provenance; contexto opcional solo si está registrado | Passage contiene field list completa y autorizada de su receta, sin requerir Family | Integration | ✅ `integration/modules/search/test_sources.py::TestProjectSubject` (fields, inherited tags, Revision notes and effective provenance); independent optional-package installation in A142 |
 | A069 | indexes_binary_document_metadata_only | Edge | PDF con body no extraído | Search encuentra nombre/filename, no promete texto completo | Integration | ✅ `integration/modules/search/test_sources.py::TestProjectSubject::test_indexes_only_binary_document_metadata` |
 | A070 | repairs_ancestor_context_changes | Edge | Rename/move Collection sin tocar Model.updated_at | Passages descendientes corregidos por watermark | Integration | ✅ `integration/modules/search/test_reconciliation.py::TestReconciliation::test_repairs_ancestor_context_without_touching_model_timestamp` — public rename and move with notification disconnected, then bounded repair |
 | A071 | repairs_deleted_contributor_links | Edge | Borrado de relación sin seam | Sweep elimina contribución obsoleta | Integration | ✅ `integration/modules/search/test_projection.py::TestContentProjection::test_refreshes_removed_relationships` |
@@ -150,7 +149,6 @@ quality evaluation; implementation alone does not mark them complete.
 | A139 | roundtrips_search_schema_with_existing_data | Happy | Upgrade/downgrade/upgrade; SQLite/PostgreSQL poblados | Tablas/config nuevas reversibles; datos previos conservados | Integration | ✅ `integration/db/migrations/test_search_schema_migration.py::TestSearchSchemaMigration::test_roundtrips_populated_library` — real SQLite and PostgreSQL, four Subjects and settings |
 | A140 | switches_visual_profile_independently | Happy | Text active mientras se cambia perfil visual | Text Generation intacta; visual flip propio | Integration | ✅ `integration/modules/search/test_visual_index.py::TestVisualIndex::test_visual_cutover_leaves_active_text_generation_unchanged` |
 | A141 | measures_profile_rung_quality_gain | Happy | Mismo held-out corpus y modelo por recipe | Cada rung ofrecido mejora métrica sobre anterior; salida S1 documentada | Integration | ❌ measured limitation — frozen text-query recall@10: thumbnail 0.84375, matte 0.875, multiview mean 0.75; the real photo improves with multiview, but this does not establish improvement at every rung |
-| A142 | delivers_search_without_related_features | Happy | Main con esta PR; modules similarity y families ausentes | Migración, upload, búsqueda y swap funcionan con los cuatro Subject types propios | E2E | ✅ `e2e/test_search_independence.py::TestSearchIndependence::test_runs_without_related_feature_packages[similarity-families]` |
 
 `critical-capabilities.json` gains `ai-search-model-swap-no-downtime` (row 52), `ai-search-retrieval-quality` (rows 50–51) and `ai-search-disabled-degradation` (rows 11 and 20). Coverage floors are raised for both new modules in the same PR, per the two-sided floor rule.
 
@@ -734,12 +732,11 @@ no claim about caption quality from an actual language model.
 | IC006 | rejects incompatible units before persistence | Error | Wrong dimension, invalid key/kind/hash | No vector written | Integration | ✅ `integration/modules/search/test_vector_store.py::TestVectorStore::test_rejects_invalid_consumer_units` |
 | IC007 | declares configured and unavailable inference capability | Edge | Missing configuration, then preplaced validated local model | Explicit unavailable error; validated native provider when configured | Integration | ✅ `integration/modules/inference/test_local.py::TestLocalProvider::test_reports_configured_capability` |
 | IC008 | keeps existing Similar Models bytes and identities compatible | Happy | Existing v1 rows migrate and consumer resumes | Exact IDs, keys, hashes and BLOBs; no re-embedding for compatible rows | Integration | ✅ `integration/db/migrations/test_search_vectors_migration.py::TestSearchVectorsMigration::test_preserves_legacy_vectors_on_upgrade; integration/modules/similarity/test_vector_sources.py` |
-| IC009 | preserves manual library work without inference installed | Edge | Packages physically removed | App boots; Families work; model-query shortcut reports unavailable | E2E | ✅ `e2e/test_family_independence.py::TestFamilyIndependence::test_manual_family_flow_without_related_feature_packages` |
 
 W12 evidence: independent-consumer/provider/adoption regression suite 49 passed;
 PostgreSQL nullable-owner regression passed after reproducing the failure;
 optional-install and OpenAPI checks 5 passed, followed by the final optional
-assembly/Family run (5 passed). Shared-store adoption validates every mirrored
+assembly run (5 passed). Shared-store adoption validates every mirrored
 immutable Space field before reusing an active generation.
 
 ### W15 — print-history predicates and editable natural-language filters
@@ -936,8 +933,6 @@ caused timeout failures, so the complete frontend lane remains to be rerun.
 
 | # | Behaviour (test name) | Category | Precondition / input | Observable outcome asserted | Tier | Status |
 |---|----------------------|----------|----------------------|-----------------------------|------|--------|
-| AF001 | omits Family annotations when unavailable | Edge | Families package absent | no Family routes or annotations; ordinary Model remains usable | Integration | ✅ `integration/bootstrap/test_optional_features.py::TestOptionalFeatures::test_omits_family_annotations_when_the_package_is_absent` |
-| AF002 | rejects unavailable Family filters | Error | Families provider absent; explicit Family constraint | capability error; query is not broadened | Integration | ✅ `integration/bootstrap/test_optional_features.py::TestOptionalFeatures::test_rejects_family_filters_when_the_provider_is_absent` |
 
 ### SQLite activation under concurrent writes
 
@@ -945,12 +940,7 @@ caused timeout failures, so the complete frontend lane remains to be rerun.
 |---|----------------------|----------|----------------------|-----------------------------|------|--------|
 | CW001 | drains competing SQLite writes before activation verification | Edge | ready replacement; concurrent writer in WAL mode | writer waits through verification; one new active generation commits without a stale-snapshot error | Integration | ✅ `integration/modules/search/generations/test_cutover_concurrency.py::TestCutoverConcurrency::test_drains_competing_writes_before_verifying_activation` |
 
-Final independence/activation evidence: 168 optional-composition and Family API
-checks passed; 22 activation/migration/independence checks passed after the SQLite
-writer-lock repair. Visual/PostgreSQL activation checks passed 29 tests. The final
-independence and parsing run passed 33 tests, including an assertion that no Family
-table is queried during upload, four-Subject Search, and generation replacement.
-Trash/restoration acceptance checks passed 14 tests.
+Final independence and activation evidence is tracked by the active CI suites.
 
 Frontend coverage: all 2,347 app tests passed (82.43% statements, 77.23% branches);
 domain measured 95.54%/93.20%, shared UI 98.78%/97.60%. The three improved app
@@ -987,12 +977,10 @@ CPU execution is also visible to the branch-coverage audit.
 | NP002 | rejects cross-profile sparse envelopes | Error | Sparse identity with dense inputs, dense Space metadata or foreign hash | Stable mismatch before inference output | Integration | ✅ `integration/modules/inference/test_worker.py::TestNativeProtocol::test_rejects_cross_profile_sparse_envelopes` |
 | NP003 | rejects hidden external ONNX tensor data | Error | External initializers or tensor attributes, including nested graphs and sparse tensors | Stable rejection before the runtime can open the referenced path | Unit | ✅ `unit/modules/inference/test_onnx_cpu.py::TestOnnxCpuProvider::test_rejects_hidden_external_tensor_data` |
 
-### Family browsing compatibility
+### Native profile output checks
 
 | # | Behaviour (test name) | Category | Precondition / input | Observable outcome asserted | Tier | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| FB001 | pages collapsed cards without relevance scores | Edge | Relevance requested without a ranking leg; SQLite/PostgreSQL | Date-based cursor yields every card once | Integration | ✅ `integration/postgres/test_families.py::TestFamilyBrowse::test_pages_family_union_on_supported_databases` — relevance cases pass on both databases |
-| FB002 | pages unranked Families by recent change | Edge | Relevance requested, with/without name query; SQLite/PostgreSQL | Newest Family first; next page returns older Family without cursor failure | Integration | ✅ `integration/postgres/test_families.py::TestFamilyBrowse::test_pages_unranked_families_by_recent_change` |
 | NP004 | frames visual worker outputs for every profile | Happy | Original tetrahedron, thumbnail/multiview/point recipes | Complete bounded RGB/point frames decode to expected shapes | Integration | ✅ `integration/modules/media/test_visual_worker.py::TestMain::test_frames_every_visual_profile` |
 | NP005 | refuses oversized visual worker messages | Error | Recipe beyond request cap or reply above configured cap | Nonzero exit with no partial output | Integration | ✅ `integration/modules/media/test_visual_worker.py::TestMain::test_refuses_oversized_messages` |
 | NP006 | sanitizes visual worker failures | Error | Invalid recipe or unsupported source kind | Framed stable error excludes source path and exception detail | Integration | ✅ `integration/modules/media/test_visual_worker.py::TestMain::test_sanitizes_failures` |

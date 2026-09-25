@@ -9,7 +9,22 @@ test" — which it usually does. The two are one workflow; the split is only tha
 this file knows about failure modes, floors and lanes, and never about matrices
 or tiers.
 
-## Run the lanes cheapest-first
+## Choose the smallest useful test scope
+
+For an ordinary frontend change, run the new or changed Vitest files and the
+existing files that cover the affected component or flow. Use
+`pnpm exec vitest run <test paths>` so a file selection stays within the app
+suite; `pnpm test` runs the whole app and both workspace packages. If a shared
+package changed, run that package's affected tests too. Run the relevant
+Playwright spec when browser behavior is the point of the change.
+
+Expand from that set only for a concrete cross-component risk, a failure, or a
+shared seam whose consumers need checking. Choose the next affected files by
+that dependency, then stop once the behavior is verified. CI runs the full
+frontend test and coverage gates for PRs; local full suites are for an explicit
+full-suite request, release validation, or work on the suite or coverage floors.
+
+## Run the selected lanes cheapest-first
 
 A failure found in 8 seconds costs nothing; the same failure found after a
 4-minute full run costs the whole run. So never start with `full`.
@@ -26,14 +41,17 @@ uv run pyright
 ```
 
 ```
-# frontend, in order
-pnpm test -- src/lib/__tests__/thing.test.ts    # seconds
-pnpm test                                        # ~30s
+# frontend, for the affected files and flow
+pnpm exec vitest run src/lib/__tests__/thing.test.ts
 pnpm lint && pnpm format:check && pnpm typecheck
-pnpm coverage                                    # three suites + the gate
-pnpm test:e2e                                    # Playwright, mock API
-pnpm test:e2e:real                               # Playwright, real backend
+pnpm exec playwright test tests/e2e/thing.spec.ts
+pnpm exec playwright test tests/e2e-real/thing.spec.ts --config=playwright.real.config.ts
 ```
+
+Full frontend gates (`pnpm test`, `pnpm coverage`, `pnpm test:e2e`, and
+`pnpm test:e2e:real`) belong to CI, release validation, or an explicit
+full-suite request. A selected Vitest run does not establish the global
+coverage floors; report the focused result by its file and test count.
 
 Two things about the boundaries:
 
@@ -81,6 +99,10 @@ button is *disabled* rather than toasting, `Checkbox` renders
 `role="checkbox"` not `switch`, `formatGrams` renders `800g` not `800 g`.
 
 ## Coverage: the two-sided ratchet
+
+Use this loop when CI reports a floor failure or the task changes coverage
+floors. An ordinary localized UI edit uses its behavior matrix and affected
+tests locally; the PR's CI run supplies the full floor result.
 
 Every floor in this repo fails in **both** directions. Below it is a
 regression. Clear it by more than its slack and the run fails until the floor is

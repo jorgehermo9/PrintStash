@@ -59,6 +59,58 @@ def resolve_or_create_collection(
     return parent
 
 
+def resolve_or_create_mirrored_collection(
+    session: Session, raw_path: str
+) -> Optional[Collection]:
+    """Mirror filesystem segments without merging names that share a slug.
+
+    Collection paths remain URL-safe identities. A filesystem can contain both
+    ``Testing`` and ``testing`` (or ``My Parts`` and ``My-Parts``), so matching
+    those folders by their slug would attach their files to the same row.
+    """
+    segments = [segment for segment in raw_path.split("/") if segment not in ("", ".")]
+    if not segments:
+        return None
+
+    parent: Optional[Collection] = None
+    for name in segments:
+        parent_id = parent.id if parent else None
+        existing = session.exec(
+            select(Collection).where(
+                Collection.parent_id == parent_id, Collection.name == name
+            )
+        ).first()
+        if existing is None:
+            base = slugify(name) or "folder"
+            slug = base
+            suffix = 2
+            while (
+                session.exec(
+                    select(Collection.id).where(
+                        Collection.path == (f"{parent.path}/{slug}" if parent else slug)
+                    )
+                ).first()
+                is not None
+            ):
+                slug = f"{base}-{suffix}"
+                suffix += 1
+            path = f"{parent.path}/{slug}" if parent else slug
+            existing = Collection(name=name, slug=slug, parent_id=parent_id, path=path)
+            session.add(existing)
+            content_changed(session, "collection", (row.id for row in (existing,)))
+            session.commit()
+            session.refresh(existing)
+        elif existing.deleted_at is not None:
+            existing.deleted_at = None
+            existing.deleted_by = None
+            session.add(existing)
+            content_changed(session, "collection", (row.id for row in (existing,)))
+            session.commit()
+            session.refresh(existing)
+        parent = existing
+    return parent
+
+
 def resolve_or_create_collection_in_transaction(
     session: Session, raw_path: str
 ) -> Optional[Collection]:

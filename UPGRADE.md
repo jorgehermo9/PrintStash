@@ -34,6 +34,18 @@ to be installed or configured for the default single-container deployment.
   at once are `VAULT_JOBS_INGEST_CONCURRENCY` (default 2), or Settings →
   Background work.
 
+## Unreleased: Model Family removal
+
+This upgrade removes the Model Families feature and its database tables. Back up
+both the database and managed storage before upgrading if you need to retain
+Family names, roles, comparison measurements, or uploaded covers. The migration
+keeps every Model, Artifact, G-code Revision, print job, Collection, and Multipart
+Model; Family relationship metadata is not restored by a downgrade. Existing
+portable archives remain importable for their Models and Multipart Models, but
+Family entries and views filtered by Family are skipped.
+Uploaded Family cover blobs may remain in managed storage without a live
+reference after the database tables are removed.
+
 ## Unreleased: canonical Artifact downloads
 
 Clients using `/api/v1/files/{id}/download-url` or `download-direct` must use

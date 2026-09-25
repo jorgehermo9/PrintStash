@@ -62,10 +62,6 @@ function modelListSearch(params?: ListModelsParams): URLSearchParams {
   if (params?.has_similar_candidates !== undefined)
     search.set("has_similar_candidates", String(params.has_similar_candidates));
   if (params?.printed !== undefined) search.set("printed", String(params.printed));
-  if (params?.family_id) search.set("family_id", String(params.family_id));
-  if (params?.family_role) search.set("family_role", params.family_role);
-  if (params?.in_family !== undefined) search.set("in_family", String(params.in_family));
-  if (params?.browse) search.set("browse", params.browse);
   if (params?.uploaded_after) search.set("uploaded_after", params.uploaded_after);
   if (params?.uploaded_before) search.set("uploaded_before", params.uploaded_before);
 

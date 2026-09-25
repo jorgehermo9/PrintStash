@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Localized } from "@/components/ui/localized";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { collectionDisplayPath } from "@/lib/collection-display";
 import type { CollectionRead } from "@/types";
 import type { MultipartStructureFilter } from "@/components/multipart-model-browser";
 
@@ -49,7 +50,11 @@ export function MultipartFilterSidebar({
   const visibleCollections = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return [...collections]
-      .filter((collection) => !needle || collection.path.toLocaleLowerCase().includes(needle))
+      .filter(
+        (collection) =>
+          !needle ||
+          collectionDisplayPath(collections, collection.path)?.toLocaleLowerCase().includes(needle),
+      )
       .sort((a, b) => a.path.localeCompare(b.path));
   }, [collections, query]);
 
@@ -152,7 +157,7 @@ export function MultipartFilterSidebar({
                         : "text-foreground hover:bg-muted",
                     )}
                     style={{ paddingLeft: 8 + collectionDepth(collection.path) * 16 }}
-                    title={collection.path}
+                    title={collectionDisplayPath(collections, collection.path) ?? collection.name}
                   >
                     {selected ? (
                       <FolderOpen className="h-4 w-4 shrink-0 text-primary" aria-hidden />

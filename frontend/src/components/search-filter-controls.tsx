@@ -36,9 +36,6 @@ const labels = {
   printed_before: "aiSearch.filter.printed_before",
   print_duration_min_s: "aiSearch.filter.print_duration_min_s",
   print_duration_max_s: "aiSearch.filter.print_duration_max_s",
-  family_id: "aiSearch.filter.family_id",
-  family_role: "aiSearch.filter.family_role",
-  in_family: "aiSearch.filter.in_family",
   has_similar_candidates: "aiSearch.filter.has_similar_candidates",
 } satisfies Record<string, MessageKey>;
 function filterLabel(key: string): MessageKey {

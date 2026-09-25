@@ -30,7 +30,6 @@ class DecisionRequest(BaseModel):
     version: int = Field(ge=1, le=2**63 - 1, strict=True)
     action: Literal[
         "confirm_evidence",
-        "confirm_family",
         "create_multipart",
         "reject",
         "later",
@@ -48,8 +47,6 @@ def decide(
     session: Session, actor: User, candidate_id: int, request: DecisionRequest
 ) -> SimilarityReviewDecision:
     row = candidates.require(session, actor, candidate_id)
-    if request.action == "confirm_family":
-        raise OperationError("family_resolution_unavailable", kind=ErrorKind.CONFLICT)
     digest = hashlib.sha256(
         encode_json([candidate_id, request.model_dump()]).encode()
     ).hexdigest()

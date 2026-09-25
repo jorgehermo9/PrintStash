@@ -70,7 +70,7 @@ describe("RemoteStorageConnections", () => {
     const user = userEvent.setup();
     const created = aStorageConnection({
       id: 9,
-      name: "Family Drive",
+      name: "Shared Drive",
       kind: "gdrive",
       configuration: { client_id: "google-client", root: "PrintStash" },
       secret_fields_set: ["client_secret", "refresh_token"],
@@ -85,7 +85,7 @@ describe("RemoteStorageConnections", () => {
     await screen.findByText(/No remote storage connected yet/);
 
     await user.click(screen.getByLabelText("Connection name"));
-    await user.paste("Family Drive");
+    await user.paste("Shared Drive");
     await user.selectOptions(screen.getByLabelText("Provider"), "gdrive");
     await user.click(screen.getByLabelText("OAuth client ID"));
     await user.paste("google-client");
@@ -97,13 +97,13 @@ describe("RemoteStorageConnections", () => {
 
     await waitFor(() => expect(view.requestsWithMethod("POST")).toHaveLength(1));
     expect(JSON.parse(view.requestsWithMethod("POST")[0].body)).toEqual({
-      name: "Family Drive",
+      name: "Shared Drive",
       kind: "gdrive",
       purpose: "both",
       configuration: { provider: "gdrive", client_id: "google-client", root: "PrintStash" },
       secrets: { client_secret: "google-secret", refresh_token: "google-refresh" },
     });
-    expect(await screen.findByText("Family Drive")).toBeVisible();
+    expect(await screen.findByText("Shared Drive")).toBeVisible();
     expect(screen.queryByDisplayValue("google-secret")).toBeNull();
   });
 

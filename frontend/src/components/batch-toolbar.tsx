@@ -2,6 +2,7 @@
 
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
+import { collectionDisplayPath } from "@/lib/collection-display";
 
 import { useMemo, useState } from "react";
 import { FolderInput, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
@@ -212,7 +213,11 @@ function MoveDialog({
               (path) => collection.path === path || collection.path.startsWith(`${path}/`),
             ),
         )
-        .filter((collection) => collection.path.toLowerCase().includes(query.trim().toLowerCase()))
+        .filter((collection) =>
+          collectionDisplayPath(collections, collection.path)
+            ?.toLowerCase()
+            .includes(query.trim().toLowerCase()),
+        )
         .sort((a, b) => a.path.localeCompare(b.path)),
     [blockedPaths, collections, query],
   );
@@ -256,7 +261,8 @@ function MoveDialog({
                 : "text-muted-foreground hover:bg-muted"
             }`}
           >
-            {c.path} <span className="opacity-50">({c.model_count})</span>
+            {collectionDisplayPath(collections, c.path)}{" "}
+            <span className="opacity-50">({c.model_count})</span>
           </button>
         ))}
         {sorted.length === 0 && (
@@ -329,7 +335,7 @@ function RenameCollectionsDialog({
         {collections.map((collection) => (
           <label key={collection.id} className="block space-y-1">
             <span className="block truncate font-mono text-3xs text-muted-foreground">
-              {collection.path}
+              {collectionDisplayPath(collections, collection.path)}
             </span>
             <input
               value={values[collection.id]}

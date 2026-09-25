@@ -91,13 +91,6 @@ purge) · model detail (edit tags with save/cancel, log a manual print, download
 a revision) · G-code revisions (add, auto-recommend, re-recommend,
 status, compare) · public share links (view-only vs downloadable, revoke → 404) ·
 multipart sets (empty-set first action, external cover, tags, favorites, reusable members, collection browsing with multiple part selection) ·
-Model Families (complete real Benchy variants and independent Revisions, explicit
-canonical selection, shared physical scale, isolated preview failures,
-desktop/mobile layouts, collapsed Saved Views, grouping-only trash,
-Model-detail creation, existing-Family selection, slug navigation, missing stored
-dimensions, a real G-code-only member beside a working preview, visible sibling
-context, explicit member moves, local Multipart Choice drafts,
-and canonical Revision delivery to the printer emulator) ·
 RBAC (create user, grant collection access, non-admin sees only granted
 collections, view vs edit role gates editing + deleting) · user management
 (promote/disable/reset password) · API keys · settings overview (system status
@@ -127,6 +120,10 @@ not hosted-account certification. Run `pnpm exec playwright test -c
 playwright.storage-presets.config.ts`.
 
 Storage insights: reads real capacity evidence, persists a measurement, and confirms cleanup of a receipt-verified expired staging fixture in the disposable suite database. The file must remain until the confirmation is accepted.
+Collection usage: compares readable sizes at desktop and mobile widths and opens the Uncollected Model drilldown using representative display data.
+Settings navigation: checks that moving storage and reading storage insights stay discoverable, routine maintenance leads with a quick check, and Similar Models exposes its analysis action on desktop and mobile.
+Maintenance: waits for both schedules and backup sources to load, opens both scheduling forms and advanced controls, checks matching mobile form and action widths without horizontal overflow, and saves an audit policy through the real API before reloading it.
+Collection storage: keeps the two-column collection list and its container height stable while opening Models in the same area; links to Model details, fits every row above the pager for a 17-model collection on desktop and mobile, and keeps page navigation understandable; empty activity does not add a disclosure.
 
 Native S3 browser delivery has a dedicated fixture and config:
 `pnpm exec playwright test --config playwright.delivery.config.ts` (also included
@@ -141,3 +138,5 @@ Only the test certificate's trust check is relaxed; browser CORS remains enabled
 - `migration/vault-migration.spec.ts` (isolated `playwright.migration.config.ts`): real backup, preflight, online delta ingestion, API restart, recovery/resume, explicit cutover, byte-exact Artifact downloads, Full audit and JSON report. Source cleanup remains disabled during grace. Included in `pnpm test:e2e:real`.
 
 Search clarity: the AI-search flow verifies that Enter preserves the live library filter, explicit AI search opens results, and retrieval explanations stay hidden. Library workflows reveal secondary commands through Library tools.
+
+AI Search settings: the Settings browser flow waits for loaded AI data, visits guided setup, search types, AI servers and technical options, captures desktop and mobile views, and checks visible choices and horizontal fit.

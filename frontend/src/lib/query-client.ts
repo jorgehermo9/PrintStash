@@ -36,8 +36,6 @@ export const queryClient = new QueryClient({
 // ---------------------------------------------------------------------------
 export const queryKeys = {
   models: ["models"] as const,
-  families: ["families"] as const,
-  family: (id: number) => ["families", id] as const,
   model: (id: number) => ["models", id] as const,
   multipartModels: ["multipart-models"] as const,
   multipartModel: (id: number) => ["multipart-models", id] as const,
@@ -74,7 +72,6 @@ export async function refreshVaultAfterIngest(): Promise<void> {
     queryKeys.collections,
     queryKeys.vaultStats,
     queryKeys.multipartModels,
-    queryKeys.families,
   ];
   await Promise.all(keys.map((queryKey) => queryClient.cancelQueries({ queryKey })));
   await Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
@@ -123,24 +120,15 @@ export function invalidateQueriesForPath(path: string, method: ApiMethod = "POST
     bust(["ai-search"]);
   }
 
-  if (has("families")) {
-    bust(queryKeys.families);
-    multipartAffected();
-    bust(queryKeys.models);
-    bust(queryKeys.collections);
-    bust(queryKeys.tags);
-  }
   if (has("collections")) {
     bust(queryKeys.collections);
     bust(queryKeys.models);
     multipartAffected();
-    bust(queryKeys.families);
   }
   if (has("tags")) {
     bust(queryKeys.tags);
     bust(queryKeys.models);
     multipartAffected();
-    bust(queryKeys.families);
   }
   if (
     has(
@@ -162,7 +150,6 @@ export function invalidateQueriesForPath(path: string, method: ApiMethod = "POST
     // counts, so refresh the collection list (and its sidebar badges) too.
     bust(queryKeys.collections);
     multipartAffected();
-    bust(queryKeys.families);
   }
   if (has("trash", "restore", "purge", "gc")) {
     // Trash routes can operate on Models, Files, or collections. These reads
@@ -172,7 +159,6 @@ export function invalidateQueriesForPath(path: string, method: ApiMethod = "POST
     bust(queryKeys.collections);
     bust(queryKeys.vaultStats);
     multipartAffected();
-    bust(queryKeys.families);
   }
   if (has("multipart-models")) {
     multipartAffected();

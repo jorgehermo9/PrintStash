@@ -90,9 +90,7 @@ function renderPanel(options: RenderAppOptions & { audit?: VaultAuditRun | null 
   const { audit = anAudit(), routes = {}, ...rest } = options;
   return renderApp(<MaintenancePanel />, {
     routes: {
-      "GET /api/v1/maintenance/audits/latest": audit
-        ? json(audit)
-        : json({ detail: "not_found" }, 404),
+      "GET /api/v1/maintenance/audits": json(audit ? [audit] : []),
       "GET /api/v1/backups/sources": json([]),
       ...routes,
     },
@@ -111,15 +109,22 @@ afterEach(() => {
 describe("MaintenancePanel", () => {
   describe("before anything has been audited", () => {
     it("says so", async () => {
-      renderPanel({ audit: null });
+      const view = renderPanel({ audit: null });
 
-      expect(await screen.findByText("No audit has run yet.")).toBeInTheDocument();
+      expect(
+        await screen.findByText("No checks yet. Start with a quick check."),
+      ).toBeInTheDocument();
+      expect(
+        view
+          .requestsWithMethod("GET")
+          .some((request) => request.url.includes("/maintenance/audits/latest")),
+      ).toBe(false);
     });
 
     it("offers a quick audit", async () => {
       renderPanel({ audit: null });
 
-      expect(await screen.findByRole("button", { name: "Quick Audit" })).toBeEnabled();
+      expect(await screen.findByRole("button", { name: "Run quick check" })).toBeEnabled();
     });
 
     it("offers a full audit as well", async () => {
@@ -127,7 +132,7 @@ describe("MaintenancePanel", () => {
       // and an hour on a large vault — they are not interchangeable.
       renderPanel({ audit: null });
 
-      expect(await screen.findByRole("button", { name: "Full Audit" })).toBeEnabled();
+      expect(await screen.findByRole("button", { name: "Run full check" })).toBeEnabled();
     });
   });
 
@@ -139,7 +144,7 @@ describe("MaintenancePanel", () => {
         routes: { "POST /api/v1/maintenance/audits": json(anAudit({ mode: "full" })) },
       });
 
-      await user.click(await screen.findByRole("button", { name: "Full Audit" }));
+      await user.click(await screen.findByRole("button", { name: "Run full check" }));
 
       await waitFor(() =>
         expect(JSON.parse(requestsWithMethod("POST").at(-1)?.body ?? "{}")).toMatchObject({
@@ -153,7 +158,7 @@ describe("MaintenancePanel", () => {
       // information.
       renderPanel({ audit: anAudit({ state: "running", progress: 40 }) });
 
-      expect(await screen.findByRole("button", { name: "Quick Audit" })).toBeDisabled();
+      expect(await screen.findByRole("button", { name: "Run quick check" })).toBeDisabled();
     });
 
     it("offers a way to stop one mid-run", async () => {
@@ -168,7 +173,7 @@ describe("MaintenancePanel", () => {
       });
 
       expect(await screen.findByRole("button", { name: "Cancel" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Quick Audit" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Run quick check" })).toBeDisabled();
     });
 
     it("reports how far along it is", async () => {
@@ -277,7 +282,8 @@ describe("MaintenancePanel", () => {
     it("says so when the audit found nothing", async () => {
       renderPanel({ audit: anAudit({ critical_count: 0, findings: [] }) });
 
-      expect(await screen.findByText("No findings in this category.")).toBeInTheDocument();
+      expect(await screen.findByText("No problems found in this check.")).toBeInTheDocument();
+      expect(screen.queryByLabelText("100 percent complete")).not.toBeInTheDocument();
     });
 
     it("narrows the list to one severity", async () => {
@@ -371,7 +377,9 @@ describe("MaintenancePanel", () => {
     it("shows the credential-free source details", async () => {
       renderPanel({ routes: { "GET /api/v1/backups/sources": json([A_BACKUP]) } });
 
-      expect(await screen.findByText("Locator: local-source")).toBeInTheDocument();
+      const user = userEvent.setup();
+      await user.click(await screen.findByText("Storage details"));
+      expect(screen.getByText("Locator: local-source")).toBeInTheDocument();
       expect(screen.getByText("Provider: local…")).toBeInTheDocument();
       expect(
         screen.getByText("Exact key: printstash-backups/2026-01-01T000000Z.tar.gz"),

@@ -13,7 +13,6 @@ export type EvidenceClass = (typeof EVIDENCE_CLASSES)[number];
 export type ReviewState = "open" | "confirmed" | "rejected" | "later";
 export type SimilarityAction =
   | "confirm_evidence"
-  | "confirm_family"
   | "create_multipart"
   | "reject"
   | "later"
@@ -39,7 +38,6 @@ export interface SimilarityStatus {
   pending_fingerprints: number;
   selection?: Pick<SimilaritySettings, "minimum_confidence" | "class_overrides">;
   capabilities: {
-    family_resolution: boolean;
     multipart_resolution: boolean;
     step: boolean;
     local_embeddings: boolean;
@@ -133,7 +131,7 @@ export interface SimilarityCandidate {
   exact_equivalence: boolean;
   review_state: ReviewState;
   freshness: "current" | "stale";
-  resolution_kind: "evidence_only" | "multipart" | "family" | null;
+  resolution_kind: "evidence_only" | "multipart" | null;
   version: number;
   summary: SimilarityEvidence;
   allowed_actions: SimilarityAction[];

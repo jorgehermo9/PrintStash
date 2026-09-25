@@ -32,7 +32,6 @@ const HomePage = lazyImport(() => import("@/pages/home"));
 const SearchPage = lazyImport(() => import("@/pages/search"));
 const SimilarModelComparisonPage = lazyImport(() => import("@/pages/similar-model-comparison"));
 const SimilarModelsPage = lazyImport(() => import("@/pages/similar-models"));
-const ModelFamilyPage = lazyImport(() => import("@/pages/model-family"));
 const ModelDetailPage = lazyImport(() => import("@/pages/model-detail"));
 const MultipartBuildsPage = lazyImport(() => import("@/pages/multipart-builds"));
 const MultipartModelDetailPage = lazyImport(() => import("@/pages/multipart-model-detail"));
@@ -77,14 +76,6 @@ export const router = createBrowserRouter([
         element: (
           <RouteChunk>
             <SearchPage />
-          </RouteChunk>
-        ),
-      },
-      {
-        path: "families/:id",
-        element: (
-          <RouteChunk>
-            <ModelFamilyPage />
           </RouteChunk>
         ),
       },

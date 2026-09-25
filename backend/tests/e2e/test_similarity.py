@@ -1,4 +1,4 @@
-"""Ingest real meshes, find geometric evidence and confirm without a Family."""
+"""Ingest real meshes, find geometric evidence and confirm it."""
 
 import hashlib
 

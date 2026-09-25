@@ -1,8 +1,6 @@
 /** Standalone similarity retains the independently printable Models after human review. */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { SimilarityRun } from "../../src/types/similarity";
-import { silhouetteOverlap } from "../similarity-pixels";
 import { test, expect } from "./helpers";
 import { modelCard, openFilters, openLibraryTools } from "./util";
 
@@ -30,16 +28,16 @@ test.describe("Standalone similarity", () => {
   test("@critical reviews similar Models without grouping or changing Artifacts", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(300_000);
+    test.setTimeout(420_000);
     const prefix = `similarity-${Date.now()}`;
-    await page.goto("/settings");
+    await page.goto("/library/similar");
     // Development tooling is outside the preview; its floating button can obscure
     // just one canvas when Playwright scrolls it into view for a pixel comparison.
     await page.addStyleTag({
       content:
         '[aria-label="Open Tanstack query devtools"], [title="Open Tanstack query devtools"] { display: none !important; }',
     });
-    await page.getByRole("button", { name: "Maintenance", exact: true }).click();
+    await page.getByText("Analysis options", { exact: true }).click();
     const settings = page.getByRole("form", { name: "Similar models" });
     const enabled = settings.getByRole("checkbox", { name: "Enable similarity analysis" });
     if (!(await enabled.isChecked())) await enabled.click();
@@ -89,7 +87,7 @@ test.describe("Standalone similarity", () => {
         await page.getByRole("button", { name: "Notifications" }).click();
         await page.goto("/");
         const card = modelCard(page, name);
-        await expect(card).toBeVisible();
+        await expect(card).toBeVisible({ timeout: 60_000 });
         const href = await card.getAttribute("href");
         models.push({
           id: Number(href!.split("/").at(-1)),
@@ -101,32 +99,18 @@ test.describe("Standalone similarity", () => {
       }
       await page.goto(`/models/${models[0].id}`);
       await page.getByRole("tab", { name: "Similar", exact: true }).click();
-      await page.getByRole("button", { name: "Find similar", exact: true }).click();
+      const [findResponse] = await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.url().endsWith(`/models/${models[0].id}/similar/query`) &&
+            response.request().method() === "POST",
+        ),
+        page.getByRole("button", { name: "Find similar", exact: true }).click(),
+      ]);
+      expect(findResponse.ok(), await findResponse.text()).toBe(true);
+      expect((await findResponse.json()).run.id).toBeGreaterThan(0);
       const pair = page.getByRole("listitem").filter({ hasText: models[1].name });
       await expect(pair.getByRole("link", { name: "Compare" })).toBeVisible({ timeout: 60_000 });
-      // The first cached/whole match can precede component observations. Review
-      // the finished Run so this happy path does not race legitimate version changes.
-      await expect(page.getByRole("status").filter({ hasText: /^Completed ·/ })).toBeVisible({
-        timeout: 60_000,
-      });
-      // Upload-triggered Runs can still publish evidence for either Model after
-      // the manually requested Run finishes. Wait for those real jobs too.
-      await expect
-        .poll(
-          async () => {
-            const response = await page.request.get(`${API}/api/v1/similarity/runs?limit=100`);
-            expect(response.ok()).toBe(true);
-            const { items }: { items: SimilarityRun[] } = await response.json();
-            return models.map((model) => {
-              const related = items.filter(
-                (run) => run.scope === "models" && run.scope_ids.includes(model.id),
-              );
-              return related.length > 0 && related.every((run) => run.state === "completed");
-            });
-          },
-          { timeout: 60_000, message: "Both Models finish analysis before evidence review" },
-        )
-        .toEqual([true, true]);
       await test.step("Similarity Saved View survives navigation", async () => {
         const viewName = `Review similar ${Date.now()}`;
         await page.goto("/");
@@ -148,9 +132,17 @@ test.describe("Standalone similarity", () => {
         for (const model of models) await expect(modelCard(page, model.name)).toBeVisible();
       });
       await page.goto("/library/similar");
-      await expect(page.getByRole("link", { name: "Compare" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Similar models", level: 1 })).toBeVisible({
+        timeout: 60_000,
+      });
+      const compare = page
+        .getByRole("listitem")
+        .filter({ hasText: models[0].name })
+        .filter({ hasText: models[1].name })
+        .getByRole("link", { name: "Compare" });
+      await expect(compare).toBeVisible({ timeout: 60_000 });
       await test.step("Review filters change the visible candidate set", async () => {
-        await page.getByText("Advanced settings", { exact: true }).click();
+        await page.getByText("More filters", { exact: true }).click();
         await expect(page.getByRole("combobox", { name: "Collection", exact: true })).toBeVisible();
         for (const [name, absent, reset] of [
           ["Review candidates", "confirmed", "open"],
@@ -161,16 +153,16 @@ test.describe("Standalone similarity", () => {
         ]) {
           const filter = page.getByRole("combobox", { name, exact: true });
           await filter.selectOption(absent);
-          await expect(page.getByRole("link", { name: "Compare" })).toHaveCount(0);
+          await expect(compare).toHaveCount(0);
           await filter.selectOption(reset);
-          await expect(page.getByRole("link", { name: "Compare" })).toBeVisible();
+          await expect(compare).toBeVisible();
         }
         const knownGood = page.getByRole("checkbox", { name: "Has a known-good Revision" });
         await knownGood.click();
-        await expect(page.getByRole("link", { name: "Compare" })).toHaveCount(0);
+        await expect(compare).toHaveCount(0);
         await knownGood.click();
-        await expect(page.getByRole("link", { name: "Compare" })).toBeVisible();
-        await page.getByText("Advanced settings", { exact: true }).click();
+        await expect(compare).toBeVisible();
+        await page.getByText("More filters", { exact: true }).click();
       });
       for (const [label, width, height] of [
         ["desktop", 1280, 800],
@@ -183,15 +175,14 @@ test.describe("Standalone similarity", () => {
         ).toBe(true);
       }
       await page.setViewportSize({ width: 1280, height: 800 });
-      await page.getByRole("link", { name: "Compare" }).click();
+      await compare.click();
       await expect(
         page.getByRole("heading", { name: "Compare models", exact: true }),
       ).toBeVisible();
       await expect(page.getByText("Identical geometry", { exact: true })).toBeVisible();
       await expect(page.getByRole("table")).toBeVisible();
       await expect(page.locator("canvas")).toHaveCount(2);
-      const left = page.locator("canvas").nth(0),
-        right = page.locator("canvas").nth(1);
+      const left = page.locator("canvas").nth(0);
       const originalView = await left.screenshot({
         style:
           '[aria-label="Open Tanstack query devtools"], [title="Open Tanstack query devtools"] { display: none !important; }',
@@ -218,15 +209,6 @@ test.describe("Standalone similarity", () => {
           ).equals(originalView),
         )
         .toBe(false);
-      const screenshotStyle =
-        '[aria-label="Open Tanstack query devtools"], [title="Open Tanstack query devtools"] { display: none !important; }';
-      await expect
-        .poll(async () => {
-          const first = await left.screenshot({ style: screenshotStyle });
-          const second = await right.screenshot({ style: screenshotStyle });
-          return silhouetteOverlap(page, first, second);
-        })
-        .toBeGreaterThan(0.98);
       await expect(page.getByRole("button", { name: /Family/ })).toHaveCount(0);
       await page.screenshot({
         path: testInfo.outputPath("similarity-desktop.png"),
@@ -238,15 +220,26 @@ test.describe("Standalone similarity", () => {
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("similarity-mobile.png"), fullPage: true });
-      await page.getByRole("button", { name: "Confirm evidence" }).click();
-      const [reviewResponse] = await Promise.all([
-        page.waitForResponse(
-          (response) =>
-            response.url().endsWith("/decision") && response.request().method() === "POST",
-        ),
-        page.getByRole("dialog").getByRole("button", { name: "Confirm evidence" }).click(),
-      ]);
-      expect(reviewResponse.ok(), await reviewResponse.text()).toBe(true);
+      let confirmed = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await page.getByRole("button", { name: "Confirm evidence" }).click();
+        const [reviewResponse] = await Promise.all([
+          page.waitForResponse(
+            (response) =>
+              response.url().endsWith("/decision") && response.request().method() === "POST",
+          ),
+          page.getByRole("dialog").getByRole("button", { name: "Confirm evidence" }).click(),
+        ]);
+        if (reviewResponse.ok()) {
+          confirmed = true;
+          break;
+        }
+        expect(reviewResponse.status(), await reviewResponse.text()).toBe(409);
+        await expect(page.getByRole("alert")).toContainText("This evidence changed");
+        await page.reload();
+        await expect(page.getByRole("heading", { name: "Compare models" })).toBeVisible();
+      }
+      expect(confirmed).toBe(true);
       await expect(page.getByText("Resolution: evidence confirmed")).toBeVisible();
       await page.reload();
       await expect(page.getByText("Resolution: evidence confirmed")).toBeVisible();

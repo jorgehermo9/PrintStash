@@ -5,18 +5,7 @@ from importlib.util import find_spec
 from fastapi import APIRouter
 
 from app.modules.ingestion.extensions import bind_derivatives
-from app.modules.library.model_views.extensions import bind_annotations, bind_families
-
-
-def install_family_routes(router: APIRouter) -> None:
-    if find_spec("app.modules.library.families") is None:
-        bind_families(None)
-        return
-    from app.api.v1.families import router as family_router
-    from app.modules.library.model_views import families
-
-    bind_families(families)
-    router.include_router(family_router)
+from app.modules.library.model_views.extensions import bind_annotations
 
 
 def similarity_available() -> bool:

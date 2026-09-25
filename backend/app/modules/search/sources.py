@@ -1,6 +1,6 @@
 """The recipe-v1 library field list, with separately authorized contributors.
 
-No bytes, inference sessions, Family data or user-specific indexes are read here.
+No bytes, inference sessions or user-specific indexes are read here.
 Callers own the transaction and must revalidate Subject and segment access before
 using these internal projections in retrieval or returning them to a user.
 """

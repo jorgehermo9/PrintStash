@@ -82,6 +82,30 @@ afterEach(() => {
 });
 
 describe("UploadModal", () => {
+  it("shows the exact folder name in the destination picker", async () => {
+    const user = userEvent.setup();
+    const collections = [
+      aCollection({ id: 1, name: "Testing", path: "testing" }),
+      aCollection({
+        id: 2,
+        name: "My Parts",
+        slug: "my-parts",
+        path: "testing/my-parts",
+        parent_id: 1,
+      }),
+    ];
+    renderUpload({
+      seed: [[queryKeys.collections, collections]],
+      routes: { "GET /api/v1/collections": json(collections) },
+    });
+
+    await user.click(screen.getByRole("button", { name: "None" }));
+    await user.click(screen.getByRole("option", { name: /Testing\/My Parts/ }));
+
+    expect(screen.getByRole("button", { name: "Testing/My Parts" })).toBeVisible();
+    expect(screen.queryByText("testing/my-parts")).toBeNull();
+  });
+
   describe("choosing a way in", () => {
     it("opens on the files tab", async () => {
       renderUpload();
@@ -397,7 +421,7 @@ describe("UploadModal", () => {
 
       await user.click(await screen.findByRole("button", { name: "None" }));
 
-      expect(await screen.findByRole("option", { name: /parts/ })).toBeInTheDocument();
+      expect(await screen.findByRole("option", { name: /Parts/ })).toBeInTheDocument();
     });
 
     it("leaves a read-only collection out of the choices", async () => {
@@ -418,9 +442,9 @@ describe("UploadModal", () => {
       renderUpload();
       await user.click(await screen.findByRole("button", { name: "None" }));
 
-      await user.click(await screen.findByRole("option", { name: /parts/ }));
+      await user.click(await screen.findByRole("option", { name: /Parts/ }));
 
-      expect(await screen.findByRole("button", { name: /parts/ })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: /Parts/ })).toBeInTheDocument();
     });
   });
 

@@ -7,6 +7,7 @@ import { formatNumber } from "@/lib/format";
 import { currentLocale } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
+import { collectionDisplayPath } from "@/lib/collection-display";
 
 import { useCallback, useEffect, useState } from "react";
 import { BackupRunHistory } from "@/components/backup-run-history";
@@ -72,7 +73,6 @@ import { NotificationsPanel } from "@/components/notifications-panel";
 import { SpoolmanConnectCard } from "@/components/spoolman-connect-card";
 import { OidcSettingsCard } from "@/components/oidc-settings-card";
 import { AiSearchSettings } from "@/components/ai-search-settings";
-import { SimilaritySettingsPanel } from "@/components/similarity-settings-panel";
 import { MaintenancePanel } from "@/components/maintenance-panel";
 import { BackgroundWorkPanel } from "@/components/background-work-panel";
 import { BrandMark } from "@/components/brand-mark";
@@ -466,7 +466,6 @@ export function SettingsPanel() {
   const stats = useVaultStats().data ?? null;
   const [exporting, setExporting] = useState<"json" | "csv" | null>(null);
   const [archiveBusy, setArchiveBusy] = useState<"export" | "import" | null>(null);
-  const [archiveVersion, setArchiveVersion] = useState<1 | 2>(2);
   const [loadedApiKeys, setApiKeys] = useState<ApiKeyRead[]>([]);
   // A signed-out visitor has no keys to list, so that is derived rather than cleared
   // from an effect on sign-out.
@@ -1102,7 +1101,7 @@ export function SettingsPanel() {
   async function exportArchive() {
     setArchiveBusy("export");
     try {
-      await downloadLibraryArchive(archiveVersion);
+      await downloadLibraryArchive(2);
     } catch (e) {
       toast.error(e);
     } finally {
@@ -1968,27 +1967,6 @@ export function SettingsPanel() {
                         )}
                       </p>
                       <div className="flex flex-wrap items-end gap-2">
-                        <label
-                          className="space-y-1 text-xs text-muted-foreground"
-                          htmlFor="library-archive-version"
-                        >
-                          <span className="block">{t("families.archiveFormat")}</span>
-                          <select
-                            id="library-archive-version"
-                            className={cn(inputClasses, "w-auto")}
-                            value={archiveVersion}
-                            disabled={archiveBusy !== null}
-                            aria-describedby={
-                              archiveVersion === 1 ? "library-archive-warning" : undefined
-                            }
-                            onChange={(event) =>
-                              setArchiveVersion(event.target.value === "1" ? 1 : 2)
-                            }
-                          >
-                            <option value="2">{t("families.archiveCurrent")}</option>
-                            <option value="1">{t("families.archiveLegacy")}</option>
-                          </select>
-                        </label>
                         <button
                           type="button"
                           onClick={() => void exportArchive()}
@@ -2022,15 +2000,6 @@ export function SettingsPanel() {
                           </label>
                         )}
                       </div>
-                      {archiveVersion === 1 && (
-                        <p
-                          id="library-archive-warning"
-                          role="status"
-                          className="text-xs text-muted-foreground"
-                        >
-                          {t("families.archiveLegacyWarning")}
-                        </p>
-                      )}
                     </div>
                   </SettingsCard>
 
@@ -2299,7 +2268,7 @@ export function SettingsPanel() {
                             <option value="">{uiText("Select collection")}</option>
                             {grantableCollections.map((row) => (
                               <option key={row.id} value={row.id}>
-                                {row.path}
+                                {collectionDisplayPath(grantableCollections, row.path)}
                               </option>
                             ))}
                           </select>
@@ -2746,8 +2715,17 @@ export function SettingsPanel() {
               <div className="space-y-6 animate-panel-in">
                 <StorageConfigCard storageHealth={storageHealth} migrationManaged />
                 {user?.is_superuser && <StorageInventoryPanel />}
-                {user?.is_superuser && <ArtifactCacheCard />}
                 {user?.is_superuser && <VaultMigrationPanel />}
+                {user?.is_superuser && (
+                  <details>
+                    <summary className="cursor-pointer rounded-md px-2 py-2 text-sm font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      {uiText("Remote file cache")}
+                    </summary>
+                    <div className="mt-3">
+                      <ArtifactCacheCard />
+                    </div>
+                  </details>
+                )}
               </div>
             )}
 
@@ -3407,12 +3385,7 @@ export function SettingsPanel() {
 
             {activeSection === "ai-search" && user?.is_superuser && <AiSearchSettings />}
 
-            {activeSection === "maintenance" && user?.is_superuser && (
-              <>
-                <MaintenancePanel />
-                <SimilaritySettingsPanel />
-              </>
-            )}
+            {activeSection === "maintenance" && user?.is_superuser && <MaintenancePanel />}
 
             {activeSection === "work" && user?.is_superuser && <BackgroundWorkPanel />}
 

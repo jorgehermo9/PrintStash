@@ -778,7 +778,7 @@ describe("MultipartModelDetailPage", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(JSON.parse(requestsWithMethod("PUT")[0].body).collection_id).toBe(3);
-    expect(await screen.findByText("parts")).toBeVisible();
+    expect(await screen.findByText("Parts")).toBeVisible();
   });
 
   it("saves an external image as the set cover", async () => {

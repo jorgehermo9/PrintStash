@@ -92,6 +92,7 @@ describe("Spanish review states", () => {
     expect(await screen.findByText("No hay candidatos por revisar")).toBeVisible();
   });
   it("labels stale evidence in Spanish", async () => {
+    const user = userEvent.setup();
     renderQueue({
       locale: "es",
       routes: {
@@ -101,7 +102,9 @@ describe("Spanish review states", () => {
         }),
       },
     });
-    expect(await screen.findByText("Evidencia desactualizada")).toBeVisible();
+    await user.click(screen.getByText("Más filtros"));
+    const labels = await screen.findAllByText("Evidencia desactualizada");
+    expect(labels.find((element) => element.tagName !== "OPTION")).toBeVisible();
   });
 });
 
@@ -140,7 +143,7 @@ describe("Queue navigation", () => {
       },
     });
     await screen.findByText("No candidates to review");
-    await user.click(screen.getByText("Advanced settings"));
+    await user.click(screen.getByText("More filters"));
     await user.selectOptions(screen.getByRole("combobox", { name: label }), value);
     await waitFor(() =>
       expect(
@@ -212,7 +215,7 @@ describe("Queue navigation", () => {
       },
     });
     await screen.findByText("No candidates to review");
-    await user.click(screen.getByText("Advanced settings"));
+    await user.click(screen.getByText("More filters"));
     const toggle = screen.getByRole("checkbox", { name: "Has a known-good Revision" });
     await user.click(toggle);
     expect(await screen.findByRole("link", { name: "Compare" })).toBeVisible();

@@ -1,7 +1,6 @@
 "use client";
 
 import { SubjectCaption } from "@/components/subject-caption";
-import { ModelFamilyMembership } from "@/components/families/model-membership";
 import { ModelSearchAction } from "@/components/model-search-action";
 
 import { currentLocale } from "@/lib/locale";
@@ -562,7 +561,6 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
                 {uiText(" · Last updated ")}
                 {timeAgo(model.updated_at)}
               </span>
-              {!editing && <ModelFamilyMembership model={model} editable={canEditModel} />}
               {editing && !editName.trim() && (
                 <p id="model-name-error" role="alert" className="mt-1 text-xs text-destructive">
                   {uiText("Model name is required.")}

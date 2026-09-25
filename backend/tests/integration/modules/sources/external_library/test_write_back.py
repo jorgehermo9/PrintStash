@@ -85,6 +85,41 @@ def _upload(
 
 
 class TestIngestIntoExternalLibrary:
+    def test_write_back_uses_existing_folder_spelling(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        enable_feature(db_session)
+        nas = tmp_path / "nas"
+        drop_gcode(nas / "Testing" / "My Parts", "existing.gcode", marker="existing")
+        lib = build_external_library(
+            db_session,
+            nas,
+            name="nas",
+            collection_mode=ExternalLibraryCollectionMode.MIRROR,
+        )
+        external_library.scan_library(lib.id)
+        existing = db_session.exec(
+            select(File).where(File.original_filename == "existing.gcode")
+        ).one()
+        model = db_session.get(Model, existing.model_id)
+        assert model.collection_rel is not None
+
+        _upload(
+            db_session,
+            stage("new.gcode", gcode_bytes("new")),
+            filename="new.gcode",
+            name="New Model",
+            collection=model.collection_rel.path,
+            library=lib,
+        )
+
+        written = db_session.exec(
+            select(File).where(File.original_filename == "new.gcode")
+        ).one()
+        assert written.path == str(nas / "Testing" / "My Parts" / "new.gcode")
+        assert not (nas / "testing").exists()
+
     def test_write_back_lands_in_nas_folder(
         self, tmp_path: Path, db_session: Session
     ) -> None:

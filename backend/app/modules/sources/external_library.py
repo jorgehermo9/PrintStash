@@ -27,6 +27,7 @@ from time import monotonic
 from typing import Optional
 
 from croniter import croniter
+from printstash_core.files import slugify
 from sqlalchemy import exists, func, or_, update
 from sqlmodel import Session, col, select
 
@@ -34,6 +35,7 @@ from app.core.logging import get_logger
 from app.core.time import ensure_utc, utcnow
 from app.db.models import (
     SUFFIX_TO_FILE_TYPE,
+    Collection,
     ExternalLibrary,
     ExternalLibraryCheckpoint,
     ExternalLibraryCollectionMode,
@@ -365,6 +367,80 @@ def _collection_path_for(
     return None
 
 
+def _repair_mirrored_collection_names(
+    session: Session,
+    root: Path,
+    disk_paths: set[str],
+    indexed: dict[str, File],
+) -> None:
+    """Separate old catalog rows merged by case or punctuation-insensitive slugs.
+
+    Only a Model still filed under a slug-equivalent folder is eligible. A
+    deliberate move to a different folder remains the user's choice.
+    """
+    collections = session.exec(select(Collection)).all()
+    by_id = {collection.id: collection for collection in collections}
+
+    def names_for(collection: Collection) -> tuple[str, ...]:
+        names: list[str] = []
+        seen: set[int] = set()
+        current: Collection | None = collection
+        while current is not None and current.id not in seen:
+            if current.id is not None:
+                seen.add(current.id)
+            names.append(current.name)
+            current = by_id.get(current.parent_id)
+        return tuple(reversed(names))
+
+    model_dirs: dict[int, set[str]] = {}
+    for path, file_row in indexed.items():
+        if path in disk_paths:
+            relative = Path(path).parent.relative_to(root).as_posix()
+            model_dirs.setdefault(file_row.model_id, set()).add(relative)
+
+    model_collections: dict[int, int | None] = {}
+    model_ids = list(model_dirs)
+    for start in range(0, len(model_ids), 500):
+        model_collections.update(
+            session.exec(
+                select(Model.id, Model.collection_id).where(
+                    Model.id.in_(model_ids[start : start + 500])
+                )
+            ).all()
+        )
+
+    checked_models: set[int] = set()
+    for path, file_row in indexed.items():
+        if path not in disk_paths:
+            continue
+        if file_row.model_id in checked_models:
+            continue
+        checked_models.add(file_row.model_id)
+        relative = Path(path).parent.relative_to(root)
+        if len(model_dirs.get(file_row.model_id, ())) != 1:
+            continue
+        collection_id = model_collections.get(file_row.model_id)
+        collection = by_id.get(collection_id)
+        if collection is None:
+            continue
+        current_names = names_for(collection)
+        if current_names == relative.parts or tuple(
+            map(slugify, current_names)
+        ) != tuple(map(slugify, relative.parts)):
+            continue
+        target = taxonomy.resolve_or_create_mirrored_collection(
+            session, relative.as_posix()
+        )
+        if target is not None and target.id != collection_id:
+            model = session.get(Model, file_row.model_id)
+            if model is None:
+                continue
+            model.collection_id = target.id
+            session.add(model)
+            content_changed(session, "model", [model.id])
+            session.commit()
+
+
 def _index_external_file(
     session: Session,
     library: ExternalLibrary,
@@ -387,7 +463,11 @@ def _index_external_file(
     if created or model.collection_id is None:
         coll_path = _collection_path_for(session, library, source_path)
         if coll_path:
-            coll = taxonomy.resolve_or_create_collection(session, coll_path)
+            coll = (
+                taxonomy.resolve_or_create_mirrored_collection(session, coll_path)
+                if library.collection_mode == ExternalLibraryCollectionMode.MIRROR
+                else session.get(Collection, library.target_collection_id)
+            )
             if coll is not None:
                 model.collection_id = coll.id
                 session.add(model)
@@ -1178,6 +1258,8 @@ def scan_library(
 
             assert_root_binding(library)
             assert pinned_snapshot is not None
+            if library.collection_mode == ExternalLibraryCollectionMode.MIRROR:
+                _repair_mirrored_collection_names(session, root, set(disk), db_by_path)
             for path, file_row in db_by_path.items():
                 assert_root_binding(library)
                 if path not in disk:

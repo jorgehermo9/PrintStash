@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.core.time import ensure_utc
 from app.db.models import CollectionRole, FileRevisionStatus, FileType, PrintJobState
-from app.schemas.family_types import VariantRole
 from app.schemas.printers import (
     PrintJobIdentityRead,
     PrintJobReportedMetadataRead,
@@ -135,20 +134,7 @@ class ModelSimilarityRead(BaseModel):
     confirmed: int = 0
 
 
-class ModelFamilyRead(BaseModel):
-    id: int
-    name: str
-    slug: str
-    version: int
-    member_id: int
-    role: VariantRole
-    member_count: int
-    canonical_model_id: int | None = None
-    effective_role: CollectionRole
-
-
 class ModelRead(BaseModel):
-    family: ModelFamilyRead | None = None
     similarity: ModelSimilarityRead = Field(default_factory=ModelSimilarityRead)
     id: int
     name: str
@@ -251,7 +237,6 @@ class PrintSummaryRead(BaseModel):
 
 
 class ModelListItem(BaseModel):
-    family: ModelFamilyRead | None = None
     similarity: ModelSimilarityRead = Field(default_factory=ModelSimilarityRead)
     id: int
     name: str
@@ -341,10 +326,6 @@ class ModelFilters(BaseModel):
         description="Exclusive actual PrintJob duration: under three hours is 10800.",
     )
     has_similar_candidates: Optional[bool] = None
-    family_id: int | None = Field(default=None, gt=0)
-    family_role: VariantRole | None = None
-    in_family: bool | None = None
-    browse: Literal["models", "families_collapsed"] = "models"
 
     @field_validator("printed_after", "printed_before")
     @classmethod

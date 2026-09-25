@@ -161,7 +161,7 @@ function renderSettings(options: RenderAppOptions = {}) {
       "GET /api/v1/notifications/deliveries": json([]),
       "GET /api/v1/auth/oidc": json({ enabled: false }),
       "GET /api/v1/spoolman/status": json({ enabled: false, url: null, reachable: false }),
-      "GET /api/v1/maintenance/audits/latest": json(null),
+      "GET /api/v1/maintenance/audits": json([]),
       "GET /api/v1/models/trash": json([]),
       "GET /api/v1/admin/gc": json(null),
       "GET /api/v1/backups": json([]),
@@ -839,6 +839,11 @@ describe("SettingsPanel", () => {
         await screen.findByRole("button", { name: "Move storage with a verified migration" }),
       ).toBeVisible();
       expect(screen.queryByRole("button", { name: /Backup now/ })).toBeNull();
+      const move = screen.getByRole("region", { name: "Move Vault storage" });
+      const insights = screen.getByRole("heading", { name: "Storage insights" });
+      expect(
+        insights.compareDocumentPosition(move) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
     });
 
     it("opens backup controls in their own section", async () => {
@@ -1478,6 +1483,12 @@ describe("SettingsPanel", () => {
     });
   });
 
+  it("keeps model matching out of maintenance", async () => {
+    renderSettings({ at: "/settings?section=maintenance" });
+    expect(await screen.findByRole("button", { name: "Run quick check" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Similar models" })).toBeNull();
+  });
+
   describe("trash retention", () => {
     it("saves the retention window", async () => {
       const user = userEvent.setup();
@@ -1845,26 +1856,6 @@ describe("SettingsPanel", () => {
 
       await waitFor(() =>
         expect(requests().some((call) => call.url.includes("library-archive"))).toBe(true),
-      );
-    });
-
-    it("explains the Family omission before a legacy export", async () => {
-      const user = userEvent.setup();
-      const { requests } = renderSettings({
-        routes: { "GET /api/v1/models/library-archive": json([]) },
-      });
-      const format = await screen.findByRole("combobox", { name: "Archive format" });
-      expect(format).toHaveValue("2");
-      await user.selectOptions(format, "1");
-      expect(format).toHaveAccessibleDescription(
-        "This export excludes Families, their relationships, and saved views filtered by Family. Choose v2 to keep them.",
-      );
-      expect(requests().some((call) => call.url.includes("library-archive"))).toBe(false);
-      await user.click(screen.getByRole("button", { name: /Export full library/ }));
-      await waitFor(() =>
-        expect(requests().some((call) => call.url.includes("library-archive?version=1"))).toBe(
-          true,
-        ),
       );
     });
 

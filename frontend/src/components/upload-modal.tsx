@@ -3,6 +3,7 @@
 import { uiMessage, type MessageDescriptor } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
 import { useI18n, useUiLocale } from "@/lib/i18n";
+import { collectionDisplayPath } from "@/lib/collection-display";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -210,6 +211,7 @@ export function UploadModal({
     (!user?.is_superuser && writableCollections.length > 0 ? writableCollections[0].path : "");
   const [pickedCollection, setPickedCollection] = useState<string | null>(null);
   const collectionPath = pickedCollection ?? suggestedCollection;
+  const selectedCollectionLabel = collectionDisplayPath(collections, collectionPath);
 
   // Seeding the form from the props above is an adjustment to changed props,
   // not synchronization with an external system, so it happens during render:
@@ -1002,13 +1004,16 @@ export function UploadModal({
                       onClick={() => setCatOpen((v) => !v)}
                       aria-haspopup="listbox"
                       aria-expanded={catOpen}
-                      className="w-full h-10 flex items-center justify-between bg-surface-container-lowest text-on-surface font-mono text-sm border border-outline-variant rounded px-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                      title={selectedCollectionLabel || undefined}
+                      className="w-full h-10 flex min-w-0 items-center gap-2 bg-surface-container-lowest text-on-surface font-mono text-sm border border-outline-variant rounded px-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                     >
-                      <span className={collectionPath ? "" : "text-on-surface-variant/60"}>
-                        {collectionPath ||
+                      <span
+                        className={`min-w-0 flex-1 truncate text-left ${collectionPath ? "" : "text-on-surface-variant/60"}`}
+                      >
+                        {selectedCollectionLabel ||
                           (user?.is_superuser ? uiText("None") : uiText("Choose collection"))}
                       </span>
-                      <ChevronDown className="h-4 w-4 text-on-surface-variant" />
+                      <ChevronDown className="h-4 w-4 shrink-0 text-on-surface-variant" />
                     </button>
                   }
                 >
@@ -1047,7 +1052,8 @@ export function UploadModal({
                             : "text-on-surface-variant hover:bg-surface-container-low"
                         }`}
                       >
-                        {c.path} <span className="opacity-50">({c.model_count})</span>
+                        {collectionDisplayPath(collections, c.path)}{" "}
+                        <span className="opacity-50">({c.model_count})</span>
                       </button>
                     ))
                   )}

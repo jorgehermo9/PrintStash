@@ -72,23 +72,20 @@ and changelog instead of reconstructing their contents.
      backend change, `./scripts/test.sh full -q`,
      `uv run ruff check app/ tests/`, and `uv run pyright` when feasible.
    - Frontend: `cd frontend && pnpm format:check && pnpm lint && pnpm typecheck`;
-     add `pnpm test` for logic and the applicable Playwright suite for a
-     headline UI flow.
+     run the affected Vitest files for logic and the applicable Playwright spec
+     for a headline UI flow. A localized UI change does not call for the full
+     frontend test or coverage suite; follow
+     [references/running-tests.md](references/running-tests.md) to choose scope.
    - Browser extension: use [references/capture.md](references/capture.md).
    PostgreSQL-affecting changes also run the supported-server contract suite.
    Report only checks actually run and preserve failure output.
-4. For every production-code implementation, run
-   `codex-security:security-diff-scan` over the exact branch diff before marking
-   the PR ready or merging it. Resolve and reverify validated findings. When the
-   user explicitly opts out, record the gate as omitted by request; never report
-   it as passed.
-5. Update the changelog and repository docs the change invalidates. Public site
+4. Update the changelog and repository docs the change invalidates. Public site
    docs that live in `printstash-landing` are a separate repository change;
    identify it without editing another repository unless that scope was assigned.
-6. When the task includes commit or PR preparation, use one PR per bug/feature,
+5. When the task includes commit or PR preparation, use one PR per bug/feature,
    conventional commits, and the repository's configured git identity. Do not
    reuse a historical release branch as precedent for combining unrelated work.
-7. When explicitly asked to cut a release, first confirm that each completed PR
+6. When explicitly asked to cut a release, first confirm that each completed PR
    is independently merged to `main` and CI is green, then follow
    [references/release.md](references/release.md). Never collect feature work on
    a version-number branch.

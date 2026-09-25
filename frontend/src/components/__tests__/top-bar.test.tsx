@@ -237,6 +237,26 @@ describe("TopBar", () => {
     });
   });
 
+  describe("Similar models shortcut", () => {
+    it("opens the similarity finder from the header", async () => {
+      const user = userEvent.setup();
+      renderTopBar();
+
+      await user.click(screen.getByRole("link", { name: "Similar models" }));
+
+      expect(screen.getByTestId("location")).toHaveTextContent("/library/similar");
+    });
+
+    it("marks comparison pages as part of Similar models", () => {
+      renderTopBar({ at: "/library/similar/41" });
+
+      expect(screen.getByRole("link", { name: "Similar models" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+    });
+  });
+
   describe("home link", () => {
     it("returns to the vault root by default", () => {
       renderTopBar({ at: "/settings" });

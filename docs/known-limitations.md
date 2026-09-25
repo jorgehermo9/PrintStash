@@ -317,8 +317,7 @@ active deletion safety tier.
 ## Similar Models (Unreleased)
 
 - Analysis defaults off. Similarity is review evidence, not byte deduplication,
-  printable compatibility or automatic grouping. Similarity-driven Family
-  resolution is unavailable; manual Families and Multipart composition remain
+  printable compatibility or automatic grouping. Multipart composition is
   independent of evidence review.
 - Complete STL/OBJ/3MF geometry is available in lite; STEP and local ONNX require
   the full profile. Sources beyond the geometry budget remain explicitly partial

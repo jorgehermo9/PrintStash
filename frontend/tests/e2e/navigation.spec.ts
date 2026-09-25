@@ -17,6 +17,26 @@ import { useMockApi } from "./_setup";
 useMockApi();
 
 test.describe("app navigation", () => {
+  test("desktop shortcut opens Similar models", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+
+    await page.getByRole("link", { name: "Similar models" }).click();
+
+    await expect(page).toHaveURL(/\/library\/similar$/);
+    await expect(page.getByRole("heading", { name: "Similar models" })).toBeVisible();
+  });
+
+  test("mobile tab opens Similar models", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+
+    await page.getByRole("link", { name: "Similar", exact: true }).click();
+
+    await expect(page).toHaveURL(/\/library\/similar$/);
+    await expect(page.getByRole("heading", { name: "Similar models" })).toBeVisible();
+  });
+
   test("desktop navigation reaches Pending Imports and marks nested routes active", async ({
     page,
   }) => {

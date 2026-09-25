@@ -1,4 +1,4 @@
-/** Maintenance owns opt-in, bounded scan configuration and cooperative cancellation. */
+/** Similar Models owns opt-in, bounded scan configuration and cooperative cancellation. */
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,7 +29,8 @@ describe("SimilaritySettingsPanel", () => {
   it("saves a complete dense-mesh budget", async () => {
     const user = userEvent.setup();
     const rendered = renderSettings();
-    await user.click(await screen.findByText("Advanced settings"));
+    await user.click(screen.getByText("Analysis options"));
+    await user.click(await screen.findByText("Advanced settings", { selector: "form summary" }));
     const input = screen.getByRole("spinbutton", { name: "Triangle limit per mesh" });
     await user.clear(input);
     await user.type(input, "2000000");
@@ -46,6 +47,7 @@ describe("SimilaritySettingsPanel", () => {
   it("persists the operator opt-in", async () => {
     const user = userEvent.setup();
     const rendered = renderSettings();
+    await user.click(screen.getByText("Analysis options"));
     await user.click(await screen.findByRole("checkbox", { name: "Enable similarity analysis" }));
     await user.click(screen.getByRole("button", { name: "Save settings" }));
     await waitFor(() => expect(rendered.requestsWithMethod("PATCH")).toHaveLength(1));
@@ -66,6 +68,7 @@ describe("SimilaritySettingsPanel", () => {
         "POST /api/v1/similarity/runs/1/cancel": json(aSimilarityRun({ state: "cancelling" })),
       },
     });
+    await user.click(screen.getByText("Analysis history"));
     await user.click(await screen.findByRole("button", { name: "Cancel analysis" }));
     await waitFor(() =>
       expect(
@@ -84,8 +87,9 @@ describe("SimilaritySettingsPanel", () => {
         }),
       },
     });
+    await user.click(screen.getByText("Analysis options"));
     expect(await screen.findByText(/8 open candidates meet these thresholds/)).toBeVisible();
-    await user.click(screen.getByText("Advanced settings"));
+    await user.click(screen.getByText("Advanced settings", { selector: "form summary" }));
     await user.click(screen.getByRole("checkbox", { name: "Set confidence per evidence class" }));
     const input = screen.getByRole("spinbutton", { name: /Identical geometry/ });
     await user.clear(input);
@@ -156,9 +160,11 @@ describe("Scoped analysis", () => {
     expect(screen.getByRole("button", { name: "Start analysis" })).toBeDisabled();
   });
   it("explains failed preview counts", async () => {
+    const user = userEvent.setup();
     renderSettings({
       routes: { "POST /api/v1/similarity/selection-preview": json({ detail: "unavailable" }, 503) },
     });
+    await user.click(screen.getByText("Analysis options"));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not update the candidate count",
     );
@@ -209,6 +215,9 @@ describe("Localized analysis outcomes", () => {
           }),
         },
       });
+      await userEvent.click(
+        screen.getByText(locale === "es" ? "Historial de análisis" : "Analysis history"),
+      );
       expect(await screen.findByText(partial)).toBeVisible();
       expect(await screen.findByText(unsupported)).toBeVisible();
     },

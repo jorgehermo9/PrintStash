@@ -179,8 +179,9 @@ input never reached it, and that input is almost always a row missing from the
 matrix. So the loop is:
 
 1. Build the matrix from requirements. Write the tests. (`Plan`, then write.)
-2. Run coverage. Read the uncovered lines and **partial branches** in the module
-   you changed.
+2. When a coverage report is available from CI or an intentional coverage
+   audit, read the uncovered lines and **partial branches** in the module you
+   changed.
 3. For each one, ask *what input would reach this?* — and put **that** in the
    matrix as a new row, phrased as a behaviour, with a Category and a Tier.
 4. Write the test for the row. Never write a test "for the line."
@@ -198,7 +199,8 @@ count, and that ~1.7pp is 612 branches — 612 conditions that only ever went on
 way in the entire suite. Those are the highest-yield rows in the report: an
 `if` with one untried side is usually an error path with no test.
 
-Commands (each writes term-missing, an HTML report, and the JSON the gate reads):
+Full coverage commands for CI, release validation, or a coverage-floor task
+(each writes term-missing, an HTML report, and the JSON the gate reads):
 
 | Suite | Command | Report |
 | --- | --- | --- |
@@ -726,8 +728,10 @@ tests/` and `uv run pyright`.
 `printstash-core`: `cd backend/packages/printstash-core && ./scripts/test.sh
 coverage`.
 
-Frontend: `pnpm lint && pnpm format:check && pnpm typecheck && pnpm test`, plus
-`pnpm coverage` when the change touches `src/` or either workspace package.
+Frontend: `pnpm lint && pnpm format:check && pnpm typecheck`, then the affected
+Vitest files and Playwright spec selected by [running tests](running-tests.md).
+CI runs the full `pnpm test` and `pnpm coverage` gates; a localized `src/`
+change does not require repeating those full suites locally.
 
 Report the exact result — never say tests passed without running them, and paste
 failures verbatim. A coverage floor that had to be raised is part of the result;

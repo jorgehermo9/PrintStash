@@ -12,6 +12,25 @@ import { anAuditPolicy } from "@/test-support/factories";
 import { json, renderApp } from "@/test-support/render";
 
 describe("Audit schedules", () => {
+  it("shows only the scheduling switch until a weekly check is enabled", async () => {
+    const user = userEvent.setup();
+    renderApp(<AuditSchedulePanel />, {
+      routes: {
+        "GET /api/v1/maintenance/audit-policies": json([anAuditPolicy()]),
+        "GET /api/v1/maintenance/audits": json([]),
+      },
+    });
+    const form = await screen.findByRole("form", { name: "Quick check schedule" });
+    expect(within(form).queryByLabelText("Frequency")).not.toBeInTheDocument();
+    expect(within(form).queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+
+    await user.click(within(form).getByRole("checkbox", { name: "Run automatically" }));
+    expect(within(form).getByLabelText("Frequency")).toBeVisible();
+    expect(within(form).getByLabelText("Day of week")).toHaveValue("6");
+    expect(within(form).getByRole("option", { name: "Sunday" })).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "Save changes" })).toBeVisible();
+  });
+
   it("saves an enabled schedule", async () => {
     const user = userEvent.setup();
     const view = renderApp(<AuditSchedulePanel />, {
@@ -23,9 +42,9 @@ describe("Audit schedules", () => {
         ),
       },
     });
-    const form = await screen.findByRole("form", { name: "Quick audit schedule" });
-    await user.click(within(form).getByRole("checkbox", { name: "Enabled" }));
-    await user.click(within(form).getByRole("button", { name: "Save schedule" }));
+    const form = await screen.findByRole("form", { name: "Quick check schedule" });
+    await user.click(within(form).getByRole("checkbox", { name: "Run automatically" }));
+    await user.click(within(form).getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(view.requestsWithMethod("PUT")[0]?.body).toContain('"enabled":true'),
     );
@@ -42,15 +61,17 @@ describe("Audit schedules", () => {
         "PUT /api/v1/maintenance/audit-policies/quick": json(anAuditPolicy({ revision: 2 })),
       },
     });
-    const form = await screen.findByRole("form", { name: "Quick audit schedule" });
+    const form = await screen.findByRole("form", { name: "Quick check schedule" });
+    await user.click(within(form).getByRole("checkbox", { name: "Run automatically" }));
     await user.selectOptions(within(form).getByLabelText("Frequency"), "monthly");
+    await user.click(within(form).getByText("Advanced settings"));
     await user.selectOptions(
       within(form).getByLabelText("Issue notification threshold"),
       "critical",
     );
     await user.clear(within(form).getByLabelText("Overdue after (minutes)"));
     await user.type(within(form).getByLabelText("Overdue after (minutes)"), "45");
-    await user.click(within(form).getByRole("button", { name: "Save schedule" }));
+    await user.click(within(form).getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(view.requestsWithMethod("PUT")[0]?.body).toContain(
         '"notification_threshold":"critical"',
@@ -71,9 +92,10 @@ describe("Audit schedules", () => {
         ),
       },
     });
-    const form = await screen.findByRole("form", { name: "Quick audit schedule" });
+    const form = await screen.findByRole("form", { name: "Quick check schedule" });
+    await user.click(within(form).getByText("Advanced settings"));
     await user.click(within(form).getByRole("checkbox", { name: "Paused" }));
-    await user.click(within(form).getByRole("button", { name: "Save schedule" }));
+    await user.click(within(form).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(view.requestsWithMethod("PUT")[0]?.body).toContain('"paused":true'));
   });
 
@@ -92,8 +114,32 @@ describe("Audit schedules", () => {
 
   it("shows a recoverable loading failure", async () => {
     renderApp(<AuditSchedulePanel />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load audit schedules.");
+    expect(await screen.findByText("Could not load audit schedules.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+  });
+
+  it("keeps schedules available when check history fails", async () => {
+    renderApp(<AuditSchedulePanel />, {
+      routes: {
+        "GET /api/v1/maintenance/audit-policies": json([anAuditPolicy()]),
+        "GET /api/v1/maintenance/audits": json({ detail: "unavailable" }, 503),
+      },
+    });
+    expect(await screen.findByRole("form", { name: "Quick check schedule" })).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Check history could not be loaded");
+  });
+
+  it("shows the full-check cost acknowledgement without opening advanced settings", async () => {
+    renderApp(<AuditSchedulePanel />, {
+      routes: {
+        "GET /api/v1/maintenance/audit-policies": json([
+          anAuditPolicy({ mode: "full", enabled: true }),
+        ]),
+        "GET /api/v1/maintenance/audits": json([]),
+      },
+    });
+    const form = await screen.findByRole("form", { name: "Full check schedule" });
+    expect(within(form).getByText(/Full audits read all owned data/)).toBeVisible();
   });
 
   it("keeps an unsuccessful save editable", async () => {
@@ -105,8 +151,10 @@ describe("Audit schedules", () => {
         "PUT /api/v1/maintenance/audit-policies/quick": json({ detail: "invalid" }, 400),
       },
     });
-    await user.click(await screen.findByRole("button", { name: "Save schedule" }));
+    const form = await screen.findByRole("form", { name: "Quick check schedule" });
+    await user.click(within(form).getByRole("checkbox", { name: "Run automatically" }));
+    await user.click(within(form).getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not save audit schedule");
-    expect(screen.getByRole("button", { name: "Save schedule" })).toBeEnabled();
+    expect(within(form).getByRole("button", { name: "Save changes" })).toBeEnabled();
   });
 });

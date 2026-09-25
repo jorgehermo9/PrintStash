@@ -21,6 +21,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelBrowser } from "@/components/model-grid";
@@ -34,7 +35,6 @@ import type {
   TagRead,
 } from "@/types";
 import { aModelListItem, aPrinter } from "@/test-support/factories";
-import { aFamily } from "@/test-support/families";
 import {
   adminSession,
   json,
@@ -138,6 +138,7 @@ function renderVault(
     multipartModels?: MultipartModelListItem[];
     collections?: CollectionRead[];
     tags?: TagRead[];
+    historyProbe?: boolean;
   } = {},
 ) {
   const {
@@ -145,31 +146,49 @@ function renderVault(
     multipartModels = [],
     collections = [],
     tags = [],
+    historyProbe = false,
     seed = [],
     routes = {},
     ...rest
   } = options;
-  return renderApp(<ModelBrowser />, {
-    seed: [
-      [queryKeys.collections, collections],
-      [queryKeys.tags, tags],
-      [queryKeys.vaultStats, { model_count: models.length, file_count: 0, total_size_bytes: 0 }],
-      ...seed,
-    ],
-    routes: {
-      "GET /api/v1/models/facets": json(EMPTY_FACETS),
-      "GET /api/v1/models/page": json({ items: models, total: models.length, next_cursor: null }),
-      "GET /api/v1/models/outliner": json([]),
-      "GET /api/v1/models": json(models),
-      "GET /api/v1/saved-views": json([]),
-      "GET /api/v1/documents": json([]),
-      "GET /api/v1/multipart-models": json(multipartModels),
-      "GET /api/v1/collections": json(collections),
-      "GET /api/v1/tags": json(tags),
-      ...routes,
+  return renderApp(
+    <>
+      <ModelBrowser />
+      {historyProbe && <HistoryProbe />}
+    </>,
+    {
+      seed: [
+        [queryKeys.collections, collections],
+        [queryKeys.tags, tags],
+        [queryKeys.vaultStats, { model_count: models.length, file_count: 0, total_size_bytes: 0 }],
+        ...seed,
+      ],
+      routes: {
+        "GET /api/v1/models/facets": json(EMPTY_FACETS),
+        "GET /api/v1/models/page": json({ items: models, total: models.length, next_cursor: null }),
+        "GET /api/v1/models/outliner": json([]),
+        "GET /api/v1/models": json(models),
+        "GET /api/v1/saved-views": json([]),
+        "GET /api/v1/documents": json([]),
+        "GET /api/v1/multipart-models": json(multipartModels),
+        "GET /api/v1/collections": json(collections),
+        "GET /api/v1/tags": json(tags),
+        ...routes,
+      },
+      ...rest,
     },
-    ...rest,
-  });
+  );
+}
+
+function HistoryProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <output data-testid="vault-location">{location.pathname + location.search}</output>
+      <button onClick={() => navigate(-1)}>History back</button>
+    </>
+  );
 }
 
 /**
@@ -235,126 +254,31 @@ describe("ModelBrowser", () => {
         "aria-expanded",
         "false",
       );
-      expect(screen.queryByRole("button", { name: "Create Family" })).toBeNull();
-      expect(screen.queryByRole("combobox", { name: "Group variations" })).toBeNull();
     });
     it("reveals organization tools on request", async () => {
       renderVault();
       await openLibraryTools();
-      expect(screen.getByRole("button", { name: "Create Family" })).toBeVisible();
       expect(screen.getByRole("button", { name: "New multipart set" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "New Family" })).not.toBeInTheDocument();
+    });
+    it("opens multipart creation from the mobile More menu", async () => {
+      const user = userEvent.setup();
+      renderVault();
+      await screen.findByRole("button", { name: "All Models" });
+      await user.click(screen.getByRole("button", { name: "More" }));
+      await user.click(screen.getByRole("menuitem", { name: "New multipart set" }));
+      expect(screen.getByRole("dialog", { name: "New multipart set" })).toBeVisible();
     });
     it("can collapse the tools after opening them", async () => {
       renderVault();
       await openLibraryTools();
       await userEvent.setup().click(screen.getByRole("button", { name: "Library tools" }));
-      expect(screen.queryByRole("button", { name: "Create Family" })).toBeNull();
-    });
-    it("keeps Done visible when selecting from the Family view", async () => {
-      renderVault({
-        at: "/?type=all&browse=families_collapsed",
-        routes: { "GET /api/v1/families/browse": json({ items: [], total: 0 }) },
-      });
-      await screen.findByRole("button", { name: "All Models" });
-      await userEvent.setup().keyboard("s");
-      expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
-      expect(screen.getByText("0 selected")).toBeVisible();
-      await userEvent.setup().click(screen.getByRole("button", { name: "Done" }));
-      expect(screen.queryByText("0 selected")).toBeNull();
-    });
-    it("exposes active family filters on arrival", async () => {
-      renderVault({ at: "/?in_family=yes" });
-      expect(screen.getAllByRole("button", { name: "Filters" }).at(-1)).toHaveAttribute(
+      expect(screen.getByRole("button", { name: "Library tools" })).toHaveAttribute(
         "aria-expanded",
-        "true",
+        "false",
       );
-      expect(await screen.findByRole("combobox", { name: "Family membership" })).toHaveValue("yes");
+      expect(screen.queryByRole("region", { name: "Library tools" })).not.toBeInTheDocument();
     });
-  });
-  describe("Family grouping preferences", () => {
-    it("remembers the chosen grouping when returning to the library", async () => {
-      const user = userEvent.setup();
-      const routes = {
-        "GET /api/v1/families/browse": json({
-          items: [{ kind: "family", family: aFamily() }],
-          total: 1,
-          next_cursor: null,
-        }),
-      };
-      const first = renderVault({ routes });
-      await openFilters();
-      await user.selectOptions(
-        screen.getByRole("combobox", { name: "Group variations" }),
-        "families_collapsed",
-      );
-      expect(await screen.findByRole("heading", { name: "Benchy variations" })).toBeVisible();
-      expect(localStorage.getItem("ps-vault-family-browse")).toBe("families_collapsed");
-      first.unmount();
-      renderVault({ routes });
-      expect(await screen.findByRole("heading", { name: "Benchy variations" })).toBeVisible();
-      await openFilters();
-      expect(screen.getByRole("combobox", { name: "Group variations" })).toHaveValue(
-        "families_collapsed",
-      );
-      // Two complete library mounts exceed five seconds in the instrumented suite.
-    }, 10_000);
-
-    it("gives the explicit URL mode priority over a saved preference", async () => {
-      localStorage.setItem("ps-vault-family-browse", "families_collapsed");
-      localStorage.setItem("ps-vault-sort", "name-asc");
-      const { requests } = renderVault({
-        at: "/?browse=models",
-        models: [aModelListItem({ name: "Single boat" })],
-      });
-      expect(await screen.findByText("Single boat")).toBeVisible();
-      await openFilters();
-      expect(screen.getByRole("combobox", { name: "Group variations" })).toHaveValue("models");
-      expect(requests().some(({ url }) => url.includes("/families/browse"))).toBe(false);
-    });
-
-    it("applies a Saved View's ungrouped mode over the local preference", async () => {
-      const user = userEvent.setup();
-      localStorage.setItem("ps-vault-family-browse", "families_collapsed");
-      const { requests } = renderVault({
-        models: [aModelListItem({ name: "Single boat" })],
-        routes: {
-          "GET /api/v1/families/browse": json({ items: [], total: 0, next_cursor: null }),
-          "GET /api/v1/saved-views": json([
-            aSavedView({
-              name: "Individual Models",
-              filters: { ...EMPTY_VIEW_FILTERS, browse: "models" },
-            }),
-          ]),
-        },
-      });
-      await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /Saved views/ }));
-      await user.click(await screen.findByRole("button", { name: "Individual Models" }));
-      expect(await screen.findByText("Single boat")).toBeVisible();
-      expect(lastModelsQuery(requests).get("browse")).toBe("models");
-      expect(localStorage.getItem("ps-vault-family-browse")).toBe("families_collapsed");
-    });
-
-    it.each(["multipart", "components"])(
-      "preserves the %s view with a collapsed preference",
-      async (mode) => {
-        localStorage.setItem("ps-vault-family-browse", "families_collapsed");
-        const { requests } = renderVault({
-          at: `/?type=${mode}`,
-          multipartModels: [aMultipartSet()],
-        });
-        await waitFor(() =>
-          expect(requests().some(({ url }) => url.startsWith("/api/v1/multipart-models"))).toBe(
-            true,
-          ),
-        );
-        await openFilters();
-        expect(screen.getByRole("combobox", { name: "Group variations" })).toHaveValue("models");
-        expect(requests().some(({ url }) => url.includes("/families/browse"))).toBe(false);
-      },
-    );
-  });
-  describe("listing", () => {
     it("renders a card for every model", async () => {
       renderVault({
         models: [
@@ -500,6 +424,21 @@ describe("ModelBrowser", () => {
 
       expect(await screen.findByRole("heading", { name: "Parts" })).toBeVisible();
     });
+
+    it("does not add history when the current collection breadcrumb is clicked", async () => {
+      renderVault({ collections: [aCollection()], historyProbe: true });
+
+      const main = await screen.findByRole("main");
+      fireEvent.click(within(main).getByRole("button", { name: /Parts/ }));
+      expect(await screen.findByRole("heading", { name: "Parts" })).toBeVisible();
+
+      const breadcrumb = within(main).getByRole("navigation");
+      fireEvent.click(within(breadcrumb).getByRole("button", { name: "Parts" }));
+      fireEvent.click(screen.getByRole("button", { name: "History back" }));
+
+      await waitFor(() => expect(screen.getByTestId("vault-location")).toHaveTextContent(/^\/$/));
+      expect(screen.getByRole("heading", { name: "All Models" })).toBeVisible();
+    }, 20_000);
 
     it("shows multipart sets in the collection tree", async () => {
       renderVault({ multipartModels: [aMultipartSet()] });
@@ -1168,7 +1107,7 @@ describe("ModelBrowser", () => {
       await user.click(await screen.findByRole("button", { name: /Move/ }));
       const dialog = await screen.findByRole("dialog");
 
-      await user.click(within(dialog).getByRole("button", { name: /spares/ }));
+      await user.click(within(dialog).getByRole("button", { name: /Spares/ }));
       await user.click(within(dialog).getByRole("button", { name: /^Move/ }));
 
       await waitFor(() =>
@@ -1612,30 +1551,25 @@ describe("ModelBrowser", () => {
 
   describe("clearing filters", () => {
     it("clears all filters while retaining sort", async () => {
-      localStorage.setItem("ps-vault-family-browse", "families_collapsed");
       localStorage.setItem("ps-vault-sort", "name-asc");
       const { requests } = renderVault({
-        at: "/?browse=models&in_family=yes&family_role=canonical&file_type=stl&tag=functional&favorites=true&sort=name-asc",
+        at: "/?file_type=stl&tag=functional&favorites=true&sort=name-asc",
         models: [aModelListItem({ name: "Benchy" })],
       });
       await screen.findByText("Benchy");
       await userEvent.setup().click(screen.getAllByRole("button", { name: /Clear all/ })[0]);
       await waitFor(() => {
         const query = lastModelsQuery(requests);
-        expect(query.get("in_family")).toBeNull();
-        expect(query.get("family_role")).toBeNull();
         expect(query.get("file_type")).toBeNull();
         expect(query.get("tag")).toBeNull();
         expect(query.get("favorites")).toBeNull();
         expect(query.get("sort")).toBe("name-asc");
       });
-      expect(localStorage.getItem("ps-vault-family-browse")).toBeNull();
     });
-    it("keeps active chips available when their controls are collapsed", async () => {
-      renderVault({ at: "/?in_family=yes&tag=functional", tags: [aTag()] });
-      await screen.findByRole("combobox", { name: "Family membership" });
+    it("keeps active tag chips available when controls are collapsed", async () => {
+      renderVault({ at: "/?tag=functional", tags: [aTag()] });
+      await screen.findByTitle("Remove Tag: functional");
       await userEvent.setup().click(screen.getAllByRole("button", { name: "Filters" }).at(-1)!);
-      expect(screen.queryByRole("combobox", { name: "Family membership" })).toBeNull();
       expect(screen.getByTitle("Remove Tag: functional")).toBeVisible();
       expect(screen.getAllByRole("button", { name: /Clear all/ })[0]).toBeVisible();
     });
@@ -2020,7 +1954,7 @@ describe("ModelBrowser", () => {
       await user.click(screen.getByLabelText("Select Benchy"));
       await user.click(await screen.findByRole("button", { name: /Move/ }));
       const dialog = await screen.findByRole("dialog");
-      await user.click(within(dialog).getByRole("button", { name: /spares/ }));
+      await user.click(within(dialog).getByRole("button", { name: /Spares/ }));
       await user.click(within(dialog).getByRole("button", { name: /^Move/ }));
     }
 

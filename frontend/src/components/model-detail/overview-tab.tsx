@@ -2,6 +2,7 @@
 
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
+import { collectionDisplayPath } from "@/lib/collection-display";
 
 import { ChevronDown, ExternalLink, Plus, Trash2, X } from "lucide-react";
 
@@ -128,7 +129,8 @@ export function OverviewTab({
                     className="w-full h-10 flex items-center justify-between bg-surface text-on-surface font-mono text-sm border border-outline-variant rounded px-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                   >
                     <span className={editor.collection ? "" : "text-on-surface-variant/60"}>
-                      {editor.collection || uiText("None")}
+                      {collectionDisplayPath(editor.collections, editor.collection) ||
+                        uiText("None")}
                     </span>
                     <ChevronDown className="h-4 w-4 text-on-surface-variant" />
                   </button>
@@ -162,7 +164,8 @@ export function OverviewTab({
                         : "text-on-surface-variant hover:bg-surface-container-low"
                     }`}
                   >
-                    {c.path} <span className="opacity-50">({c.model_count})</span>
+                    {collectionDisplayPath(editor.collections, c.path)}{" "}
+                    <span className="opacity-50">({c.model_count})</span>
                   </button>
                 ))}
               </DropdownMenu>
@@ -278,7 +281,7 @@ export function OverviewTab({
                   {editor.tags.map((name) => (
                     <span
                       key={name}
-                      className="inline-flex items-center gap-1 bg-secondary-container text-on-secondary-container pl-2 pr-1 py-0.5 rounded font-mono text-3xs uppercase tracking-wider"
+                      className="inline-flex items-center gap-1 bg-secondary-container text-on-secondary-container pl-2 pr-1 py-0.5 rounded font-mono text-3xs tracking-wider"
                     >
                       {name}
                       <button
@@ -308,15 +311,15 @@ export function OverviewTab({
                 {uiText("Source model")}
               </a>
             )}
-            {model.collection && (
-              <span className="bg-surface-container text-on-surface px-3 py-1 rounded font-mono text-xs uppercase tracking-wider">
-                {model.collection}
+            {collectionDisplayPath(editor.collections, model.collection) && (
+              <span className="bg-surface-container text-on-surface px-3 py-1 rounded font-mono text-xs tracking-wider">
+                {collectionDisplayPath(editor.collections, model.collection)}
               </span>
             )}
             {model.tags.map((t) => (
               <span
                 key={t}
-                className="bg-secondary-container text-on-secondary-container px-3 py-1 rounded font-mono text-xs uppercase tracking-wider"
+                className="bg-secondary-container text-on-secondary-container px-3 py-1 rounded font-mono text-xs tracking-wider"
               >
                 {t}
               </span>

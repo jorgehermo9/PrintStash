@@ -1,6 +1,6 @@
 import { useI18n } from "@/lib/i18n";
 
-/** A semantic comparison shared by Revision and Model Family views. */
+/** A semantic comparison of printable revisions or models. */
 export function MetadataComparison({
   headings,
   rows,
@@ -18,7 +18,7 @@ export function MetadataComparison({
               scope="col"
               className="w-[40%] px-3 py-2 font-medium text-muted-foreground sm:w-[30%]"
             >
-              {t("families.field")}
+              {t("Field")}
             </th>
             {headings.map((heading, index) => (
               <th key={index} scope="col" className="break-words px-3 py-2 font-medium">

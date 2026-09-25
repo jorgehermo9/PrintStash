@@ -31,7 +31,6 @@ export function similarityStatus(overrides: Partial<SimilarityStatus> = {}): Sim
     algorithm_version: "geometry-v2-sh5f4577c4",
     pending_fingerprints: 0,
     capabilities: {
-      family_resolution: false,
       multipart_resolution: true,
       step: false,
       local_embeddings: false,

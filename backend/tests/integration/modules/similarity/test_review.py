@@ -28,7 +28,7 @@ def evidence_pair(db_session, make_model, make_file):
 
 
 class TestReview:
-    def test_confirms_evidence_without_family(
+    def test_confirms_evidence(
         self, db_session, make_user, evidence_pair
     ):
         candidate, fa, fb = evidence_pair
@@ -69,22 +69,6 @@ class TestReview:
                 request.model_copy(update={"action": "reject"}),
             )
 
-    def test_refuses_family_without_resolver(
-        self, db_session, make_user, evidence_pair
-    ):
-        candidate, _, _ = evidence_pair
-        with pytest.raises(OperationError, match="family_resolution_unavailable"):
-            review.decide(
-                db_session,
-                make_user(superuser=True),
-                candidate.id,
-                review.DecisionRequest(
-                    request_id="family", version=1, action="confirm_family"
-                ),
-            )
-        db_session.refresh(candidate)
-        assert candidate.review_state == "open"
-        assert db_session.exec(select(SimilarityReviewDecision)).all() == []
 
     def test_refuses_outdated_candidate_version(
         self, db_session, make_user, evidence_pair

@@ -20,7 +20,6 @@ from app.db.models import (
     Collection,
     Document,
     File,
-    ModelFamily,
     ModelSourceCover,
     MultipartModel,
 )
@@ -201,18 +200,6 @@ def ownership_snapshot(
                 resource_id=row.id,
                 expected_size=row.cover_size_bytes,
                 display_name="multipart-cover.webp",
-            )
-        )
-    for row in session.exec(select(ModelFamily)).all():
-        if row.id is None or row.cover_filename is None:
-            continue
-        result.primary.append(
-            OwnedBlob(
-                key=backend.model_family_cover_key(row.export_id, row.cover_filename),
-                resource_type="model_family_cover",
-                resource_id=row.id,
-                expected_size=row.cover_size_bytes,
-                display_name="family-cover.webp",
             )
         )
     if discover:

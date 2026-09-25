@@ -6,19 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from tests.factories.embeddings import local_embedding_assets, text_embedding_assets
 from tests.paths import BACKEND_DIR
 
 
 class TestSearchIndependence:
-    @pytest.mark.parametrize(
-        "removed_features",
-        [("similarity",), ("similarity", "families")],
-        ids=["similarity", "similarity-families"],
-    )
-    def test_runs_without_related_feature_packages(self, tmp_path, removed_features):
+    def test_runs_without_related_feature_packages(self, tmp_path):
+        removed_features = ("similarity",)
         isolated = tmp_path / "installation"
         shutil.copytree(
             BACKEND_DIR / "app",

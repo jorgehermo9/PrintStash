@@ -46,9 +46,10 @@ test.describe("search clarity", () => {
   test("reveals library organization on demand", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("button", { name: "Upload", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Create Family", exact: true })).toBeHidden();
-    await page.getByRole("button", { name: "Library tools", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Create Family", exact: true })).toBeVisible();
+    const libraryTools = page.getByRole("button", { name: "Library tools", exact: true });
+    await expect(libraryTools).toHaveAttribute("aria-expanded", "false");
+    await libraryTools.click();
+    await expect(page.getByRole("region", { name: "Library tools" })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "New multipart set", exact: true }),
     ).toBeVisible();
@@ -73,7 +74,6 @@ for (const viewport of [
       await input.fill("bracket");
       await input.press("Enter");
       await expect(page).toHaveURL(/\/\?tag=functional&favorites=true&q=bracket$/);
-      await expect(page.getByRole("button", { name: "Create Family", exact: true })).toBeHidden();
       expect(await input.evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(120);
       await page.screenshot({ path: testInfo.outputPath("library.png"), fullPage: true });
       await input.click();

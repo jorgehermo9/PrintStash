@@ -20,10 +20,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import {
   cancelVaultAudit,
-  getLatestVaultAudit,
   getVaultAudit,
   ignoreAuditFinding,
   listBackupSources,
+  listVaultAudits,
   repairAuditFinding,
   startVaultAudit,
   verifyBackup,
@@ -105,8 +105,8 @@ export function MaintenancePanel() {
   const [repairing, setRepairing] = useState(false);
 
   const refresh = useCallback(() => {
-    getLatestVaultAudit()
-      .then(setRun)
+    listVaultAudits()
+      .then((runs) => setRun(runs[0] ?? null))
       .catch(() => setRun(null));
   }, []);
 
@@ -199,44 +199,57 @@ export function MaintenancePanel() {
   }
 
   return (
-    <div className="space-y-5">
-      <AuditSchedulePanel />
+    <div className="space-y-5 animate-panel-in">
+      <div>
+        <h2 className="text-lg font-semibold">{t("maintenance.title")}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{t("maintenance.subtitle")}</p>
+      </div>
       <Card>
-        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4" />
-              {uiText(" Vault Audit")}
-            </CardTitle>
-            <CardDescription>
-              {uiText(
-                "Read-only checks for owned Artifacts, thumbnails, Metadata, external links, and storage ownership.",
-              )}
-            </CardDescription>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              size="xs"
-              onClick={() => void start("quick")}
-              loading={busy}
-              disabled={isActive(run)}
-            >
-              {uiText("Quick Audit")}
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void start("full")}
-              loading={busy}
-              disabled={isActive(run)}
-            >
-              {uiText("Full Audit")}
-            </Button>
-          </div>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4" aria-hidden />
+            {t("maintenance.checkNow")}
+          </CardTitle>
+          <CardDescription>{t("maintenance.checkNowDescription")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="divide-y divide-border rounded-md border border-border">
+            <div className="flex flex-col items-stretch gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold">{t("auditSchedule.quick")}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {t("maintenance.quickDescription")}
+                </p>
+              </div>
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => void start("quick")}
+                loading={busy}
+                disabled={isActive(run)}
+              >
+                {t("maintenance.runQuick")}
+              </Button>
+            </div>
+            <div className="flex flex-col items-stretch gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold">{t("auditSchedule.full")}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {t("maintenance.fullDescription")}
+                </p>
+              </div>
+              <Button
+                className="w-full sm:w-auto"
+                variant="outline"
+                onClick={() => void start("full")}
+                loading={busy}
+                disabled={isActive(run)}
+              >
+                {t("maintenance.runFull")}
+              </Button>
+            </div>
+          </div>
           {!run ? (
-            <p className="text-sm text-muted-foreground">{uiText("No audit has run yet.")}</p>
+            <p className="text-sm text-muted-foreground">{t("maintenance.noRun")}</p>
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -249,12 +262,24 @@ export function MaintenancePanel() {
                         : "secondary"
                   }
                 >
-                  {run.state}
+                  {t(
+                    run.state === "completed"
+                      ? "auditSchedule.statusCompleted"
+                      : run.state === "running"
+                        ? "auditSchedule.statusRunning"
+                        : run.state === "pending"
+                          ? "auditSchedule.statusPending"
+                          : run.state === "failed"
+                            ? "auditSchedule.statusFailed"
+                            : "auditSchedule.statusCancelled",
+                  )}
                 </Badge>
                 <span className="text-muted-foreground">
-                  {run.mode} · {run.current_phase ?? uiText("waiting")}
+                  {t(run.mode === "quick" ? "auditSchedule.quick" : "auditSchedule.full")}
                 </span>
-                <span className="ml-auto font-mono text-xs">{Math.round(run.progress)}%</span>
+                {isActive(run) && (
+                  <span className="ml-auto text-xs tabular-nums">{Math.round(run.progress)}%</span>
+                )}
                 {isActive(run) && (
                   <Button
                     size="xs"
@@ -265,36 +290,40 @@ export function MaintenancePanel() {
                   </Button>
                 )}
               </div>
-              <div
-                className="h-2 overflow-hidden rounded-full bg-muted"
-                aria-label={uiText("{value1} percent complete", {
-                  value1: String(Math.round(run.progress)),
-                })}
-              >
+              {isActive(run) && (
                 <div
-                  className="h-full origin-left bg-primary transition-transform duration-fast ease-out"
-                  style={{ transform: `scaleX(${run.progress / 100})` }}
-                />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {(["all", "critical", "warning", "info"] as const).map((value) => (
-                  <Button
-                    key={value}
-                    size="xs"
-                    variant={severity === value ? "secondary" : "ghost"}
-                    onClick={() => setSeverity(value)}
-                  >
-                    {value}
-                    {value === "all"
-                      ? ` ${run.findings.length}`
-                      : value === "critical"
-                        ? ` ${run.critical_count}`
-                        : value === "warning"
-                          ? ` ${run.warning_count}`
-                          : ` ${run.info_count}`}
-                  </Button>
-                ))}
-              </div>
+                  className="h-2 overflow-hidden rounded-full bg-muted"
+                  aria-label={uiText("{value1} percent complete", {
+                    value1: String(Math.round(run.progress)),
+                  })}
+                >
+                  <div
+                    className="h-full origin-left bg-primary transition-transform duration-fast ease-out"
+                    style={{ transform: `scaleX(${run.progress / 100})` }}
+                  />
+                </div>
+              )}
+              {run.findings.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {(["all", "critical", "warning", "info"] as const).map((value) => (
+                    <Button
+                      key={value}
+                      size="xs"
+                      variant={severity === value ? "secondary" : "ghost"}
+                      onClick={() => setSeverity(value)}
+                    >
+                      {value}
+                      {value === "all"
+                        ? ` ${run.findings.length}`
+                        : value === "critical"
+                          ? ` ${run.critical_count}`
+                          : value === "warning"
+                            ? ` ${run.warning_count}`
+                            : ` ${run.info_count}`}
+                    </Button>
+                  ))}
+                </div>
+              )}
               {unlinkedFindings.length > 0 && (severity === "all" || severity === "info") && (
                 <div className="rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-start gap-3">
@@ -331,103 +360,110 @@ export function MaintenancePanel() {
                   </div>
                 </div>
               )}
-              <div className="space-y-2">
-                {findings.length === 0 ? (
-                  <div className="flex items-center gap-2 rounded-md border border-border p-3 text-sm text-muted-foreground">
-                    <CheckCircle2 className="h-4 w-4 text-success" />
-                    {uiText(" No findings in this category.")}
-                  </div>
-                ) : (
-                  findings.map((finding) => {
-                    const isUnlinked = finding.code === "unowned_blob_detected";
-                    const fileType = t("settings.auditFileType", {
-                      type: storageFileType(finding.resource_identifier),
-                    });
-                    const size = finding.details.actual_size;
-                    const modifiedAt = finding.details.modified_at;
-                    const metadata =
-                      size != null && modifiedAt
-                        ? t("settings.auditFileMetadata", {
-                            type: fileType,
-                            size: formatBytes(size),
-                            modified: formatAuditDate(modifiedAt),
-                          })
-                        : size != null
-                          ? t("settings.auditFileMetadataSize", {
+              {(run.findings.length > 0 || run.state === "completed" || run.state === "failed") && (
+                <div className="space-y-2">
+                  {findings.length === 0 ? (
+                    <div className="flex items-center gap-2 rounded-md border border-border p-3 text-sm text-muted-foreground">
+                      {run.state === "failed" ? (
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
+                      )}
+                      {run.state === "failed"
+                        ? t("maintenance.checkIncomplete")
+                        : run.findings.length === 0
+                          ? t("maintenance.noProblems")
+                          : uiText(" No findings in this category.")}
+                    </div>
+                  ) : (
+                    findings.map((finding) => {
+                      const isUnlinked = finding.code === "unowned_blob_detected";
+                      const fileType = t("settings.auditFileType", {
+                        type: storageFileType(finding.resource_identifier),
+                      });
+                      const size = finding.details.actual_size;
+                      const modifiedAt = finding.details.modified_at;
+                      const metadata =
+                        size != null && modifiedAt
+                          ? t("settings.auditFileMetadata", {
                               type: fileType,
                               size: formatBytes(size),
+                              modified: formatAuditDate(modifiedAt),
                             })
-                          : modifiedAt
-                            ? t("settings.auditFileMetadataModified", {
+                          : size != null
+                            ? t("settings.auditFileMetadataSize", {
                                 type: fileType,
-                                modified: formatAuditDate(modifiedAt),
+                                size: formatBytes(size),
                               })
-                            : t("settings.auditFileMetadataUnavailable", { type: fileType });
-                    return (
-                      <div
-                        key={finding.id}
-                        className="flex flex-col gap-3 rounded-md border border-border p-3 sm:flex-row sm:items-center"
-                      >
-                        <AlertTriangle
-                          className={`h-4 w-4 flex-shrink-0 ${finding.severity === "critical" ? "text-destructive" : finding.severity === "warning" ? "text-warning" : "text-muted-foreground"}`}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium">
-                            {isUnlinked
-                              ? t("settings.auditUnlinkedFinding")
-                              : (FINDING_LABELS.get(finding.code) ?? finding.code)}
-                          </p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {finding.resource_identifier}
-                          </p>
-                          {isUnlinked && (
-                            <p className="text-xs text-muted-foreground">{metadata}</p>
-                          )}
-                        </div>
-                        {finding.state === "open" ? (
-                          <div className="flex gap-2">
-                            {finding.repair_action && (
-                              <Button size="xs" onClick={() => setRepairTarget(finding)}>
-                                <Wrench className="h-3.5 w-3.5" />
-                                {uiText(" Repair")}
-                              </Button>
+                            : modifiedAt
+                              ? t("settings.auditFileMetadataModified", {
+                                  type: fileType,
+                                  modified: formatAuditDate(modifiedAt),
+                                })
+                              : t("settings.auditFileMetadataUnavailable", { type: fileType });
+                      return (
+                        <div
+                          key={finding.id}
+                          className="flex flex-col gap-3 rounded-md border border-border p-3 sm:flex-row sm:items-center"
+                        >
+                          <AlertTriangle
+                            className={`h-4 w-4 flex-shrink-0 ${finding.severity === "critical" ? "text-destructive" : finding.severity === "warning" ? "text-warning" : "text-muted-foreground"}`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium">
+                              {isUnlinked
+                                ? t("settings.auditUnlinkedFinding")
+                                : (FINDING_LABELS.get(finding.code) ?? finding.code)}
+                            </p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {finding.resource_identifier}
+                            </p>
+                            {isUnlinked && (
+                              <p className="text-xs text-muted-foreground">{metadata}</p>
                             )}
-                            <Button
-                              size="xs"
-                              variant="ghost"
-                              onClick={() => void act(finding, "ignore")}
-                            >
-                              {t("settings.auditMarkReviewed")}
-                            </Button>
                           </div>
-                        ) : finding.state === "ignored" ? (
-                          <Badge variant="secondary">{t("settings.auditReviewed")}</Badge>
-                        ) : null}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+                          {finding.state === "open" ? (
+                            <div className="flex gap-2">
+                              {finding.repair_action && (
+                                <Button size="xs" onClick={() => setRepairTarget(finding)}>
+                                  <Wrench className="h-3.5 w-3.5" />
+                                  {uiText(" Repair")}
+                                </Button>
+                              )}
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => void act(finding, "ignore")}
+                              >
+                                {t("settings.auditMarkReviewed")}
+                              </Button>
+                            </div>
+                          ) : finding.state === "ignored" ? (
+                            <Badge variant="secondary">{t("settings.auditReviewed")}</Badge>
+                          ) : null}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
             </>
           )}
         </CardContent>
       </Card>
+      <AuditSchedulePanel />
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Database className="h-4 w-4" />
-            {uiText(" Backup Verification")}
+            {t("maintenance.backupTitle")}
           </CardTitle>
-          <CardDescription>
-            {uiText(
-              "Streams each archive and checks safe paths, manifest, database member, member counts, and sizes.",
-            )}
-          </CardDescription>
+          <CardDescription>{t("maintenance.backupDescription")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {backups.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{uiText("No backups available.")}</p>
+            <p className="text-sm text-muted-foreground">{t("maintenance.noBackups")}</p>
           ) : (
             backups.map((item) => {
               const sourceRef = sourceKey(item);
@@ -435,55 +471,63 @@ export function MaintenancePanel() {
               return (
                 <div
                   key={sourceRef}
-                  className="flex items-center gap-3 rounded-md border border-border p-3"
+                  className="flex min-w-0 flex-col items-stretch gap-3 rounded-md border border-border p-3 sm:flex-row sm:items-center"
                 >
-                  {result?.valid ? (
-                    <CheckCircle2 className="h-4 w-4 text-success" />
-                  ) : (
-                    <Database className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{item.backup_id}</p>
-                    <p className="truncate font-mono text-2xs text-muted-foreground">
-                      {t("settings.backupSourceLocator", {
-                        source: item.source_ref ?? t("settings.backupSourceUnavailable"),
-                      })}
-                    </p>
-                    <p className="truncate font-mono text-2xs text-muted-foreground">
-                      {t("settings.backupProviderRef", {
-                        provider: shortOpaque(item.provider_ref),
-                      })}
-                    </p>
-                    {item.key && (
-                      <p className="truncate font-mono text-2xs text-muted-foreground">
-                        {t("settings.backupExactKey", { key: item.key })}
-                      </p>
+                  <div className="flex min-w-0 items-start gap-3 sm:flex-1">
+                    {result?.valid ? (
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                    ) : (
+                      <Database className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                     )}
-                    {item.prefix && (
-                      <p className="truncate font-mono text-2xs text-muted-foreground">
-                        {t("settings.backupPrefix", { prefix: item.prefix })}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{formatAuditDate(item.created_at)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatBytes(item.size_bytes)} ·{" "}
+                        {t("maintenance.backupFiles", { count: item.file_count })}
                       </p>
-                    )}
-                    {item.archive_sha256 && (
-                      <p className="truncate font-mono text-2xs text-muted-foreground">
-                        {t("settings.backupSha256", {
-                          digest: shortOpaque(item.archive_sha256),
-                        })}
+                      <p className="text-xs text-muted-foreground">
+                        {result
+                          ? result.valid
+                            ? uiText("{value1} members verified", {
+                                value1: String(result.checked_members),
+                              })
+                            : uiText("{value1} verification findings", {
+                                value1: String(result.findings.length),
+                              })
+                          : uiText("Not verified this session")}
                       </p>
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                      {result
-                        ? result.valid
-                          ? uiText("{value1} members verified", {
-                              value1: String(result.checked_members),
-                            })
-                          : uiText("{value1} verification findings", {
-                              value1: String(result.findings.length),
-                            })
-                        : uiText("Not verified this session")}
-                    </p>
+                      <details className="mt-2 text-xs text-muted-foreground">
+                        <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                          {t("maintenance.backupDetails")}
+                        </summary>
+                        <div className="mt-2 space-y-1 break-all font-mono text-2xs">
+                          <p>
+                            {t("settings.backupSourceLocator", {
+                              source: item.source_ref ?? t("settings.backupSourceUnavailable"),
+                            })}
+                          </p>
+                          <p>
+                            {t("settings.backupProviderRef", {
+                              provider: shortOpaque(item.provider_ref),
+                            })}
+                          </p>
+                          {item.key && <p>{t("settings.backupExactKey", { key: item.key })}</p>}
+                          {item.prefix && (
+                            <p>{t("settings.backupPrefix", { prefix: item.prefix })}</p>
+                          )}
+                          {item.archive_sha256 && (
+                            <p>
+                              {t("settings.backupSha256", {
+                                digest: shortOpaque(item.archive_sha256),
+                              })}
+                            </p>
+                          )}
+                        </div>
+                      </details>
+                    </div>
                   </div>
                   <Button
+                    className="w-full sm:w-auto"
                     size="xs"
                     variant="outline"
                     loading={verifying === sourceRef}

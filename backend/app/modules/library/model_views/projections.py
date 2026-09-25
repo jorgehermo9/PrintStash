@@ -39,7 +39,7 @@ from app.schemas.models import (
     PrintSummaryRead,
 )
 
-from .extensions import family_summaries, similarity_summaries
+from .extensions import similarity_summaries
 from .thumbnails import thumb_url
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,6 @@ def _hydrate_list_rows(
     if not model_ids:
         return []
     similarity = similarity_summaries(session, user, model_ids)
-    families = family_summaries(session, user, model_ids)
     starred_ids = set(
         session.exec(
             select(ModelStar.model_id).where(
@@ -271,7 +270,6 @@ def _hydrate_list_rows(
         out.append(
             ModelListItem(
                 id=model.id,
-                family=families.get(model.id),
                 similarity=similarity.get(model.id, {}),
                 name=model.name,
                 slug=model.slug,

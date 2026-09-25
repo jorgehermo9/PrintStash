@@ -419,9 +419,9 @@ function CollectionTreeRow({
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onSelect(isSelected ? null : node.cat.path)}
+              onClick={() => onSelect(node.cat.path)}
               className="flex flex-1 min-w-0 items-center gap-1.5 text-left text-sm font-medium truncate"
-              title={node.cat.path}
+              title={node.cat.name}
               {...attributes}
             >
               {isOpen || isSelected ? (
@@ -611,7 +611,6 @@ export function FilterSidebarContent({
   canViewPrinters = true,
   structuredFilters,
   filtersOpen = true,
-  familyFilters,
   libraryView,
   onLibraryViewChange,
 }: FilterSidebarProps) {
@@ -992,7 +991,6 @@ export function FilterSidebarContent({
 
           {filtersOpen && (
             <div className="space-y-6" aria-label={uiText("Filters")} role="region">
-              {familyFilters}
               {/* Printer */}
               {canViewPrinters && (
                 <section>
@@ -1156,7 +1154,7 @@ export function FilterSidebarContent({
                             type="button"
                             key={t.id}
                             onClick={() => toggleTag(t.slug)}
-                            className={`flex items-center gap-1 px-2 py-1 rounded font-mono text-2xs tracking-wider uppercase border transition-colors ${
+                            className={`flex items-center gap-1 px-2 py-1 rounded font-mono text-2xs tracking-wider border transition-colors ${
                               active
                                 ? "border-primary bg-accent text-accent-foreground"
                                 : "border-border text-muted-foreground hover:border-border hover:bg-muted"
@@ -1216,7 +1214,6 @@ export interface FilterSidebarProps {
   outlinerFilter?: string;
   structuredFilters?: React.ReactNode;
   filtersOpen?: boolean;
-  familyFilters?: React.ReactNode;
   libraryView: LibraryViewMode;
   onLibraryViewChange: (view: LibraryViewMode) => void;
 }

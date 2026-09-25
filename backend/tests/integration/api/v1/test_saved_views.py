@@ -36,6 +36,15 @@ def _create(client: TestClient, headers: dict[str, str], name: str, **filters: A
 
 
 class TestCreateSavedView:
+    def test_rejects_retired_group_filters(
+        self, client: TestClient, user_headers: UserHeaders
+    ) -> None:
+        response = _create(
+            client, user_headers("retired-filter"), "Old grouping", family_id=42
+        )
+
+        assert response.status_code == 422, response.text
+
     def test_returns_the_created_view(
         self, client: TestClient, user_headers: UserHeaders
     ) -> None:

@@ -409,42 +409,6 @@ class TestLexicalQuery:
         finally:
             bind_content_search(previous)
 
-    def test_searches_grouped_families_through_ranked_port(
-        self, db_session, make_user, make_model, make_family, make_family_member
-    ):
-        from app.db.content_search import bind_content_search
-        from app.modules.library.model_views.family_browse import collapsed_page
-        from app.modules.search.lexical_query import LibrarySearch
-        from app.schemas.models import ModelFilters, ModelSort
-
-        actor = make_user(superuser=True)
-        family = make_family("Bracket variations")
-        member = make_model("Bracket")
-        make_family_member(family, member, canonical=True)
-        ungrouped = make_model("Bracket standalone")
-        content_changed(db_session, "model", [member.id, ungrouped.id])
-        drain_search(db_session)
-        lexical_index.rebuild_partition(db_session)
-        db_session.commit()
-        drain_search(db_session)
-        assert lexical_index.capability(db_session) == "fts5"
-        previous = bind_content_search(LibrarySearch())
-        try:
-            result = collapsed_page(
-                db_session,
-                actor,
-                filters=ModelFilters(q="bracket"),
-                sort=ModelSort.DATE_DESC,
-                cursor=None,
-                limit=30,
-            )
-            assert result.total == 2
-            assert {
-                (item.kind, item.family.id if item.kind == "family" else item.model.id)
-                for item in result.items
-            } == {("family", family.id), ("model", ungrouped.id)}
-        finally:
-            bind_content_search(previous)
 
     def test_browse_falls_back_after_native_table_loss(
         self, db_session, make_user, make_model

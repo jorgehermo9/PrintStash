@@ -39,7 +39,6 @@ function renderSearch({
       "GET /api/v1/similarity/status": json(
         similarityStatus({
           capabilities: {
-            family_resolution: false,
             multipart_resolution: true,
             step: true,
             local_embeddings: available,

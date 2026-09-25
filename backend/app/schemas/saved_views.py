@@ -9,6 +9,8 @@ from app.schemas.models import ModelFilters, ModelSort
 
 
 class SavedViewFilters(ModelFilters):
+    model_config = ConfigDict(extra="forbid")
+
     sort: ModelSort | None = None
 
 

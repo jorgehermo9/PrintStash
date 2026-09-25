@@ -36,6 +36,26 @@ class TestListForUser:
 
         assert [view.name for view in listed] == ["Apple", "Mango", "Zebra"]
 
+    def test_hides_retired_group_filters_without_deleting_the_saved_row(
+        self, db_session: Session
+    ) -> None:
+        user = build_user(db_session, "legacy-view-owner")
+        ordinary = saved_views.create(db_session, user.id, _payload("Ordinary"))
+        retired = SavedView(
+            user_id=user.id,
+            name="Old grouping",
+            filters_json='{"family_id": 42, "tag": ["brackets"]}',
+        )
+        db_session.add(retired)
+        db_session.commit()
+        db_session.refresh(retired)
+
+        assert [view.id for view in saved_views.list_for_user(db_session, user.id)] == [
+            ordinary.id
+        ]
+        assert saved_views.get_for_user(db_session, user.id, retired.id) is None
+        assert db_session.get(SavedView, retired.id) is not None
+
 
 class TestGetForUser:
     def test_returns_none_for_another_users_view(self, db_session: Session) -> None:

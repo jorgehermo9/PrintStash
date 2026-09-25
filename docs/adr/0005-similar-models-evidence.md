@@ -74,10 +74,6 @@ confirmation preserves Models and Revisions. Verified component/plate proposals
 use the existing Multipart owner in the same transaction as their decision,
 including preservation of existing Choices when appending to a composition.
 
-Family confirmation remains conditional integration C-FAMILY. The capability
-is false and direct requests fail without writes until a real Family resolver
-exists. The independent schema has no foreign keys to absent Family tables.
-
 `printstash_core.inference` defines the framework-free embedding contract.
 `modules.inference` owns a local CPU adapter, immutable Space/Generation rows,
 native little-endian float32 vectors and bounded cosine queries. Preplaced

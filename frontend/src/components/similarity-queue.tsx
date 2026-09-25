@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
-import { Box, ScanSearch } from "lucide-react";
+import { ArrowLeftRight, Box, ScanSearch } from "lucide-react";
 
 import { SimilaritySearch } from "@/components/similarity-search";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import {
   listSimilarityCandidates,
 } from "@/lib/api/similarity";
 import { listCollections } from "@/lib/api/taxonomy";
+import { collectionDisplayPath } from "@/lib/collection-display";
 import { useI18n } from "@/lib/i18n";
 import { Link } from "@/lib/link";
 import { evidenceDescription, evidenceLabel, isSimilarityRunActive } from "@/lib/similarity";
@@ -55,28 +56,34 @@ function ModelLabel({ model }: { model: SimilarityModel }) {
 export function SimilarityRow({ candidate }: { candidate: SimilarityCandidate }) {
   const { t } = useI18n();
   return (
-    <li className="grid gap-3 px-4 py-4 sm:px-5 @3xl/similarity:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_auto] @3xl/similarity:items-center">
-      <div className="grid gap-3 @lg/similarity:grid-cols-2 @3xl/similarity:contents">
+    <li className="px-4 py-4 sm:px-5">
+      <div className="grid gap-3 @lg/similarity:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @lg/similarity:items-center">
         <ModelLabel model={candidate.model_a} />
+        <ArrowLeftRight
+          className="hidden h-4 w-4 text-muted-foreground @lg/similarity:block"
+          aria-hidden
+        />
         <ModelLabel model={candidate.model_b} />
       </div>
-      <div className="min-w-0 space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">{evidenceLabel(candidate.evidence_class)}</Badge>
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            {Math.round(candidate.confidence * 100)}%
-          </span>
-          {candidate.freshness === "stale" && (
-            <Badge variant="outline">{t("similarity.stale")}</Badge>
-          )}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{evidenceLabel(candidate.evidence_class)}</Badge>
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              {Math.round(candidate.confidence * 100)}%
+            </span>
+            {candidate.freshness === "stale" && (
+              <Badge variant="outline">{t("similarity.stale")}</Badge>
+            )}
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {evidenceDescription(candidate)}
+          </p>
         </div>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {evidenceDescription(candidate)}
-        </p>
+        <Button asChild variant="outline" size="sm">
+          <Link href={`/library/similar/${candidate.id}`}>{t("similarity.compare")}</Link>
+        </Button>
       </div>
-      <Button asChild variant="outline" size="sm" className="justify-self-start">
-        <Link href={`/library/similar/${candidate.id}`}>{t("similarity.compare")}</Link>
-      </Button>
     </li>
   );
 }
@@ -161,48 +168,6 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
               ))}
             </select>
           </label>
-          <label className="min-w-0 flex-1 basis-32 space-y-1 text-xs">
-            {t("similarity.allClasses")}
-            <select
-              className="block w-full rounded-md border border-input bg-background p-2 text-sm"
-              value={filters.evidence_class ?? ""}
-              onChange={(event) =>
-                setFilters({
-                  ...filters,
-                  evidence_class: EVIDENCE_CLASSES.find((value) => value === event.target.value),
-                })
-              }
-            >
-              <option value="">{t("similarity.allClasses")}</option>
-              {EVIDENCE_CLASSES.map((value) => (
-                <option key={value} value={value}>
-                  {evidenceLabel(value)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="min-w-0 flex-1 basis-32 space-y-1 text-xs">
-            {t("similarity.current")}
-            <select
-              className="block w-full rounded-md border border-input bg-background p-2 text-sm"
-              value={filters.freshness ?? ""}
-              onChange={(event) =>
-                setFilters({
-                  ...filters,
-                  freshness:
-                    event.target.value === "current"
-                      ? "current"
-                      : event.target.value === "stale"
-                        ? "stale"
-                        : undefined,
-                })
-              }
-            >
-              <option value="">{t("similarity.allFreshness")}</option>
-              <option value="current">{t("similarity.current")}</option>
-              <option value="stale">{t("similarity.stale")}</option>
-            </select>
-          </label>
           {modelId !== undefined && (
             <Button
               onClick={() => find.mutate()}
@@ -214,9 +179,53 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
           )}
           <details className="min-w-0 basis-full">
             <summary className="cursor-pointer text-xs font-medium">
-              {t("similarity.advanced")}
+              {t("similarity.moreFilters")}
             </summary>
             <div className="mt-3 flex flex-wrap items-end gap-3">
+              <label className="min-w-0 flex-1 basis-32 space-y-1 text-xs">
+                {t("similarity.allClasses")}
+                <select
+                  className="block w-full rounded-md border border-input bg-background p-2 text-sm"
+                  value={filters.evidence_class ?? ""}
+                  onChange={(event) =>
+                    setFilters({
+                      ...filters,
+                      evidence_class: EVIDENCE_CLASSES.find(
+                        (value) => value === event.target.value,
+                      ),
+                    })
+                  }
+                >
+                  <option value="">{t("similarity.allClasses")}</option>
+                  {EVIDENCE_CLASSES.map((value) => (
+                    <option key={value} value={value}>
+                      {evidenceLabel(value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-0 flex-1 basis-32 space-y-1 text-xs">
+                {t("similarity.current")}
+                <select
+                  className="block w-full rounded-md border border-input bg-background p-2 text-sm"
+                  value={filters.freshness ?? ""}
+                  onChange={(event) =>
+                    setFilters({
+                      ...filters,
+                      freshness:
+                        event.target.value === "current"
+                          ? "current"
+                          : event.target.value === "stale"
+                            ? "stale"
+                            : undefined,
+                    })
+                  }
+                >
+                  <option value="">{t("similarity.allFreshness")}</option>
+                  <option value="current">{t("similarity.current")}</option>
+                  <option value="stale">{t("similarity.stale")}</option>
+                </select>
+              </label>
               <label className="min-w-48 flex-1 space-y-1 text-xs">
                 {t("similarity.threshold")}{" "}
                 <output>
@@ -253,7 +262,7 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                     <option value="">{t("similarity.library")}</option>
                     {collections.data?.map((row) => (
                       <option key={row.id} value={row.id}>
-                        {row.path}
+                        {collectionDisplayPath(collections.data ?? [], row.path)}
                       </option>
                     ))}
                   </select>

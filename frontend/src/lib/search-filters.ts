@@ -68,16 +68,6 @@ export function readSearchFilters(params: URLSearchParams): SavedViewFilters {
     printer_model: params.getAll("printer_model"),
     uploaded_after: params.get("uploaded_after") || undefined,
     uploaded_before: params.get("uploaded_before") || undefined,
-    family_id: nonnegativeInteger(params.get("family_id")) || undefined,
-    family_role: values(params, "family_role", [
-      "canonical",
-      "identical",
-      "rescaled",
-      "mirrored",
-      "repaired",
-      "print_variant",
-    ] as const)[0],
-    in_family: params.has("in_family") ? params.get("in_family") === "yes" : undefined,
     has_similar_candidates: params.has("has_similar_candidates")
       ? params.get("has_similar_candidates") === "yes"
       : undefined,
@@ -92,9 +82,9 @@ export function writeSearchFilters(
   if (q) params.set("q", q);
   if (sort !== "relevance") params.set("sort", sort);
   for (const [key, value] of Object.entries(filters)) {
-    if (key === "q" || key === "sort" || key === "browse" || value == null) continue;
+    if (key === "q" || key === "sort" || value == null) continue;
     if (Array.isArray(value)) value.forEach((item) => params.append(key, item));
-    else if (["printed", "in_family", "has_similar_candidates"].includes(key))
+    else if (["printed", "has_similar_candidates"].includes(key))
       params.set(key, value ? "yes" : "no");
     else if (value !== false && value !== "")
       params.set(key === "collection" ? "c" : key, String(value));

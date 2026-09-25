@@ -22,16 +22,16 @@ async function hideDevtools(page: import("@playwright/test").Page) {
 }
 
 test.describe("mobile layout", () => {
-  test("bottom nav shows tabs and navigates directly", async ({ page }) => {
+  test("opens the Similar models primary tab", async ({ page }) => {
     await page.goto("/");
     await hideDevtools(page);
     const nav = bottomNav(page);
     await expect(nav).toBeVisible();
     await expect(nav.getByRole("link", { name: "Vault" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Profiles" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Similar" })).toBeVisible();
 
-    await nav.getByRole("link", { name: "Profiles" }).click();
-    await expect(page).toHaveURL(/\/profiles$/);
+    await nav.getByRole("link", { name: "Similar" }).click();
+    await expect(page).toHaveURL(/\/library\/similar$/);
   });
 
   test("'More' sheet exposes overflow destinations and navigates", async ({ page }) => {

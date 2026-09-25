@@ -20,6 +20,26 @@ import { useMockApi } from "./_setup";
 useMockApi();
 
 test.describe("vault route", () => {
+  test("browser Back returns through collection navigation", async ({ page }) => {
+    await page.goto("/settings");
+    await page.getByRole("link", { name: "PrintStash" }).click();
+    await expect(page.getByRole("heading", { name: "All Models" })).toBeVisible();
+
+    await page
+      .getByRole("main")
+      .getByRole("button", { name: /maraio/ })
+      .click();
+    await expect(page).toHaveURL(/\?c=maraio$/);
+    await expect(page.getByRole("heading", { name: "maraio" })).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("heading", { name: "All Models" })).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/settings$/);
+  });
+
   test("vault display choice survives reload", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Display" }).click();

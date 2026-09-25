@@ -18,6 +18,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
+import { useState } from "react";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,21 +78,32 @@ function renderSidebar(over: Partial<FilterSidebarProps> = {}) {
   };
   // Model leaves are links into the vault, so the tree needs a router even
   // though nothing here navigates.
-  const result = renderApp(
-    <FilterSidebar
-      collections={TREE}
-      models={[]}
-      tags={[aTag()]}
-      printers={[aPrinter({ id: 4, name: "Voron" })]}
-      selectedCollection={null}
-      selectedTags={[]}
-      selectedPrinterId={null}
-      selectedPrinterPresence={null}
-      libraryView="organized"
-      {...handlers}
-      {...over}
-    />,
-  );
+  function SidebarHarness() {
+    const [selectedCollection, setSelectedCollection] = useState(over.selectedCollection ?? null);
+    return (
+      <>
+        <output aria-label="Selected collection">{selectedCollection ?? "All Models"}</output>
+        <FilterSidebar
+          collections={TREE}
+          models={[]}
+          tags={[aTag()]}
+          printers={[aPrinter({ id: 4, name: "Voron" })]}
+          selectedTags={[]}
+          selectedPrinterId={null}
+          selectedPrinterPresence={null}
+          libraryView="organized"
+          {...handlers}
+          {...over}
+          selectedCollection={selectedCollection}
+          onCollectionChange={(path) => {
+            handlers.onCollectionChange(path);
+            setSelectedCollection(path);
+          }}
+        />
+      </>
+    );
+  }
+  const result = renderApp(<SidebarHarness />);
   return { ...result, ...handlers };
 }
 
@@ -125,6 +137,28 @@ describe("FilterSidebar", () => {
       await user.click(screen.getByText("Parts"));
 
       expect(onCollectionChange).toHaveBeenCalledWith("parts");
+    });
+
+    it("keeps a folder open after a double-click", async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.dblClick(screen.getByRole("button", { name: "Parts" }));
+
+      expect(screen.getByRole("status", { name: "Selected collection" })).toHaveTextContent(
+        "parts",
+      );
+    });
+
+    it("keeps the selected folder open on another click", async () => {
+      const user = userEvent.setup();
+      renderSidebar({ selectedCollection: "parts" });
+
+      await user.click(screen.getByRole("button", { name: "Parts" }));
+
+      expect(screen.getByRole("status", { name: "Selected collection" })).toHaveTextContent(
+        "parts",
+      );
     });
 
     it("returns to the whole library from the root entry", async () => {
@@ -468,6 +502,12 @@ describe("FilterSidebar", () => {
   });
 
   describe("filtering by tag", () => {
+    it("keeps tag names in their original case", () => {
+      renderSidebar({ tags: [aTag({ name: "Mixed Case" })] });
+
+      expect(screen.getByRole("button", { name: /Mixed Case/ })).not.toHaveClass("uppercase");
+    });
+
     it("includes multipart sets in shared tag counts", () => {
       renderSidebar({
         tags: [aTag({ model_count: 3, multipart_model_count: 2 })],

@@ -265,11 +265,11 @@ describe("AiSearchSetup", () => {
     await userEvent.click(screen.getByRole("button", { name: "Connect another server" }));
     expect(screen.getByRole("form", { name: "Inference server" })).toBeVisible();
   });
-  it("preserves advanced AI controls", async () => {
+  it("keeps guided setup available while visiting technical settings", async () => {
     setup();
-    await userEvent.click(await screen.findByRole("button", { name: "Advanced AI controls" }));
+    await userEvent.click(await screen.findByRole("tab", { name: "Technical" }));
     expect(await screen.findByRole("checkbox", { name: "Enable AI Search" })).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Back to guided setup" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Guided setup" }));
     expect(
       await screen.findByRole("heading", { name: "Where should AI Search run?" }),
     ).toBeVisible();

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { HardDrive, Server } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
   const { t } = useI18n();
   const statusLabel = (key: string) => t(isMessageKey(key) ? key : "aiSearch.unspecified");
   const [selection, setSelection] = useState("");
+  const [showIndexOptions, setShowIndexOptions] = useState(false);
   const [profile, setProfile] =
     useState<NonNullable<GenerationProposal["profile"]>>("semantic_text");
   const [aggregation, setAggregation] = useState<"mean" | "max">("mean");
@@ -143,379 +145,475 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
     (generation) => generation.state === "building" && generation.profile === profile,
   );
   const active = generations.data?.filter((generation) => generation.state === "active") ?? [];
+  const otherGenerations =
+    generations.data?.filter((generation) => generation.state !== "active") ?? [];
+  const localChoices =
+    models.data?.filter(
+      (model) =>
+        model.modality ===
+        (profile === "semantic_text"
+          ? "text"
+          : profile === "point_cloud"
+            ? "point_cloud"
+            : "text_image"),
+    ) ?? [];
+  const serverChoices =
+    profile === "semantic_text"
+      ? settings.endpoints.filter((endpoint) => endpoint.kind === "embedding")
+      : [];
+  const profileChoices = [
+    {
+      value: "semantic_text",
+      label: t("aiSearch.profile.semantic_text"),
+      help: t("aiSearch.profileHelp.semantic_text"),
+    },
+    {
+      value: "thumbnail",
+      label: t("aiSearch.profile.thumbnail"),
+      help: t("aiSearch.thumbnailHelp"),
+    },
+    {
+      value: "multiview",
+      label: t("aiSearch.profile.multiview"),
+      help: t("aiSearch.multiviewHelp"),
+    },
+    {
+      value: "point_cloud",
+      label: t("aiSearch.profile.point_cloud"),
+      help: t("aiSearch.pointCloudHelp"),
+    },
+  ] as const;
   return (
     <>
       <div className="border-t border-border bg-muted/30 px-4 py-4 sm:px-5">
-        <h4 className="text-sm font-semibold">{t("aiSearch.activeIndex")}</h4>
+        <h3 className="text-sm font-semibold">{t("aiSearch.activeIndex")}</h3>
         {generations.isPending ? (
           <p role="status" className="mt-1 text-sm text-muted-foreground">
             {t("aiSearch.loading")}
           </p>
         ) : active.length ? (
-          active.map((generation) => (
-            <p key={generation.id} className="mt-1 break-words text-sm">
-              {statusLabel(`aiSearch.profile.${generation.profile}`)} · {generation.model}
-            </p>
-          ))
+          <ul className="mt-2 divide-y divide-border">
+            {active.map((generation) => (
+              <li
+                key={generation.id}
+                className="flex flex-wrap items-center justify-between gap-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="break-words text-sm font-semibold">
+                    {statusLabel(`aiSearch.profile.${generation.profile}`)} · {generation.model}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t("aiSearch.indexProgress", {
+                      indexed: generation.indexed,
+                      total: generation.eligible,
+                    })}
+                  </p>
+                </div>
+                {generation.version_token &&
+                (generation.quarantined > 0 || !!generation.error_code) ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={action.isPending}
+                    onClick={() => action.mutate({ generation, action: "retry" })}
+                  >
+                    {t("aiSearch.retry")}
+                  </Button>
+                ) : (
+                  <Badge variant="success">{t("aiSearch.generation.active")}</Badge>
+                )}
+              </li>
+            ))}
+          </ul>
         ) : (
           <p className="mt-1 text-sm text-muted-foreground">{t("aiSearch.noActiveIndex")}</p>
         )}
       </div>
       <div className="space-y-4 border-t border-border p-4 sm:p-5">
-        <h4 className="text-sm font-semibold">{t("aiSearch.prepareIndex")}</h4>
-        <p className="max-w-prose text-xs text-muted-foreground">{t("aiSearch.pendingHelp")}</p>
-        <label className="block space-y-1 text-sm">
-          {t("aiSearch.indexPurpose")}
-          <select
-            className="block w-full rounded-md border border-input bg-background p-2"
-            value={profile}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (
-                value === "semantic_text" ||
-                value === "thumbnail" ||
-                value === "multiview" ||
-                value === "point_cloud"
-              ) {
-                setProfile(value);
-                setSelection("");
-                setDimension(0);
-              }
-            }}
-          >
-            <option value="semantic_text">{t("aiSearch.profile.semantic_text")}</option>
-            <option value="thumbnail">{t("aiSearch.profile.thumbnail")}</option>
-            <option value="multiview">{t("aiSearch.profile.multiview")}</option>
-            <option value="point_cloud">{t("aiSearch.profile.point_cloud")}</option>
-          </select>
-        </label>
-        {profile !== "semantic_text" && (
-          <p className="max-w-prose text-xs text-muted-foreground">
-            {t(
-              profile === "thumbnail"
-                ? "aiSearch.thumbnailHelp"
-                : profile === "point_cloud"
-                  ? "aiSearch.pointCloudHelp"
-                  : "aiSearch.multiviewHelp",
-            )}
-          </p>
-        )}
-        {profile === "multiview" && (
-          <label className="block space-y-1 text-sm">
-            {t("aiSearch.aggregation")}
-            <select
-              className="block w-full rounded-md border border-input bg-background p-2"
-              value={aggregation}
-              onChange={(event) => {
-                if (event.target.value === "mean" || event.target.value === "max")
-                  setAggregation(event.target.value);
-              }}
-            >
-              <option value="mean">{t("aiSearch.meanViews")}</option>
-              <option value="max">{t("aiSearch.bestView")}</option>
-            </select>
-          </label>
-        )}
-        <label className="block space-y-1 text-sm">
-          {t("aiSearch.modelOrServer")}
-          <select
-            className="block w-full rounded-md border border-input bg-background p-2"
-            value={selection}
-            onChange={(event) => {
-              setSelection(event.target.value);
-              setDimension(0);
-            }}
-          >
-            <option value="">{t("aiSearch.chooseModel")}</option>
-            <optgroup label={t("aiSearch.localModels")}>
-              {models.data
-                ?.filter(
-                  (model) =>
-                    model.modality ===
-                    (profile === "semantic_text"
-                      ? "text"
-                      : profile === "point_cloud"
-                        ? "point_cloud"
-                        : "text_image"),
-                )
-                .map((model) => (
-                  <option key={model.id} value={`local:${model.id}`}>
-                    {model.key} ·{" "}
-                    {t(model.installed ? "aiSearch.installed" : "aiSearch.downloadRequired")}
-                  </option>
+        <div hidden={showIndexOptions} className="space-y-4">
+          <h3 className="text-base font-semibold">{t("aiSearch.prepareIndex")}</h3>
+          <p className="max-w-prose text-sm text-muted-foreground">{t("aiSearch.pendingHelp")}</p>
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-semibold">{t("aiSearch.indexPurpose")}</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {profileChoices.map((choice) => (
+                <label
+                  key={choice.value}
+                  className={`flex cursor-pointer items-start gap-3 rounded-md p-3 text-sm focus-within:ring-2 focus-within:ring-ring ${profile === choice.value ? "bg-accent text-accent-foreground" : "outline outline-1 outline-border"}`}
+                >
+                  <input
+                    type="radio"
+                    name="ai-search-profile"
+                    className="mt-0.5 accent-primary"
+                    value={choice.value}
+                    checked={profile === choice.value}
+                    onChange={() => {
+                      setProfile(choice.value);
+                      setSelection("");
+                      setDimension(0);
+                    }}
+                  />
+                  <span className="min-w-0">
+                    <span className="block font-semibold">{choice.label}</span>
+                    <span className="mt-1 block text-xs opacity-80">{choice.help}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {profile === "multiview" && (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-semibold">{t("aiSearch.aggregation")}</legend>
+              <div className="flex flex-wrap gap-4">
+                {(["mean", "max"] as const).map((value) => (
+                  <label key={value} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="ai-search-aggregation"
+                      className="accent-primary"
+                      checked={aggregation === value}
+                      onChange={() => setAggregation(value)}
+                    />
+                    {t(value === "mean" ? "aiSearch.meanViews" : "aiSearch.bestView")}
+                  </label>
                 ))}
-            </optgroup>
-            {profile === "semantic_text" && (
-              <optgroup label={t("aiSearch.compatibleServers")}>
-                {settings.endpoints
-                  .filter((endpoint) => endpoint.kind === "embedding")
-                  .map((endpoint) => (
-                    <option key={endpoint.id} value={`endpoint:${endpoint.id}`}>
-                      {endpoint.model} · {endpoint.host}
-                    </option>
-                  ))}
-              </optgroup>
-            )}
-          </select>
-        </label>
-        {models.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {t("aiSearch.modelsError")}
-          </p>
-        )}
-        {local && (
-          <div className="space-y-2">
-            <dl className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
-              <div>
-                <dt className="text-muted-foreground">{t("aiSearch.languages")}</dt>
-                <dd>{local.languages.join(", ") || t("aiSearch.unspecified")}</dd>
               </div>
-              <div>
-                <dt className="text-muted-foreground">{t("aiSearch.license")}</dt>
-                <dd>{local.license ?? t("aiSearch.unspecified")}</dd>
+            </fieldset>
+          )}
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-semibold">{t("aiSearch.modelOrServer")}</legend>
+            <p className="text-xs text-muted-foreground">{t("aiSearch.newIndexModelHelp")}</p>
+            {localChoices.length + serverChoices.length ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {localChoices.map((model) => (
+                  <label
+                    key={model.id}
+                    className={`flex cursor-pointer items-start gap-3 rounded-md p-3 text-sm focus-within:ring-2 focus-within:ring-ring ${selection === `local:${model.id}` ? "bg-accent text-accent-foreground" : "outline outline-1 outline-border"}`}
+                  >
+                    <input
+                      type="radio"
+                      name="ai-search-model"
+                      className="mt-0.5 accent-primary"
+                      checked={selection === `local:${model.id}`}
+                      onChange={() => {
+                        setSelection(`local:${model.id}`);
+                        setDimension(0);
+                      }}
+                    />
+                    <HardDrive className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    <span className="min-w-0">
+                      <span className="block break-words font-semibold">{model.key}</span>
+                      <span className="mt-1 block text-xs opacity-80">
+                        {t("aiSearch.localModels")} ·{" "}
+                        {t(model.installed ? "aiSearch.installed" : "aiSearch.downloadRequired")} ·{" "}
+                        {formatBytes(model.size_bytes)}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+                {serverChoices.map((endpoint) => (
+                  <label
+                    key={endpoint.id}
+                    className={`flex cursor-pointer items-start gap-3 rounded-md p-3 text-sm focus-within:ring-2 focus-within:ring-ring ${selection === `endpoint:${endpoint.id}` ? "bg-accent text-accent-foreground" : "outline outline-1 outline-border"}`}
+                  >
+                    <input
+                      type="radio"
+                      name="ai-search-model"
+                      className="mt-0.5 accent-primary"
+                      checked={selection === `endpoint:${endpoint.id}`}
+                      onChange={() => {
+                        setSelection(`endpoint:${endpoint.id}`);
+                        setDimension(0);
+                      }}
+                    />
+                    <Server className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    <span className="min-w-0">
+                      <span className="block break-words font-semibold">{endpoint.model}</span>
+                      <span className="mt-1 block break-all text-xs opacity-80">
+                        {endpoint.host} · {t("aiSearch.compatibleServers")}
+                      </span>
+                    </span>
+                  </label>
+                ))}
               </div>
-              <div>
-                <dt className="text-muted-foreground">{t("aiSearch.modelSize")}</dt>
-                <dd>{formatBytes(local.size_bytes)}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">{t("aiSearch.nativeDimension")}</dt>
-                <dd>{local.native_dimension}</dd>
-              </div>
-              <div className="min-w-0 sm:col-span-2">
-                <dt className="text-muted-foreground">{t("aiSearch.provenance")}</dt>
-                <dd className="break-all">
-                  {local.repository ?? local.key}@{local.revision}
-                </dd>
-              </div>
-            </dl>
-            {!local.runtime_available && (
-              <p role="status" className="text-sm text-warning">
-                {t("aiSearch.runtimeUnavailable")}
+            ) : (
+              <p className="rounded-md border border-border p-4 text-sm text-muted-foreground">
+                {t("aiSearch.noCompatibleModels")}
               </p>
             )}
-            <div className="flex flex-wrap gap-2">
-              {!local.installed && local.curated && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  loading={download.isPending}
-                  disabled={
-                    !settings.settings.enabled ||
-                    !settings.settings.local_models_enabled ||
-                    !settings.settings.download_enabled ||
-                    !local.runtime_available ||
-                    downloads.data?.some((job) => job.state === "running" || job.state === "queued")
-                  }
-                  onClick={() => download.mutate(local.key)}
-                >
-                  {t("aiSearch.downloadModel")}
-                </Button>
-              )}
-              {local.installed && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  loading={validate.isPending}
-                  disabled={!local.runtime_available}
-                  onClick={() => validate.mutate(local.id)}
-                >
-                  {t("aiSearch.verifyModel")}
-                </Button>
-              )}
-              {local.installed && !local.referenced && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  loading={remove.isPending}
-                  onClick={() => remove.mutate(local.id)}
-                >
-                  {t("aiSearch.removeModel")}
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-        {remote && (
-          <p className="text-sm text-muted-foreground">
-            {t("aiSearch.indexDisclosure", { host: remote.host })}
-          </p>
-        )}
-        <details className="space-y-4 border-t pt-3">
-          <summary className="cursor-pointer text-sm font-medium">
-            {t("aiSearch.indexAdvanced")}
-          </summary>
-          <p className="text-xs text-muted-foreground">{t("aiSearch.indexDefaultsHelp")}</p>
-          <details>
-            <summary className="cursor-pointer text-sm font-medium">
-              {t("aiSearch.offlineCustom")}
-            </summary>
-            <p className="mt-2 max-w-prose text-xs leading-relaxed text-muted-foreground">
-              {t("aiSearch.offlineHelp")}
+          </fieldset>
+          {models.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {t("aiSearch.modelsError")}
             </p>
-            <Button variant="ghost" size="sm" onClick={() => void models.refetch()}>
-              {t("aiSearch.refreshModels")}
-            </Button>
-          </details>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="space-y-1 text-sm">
-              {t("aiSearch.indexDimension")}
-              <select
-                className="block w-full rounded-md border border-input bg-background p-2"
-                value={dimension}
-                onChange={(event) => setDimension(Number(event.target.value))}
-              >
-                <option value={0}>{t("aiSearch.nativeDimension")}</option>
-                {dimensions.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-1 text-sm">
-              {t("aiSearch.quantization")}
-              <select
-                className="block w-full rounded-md border border-input bg-background p-2"
-                value={quantization}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (value === "float32" || value === "int8" || value === "binary")
-                    setQuantization(value);
-                }}
-              >
-                <option value="float32">{t("aiSearch.float32")}</option>
-                <option value="int8">{t("aiSearch.int8")}</option>
-                <option value="binary">{t("aiSearch.binary")}</option>
-              </select>
-            </label>
-            <label className="space-y-1 text-sm">
-              {t("aiSearch.backend")}
-              <select
-                className="block w-full rounded-md border border-input bg-background p-2"
-                value={indexBackend}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (value === "auto" || value === "numpy") setIndexBackend(value);
-                }}
-              >
-                <option value="auto">{t("aiSearch.autoBackend")}</option>
-                <option value="numpy">{t("aiSearch.portableBackend")}</option>
-              </select>
-            </label>
-          </div>
-          {profile === "semantic_text" && (
-            <details>
-              <summary className="cursor-pointer text-sm font-medium">
-                {t("aiSearch.inputRecipe")}
-              </summary>
-              <label className="mt-3 flex items-center gap-2 text-sm">
-                <Checkbox
-                  ariaLabel={t("aiSearch.customPrefixes")}
-                  checked={customPrefixes}
-                  onChange={setCustomPrefixes}
-                />
-                {t("aiSearch.customPrefixes")}
-              </label>
-              {customPrefixes && (
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-1 text-sm">
-                    {t("aiSearch.queryPrefix")}
-                    <Input
-                      value={queryPrefix}
-                      maxLength={256}
-                      onChange={(event) => setQueryPrefix(event.target.value)}
-                    />
-                  </label>
-                  <label className="space-y-1 text-sm">
-                    {t("aiSearch.documentPrefix")}
-                    <Input
-                      value={documentPrefix}
-                      maxLength={256}
-                      onChange={(event) => setDocumentPrefix(event.target.value)}
-                    />
-                  </label>
-                </div>
-              )}
-            </details>
           )}
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox
-              ariaLabel={t("aiSearch.autoActivate")}
-              checked={autoActivate}
-              onChange={setAutoActivate}
-            />
-            {t("aiSearch.autoActivate")}
-          </label>
-        </details>
-        <p role="status" className="text-sm text-muted-foreground">
-          {!settings.settings.enabled
-            ? t("aiSearch.enableFirst")
-            : !proposal
-              ? t("aiSearch.chooseFirst")
-              : local && !settings.settings.local_models_enabled
-                ? t("aiSearch.localFirst")
-                : local && !local.runtime_available
-                  ? t("aiSearch.runtimeUnavailable")
-                  : local && !local.installed
-                    ? t(
-                        settings.settings.download_enabled
-                          ? "aiSearch.downloadFirst"
-                          : "aiSearch.allowFirst",
+          {local && (
+            <div className="space-y-2">
+              <dl className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+                <div>
+                  <dt className="text-muted-foreground">{t("aiSearch.languages")}</dt>
+                  <dd>{local.languages.join(", ") || t("aiSearch.unspecified")}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t("aiSearch.license")}</dt>
+                  <dd>{local.license ?? t("aiSearch.unspecified")}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t("aiSearch.modelSize")}</dt>
+                  <dd>{formatBytes(local.size_bytes)}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t("aiSearch.nativeDimension")}</dt>
+                  <dd>{local.native_dimension}</dd>
+                </div>
+                <div className="min-w-0 sm:col-span-2">
+                  <dt className="text-muted-foreground">{t("aiSearch.provenance")}</dt>
+                  <dd className="break-all">
+                    {local.repository ?? local.key}@{local.revision}
+                  </dd>
+                </div>
+              </dl>
+              {!local.runtime_available && (
+                <p role="status" className="text-sm text-warning">
+                  {t("aiSearch.runtimeUnavailable")}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {!local.installed && local.curated && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={download.isPending}
+                    disabled={
+                      !settings.settings.enabled ||
+                      !settings.settings.local_models_enabled ||
+                      !settings.settings.download_enabled ||
+                      !local.runtime_available ||
+                      downloads.data?.some(
+                        (job) => job.state === "running" || job.state === "queued",
                       )
-                    : building
-                      ? t("aiSearch.alreadyBuilding")
-                      : currentEstimate?.fits_budget === false
-                        ? t("aiSearch.overBudget")
-                        : t("aiSearch.readyToBuild")}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            loading={estimate.isPending}
-            disabled={!proposal || (!!local && !local.installed)}
-            onClick={() => {
-              if (proposal) estimate.mutate(proposal);
-            }}
-          >
-            {t("aiSearch.estimate")}
-          </Button>
-          <Button
-            loading={prepare.isPending}
-            disabled={!canPrepare || building || currentEstimate?.fits_budget === false}
-            onClick={() => {
-              if (proposal) prepare.mutate(proposal);
-            }}
-          >
-            {t("aiSearch.buildIndex")}
+                    }
+                    onClick={() => download.mutate(local.key)}
+                  >
+                    {t("aiSearch.downloadModel")}
+                  </Button>
+                )}
+                {local.installed && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={validate.isPending}
+                    disabled={!local.runtime_available}
+                    onClick={() => validate.mutate(local.id)}
+                  >
+                    {t("aiSearch.verifyModel")}
+                  </Button>
+                )}
+                {local.installed && !local.referenced && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={remove.isPending}
+                    onClick={() => remove.mutate(local.id)}
+                  >
+                    {t("aiSearch.removeModel")}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+          {remote && (
+            <p className="text-sm text-muted-foreground">
+              {t("aiSearch.indexDisclosure", { host: remote.host })}
+            </p>
+          )}
+          <Button variant="outline" size="sm" onClick={() => setShowIndexOptions(true)}>
+            {t("aiSearch.customizeIndex")}
           </Button>
         </div>
-        {currentEstimate && (
+        <div hidden={!showIndexOptions} className="space-y-4">
+          <Button variant="ghost" size="sm" onClick={() => setShowIndexOptions(false)}>
+            {t("aiSearch.backToChoices")}
+          </Button>
+          <section
+            className="space-y-4 rounded-md border border-border p-4"
+            aria-label={t("aiSearch.indexAdvanced")}
+          >
+            <div>
+              <h4 className="text-sm font-semibold">{t("aiSearch.indexAdvanced")}</h4>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("aiSearch.indexDefaultsHelp")}
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1 text-sm">
+                {t("aiSearch.indexDimension")}
+                <select
+                  className="block w-full rounded-md border border-input bg-background p-2"
+                  value={dimension}
+                  onChange={(event) => setDimension(Number(event.target.value))}
+                >
+                  <option value={0}>{t("aiSearch.nativeDimension")}</option>
+                  {dimensions.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                {t("aiSearch.quantization")}
+                <select
+                  className="block w-full rounded-md border border-input bg-background p-2"
+                  value={quantization}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "float32" || value === "int8" || value === "binary")
+                      setQuantization(value);
+                  }}
+                >
+                  <option value="float32">{t("aiSearch.float32")}</option>
+                  <option value="int8">{t("aiSearch.int8")}</option>
+                  <option value="binary">{t("aiSearch.binary")}</option>
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                {t("aiSearch.backend")}
+                <select
+                  className="block w-full rounded-md border border-input bg-background p-2"
+                  value={indexBackend}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "auto" || value === "numpy") setIndexBackend(value);
+                  }}
+                >
+                  <option value="auto">{t("aiSearch.autoBackend")}</option>
+                  <option value="numpy">{t("aiSearch.portableBackend")}</option>
+                </select>
+              </label>
+            </div>
+            {profile === "semantic_text" && (
+              <div className="space-y-2 border-t border-border pt-3">
+                <h5 className="text-sm font-medium">{t("aiSearch.inputRecipe")}</h5>
+                <label className="mt-3 flex items-center gap-2 text-sm">
+                  <Checkbox
+                    ariaLabel={t("aiSearch.customPrefixes")}
+                    checked={customPrefixes}
+                    onChange={setCustomPrefixes}
+                  />
+                  {t("aiSearch.customPrefixes")}
+                </label>
+                {customPrefixes && (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="space-y-1 text-sm">
+                      {t("aiSearch.queryPrefix")}
+                      <Input
+                        value={queryPrefix}
+                        maxLength={256}
+                        onChange={(event) => setQueryPrefix(event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      {t("aiSearch.documentPrefix")}
+                      <Input
+                        value={documentPrefix}
+                        maxLength={256}
+                        onChange={(event) => setDocumentPrefix(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                ariaLabel={t("aiSearch.autoActivate")}
+                checked={autoActivate}
+                onChange={setAutoActivate}
+              />
+              {t("aiSearch.autoActivate")}
+            </label>
+            <div className="space-y-2 border-t border-border pt-3">
+              <h5 className="text-sm font-medium">{t("aiSearch.offlineCustom")}</h5>
+              <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
+                {t("aiSearch.offlineHelp")}
+              </p>
+              <Button variant="outline" size="sm" onClick={() => void models.refetch()}>
+                {t("aiSearch.refreshModels")}
+              </Button>
+            </div>
+          </section>
+        </div>
+        <div hidden={showIndexOptions} className="space-y-4">
           <p role="status" className="text-sm text-muted-foreground">
-            {t(
-              profile === "semantic_text"
-                ? "aiSearch.estimateResult"
-                : "aiSearch.estimateVisualResult",
-              {
-                count: currentEstimate.passages,
-                size: formatBytes(currentEstimate.estimated_bytes),
-                existing: formatBytes(currentEstimate.existing_bytes),
-                time:
-                  currentEstimate.estimated_seconds === null
-                    ? t("aiSearch.estimateUnknown")
-                    : formatDuration(currentEstimate.estimated_seconds),
-              },
-            )}
-            {!currentEstimate.fits_budget && (
-              <span className="block text-destructive">{t("aiSearch.overBudget")}</span>
-            )}
+            {!settings.settings.enabled
+              ? t("aiSearch.enableFirst")
+              : !proposal
+                ? t("aiSearch.chooseFirst")
+                : local && !settings.settings.local_models_enabled
+                  ? t("aiSearch.localFirst")
+                  : local && !local.runtime_available
+                    ? t("aiSearch.runtimeUnavailable")
+                    : local && !local.installed
+                      ? t(
+                          settings.settings.download_enabled
+                            ? "aiSearch.downloadFirst"
+                            : "aiSearch.allowFirst",
+                        )
+                      : building
+                        ? t("aiSearch.alreadyBuilding")
+                        : currentEstimate?.fits_budget === false
+                          ? t("aiSearch.overBudget")
+                          : t("aiSearch.readyToBuild")}
           </p>
-        )}
-        {prepare.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {t("aiSearch.buildError")}
-          </p>
-        )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              loading={estimate.isPending}
+              disabled={!proposal || (!!local && !local.installed)}
+              onClick={() => {
+                if (proposal) estimate.mutate(proposal);
+              }}
+            >
+              {t("aiSearch.estimate")}
+            </Button>
+            <Button
+              loading={prepare.isPending}
+              disabled={!canPrepare || building || currentEstimate?.fits_budget === false}
+              onClick={() => {
+                if (proposal) prepare.mutate(proposal);
+              }}
+            >
+              {t("aiSearch.buildIndex")}
+            </Button>
+          </div>
+          {currentEstimate && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t(
+                profile === "semantic_text"
+                  ? "aiSearch.estimateResult"
+                  : "aiSearch.estimateVisualResult",
+                {
+                  count: currentEstimate.passages,
+                  size: formatBytes(currentEstimate.estimated_bytes),
+                  existing: formatBytes(currentEstimate.existing_bytes),
+                  time:
+                    currentEstimate.estimated_seconds === null
+                      ? t("aiSearch.estimateUnknown")
+                      : formatDuration(currentEstimate.estimated_seconds),
+                },
+              )}
+              {!currentEstimate.fits_budget && (
+                <span className="block text-destructive">{t("aiSearch.overBudget")}</span>
+              )}
+            </p>
+          )}
+          {prepare.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {t("aiSearch.buildError")}
+            </p>
+          )}
+        </div>
       </div>
       {!!downloads.data?.length && (
         <div className="border-t border-border px-4 py-3 sm:px-5">
@@ -565,11 +663,11 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
             {t("aiSearch.historyError")}
           </p>
         )}
-        {generations.data?.length === 0 && (
+        {otherGenerations.length === 0 && !generations.isPending && !generations.isError && (
           <p className="mt-2 text-sm text-muted-foreground">{t("aiSearch.noHistory")}</p>
         )}
         <ul className="mt-2 divide-y divide-border">
-          {generations.data?.map((generation) => (
+          {otherGenerations.map((generation) => (
             <li
               key={generation.id}
               className="flex flex-wrap items-start justify-between gap-3 py-3"

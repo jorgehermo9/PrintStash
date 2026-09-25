@@ -31,8 +31,10 @@ cd frontend
 pnpm lint          # oxlint (+ vendored anti-slop plugin) — report the exact count from the run
 pnpm format:check  # oxfmt — formatting is a CI gate; `pnpm format` writes
 pnpm typecheck     # tsc --noEmit, root + both workspace packages
-pnpm test          # vitest, when logic changed
+pnpm exec vitest run <affected-test-paths>  # logic in the changed component or flow
 ```
+
+Choose affected files and browser specs with [running tests](running-tests.md).
 
 Writing or changing tests (vitest or Playwright): [test design](testing.md)
 and its [frontend](tests/frontend.md) / [Playwright](tests/playwright.md) references.

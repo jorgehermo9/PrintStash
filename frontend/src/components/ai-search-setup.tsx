@@ -411,41 +411,67 @@ export function AiSearchSetup({
                       </p>
                     </div>
                     {((path === "local" && choices.length > 1) || path === "server") && (
-                      <details>
-                        <summary className="cursor-pointer py-3 text-sm font-medium">
+                      <fieldset className="space-y-3">
+                        <legend className="text-sm font-semibold">
                           {t("Choose a different AI model")}
-                        </summary>
-                        <label className="block space-y-2 text-sm">
-                          {t("AI model")}
-                          <select
-                            className="min-h-11 w-full rounded-md border border-input bg-background p-2"
-                            value={path === "local" ? local?.id : remote?.id}
-                            disabled={busy || !!downloading}
-                            onChange={(event) => {
-                              if (path === "local") setSelected(event.target.value);
-                              else setEndpointId(Number(event.target.value));
-                              setMessage(null);
-                            }}
-                          >
-                            {path === "local"
-                              ? choices.map((model) => (
-                                  <option key={model.id} value={model.id}>
-                                    {model.key} · {formatBytes(model.size_bytes)}
-                                  </option>
-                                ))
-                              : servers.map((server) => (
-                                  <option key={server.id} value={server.id}>
-                                    {server.model} · {server.host}
-                                  </option>
-                                ))}
-                          </select>
-                        </label>
+                        </legend>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {path === "local"
+                            ? choices.map((model) => (
+                                <label
+                                  key={model.id}
+                                  className={`flex cursor-pointer items-start gap-2 rounded-md p-3 text-sm focus-within:ring-2 focus-within:ring-ring ${local?.id === model.id ? "bg-accent text-accent-foreground" : "outline outline-1 outline-border"}`}
+                                >
+                                  <input
+                                    type="radio"
+                                    name="guided-ai-model"
+                                    className="mt-0.5 accent-primary"
+                                    checked={local?.id === model.id}
+                                    disabled={busy || !!downloading}
+                                    onChange={() => {
+                                      setSelected(model.id);
+                                      setMessage(null);
+                                    }}
+                                  />
+                                  <span className="min-w-0 break-words">
+                                    {model.key}
+                                    <span className="mt-1 block text-xs opacity-80">
+                                      {formatBytes(model.size_bytes)}
+                                    </span>
+                                  </span>
+                                </label>
+                              ))
+                            : servers.map((server) => (
+                                <label
+                                  key={server.id}
+                                  className={`flex cursor-pointer items-start gap-2 rounded-md p-3 text-sm focus-within:ring-2 focus-within:ring-ring ${remote?.id === server.id ? "bg-accent text-accent-foreground" : "outline outline-1 outline-border"}`}
+                                >
+                                  <input
+                                    type="radio"
+                                    name="guided-ai-model"
+                                    className="mt-0.5 accent-primary"
+                                    checked={remote?.id === server.id}
+                                    disabled={busy || !!downloading}
+                                    onChange={() => {
+                                      setEndpointId(server.id);
+                                      setMessage(null);
+                                    }}
+                                  />
+                                  <span className="min-w-0 break-words">
+                                    {server.model}
+                                    <span className="mt-1 block break-all text-xs opacity-80">
+                                      {server.host}
+                                    </span>
+                                  </span>
+                                </label>
+                              ))}
+                        </div>
                         {path === "server" && (
                           <Button variant="ghost" onClick={() => setConnecting(true)}>
                             {t("Connect a new server")}
                           </Button>
                         )}
-                      </details>
+                      </fieldset>
                     )}
                     {!enabled ? (
                       <>

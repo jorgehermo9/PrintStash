@@ -107,7 +107,7 @@ and caption mocks and an obsolete Spanish accessible-label locator are corrected
 The real-browser helper waits for the toolbar before choosing its responsive menu, and the Similar saved-view workflow opens the advanced filters and Library
 tools explicitly. Local real-backend runs verified the AI-search headline flow,
 collection creation/deletion, saved views, Favorites, multipart creation, all three
-Family flows, Similar review, batch tag/delete, selection moves with Undo, revision labels and
+Similar review, batch tag/delete, selection moves with Undo, revision labels and
 permission preflight. The required WebDAV restart/safe-GC flow also passed after
 correcting its stale heading assertion to the base branch’s “Storage location”
 label. The remote-backup suite also opens the existing migration disclosure before
@@ -200,7 +200,7 @@ Status denotes final verified evidence, not merely a test's presence.
 | 5 | Cards omit explanations | Happy | Evidence-bearing results | No explanation disclosure | Frontend unit | ✅ CI unit/coverage |
 | 6 | Advanced filters start collapsed | Happy | Default library | Collection navigation visible | Frontend unit | ✅ CI unit/coverage |
 | 7 | Active filters are discoverable | Edge | Shared URL/saved view | Expanded sections and chips | Frontend unit/browser | ✅ CI unit and mock-browser |
-| 8 | Clear all resets advanced filters | Edge | Family and ordinary filters | Default filtering, preserved sort | Frontend unit | ✅ CI unit/coverage |
+| 8 | Clear all resets advanced filters | Edge | Structured library filters | Default filtering, preserved sort | Frontend unit | ✅ CI unit/coverage |
 | 9 | Secondary actions retain permissions | Error | Read-only collection | Restricted actions disabled | Frontend unit | ✅ CI unit/coverage |
 | 10 | Tabs fit narrow panels | Edge | 400px detail panel | No horizontal overflow | Playwright | ✅ CI narrow-panel browser |
 | 11 | Similar names remain readable | Edge | Narrow desktop panel | Name width and reachable Compare | Playwright | ✅ CI narrow-panel browser |
@@ -211,7 +211,7 @@ Status denotes final verified evidence, not merely a test's presence.
 | 16 | Search respects visibility | Error | Private/trashed/filtered candidates | No unauthorized results | Backend integration/PostgreSQL | ✅ Both candidate paths and PostgreSQL cases |
 | 17 | Semantic failure preserves keywords | Error | Inference failure | Keyword results, accurate status | Backend integration | ✅ 46-case schema/retrieval run |
 | 18 | Revised search works end to end | Happy | Real backend/local index | Library → explicit AI results | Real-backend Playwright | ✅ Real local-index headline flow |
-| 19 | Selection always offers Done | Edge | Grouped Family view, keyboard selection | Count and Done visible outside tools | Frontend unit | ✅ CI unit/coverage |
+| 19 | Selection always offers Done | Edge | Library view, keyboard selection | Count and Done visible outside tools | Frontend unit | ✅ CI unit/coverage |
 | 20 | Localized search shortcut | Happy | Spanish UI, slash key | Search library receives focus | Playwright | ✅ Six focused browser cases |
 | 21 | Independent consumer sees deferred publication | Edge | Background projection already leased | All four searchable subject types returned | Backend e2e | ✅ Isolated consumer cases |
 | 22 | Revoked local consent cancels warmup | Edge | Concurrent WAL read/write | Loader stops; provider is not warm | Backend integration | ✅ Focused compatibility regressions |

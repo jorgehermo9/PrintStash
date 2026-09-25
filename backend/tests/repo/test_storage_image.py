@@ -1,8 +1,7 @@
 """The release wheel and native image jobs cover every advertised transport.
 
 Development wheels cannot prove which services a custom release wheel compiled.
-These build contracts keep both API images built natively on both
-architectures at release; pull-request CI no longer builds images (#236).
+These build contracts keep both backend image variants on both architectures.
 """
 
 from __future__ import annotations
@@ -23,19 +22,11 @@ class TestStorageImage:
         assert feature_line is not None
         assert "services-s3" in feature_line.group(1).split(",")
 
-    def test_releases_each_backend_image_on_its_native_architecture(self) -> None:
+    def test_checks_each_backend_image_on_its_native_architecture(self) -> None:
         workflow = yaml.safe_load(
             (REPO_ROOT / ".github/workflows/container-publish.yml").read_text()
         )
-        job = next(
-            value
-            for value in workflow["jobs"].values()
-            if "matrix" in value.get("strategy", {})
-            and any(
-                row.get("image") == "printstash-api"
-                for row in value["strategy"]["matrix"].get("include", [])
-            )
-        )
+        job = workflow["jobs"]["build"]
         images = [
             row
             for row in job["strategy"]["matrix"]["include"]
@@ -48,7 +39,36 @@ class TestStorageImage:
             ("printstash-api-lite", "amd64"),
             ("printstash-api-lite", "arm64"),
         }
-        # Native runners, never QEMU: an ARM image is built on an ARM machine.
         assert all(
-            ("arm" in row["runner"]) == (row["arch"] == "arm64") for row in images
+            row["platform"] == f"linux/{row['arch']}"
+            and row["runner"]
+            == ("ubuntu-latest" if row["arch"] == "amd64" else "ubuntu-24.04-arm")
+            for row in images
+        )
+        steps = job["steps"]
+        assert any(
+            step.get("uses", "").startswith("docker/build-push-action@")
+            for step in steps
+        )
+        smoke = next(
+            step
+            for step in steps
+            if step.get("name") == "Test backend image before exporting digest"
+        )
+        assert smoke["if"] == "startsWith(matrix.image, 'printstash-api')"
+        assert smoke["env"]["VARIANT"] == (
+            "${{ matrix.image == 'printstash-api' && 'full' || 'lite' }}"
+        )
+        assert smoke["env"]["DIGEST"] == "${{ steps.build.outputs.digest }}"
+        assert smoke["run"].index('docker pull "$image"') < smoke["run"].index(
+            "./scripts/test.sh image"
+        )
+        assert '--image "$image" --variant "$VARIANT"' in smoke["run"]
+        assert steps.index(smoke) < next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Export digest"
+        )
+        assert any(
+            "test-unified-image.sh" in step.get("run", "") for step in steps
         )

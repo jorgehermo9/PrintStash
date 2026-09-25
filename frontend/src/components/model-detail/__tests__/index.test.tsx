@@ -386,7 +386,7 @@ describe("ModelDetail", () => {
       });
       await openEdit(user);
 
-      await user.click(screen.getByRole("button", { name: "parts" }));
+      await user.click(screen.getByRole("button", { name: "Parts" }));
       await user.click(screen.getByRole("option", { name: "None" }));
       await user.click(screen.getByRole("button", { name: "Save" }));
 

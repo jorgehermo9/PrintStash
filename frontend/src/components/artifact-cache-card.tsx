@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Localized } from "@/components/ui/localized";
 import { artifactCacheApi, type ArtifactCacheRead } from "@/lib/api/artifact-cache";
+import { formatBytes } from "@/lib/format";
 import { uiText } from "@/lib/locale";
 import { toast } from "@/lib/toast";
 
@@ -102,7 +103,7 @@ export function ArtifactCacheCard({ api = artifactCacheApi }: { api?: typeof art
     <Localized>
       <Card>
         <CardHeader>
-          <CardTitle>{uiText("Remote Artifact cache")}</CardTitle>
+          <CardTitle>{uiText("Remote file cache")}</CardTitle>
           <CardDescription>
             {uiText(
               "Reuse verified remote files for previews, printing, and downloads. Original files remain in Vault storage.",
@@ -142,50 +143,62 @@ export function ArtifactCacheCard({ api = artifactCacheApi }: { api?: typeof art
                 />
                 <span>{uiText("Enable remote Artifact cache")}</span>
               </label>
-              <p className="text-xs text-muted-foreground">
-                {uiText(
-                  "Disabling stops new cache use. Active reads can finish. Clear cached files separately to reclaim space.",
+              <p className="text-sm tabular-nums text-muted-foreground">
+                {formatBytes(usage.bytes ?? 0)} {uiText("cached")} · {usage.entries ?? 0}{" "}
+                {uiText("files")}
+                {(usage.leases ?? 0) > 0 && (
+                  <>
+                    {" "}
+                    · {usage.leases} {uiText("active reads")}
+                  </>
                 )}
               </p>
-              <p className="text-sm text-muted-foreground">
-                {uiText("Policy source:")}{" "}
-                {value.source === "database"
-                  ? uiText("Saved settings")
-                  : uiText("Environment defaults")}
-                . {uiText("Limits apply immediately; changing the folder requires a restart.")}
-              </p>
-              <div className="grid gap-4 sm:grid-cols-2">
-                {LIMITS.map(({ name, labelKey, min }) => (
-                  <label className="space-y-1" key={name}>
-                    <span className="block text-sm">{uiText(labelKey)}</span>
+              <details className="rounded-md border border-border px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {uiText("Advanced cache settings")}
+                </summary>
+                <div className="mt-4 space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    {uiText("Policy source:")}{" "}
+                    {value.source === "database"
+                      ? uiText("Saved settings")
+                      : uiText("Environment defaults")}
+                    . {uiText("Limits apply immediately; changing the folder requires a restart.")}
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {LIMITS.map(({ name, labelKey, min }) => (
+                      <label className="space-y-1" key={name}>
+                        <span className="block text-sm">{uiText(labelKey)}</span>
+                        <Input
+                          required
+                          type="number"
+                          min={min}
+                          step={1}
+                          value={policy[name]}
+                          disabled={busy}
+                          onChange={(event) =>
+                            setValue({
+                              ...value,
+                              policy: { ...policy, [name]: event.target.valueAsNumber },
+                            })
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <label className="block space-y-1">
+                    <span className="text-sm">{uiText("Cache folder (restart required)")}</span>
                     <Input
                       required
-                      type="number"
-                      min={min}
-                      step={1}
-                      value={policy[name]}
+                      value={policy.root}
                       disabled={busy}
                       onChange={(event) =>
-                        setValue({
-                          ...value,
-                          policy: { ...policy, [name]: event.target.valueAsNumber },
-                        })
+                        setValue({ ...value, policy: { ...policy, root: event.target.value } })
                       }
                     />
                   </label>
-                ))}
-              </div>
-              <label className="block space-y-1">
-                <span className="text-sm">{uiText("Cache folder (restart required)")}</span>
-                <Input
-                  required
-                  value={policy.root}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setValue({ ...value, policy: { ...policy, root: event.target.value } })
-                  }
-                />
-              </label>
+                </div>
+              </details>
               {value.restart_required && (
                 <p role="status" className="text-sm text-warning">
                   {uiText("Restart PrintStash to use the new cache folder.")}
@@ -196,47 +209,50 @@ export function ArtifactCacheCard({ api = artifactCacheApi }: { api?: typeof art
                   {uiText("The cache is unavailable. Files are read from their original storage.")}
                 </p>
               )}
-              <p className="text-sm tabular-nums text-muted-foreground">
-                {usage.bytes ?? 0} {uiText("bytes cached")} · {usage.entries ?? 0} {uiText("files")}{" "}
-                · {usage.leases ?? 0} {uiText("active reads")}
-              </p>
-              <dl className="grid grid-cols-2 gap-3 text-sm tabular-nums sm:grid-cols-3">
-                {[
-                  [uiText("Maximum bytes"), policy.max_bytes],
-                  [uiText("Hit ratio"), `${usage.hit_ratio_percent ?? 0}%`],
-                  [uiText("Provider bytes saved"), usage.bytes_saved ?? 0],
-                  [uiText("Cache hits"), usage.hits ?? 0],
-                  [uiText("Cache misses"), usage.misses ?? 0],
-                  [uiText("Completed downloads"), usage.completed_fills ?? 0],
-                  [uiText("Publication failures"), usage.publication_failures ?? 0],
-                  [uiText("Corruptions"), usage.corruptions ?? 0],
-                  [uiText("Cache errors"), usage.errors ?? 0],
-                  [uiText("Evictions"), usage.evictions ?? 0],
-                  [uiText("Bypasses"), usage.bypasses ?? 0],
-                ].map(([label, count]) => (
-                  <div key={label}>
-                    <dt className="text-muted-foreground">{label}</dt>
-                    <dd>{count}</dd>
-                  </div>
-                ))}
-              </dl>
-              <p className="text-xs text-muted-foreground">
-                {uiText("Last verification:")}{" "}
-                {usage.last_verification
-                  ? new Date(usage.last_verification * 1000).toLocaleString()
-                  : uiText("No cached files verified yet")}
-                .
-              </p>
-              {health !== "ready" && health !== "disabled" && (
-                <p role="status" className="text-sm text-warning">
-                  {uiText("Cache needs attention")} ({health.replaceAll("_", " ")}).{" "}
-                  {uiText("Original Vault storage remains authoritative.")}
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                {uiText("Representation:")} {labels.representation} · {uiText("Storage provider:")}{" "}
-                {labels.backend}
-              </p>
+              <details className="rounded-md border border-border px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {uiText("Cache activity and diagnostics")}
+                </summary>
+                <div className="mt-4 space-y-4">
+                  <dl className="grid grid-cols-2 gap-3 text-sm tabular-nums sm:grid-cols-3">
+                    {[
+                      [uiText("Maximum bytes"), policy.max_bytes],
+                      [uiText("Hit ratio"), `${usage.hit_ratio_percent ?? 0}%`],
+                      [uiText("Provider bytes saved"), usage.bytes_saved ?? 0],
+                      [uiText("Cache hits"), usage.hits ?? 0],
+                      [uiText("Cache misses"), usage.misses ?? 0],
+                      [uiText("Completed downloads"), usage.completed_fills ?? 0],
+                      [uiText("Publication failures"), usage.publication_failures ?? 0],
+                      [uiText("Corruptions"), usage.corruptions ?? 0],
+                      [uiText("Cache errors"), usage.errors ?? 0],
+                      [uiText("Evictions"), usage.evictions ?? 0],
+                      [uiText("Bypasses"), usage.bypasses ?? 0],
+                    ].map(([label, count]) => (
+                      <div key={label}>
+                        <dt className="text-muted-foreground">{label}</dt>
+                        <dd>{count}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <p className="text-xs text-muted-foreground">
+                    {uiText("Last verification:")}{" "}
+                    {usage.last_verification
+                      ? new Date(usage.last_verification * 1000).toLocaleString()
+                      : uiText("No cached files verified yet")}
+                    .
+                  </p>
+                  {health !== "ready" && health !== "disabled" && (
+                    <p role="status" className="text-sm text-warning">
+                      {uiText("Cache needs attention")} ({health.replaceAll("_", " ")}).{" "}
+                      {uiText("Original Vault storage remains authoritative.")}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    {uiText("Representation:")} {labels.representation} ·{" "}
+                    {uiText("Storage provider:")} {labels.backend}
+                  </p>
+                </div>
+              </details>
               {pending && (
                 <p role="status" className="text-sm text-muted-foreground">
                   {uiText("Reclaiming cache space.")} {usage.pending_eviction_bytes ?? 0}{" "}

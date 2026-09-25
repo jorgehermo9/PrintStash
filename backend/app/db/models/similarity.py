@@ -1,4 +1,4 @@
-"""Disposable geometry evidence and durable human review, without Family tables."""
+"""Disposable geometry evidence and durable human review."""
 
 from datetime import datetime
 

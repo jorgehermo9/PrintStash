@@ -99,7 +99,7 @@ export function EntityTagsDialog({
           {tags.map((tag) => (
             <span
               key={tag}
-              className="max-w-48 truncate rounded-full border border-outline-variant bg-surface-container-low px-2 py-0.5 font-mono text-3xs uppercase tracking-wider text-on-surface-variant"
+              className="max-w-48 truncate rounded-full border border-outline-variant bg-surface-container-low px-2 py-0.5 font-mono text-3xs tracking-wider text-on-surface-variant"
               title={tag}
             >
               {tag}

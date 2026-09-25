@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { listModels } from "@/lib/api/models";
 import { listExternalLibraries } from "@/lib/api/libraries";
 import { listCollections } from "@/lib/api/taxonomy";
+import { collectionDisplayPath } from "@/lib/collection-display";
 import {
   cancelSimilarityRun,
   getSimilarityStatus,
@@ -20,7 +21,6 @@ import {
   startSimilarityRun,
 } from "@/lib/api/similarity";
 import { useI18n } from "@/lib/i18n";
-import { Link } from "@/lib/link";
 import { evidenceLabel, isSimilarityRunActive } from "@/lib/similarity";
 import { toast } from "@/lib/toast";
 import { EVIDENCE_CLASSES, type SimilaritySettings } from "@/types/similarity";
@@ -285,42 +285,49 @@ export function SimilaritySettingsPanel() {
       <div className="flex items-start gap-3 border-b px-4 py-4 sm:px-5">
         <ScanSearch className="h-8 w-8 shrink-0 rounded-md bg-muted p-1.5" aria-hidden />
         <div>
-          <h3 className="text-sm font-semibold">{t("similarity.title")}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">{t("similarity.intro")}</p>
+          <h3 className="text-sm font-semibold">{t("similarity.runTitle")}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{t("similarity.runHelp")}</p>
         </div>
       </div>
-      {status.isError ? (
-        <EmptyState
-          title={t("similarity.loadError")}
-          action={<Button onClick={() => void status.refetch()}>{t("similarity.retry")}</Button>}
-        />
-      ) : status.data?.settings ? (
-        <SettingsForm
-          key={JSON.stringify(status.data.settings)}
-          initial={status.data.settings}
-          onSaved={refresh}
-        />
-      ) : (
-        <p role="status" className="p-5 text-sm text-muted-foreground">
-          {t("similarity.loading")}
-        </p>
-      )}
-      {status.data && (
-        <div className="flex flex-wrap gap-2 border-t px-4 py-3">
-          <Badge variant="outline">
-            {t(
-              status.data.capabilities.step ? "similarity.stepReady" : "similarity.stepUnavailable",
-            )}
-          </Badge>
-          <Badge variant="outline">
-            {t(
-              status.data.capabilities.local_embeddings
-                ? "similarity.embeddingsReady"
-                : "similarity.embeddingsUnavailable",
-            )}
-          </Badge>
-        </div>
-      )}
+      <details className="border-b">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          {t("similarity.analysisOptions")}
+        </summary>
+        {status.isError ? (
+          <EmptyState
+            title={t("similarity.loadError")}
+            action={<Button onClick={() => void status.refetch()}>{t("similarity.retry")}</Button>}
+          />
+        ) : status.data?.settings ? (
+          <SettingsForm
+            key={JSON.stringify(status.data.settings)}
+            initial={status.data.settings}
+            onSaved={refresh}
+          />
+        ) : (
+          <p role="status" className="p-5 text-sm text-muted-foreground">
+            {t("similarity.loading")}
+          </p>
+        )}
+        {status.data && (
+          <div className="flex flex-wrap gap-2 border-t px-4 py-3">
+            <Badge variant="outline">
+              {t(
+                status.data.capabilities.step
+                  ? "similarity.stepReady"
+                  : "similarity.stepUnavailable",
+              )}
+            </Badge>
+            <Badge variant="outline">
+              {t(
+                status.data.capabilities.local_embeddings
+                  ? "similarity.embeddingsReady"
+                  : "similarity.embeddingsUnavailable",
+              )}
+            </Badge>
+          </div>
+        )}
+      </details>
       <div className="flex flex-wrap items-end gap-3 border-y bg-muted/30 p-3">
         <label className="min-w-0 basis-full space-y-1 text-xs sm:basis-72">
           {t("similarity.scope")}
@@ -338,7 +345,7 @@ export function SimilaritySettingsPanel() {
             ))}
             {collections.data?.map((collection) => (
               <option key={collection.id} value={collection.id}>
-                {collection.path}
+                {collectionDisplayPath(collections.data ?? [], collection.path)}
               </option>
             ))}
           </select>
@@ -351,9 +358,6 @@ export function SimilaritySettingsPanel() {
           onClick={() => start.mutate()}
         >
           {t("similarity.start")}
-        </Button>
-        <Button asChild variant="outline">
-          <Link href="/library/similar">{t("similarity.review")}</Link>
         </Button>
       </div>
       {scope === "models" && (
@@ -427,82 +431,84 @@ export function SimilaritySettingsPanel() {
           </div>
         </div>
       )}
-      <div className="px-4 py-3">
-        <h4 className="text-sm font-semibold">{t("similarity.history")}</h4>
-      </div>
-      {history.isError && (
-        <p role="alert" className="px-4 pb-4 text-sm text-destructive">
-          {t("similarity.loadError")}
-        </p>
-      )}
-      {history.data?.pages[0]?.items.length === 0 && (
-        <p className="px-4 pb-4 text-sm text-muted-foreground">{t("similarity.noRuns")}</p>
-      )}
-      <ul className="divide-y divide-border">
-        {history.data?.pages
-          .flatMap((page) => page.items)
-          .map((run) => (
-            <li
-              key={run.id}
-              className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+      <details className="border-t">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          {t("similarity.history")}
+        </summary>
+        {history.isError && (
+          <p role="alert" className="px-4 pb-4 text-sm text-destructive">
+            {t("similarity.loadError")}
+          </p>
+        )}
+        {history.data?.pages[0]?.items.length === 0 && (
+          <p className="px-4 pb-4 text-sm text-muted-foreground">{t("similarity.noRuns")}</p>
+        )}
+        <ul className="divide-y divide-border">
+          {history.data?.pages
+            .flatMap((page) => page.items)
+            .map((run) => (
+              <li
+                key={run.id}
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+              >
+                <div className="min-w-0 space-y-1">
+                  <p className="text-sm font-medium">{t(`similarity.run.${run.state}`)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("similarity.progress", {
+                      processed: run.counters.artifacts_processed ?? 0,
+                      verified: run.counters.verified ?? 0,
+                    })}
+                  </p>
+                  {!!run.counters.partial && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("similarity.partial", { count: run.counters.partial })}
+                    </p>
+                  )}
+                  {!!run.counters.unsupported && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("similarity.unsupported", { count: run.counters.unsupported })}
+                    </p>
+                  )}
+                  {!!run.counters.skipped_by_budget && (
+                    <p className="text-xs text-warning">{t("similarity.budget")}</p>
+                  )}
+                  {!!run.counters.embedded && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("similarity.embeddingProgress", { count: run.counters.embedded })}
+                    </p>
+                  )}
+                  {run.checkpoint?.embedding_failure_code && (
+                    <p className="text-xs text-warning">{t("similarity.embeddingSkipped")}</p>
+                  )}
+                  {run.state === "failed" && (
+                    <p className="text-xs text-destructive">{t("similarity.runFailed")}</p>
+                  )}
+                </div>
+                {isSimilarityRunActive(run) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={run.state === "cancelling" || cancel.isPending}
+                    onClick={() => cancel.mutate(run.id)}
+                  >
+                    {t("similarity.cancel")}
+                  </Button>
+                )}
+              </li>
+            ))}
+        </ul>
+        {history.hasNextPage && (
+          <div className="border-t p-3">
+            <Button
+              variant="outline"
+              disabled={history.isFetchingNextPage}
+              onClick={() => void history.fetchNextPage()}
             >
-              <div className="min-w-0 space-y-1">
-                <p className="text-sm font-medium">{t(`similarity.run.${run.state}`)}</p>
-                <p className="text-xs text-muted-foreground">
-                  {t("similarity.progress", {
-                    processed: run.counters.artifacts_processed ?? 0,
-                    verified: run.counters.verified ?? 0,
-                  })}
-                </p>
-                {!!run.counters.partial && (
-                  <p className="text-xs text-muted-foreground">
-                    {t("similarity.partial", { count: run.counters.partial })}
-                  </p>
-                )}
-                {!!run.counters.unsupported && (
-                  <p className="text-xs text-muted-foreground">
-                    {t("similarity.unsupported", { count: run.counters.unsupported })}
-                  </p>
-                )}
-                {!!run.counters.skipped_by_budget && (
-                  <p className="text-xs text-warning">{t("similarity.budget")}</p>
-                )}
-                {!!run.counters.embedded && (
-                  <p className="text-xs text-muted-foreground">
-                    {t("similarity.embeddingProgress", { count: run.counters.embedded })}
-                  </p>
-                )}
-                {run.checkpoint?.embedding_failure_code && (
-                  <p className="text-xs text-warning">{t("similarity.embeddingSkipped")}</p>
-                )}
-                {run.state === "failed" && (
-                  <p className="text-xs text-destructive">{t("similarity.runFailed")}</p>
-                )}
-              </div>
-              {isSimilarityRunActive(run) && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={run.state === "cancelling" || cancel.isPending}
-                  onClick={() => cancel.mutate(run.id)}
-                >
-                  {t("similarity.cancel")}
-                </Button>
-              )}
-            </li>
-          ))}
-      </ul>
-      {history.hasNextPage && (
-        <div className="border-t p-3">
-          <Button
-            variant="outline"
-            disabled={history.isFetchingNextPage}
-            onClick={() => void history.fetchNextPage()}
-          >
-            {t("similarity.more")}
-          </Button>
-        </div>
-      )}
+              {t("similarity.more")}
+            </Button>
+          </div>
+        )}
+      </details>
     </Card>
   );
 }

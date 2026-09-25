@@ -582,12 +582,14 @@ describe("StorageConfigCard", () => {
 describe("Configured Vault migration entry", () => {
   it("keeps the active provider tier visible when location changes require migration", async () => {
     renderCard({ migrationManaged: true, config: anS3Config() });
+    await userEvent.setup().click(await screen.findByText("Storage connection details"));
     expect(await screen.findByText("Active: Guarded")).toBeVisible();
     expect(screen.getByText("Expected: Guarded")).toBeVisible();
     expect(screen.getByText("Support: Stable")).toBeVisible();
   });
   it("keeps guarded deletion consequences visible when location changes require migration", async () => {
     renderCard({ migrationManaged: true, config: anS3Config() });
+    await userEvent.setup().click(await screen.findByText("Storage connection details"));
     expect(await screen.findByText("Guarded storage consequences")).toBeVisible();
     expect(screen.getByText("Object versions guard destructive operations.")).toBeVisible();
     expect(screen.getByText("Confirmed catalog removal retains stored bytes.")).toBeVisible();

@@ -70,6 +70,32 @@ afterEach(() => {
 });
 
 describe("ModelCard", () => {
+  describe("collection badge", () => {
+    it("shows the exact folder name instead of its slug", () => {
+      renderApp(
+        <ModelCard
+          model={{ ...model, collection: "testing/my-parts" }}
+          collectionLabel="Testing/My Parts"
+        />,
+      );
+
+      expect(screen.getByText("My Parts")).toBeVisible();
+      expect(screen.queryByText("my-parts")).toBeNull();
+    });
+
+    it("shows only the collection name from a hierarchy path", () => {
+      renderApp(
+        <ModelCard
+          model={{ ...model, collection: "printstash-data/workstation/drawer-organizer" }}
+          collectionLabel="PrintStash Data/Workstation/Drawer Organizer"
+        />,
+      );
+
+      expect(screen.getByText("Drawer Organizer")).toBeVisible();
+      expect(screen.queryByText("PrintStash Data/Workstation/Drawer Organizer")).toBeNull();
+    });
+  });
+
   describe("quick tag access", () => {
     it("offers adding tags on an editable untagged card", () => {
       renderApp(<ModelCard model={model} onEditTags={vi.fn<(item: ModelListItem) => void>()} />);

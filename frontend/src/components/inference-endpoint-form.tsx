@@ -72,20 +72,26 @@ export function InferenceEndpointForm({
       <p className="max-w-prose text-sm text-muted-foreground">{t("aiSearch.compatibleHelp")}</p>
       <div className="grid gap-3 sm:grid-cols-2">
         {!compact && (
-          <>
-            <label className="space-y-1 text-sm">
-              {t("aiSearch.endpointKind")}
-              <select
-                className="block w-full rounded-md border border-input bg-background p-2"
-                value={kind}
-                disabled={!!initial}
-                onChange={(event) => setKind(event.target.value === "chat" ? "chat" : "embedding")}
-              >
-                <option value="embedding">{t("aiSearch.embeddingEndpoint")}</option>
-                <option value="chat">{t("aiSearch.chatEndpoint")}</option>
-              </select>
-            </label>
-          </>
+          <fieldset className="space-y-2 sm:col-span-2">
+            <legend className="text-sm font-medium">{t("aiSearch.endpointKind")}</legend>
+            <div className="flex flex-wrap gap-4">
+              {(["embedding", "chat"] as const).map((value) => (
+                <label key={value} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="ai-server-capability"
+                    className="accent-primary"
+                    checked={kind === value}
+                    disabled={!!initial}
+                    onChange={() => setKind(value)}
+                  />
+                  {t(
+                    value === "embedding" ? "aiSearch.embeddingEndpoint" : "aiSearch.chatEndpoint",
+                  )}
+                </label>
+              ))}
+            </div>
+          </fieldset>
         )}
 
         <label className="space-y-1 text-sm">
@@ -139,39 +145,41 @@ export function InferenceEndpointForm({
           )}
         </label>
       </div>
-      <details open={compact ? undefined : true}>
-        <summary className="cursor-pointer py-3 text-sm font-medium">{t("Server options")}</summary>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1 text-sm">
-            {t("aiSearch.revision")}
-            <Input
-              value={revision}
-              onChange={(event) => setRevision(event.target.value)}
-              required
-              maxLength={128}
-            />
-          </label>
-          <label className="space-y-1 text-sm">
-            {t("aiSearch.repository")}
-            <Input
-              value={repo}
-              onChange={(event) => setRepo(event.target.value)}
-              placeholder={t("aiSearch.repoPlaceholder")}
-            />
-          </label>
-          <label className="space-y-1 text-sm">
-            {t("aiSearch.endpointTimeout")}
-            <Input
-              type="number"
-              min={1}
-              max={120}
-              value={timeout}
-              required
-              onChange={(event) => setTimeout(Number(event.target.value))}
-            />
-          </label>
-        </div>
-      </details>
+      {!compact && (
+        <section className="space-y-3 border-t border-border pt-4" aria-label={t("Server options")}>
+          <h4 className="text-sm font-semibold">{t("Server options")}</h4>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-sm">
+              {t("aiSearch.revision")}
+              <Input
+                value={revision}
+                onChange={(event) => setRevision(event.target.value)}
+                required
+                maxLength={128}
+              />
+            </label>
+            <label className="space-y-1 text-sm">
+              {t("aiSearch.repository")}
+              <Input
+                value={repo}
+                onChange={(event) => setRepo(event.target.value)}
+                placeholder={t("aiSearch.repoPlaceholder")}
+              />
+            </label>
+            <label className="space-y-1 text-sm">
+              {t("aiSearch.endpointTimeout")}
+              <Input
+                type="number"
+                min={1}
+                max={120}
+                value={timeout}
+                required
+                onChange={(event) => setTimeout(Number(event.target.value))}
+              />
+            </label>
+          </div>
+        </section>
+      )}
       {initial?.has_credentials && (
         <Button
           type="button"
@@ -186,77 +194,80 @@ export function InferenceEndpointForm({
           {t("aiSearch.clearCredentials")}
         </Button>
       )}
-      <details>
-        <summary className="cursor-pointer py-3 text-sm font-medium">
-          {t("aiSearch.customHeaders")}
-        </summary>
-        {initial?.header_names.length ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t("aiSearch.savedHeaders", { names: initial.header_names.join(", ") })}
-          </p>
-        ) : null}
-        <label className="mt-2 flex items-center gap-2 text-sm">
-          <Checkbox
-            ariaLabel={t("aiSearch.replaceHeaders")}
-            checked={replaceHeaders}
-            onChange={setReplaceHeaders}
-          />
-          {t("aiSearch.replaceHeaders")}
-        </label>
-        {replaceHeaders && (
-          <div className="mt-2 space-y-2">
-            {headers.map((header, index) => (
-              <div key={index} className="flex flex-wrap gap-2">
-                <Input
-                  aria-label={t("aiSearch.headerName", { number: index + 1 })}
-                  className="min-w-0 flex-1"
-                  required
-                  maxLength={128}
-                  value={header.name}
-                  onChange={(event) =>
-                    setHeaders(
-                      headers.map((item, i) =>
-                        i === index ? { ...item, name: event.target.value } : item,
-                      ),
-                    )
-                  }
-                />
-                <Input
-                  aria-label={t("aiSearch.headerValue", { number: index + 1 })}
-                  className="min-w-0 flex-1"
-                  type="password"
-                  autoComplete="new-password"
-                  maxLength={8192}
-                  value={header.value}
-                  onChange={(event) =>
-                    setHeaders(
-                      headers.map((item, i) =>
-                        i === index ? { ...item, value: event.target.value } : item,
-                      ),
-                    )
-                  }
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => setHeaders(headers.filter((_, i) => i !== index))}
-                >
-                  {t("aiSearch.remove")}
-                </Button>
-              </div>
-            ))}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={headers.length >= 16}
-              onClick={() => setHeaders([...headers, { name: "", value: "" }])}
-            >
-              {t("aiSearch.addHeader")}
-            </Button>
-          </div>
-        )}
-      </details>
+      {!compact && (
+        <section
+          className="space-y-2 border-t border-border pt-4"
+          aria-label={t("aiSearch.customHeaders")}
+        >
+          <h4 className="text-sm font-semibold">{t("aiSearch.customHeaders")}</h4>
+          {initial?.header_names.length ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t("aiSearch.savedHeaders", { names: initial.header_names.join(", ") })}
+            </p>
+          ) : null}
+          <label className="mt-2 flex items-center gap-2 text-sm">
+            <Checkbox
+              ariaLabel={t("aiSearch.replaceHeaders")}
+              checked={replaceHeaders}
+              onChange={setReplaceHeaders}
+            />
+            {t("aiSearch.replaceHeaders")}
+          </label>
+          {replaceHeaders && (
+            <div className="mt-2 space-y-2">
+              {headers.map((header, index) => (
+                <div key={index} className="flex flex-wrap gap-2">
+                  <Input
+                    aria-label={t("aiSearch.headerName", { number: index + 1 })}
+                    className="min-w-0 flex-1"
+                    required
+                    maxLength={128}
+                    value={header.name}
+                    onChange={(event) =>
+                      setHeaders(
+                        headers.map((item, i) =>
+                          i === index ? { ...item, name: event.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <Input
+                    aria-label={t("aiSearch.headerValue", { number: index + 1 })}
+                    className="min-w-0 flex-1"
+                    type="password"
+                    autoComplete="new-password"
+                    maxLength={8192}
+                    value={header.value}
+                    onChange={(event) =>
+                      setHeaders(
+                        headers.map((item, i) =>
+                          i === index ? { ...item, value: event.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setHeaders(headers.filter((_, i) => i !== index))}
+                  >
+                    {t("aiSearch.remove")}
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={headers.length >= 16}
+                onClick={() => setHeaders([...headers, { name: "", value: "" }])}
+              >
+                {t("aiSearch.addHeader")}
+              </Button>
+            </div>
+          )}
+        </section>
+      )}
       {kind === "chat" && (
         <div className="space-y-2">
           <label className="flex items-center gap-2 text-sm">

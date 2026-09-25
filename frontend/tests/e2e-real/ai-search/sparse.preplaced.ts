@@ -24,11 +24,10 @@ test.describe("AI Search", () => {
     const documentId = (await created.json()).id;
     try {
       await page.goto("/settings?section=ai-search");
-      await page.getByRole("button", { name: "Advanced AI controls" }).click();
+      await page.getByRole("tab", { name: "Technical" }).click();
       const form = page.getByRole("form", { name: "AI Search", exact: true });
       await form.getByRole("checkbox", { name: "Enable AI Search", exact: true }).check();
       await form.getByRole("checkbox", { name: "Run AI on this machine", exact: true }).check();
-      await form.getByText("Advanced settings", { exact: true }).click();
       await form.getByRole("combobox", { name: "Expansion model" }).selectOption(sparse!.id);
       await form.getByRole("checkbox", { name: "Enable lexical expansion" }).check();
       await form.getByRole("button", { name: "Save search settings" }).click();
@@ -39,9 +38,6 @@ test.describe("AI Search", () => {
         ["mobile", 390, 844],
       ] as const) {
         await page.setViewportSize({ width, height });
-        const details = form.locator("details");
-        if (!(await details.evaluate((element) => element.hasAttribute("open"))))
-          await form.getByText("Advanced settings", { exact: true }).click();
         const field = form.getByRole("group", { name: "Lexical expansion (SPLADE)" });
         await field.evaluate((element) => element.scrollIntoView({ block: "center" }));
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -66,8 +62,7 @@ test.describe("AI Search", () => {
       await page.goto("/search?q=cycling");
       await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
       await page.goto("/settings?section=ai-search");
-      await page.getByRole("button", { name: "Advanced AI controls" }).click();
-      await form.getByText("Advanced settings", { exact: true }).click();
+      await page.getByRole("tab", { name: "Technical" }).click();
       await form.getByRole("checkbox", { name: "Enable lexical expansion" }).uncheck();
       await form.getByRole("button", { name: "Save search settings" }).click();
       await expect(page.getByText("AI Search settings saved", { exact: true })).toBeVisible();

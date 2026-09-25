@@ -405,9 +405,6 @@ class StorageBackend(ABC):
         """Key for a normalized Multipart Model cover uploaded by its user."""
 
     @abstractmethod
-    def model_family_cover_key(self, family_id: str, name: str) -> str:
-        """Normalized Family cover; ``family_id`` is its stable export UUID."""
-
     @abstractmethod
     def exists(self, key: str) -> bool: ...
 
@@ -669,10 +666,6 @@ class UnavailableStorageBackend(StorageBackend):
 
     def multipart_model_cover_key(self, multipart_model_id: int, name: str) -> str:
         del multipart_model_id, name
-        return self._fail()
-
-    def model_family_cover_key(self, family_id: str, name: str) -> str:
-        del family_id, name
         return self._fail()
 
     def exists(self, key: str) -> bool:

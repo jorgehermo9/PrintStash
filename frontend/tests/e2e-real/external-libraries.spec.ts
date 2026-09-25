@@ -4,9 +4,10 @@
  * Set PLAYWRIGHT_EXTERNAL_LIBRARY_ROOT to an existing directory shared by the
  * browser test process and the backend process. Each test creates a separate
  * child root under that test-owned directory, leaving the supplied parent
- * untouched. The contracts verify scanned-file preview/download and explicit
- * enrollment before external write-back. Without the environment path the suite
- * reports them as skipped rather than treating an arbitrary directory as safe.
+ * untouched. The contracts verify scanned-file preview/download, exact mounted
+ * names through upload, and explicit enrollment before external write-back.
+ * Without the environment path the suite reports them as skipped rather than
+ * treating an arbitrary directory as safe.
  */
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +18,102 @@ const externalRoot = process.env.PLAYWRIGHT_EXTERNAL_LIBRARY_ROOT;
 const markerName = ".printstash-external-root.json";
 
 test.describe("mounted library source root recovery", () => {
+  test("preserves mounted names through upload", async ({ page }) => {
+    if (!externalRoot) {
+      test.skip(
+        true,
+        "Issue #237: Set PLAYWRIGHT_EXTERNAL_LIBRARY_ROOT to an existing test-owned directory to run this contract. https://github.com/xiao-villamor/PrintStash/issues/237",
+      );
+      return;
+    }
+    const stamp = Date.now();
+    const name = `e2e-exact-names-${stamp}`;
+    const parentName = `Testing ${stamp}`;
+    const childName = `My Parts ${stamp}`;
+    const sourceName = `Upper Case ${stamp}`;
+    const uploadName = `New Part ${stamp}`;
+    const root = path.join(externalRoot, name);
+    const sourceFolder = path.join(root, parentName, childName);
+    let libraryId: number | null = null;
+
+    await mkdir(sourceFolder, { recursive: true });
+    await writeFile(
+      path.join(sourceFolder, `${sourceName}.gcode`),
+      `; source ${sourceName}\nG28\n`,
+    );
+    try {
+      expect(
+        (
+          await page.request.put("/api/v1/config", { data: { external_libraries_enabled: true } })
+        ).ok(),
+      ).toBe(true);
+      const created = await page.request.post("/api/v1/libraries", {
+        data: { name, root_path: root, scan_schedule: "", watch_mode: "off" },
+      });
+      expect(created.status()).toBe(201);
+      libraryId = Number((await created.json()).id);
+      expect((await page.request.post(`/api/v1/libraries/${libraryId}/scan`)).status()).toBe(202);
+
+      let collectionPath = "";
+      await expect
+        .poll(
+          async () => {
+            const models = await (await page.request.get(`/api/v1/models?q=${sourceName}`)).json();
+            if (!models.some((model: { name: string }) => model.name === sourceName)) return false;
+            const collections = await (await page.request.get("/api/v1/collections")).json();
+            const child = collections.find((item: { name: string }) => item.name === childName);
+            collectionPath = child?.path ?? "";
+            return !!collectionPath;
+          },
+          { timeout: 60_000 },
+        )
+        .toBe(true);
+
+      await page.goto(`/?c=${encodeURIComponent(collectionPath)}`);
+      const title = page.getByRole("heading", { name: sourceName });
+      await expect(title).toBeVisible({ timeout: 30_000 });
+      await expect(title).toHaveCSS("text-transform", "none");
+      await expect(page.getByText(`${parentName}/${childName}`, { exact: true })).toBeVisible();
+
+      await page.getByRole("button", { name: "Upload", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Upload model" });
+      await expect(
+        dialog.getByRole("button", { name: `${parentName}/${childName}` }),
+      ).toBeVisible();
+      await dialog.locator('input[accept=".gcode,.g,.gco,.bgcode"]').setInputFiles({
+        name: `${uploadName}.gcode`,
+        mimeType: "text/plain",
+        buffer: Buffer.from(`; uploaded ${uploadName}\nG28\n`),
+      });
+      await dialog.getByPlaceholder("e.g. Bracket v2").fill(uploadName);
+      await dialog
+        .getByRole("combobox")
+        .filter({ hasText: "Vault storage" })
+        .selectOption(String(libraryId));
+      await dialog.getByRole("button", { name: /upload to vault/i }).click();
+      await expect(dialog).toHaveCount(0);
+
+      await expect
+        .poll(async () => {
+          try {
+            await access(path.join(sourceFolder, `${uploadName}.gcode`));
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+      await expect(access(path.join(root, parentName.toLowerCase()))).rejects.toThrow();
+    } finally {
+      try {
+        if (libraryId !== null) await page.request.delete(`/api/v1/libraries/${libraryId}`);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+        await page.request.put("/api/v1/config", { data: { external_libraries_enabled: false } });
+      }
+    }
+  });
+
   test("serves a scanned mounted STL in the browser without a storage connection", async ({
     page,
   }) => {

@@ -111,6 +111,35 @@ def _seed(db: Session, tmp_path: Path) -> tuple[User, Model, File]:
 
 
 class TestImportArchive:
+    def test_imports_models_from_older_archive_with_retired_grouping_data(
+        self, db_session: Session, tmp_path: Path, auth_headers: dict[str, str]
+    ) -> None:
+        del auth_headers
+        user, _model, _file = _seed(db_session, tmp_path)
+        archive_path = library_transfer.create_archive(db_session, user)
+        try:
+
+            def add_legacy_relationships(manifest: dict) -> None:
+                manifest["models"][0]["hash"] = "c" * 64
+                manifest["models"][0]["name"] = "Imported copy"
+                manifest["families"] = [{"export_id": "retired"}]
+                manifest["saved_views"] = [
+                    {"name": "Old grouped", "filters": {"family_id": 1}},
+                    {"name": "Ordinary", "filters": {"direct": False}},
+                ]
+
+            _rewrite_manifest(archive_path, add_legacy_relationships)
+            result = library_transfer.import_archive(db_session, archive_path, user)
+
+            assert result["created_models"] == 1
+            assert (
+                db_session.exec(select(Model.name).where(Model.hash == "c" * 64)).one()
+                == "Imported copy"
+            )
+            assert db_session.exec(select(SavedView.name)).all() == ["Ordinary"]
+        finally:
+            archive_path.unlink(missing_ok=True)
+
     def test_standalone_multipart_archive_round_trip_is_lossless(
         self,
         db_session: Session,

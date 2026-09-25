@@ -168,5 +168,11 @@ describe("AppShell", () => {
 
       await waitFor(() => expect(document.title).toContain("Model"));
     });
+
+    it("names the Similar models page", async () => {
+      renderShell({ at: "/library/similar" });
+
+      await waitFor(() => expect(document.title).toBe("Similar models · PrintStash"));
+    });
   });
 });

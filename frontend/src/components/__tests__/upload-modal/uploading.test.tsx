@@ -345,7 +345,7 @@ describe("UploadModal ingestion", () => {
       await screen.findByText(".stl .3mf .obj .step .dxf");
       await user.upload(fileInputs(container)[0], new File(["x"], "cube.stl"));
       await user.click(await screen.findByRole("button", { name: "None" }));
-      await user.click(await screen.findByRole("option", { name: /parts/ }));
+      await user.click(await screen.findByRole("option", { name: /Parts/ }));
 
       await user.click(screen.getByRole("button", { name: "Upload to vault" }));
 

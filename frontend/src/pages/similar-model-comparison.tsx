@@ -116,9 +116,7 @@ function CandidateReview({ candidate }: { candidate: SimilarityCandidate }) {
               {t(
                 candidate.resolution_kind === "evidence_only"
                   ? "similarity.evidenceResolution"
-                  : candidate.resolution_kind === "multipart"
-                    ? "similarity.multipartResolution"
-                    : "similarity.familyResolution",
+                  : "similarity.multipartResolution",
               )}
             </p>
           )}

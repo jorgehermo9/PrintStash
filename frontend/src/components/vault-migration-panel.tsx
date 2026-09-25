@@ -468,44 +468,48 @@ export function VaultMigrationPanel() {
                     setValues((current) => ({ ...current, [name]: value }))
                   }
                 />
-                <fieldset className="space-y-3 border-t pt-4">
-                  <legend className="text-sm font-semibold">{t("migration.policy")}</legend>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <label className="space-y-1 text-xs">
-                      {t("migration.retentionDays")}
-                      <Input
-                        type="number"
-                        min={0}
-                        max={3650}
-                        value={retentionDays}
-                        disabled={busy}
-                        onChange={(event) => setRetentionDays(Number(event.target.value))}
-                      />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      {t("migration.concurrency")}
-                      <Input
-                        type="number"
-                        min={1}
-                        max={4}
-                        value={concurrency}
-                        disabled={busy}
-                        onChange={(event) => setConcurrency(Number(event.target.value))}
-                      />
-                    </label>
-                    <label className="space-y-1 text-xs">
-                      {t("migration.bandwidth")}
-                      <Input
-                        type="number"
-                        min={1024}
-                        value={bandwidth}
-                        disabled={busy}
-                        onChange={(event) => setBandwidth(event.target.value)}
-                      />
-                    </label>
-                  </div>
-                  <p className="text-xs text-muted-foreground">{t("migration.policyHelp")}</p>
-                </fieldset>
+                <details className="border-t pt-4">
+                  <summary className="cursor-pointer text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    {t("migration.policy")} · {t("similarity.advanced")}
+                  </summary>
+                  <fieldset className="mt-3 space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <label className="space-y-1 text-xs">
+                        {t("migration.retentionDays")}
+                        <Input
+                          type="number"
+                          min={0}
+                          max={3650}
+                          value={retentionDays}
+                          disabled={busy}
+                          onChange={(event) => setRetentionDays(Number(event.target.value))}
+                        />
+                      </label>
+                      <label className="space-y-1 text-xs">
+                        {t("migration.concurrency")}
+                        <Input
+                          type="number"
+                          min={1}
+                          max={4}
+                          value={concurrency}
+                          disabled={busy}
+                          onChange={(event) => setConcurrency(Number(event.target.value))}
+                        />
+                      </label>
+                      <label className="space-y-1 text-xs">
+                        {t("migration.bandwidth")}
+                        <Input
+                          type="number"
+                          min={1024}
+                          value={bandwidth}
+                          disabled={busy}
+                          onChange={(event) => setBandwidth(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{t("migration.policyHelp")}</p>
+                  </fieldset>
+                </details>
                 {backupPicker}
                 <p className="text-xs text-muted-foreground">{t("migration.preflightHelp")}</p>
                 <Button

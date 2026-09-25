@@ -15,6 +15,7 @@ import {
   LogOut,
   MoreHorizontal,
   Inbox,
+  ScanSearch,
   Printer,
   Settings,
   User,
@@ -42,6 +43,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { href: "/", labelKey: "nav.vault", icon: Box },
   { href: "/inbox", labelKey: "nav.inbox", icon: Inbox },
+  { href: "/library/similar", labelKey: "nav.similar", icon: ScanSearch },
   { href: "/printers", labelKey: "nav.printers", icon: Printer, adminOnly: true },
   { href: "/profiles", labelKey: "nav.profiles", icon: SlidersHorizontal },
   { href: "/statistics", labelKey: "nav.stats", icon: BarChart3, adminOnly: true },

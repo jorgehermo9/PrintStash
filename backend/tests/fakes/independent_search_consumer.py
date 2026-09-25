@@ -1,6 +1,5 @@
 """An installed consumer of the public inference/vector seams, without Similar Models."""
 
-import os
 import sys
 import time
 from importlib.util import find_spec
@@ -8,7 +7,7 @@ from importlib.util import find_spec
 from fastapi.testclient import TestClient
 from printstash_core.inference import EmbeddingInput
 from printstash_core.search.passages import SubjectType
-from sqlalchemy import event, literal
+from sqlalchemy import literal
 from sqlmodel import select
 
 from app.core.config import ensure_dirs, settings
@@ -61,11 +60,6 @@ def exercise_search(client):
         # drain does not imply that the other worker has published its result.
         time.sleep(0.05)
     assert found == expected, response.text
-    assert all(
-        row.get("model", {}).get("family") is None
-        for row in response.json()["items"]
-        if row.get("model")
-    )
     response = client.patch(
         "/api/v1/search/settings", json={"enabled": True, "local_models_enabled": True}
     )
@@ -123,11 +117,6 @@ def exercise_search(client):
 
 def run():
     assert find_spec("app.modules.similarity") is None
-    families_removed = "families" in os.environ.get("TEST_REMOVED_FEATURES", "").split(
-        ","
-    )
-    if families_removed:
-        assert find_spec("app.modules.library.families") is None
     ensure_dirs()
     run_migrations()
     with TestClient(app) as client:
@@ -228,24 +217,7 @@ def run():
             same = vector_store.register_space(session, provider.space)
             assert same.config_hash == before[2]
             assert (original.id, original.vector_blob) == before[:2]
-        family_statements = []
-
-        def observe(_conn, _cursor, statement, _parameters, _context, _many):
-            if families_removed and "model_famil" in statement.lower():
-                family_statements.append(statement.split()[0])
-
-        engine = session.get_bind()
-        event.listen(engine, "before_cursor_execute", observe)
-        try:
-            exercise_search(client)
-        finally:
-            event.remove(engine, "before_cursor_execute", observe)
-        assert family_statements == []
-        if families_removed:
-            assert client.get("/api/v1/families").status_code == 404
-            assert not any(
-                name.startswith("app.modules.library.families") for name in sys.modules
-            )
+        exercise_search(client)
         assert not any(
             name == "app.modules.similarity"
             or name.startswith("app.modules.similarity.")

@@ -23,6 +23,7 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.db.models import (
+    Collection,
     ExternalLibraryCollectionMode,
     ExternalLibraryScanStatus,
     File,
@@ -44,6 +45,69 @@ from tests.integration.modules.sources.external_library._helpers import (
 
 
 class TestScanLibrary:
+    def test_rescan_repairs_a_previously_merged_folder(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        enable_feature(db_session)
+        nas = tmp_path / "nas"
+        drop_gcode(nas / "Testing", "upper.gcode", marker="upper")
+        lib = build_external_library(db_session, nas, name="nas")
+        external_library.scan_library(lib.id)
+        # Make Testing own the canonical slug before the colliding folder exists.
+        # The old repair only checked that path and missed the lower-case file.
+        drop_gcode(nas / "testing", "lower.gcode", marker="lower")
+        external_library.scan_library(lib.id)
+        upper = db_session.exec(
+            select(File).where(File.original_filename == "upper.gcode")
+        ).one()
+        lower = db_session.exec(
+            select(File).where(File.original_filename == "lower.gcode")
+        ).one()
+        upper_model = db_session.get(Model, upper.model_id)
+        lower_model = db_session.get(Model, lower.model_id)
+        lower_model.collection_id = upper_model.collection_id
+        db_session.add(lower_model)
+        db_session.commit()
+
+        summary = external_library.scan_library(lib.id)
+
+        assert summary["skipped"] == 2
+        db_session.refresh(lower_model)
+        repaired = db_session.get(Collection, lower_model.collection_id)
+        assert repaired is not None
+        assert repaired.name == "testing"
+
+    def test_scan_preserves_distinct_folder_spelling(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        use_local_storage(tmp_path)
+        enable_feature(db_session)
+        nas = tmp_path / "nas"
+        drop_gcode(nas / "Testing" / "My Parts", "Upper Case.gcode", marker="upper")
+        drop_gcode(nas / "testing" / "My-Parts", "lower.gcode", marker="lower")
+        lib = build_external_library(db_session, nas, name="nas")
+
+        summary = external_library.scan_library(lib.id)
+
+        assert summary["added"] == 2
+        upper = db_session.exec(
+            select(File).where(File.original_filename == "Upper Case.gcode")
+        ).one()
+        lower = db_session.exec(
+            select(File).where(File.original_filename == "lower.gcode")
+        ).one()
+        upper_model = db_session.get(Model, upper.model_id)
+        lower_model = db_session.get(Model, lower.model_id)
+        assert upper_model.collection_rel is not None
+        assert lower_model.collection_rel is not None
+        assert upper_model.collection_rel.name == "My Parts"
+        assert lower_model.collection_rel.name == "My-Parts"
+        assert upper_model.collection_rel.path != lower_model.collection_rel.path
+        assert (
+            upper_model.collection_rel.parent_id != lower_model.collection_rel.parent_id
+        )
+
     def test_a_scan_mirrors_the_directory_tree_as_collections(
         self, tmp_path: Path, db_session: Session
     ) -> None:

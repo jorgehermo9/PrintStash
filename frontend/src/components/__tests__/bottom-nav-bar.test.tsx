@@ -102,8 +102,8 @@ describe("BottomNavBar", () => {
       expect(screen.getAllByRole("link").map((tab) => tab.textContent)).toEqual([
         "Vault",
         "Pending",
+        "Similar",
         "Printers",
-        "Profiles",
       ]);
       expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
     });
@@ -114,8 +114,8 @@ describe("BottomNavBar", () => {
       expect(screen.getAllByRole("link").map((tab) => tab.textContent)).toEqual([
         "Vault",
         "Pending",
+        "Similar",
         "Profiles",
-        "Settings",
       ]);
     });
 
@@ -133,6 +133,15 @@ describe("BottomNavBar", () => {
 
       expect(screen.getByTestId("current-path")).toHaveTextContent("/inbox");
     });
+
+    it("opens Similar models from its tab", async () => {
+      const user = userEvent.setup();
+      renderNav();
+
+      await user.click(screen.getByRole("link", { name: "Similar" }));
+
+      expect(screen.getByTestId("current-path")).toHaveTextContent("/library/similar");
+    });
   });
 
   describe("active destination", () => {
@@ -146,6 +155,12 @@ describe("BottomNavBar", () => {
       renderNav({ at: "/inbox/41" });
 
       expect(screen.getByRole("link", { name: "Pending" })).toHaveAttribute("aria-current", "page");
+    });
+
+    it("marks Similar for a comparison route", () => {
+      renderNav({ at: "/library/similar/41" });
+
+      expect(screen.getByRole("link", { name: "Similar" })).toHaveAttribute("aria-current", "page");
     });
 
     it("keeps Vault unmarked away from the root", () => {
@@ -226,7 +241,7 @@ describe("BottomNavBar", () => {
         within(sheet)
           .getAllByRole("link")
           .map((link) => link.textContent),
-      ).toEqual(["Stats", "Settings", "Wiki"]);
+      ).toEqual(["Profiles", "Stats", "Settings", "Wiki"]);
     });
 
     it("sends an external destination to a plain link", async () => {

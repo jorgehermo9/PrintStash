@@ -22,6 +22,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
@@ -102,7 +103,6 @@ from app.modules.storage.storage_deletion import (
 from app.modules.storage.storage_ownership import UnsafeStorageDeleteError
 from app.modules.work import nudge
 from app.modules.work import service as work_service
-from app.schemas.family_types import VariantRole
 from app.schemas.jobs import JobAccepted
 from app.schemas.models import (
     ArtifactOutcomeRead,
@@ -139,7 +139,19 @@ from app.schemas.provenance import (
 from app.schemas.saved_views import ModelStarRead
 from app.schemas.search import SearchResponse
 
-router = APIRouter(prefix="/models", tags=["models"])
+
+def _reject_retired_group_queries(request: Request) -> None:
+    """A legacy group filter must not silently turn into an unfiltered browse."""
+    if any(
+        key in request.query_params
+        for key in ("family_id", "family_role", "in_family", "browse")
+    ):
+        raise HTTPException(status_code=422, detail="model_filters_invalid")
+
+
+router = APIRouter(
+    prefix="/models", tags=["models"], dependencies=[Depends(_reject_retired_group_queries)]
+)
 
 
 def _model_filters(**values) -> ModelFilters:
@@ -268,9 +280,6 @@ def list_models(
     print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
     print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
-    family_id: int | None = Query(None, gt=0),
-    family_role: VariantRole | None = Query(None),
-    in_family: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(require_user),
@@ -303,9 +312,6 @@ def list_models(
         print_duration_min_s=print_duration_min_s,
         print_duration_max_s=print_duration_max_s,
         has_similar_candidates=has_similar_candidates,
-        family_id=family_id,
-        family_role=family_role,
-        in_family=in_family,
     )
     return models_listing.list_items(
         session,
@@ -346,9 +352,6 @@ def page_models(
     print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
     print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
-    family_id: int | None = Query(None, gt=0),
-    family_role: VariantRole | None = Query(None),
-    in_family: bool | None = Query(None),
     sort: ModelSort = Query(ModelSort.DATE_DESC),
     cursor: Optional[str] = Query(None, max_length=1024),
     limit: int = Query(60, ge=1, le=200),
@@ -382,9 +385,6 @@ def page_models(
         print_duration_min_s=print_duration_min_s,
         print_duration_max_s=print_duration_max_s,
         has_similar_candidates=has_similar_candidates,
-        family_id=family_id,
-        family_role=family_role,
-        in_family=in_family,
     )
     try:
         return models_pagination.page_items(
@@ -428,9 +428,6 @@ def outliner_models(
     print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
     print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
-    family_id: int | None = Query(None, gt=0),
-    family_role: VariantRole | None = Query(None),
-    in_family: bool | None = Query(None),
     limit: int = Query(500, ge=1, le=500),
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
@@ -462,9 +459,6 @@ def outliner_models(
             print_duration_min_s=print_duration_min_s,
             print_duration_max_s=print_duration_max_s,
             has_similar_candidates=has_similar_candidates,
-            family_id=family_id,
-            family_role=family_role,
-            in_family=in_family,
         ),
         limit=limit,
     )
@@ -496,9 +490,6 @@ def model_facets(
     print_duration_min_s: int | None = Query(None, ge=0, le=2**31 - 1),
     print_duration_max_s: int | None = Query(None, ge=1, le=2**31 - 1),
     has_similar_candidates: Optional[bool] = Query(None),
-    family_id: int | None = Query(None, gt=0),
-    family_role: VariantRole | None = Query(None),
-    in_family: bool | None = Query(None),
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> ModelFacetsRead:
@@ -532,9 +523,6 @@ def model_facets(
             print_duration_min_s=print_duration_min_s,
             print_duration_max_s=print_duration_max_s,
             has_similar_candidates=has_similar_candidates,
-            family_id=family_id,
-            family_role=family_role,
-            in_family=in_family,
         ),
     )
 
@@ -637,9 +625,6 @@ def export_library_archive(
         path,
         media_type="application/zip",
         filename=f"printstash-library-v{version}.zip",
-        headers={"X-PrintStash-Export-Warning": "model_families_omitted"}
-        if version == 1
-        else None,
         background=BackgroundTask(path.unlink, missing_ok=True),
     )
 

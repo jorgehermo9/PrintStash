@@ -33,7 +33,7 @@ describe("ArtifactCacheCard", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Save cache settings" }));
     expect(persisted.policy.enabled).toBe(true);
-    expect(await screen.findByText(/100 bytes cached/)).toBeInTheDocument();
+    expect(await screen.findByText(/100 B cached/)).toBeVisible();
   });
 
   it("shows remaining leased bytes after clear", async () => {
@@ -48,7 +48,7 @@ describe("ArtifactCacheCard", () => {
       />,
     );
     await userEvent.click(await screen.findByRole("button", { name: "Clear cached files" }));
-    expect(await screen.findByText(/25 bytes cached/)).toHaveTextContent("1 active reads");
+    expect(await screen.findByText(/25 B cached/)).toHaveTextContent("1 active reads");
   });
 
   it("shows restart requirement after changing root", async () => {
@@ -136,7 +136,9 @@ describe("ArtifactCacheCard observability", () => {
         }}
       />,
     );
-    expect(await screen.findByText(/Policy source: Saved settings/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByText("Advanced cache settings"));
+    expect(screen.getByText(/Policy source: Saved settings/)).toBeVisible();
+    await userEvent.click(screen.getByText("Cache activity and diagnostics"));
     expect(screen.getByText("75%")).toBeInTheDocument();
     expect(screen.getByText("300")).toBeInTheDocument();
     expect(screen.getByText("Publication failures")).toBeInTheDocument();

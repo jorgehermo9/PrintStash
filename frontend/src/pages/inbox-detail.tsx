@@ -27,6 +27,7 @@ import { Link } from "@/lib/link";
 import { useI18n } from "@/lib/i18n";
 import { useRouter } from "@/lib/navigation";
 import { useCollections } from "@/lib/queries";
+import { collectionDisplayPath } from "@/lib/collection-display";
 import { toast } from "@/lib/toast";
 import type { InboxManifestFile, InboxItem } from "@/types";
 import { safeHttpUrl } from "@/components/model-detail/source-url";
@@ -417,7 +418,7 @@ export default function InboxDetailPage({ api = defaultInboxDetailApi }: { api?:
                   <option value={NO_COLLECTION}>{t("inbox.noCollection")}</option>
                   {collections.map((collection) => (
                     <option key={collection.id} value={collection.id}>
-                      {collection.path}
+                      {collectionDisplayPath(collections, collection.path)}
                     </option>
                   ))}
                 </select>

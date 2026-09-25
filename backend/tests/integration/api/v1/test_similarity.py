@@ -55,7 +55,6 @@ class TestSimilarity:
         response = client.get("/api/v1/similarity/status", headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["enabled"] is False
-        assert response.json()["capabilities"]["family_resolution"] is False
         assert response.json()["pending_fingerprints"] == 0
 
     def test_admin_can_configure_start_cancel(self, client, auth_headers, db_session):

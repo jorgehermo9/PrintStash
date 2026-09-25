@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Search, SlidersHorizontal } from "lucide-react";
+import { Search } from "lucide-react";
 
 import { AiSearchSetup } from "@/components/ai-search-setup";
 import { InferenceEndpointForm } from "@/components/inference-endpoint-form";
@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { TabBar } from "@/components/ui/tabs";
 import {
   downloadInferenceModel,
   getSearchSettings,
@@ -63,6 +64,12 @@ function SettingsForm({ initial, onSaved }: { initial: SearchSettingsRead; onSav
         save.mutate();
       }}
     >
+      <div>
+        <h3 className="text-base font-semibold">{t("aiSearch.technicalTitle")}</h3>
+        <p className="mt-1 max-w-prose text-sm text-muted-foreground">
+          {t("aiSearch.technicalIntro")}
+        </p>
+      </div>
       <h4 className="text-sm font-semibold">{t("aiSearch.setupPermissions")}</h4>
       <div className="space-y-3">
         {toggles.map(([field, label, help]) => (
@@ -94,8 +101,11 @@ function SettingsForm({ initial, onSaved }: { initial: SearchSettingsRead; onSav
       <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
         {t("aiSearch.localHelp")}
       </p>
-      <details className="border-t border-border pt-3">
-        <summary className="cursor-pointer text-sm font-medium">{t("aiSearch.advanced")}</summary>
+      <section
+        className="space-y-3 border-t border-border pt-4"
+        aria-label={t("aiSearch.advanced")}
+      >
+        <h4 className="text-sm font-semibold">{t("aiSearch.advanced")}</h4>
         <fieldset className="mt-3 space-y-3 rounded-md border border-border p-3">
           <legend className="px-1 text-sm font-medium">{t("aiSearch.sparseTitle")}</legend>
           <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
@@ -328,7 +338,7 @@ function SettingsForm({ initial, onSaved }: { initial: SearchSettingsRead; onSav
           ))}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">{t("aiSearch.captionRequirements")}</p>
-      </details>
+      </section>
       {save.isError && (
         <p role="alert" className="text-sm text-destructive">
           {t("aiSearch.settingsError")}
@@ -343,8 +353,8 @@ function SettingsForm({ initial, onSaved }: { initial: SearchSettingsRead; onSav
 
 export function AiSearchSettings() {
   const { t } = useI18n();
-  const [advanced, setAdvanced] = useState(false);
-  const [editing, setEditing] = useState<number | null>(null);
+  const [section, setSection] = useState<"setup" | "indexes" | "servers" | "technical">("setup");
+  const [editing, setEditing] = useState<number | "new" | null>(null);
   const settings = useQuery({ queryKey: ["ai-search", "settings"], queryFn: getSearchSettings });
   const refresh = () => {
     void settings.refetch();
@@ -366,15 +376,24 @@ export function AiSearchSettings() {
         </div>
       </div>
       {settings.data && (
-        <div className="border-b border-border bg-muted/30 px-4 py-3 sm:px-5">
-          <Button variant="ghost" onClick={() => setAdvanced(!advanced)}>
-            {advanced ? (
-              <ArrowLeft className="h-4 w-4" aria-hidden />
-            ) : (
-              <SlidersHorizontal className="h-4 w-4" aria-hidden />
-            )}
-            {t(advanced ? "Back to guided setup" : "Advanced AI controls")}
-          </Button>
+        <div className="border-b border-border bg-muted/30 p-3">
+          <TabBar
+            tabs={[
+              { key: "setup", label: t("aiSearch.navSetup") },
+              { key: "indexes", label: t("aiSearch.navIndexes") },
+              { key: "servers", label: t("aiSearch.navServers") },
+              { key: "technical", label: t("aiSearch.navTechnical") },
+            ]}
+            active={section}
+            onChange={(next) => {
+              setSection(next);
+              if (next !== "servers") setEditing(null);
+            }}
+            showIndicator={false}
+            className="grid w-full grid-cols-2 gap-1 rounded-md bg-background p-1 ring-1 ring-border sm:flex sm:w-max"
+            tabClassName="min-h-10 rounded-md px-3 text-sm font-medium text-muted-foreground transition-[background-color,color,transform] duration-press active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            activeTabClassName="bg-accent text-accent-foreground"
+          />
         </div>
       )}
       {settings.isError ? (
@@ -388,46 +407,62 @@ export function AiSearchSettings() {
         </p>
       ) : (
         <>
-          {!advanced ? (
+          {section === "setup" ? (
             <AiSearchSetup settings={settings.data} onSaved={refresh} />
-          ) : (
+          ) : section === "indexes" ? (
+            <SearchGenerationControls settings={settings.data} />
+          ) : section === "technical" ? (
             <>
               <SettingsForm
                 key={JSON.stringify(settings.data.settings)}
                 initial={settings.data}
                 onSaved={refresh}
               />
-              <SearchGenerationControls settings={settings.data} />
-              <details className="border-t border-border p-4 sm:p-5">
-                <summary className="cursor-pointer text-sm font-semibold">
-                  {t("aiSearch.endpoints")}
-                </summary>
-                <div className="mt-4 space-y-4">
-                  <label className="block space-y-1 text-sm">
-                    {t("aiSearch.editEndpoint")}
-                    <select
-                      className="block w-full rounded-md border border-input bg-background p-2"
-                      value={editing ?? ""}
-                      onChange={(event) =>
-                        setEditing(event.target.value ? Number(event.target.value) : null)
-                      }
-                    >
-                      <option value="">{t("aiSearch.newEndpoint")}</option>
+            </>
+          ) : (
+            <div className="space-y-5 p-4 sm:p-5">
+              <div>
+                <h3 className="text-base font-semibold">{t("aiSearch.endpoints")}</h3>
+                <p className="mt-1 max-w-prose text-sm text-muted-foreground">
+                  {t("aiSearch.serversIntro")}
+                </p>
+              </div>
+              {editing === null ? (
+                <>
+                  {settings.data.endpoints.length ? (
+                    <ul className="divide-y divide-border rounded-md border border-border">
                       {settings.data.endpoints.map((endpoint) => (
-                        <option key={endpoint.id} value={endpoint.id}>
-                          {endpoint.model} · {endpoint.host}
-                        </option>
+                        <li
+                          key={endpoint.id}
+                          className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="min-w-0">
+                            <p className="break-words text-sm font-semibold">{endpoint.model}</p>
+                            <p className="mt-1 break-all text-xs text-muted-foreground">
+                              {endpoint.host} ·{" "}
+                              {t(
+                                endpoint.kind === "embedding"
+                                  ? "aiSearch.embeddingEndpoint"
+                                  : "aiSearch.chatEndpoint",
+                              )}
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditing(endpoint.id)}
+                          >
+                            {t("aiSearch.editServer", { model: endpoint.model })}
+                          </Button>
+                        </li>
                       ))}
-                    </select>
-                  </label>
-                  <InferenceEndpointForm
-                    key={editing ?? "new"}
-                    initial={settings.data.endpoints.find((endpoint) => endpoint.id === editing)}
-                    onSaved={() => {
-                      setEditing(null);
-                      refresh();
-                    }}
-                  />
+                    </ul>
+                  ) : (
+                    <p className="rounded-md border border-border p-4 text-sm text-muted-foreground">
+                      {t("aiSearch.noServers")}
+                    </p>
+                  )}
+                  <Button onClick={() => setEditing("new")}>{t("aiSearch.newEndpoint")}</Button>
                   {settings.data.environment_endpoints.map((kind) => (
                     <Button
                       key={kind}
@@ -442,9 +477,28 @@ export function AiSearchSettings() {
                       )}
                     </Button>
                   ))}
+                </>
+              ) : (
+                <div className="space-y-4 rounded-md border border-border p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-semibold">
+                      {editing === "new" ? t("aiSearch.newEndpoint") : t("aiSearch.editEndpoint")}
+                    </h4>
+                    <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>
+                      {t("aiSearch.backToServers")}
+                    </Button>
+                  </div>
+                  <InferenceEndpointForm
+                    key={editing}
+                    initial={settings.data.endpoints.find((endpoint) => endpoint.id === editing)}
+                    onSaved={() => {
+                      setEditing(null);
+                      refresh();
+                    }}
+                  />
                 </div>
-              </details>
-            </>
+              )}
+            </div>
           )}
         </>
       )}

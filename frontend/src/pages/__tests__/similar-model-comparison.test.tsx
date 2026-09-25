@@ -58,7 +58,6 @@ describe("SimilarModelComparisonPage", () => {
       request_id: expect.any(String),
     });
     expect(await screen.findByText("Resolution: evidence confirmed")).toBeVisible();
-    expect(screen.queryByRole("button", { name: /Family/ })).not.toBeInTheDocument();
   });
   it("hides confirmation when evidence is stale", async () => {
     renderComparison(
