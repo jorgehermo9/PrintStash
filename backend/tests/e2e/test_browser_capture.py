@@ -473,6 +473,7 @@ class TestBrowserCapture:
                     "direct_path": True,
                     "browser_multipart_upload": False,
                     "multipart_sha256_checksums": False,
+                    "server_side_copy": False,
                     "tier": "verified",
                     "warnings": [],
                 },
