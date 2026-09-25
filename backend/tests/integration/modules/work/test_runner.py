@@ -16,23 +16,27 @@ from dataclasses import dataclass, field
 import pytest
 from sqlmodel import Session
 
-from app.db.models import Job, JobState, WorkPriority
+from app.db.models import Job, JobKind, JobState, LaneName, WorkPriority
 from app.modules.work import catalog as catalog_module
-from app.modules.work.catalog import RECONCILE_DEFINITION, WorkCatalog, default_lanes
+from app.modules.work.catalog import WorkCatalog, default_lanes
 from app.modules.work.contracts import (
+    Deduplicated,
     EngineStatus,
     JobDefinition,
+    JobOutcome,
+    JobSubmission,
     Lane,
+    PassSubmission,
     Step,
-    Submission,
 )
 from app.modules.work.jobs import jobs
-from app.modules.work.runner import _json_small, execute_job
+from app.modules.work.runner import execute_job
 from app.runtime.engine.inline import InlineJobEngine, _Execution, _Runner
 
-MUTATING = "runner.mutating"
-READ_ONLY = "runner.read_only"
-LANE = "runner"
+# Probes borrow real kinds and a lane; this catalog holds only them.
+MUTATING = JobKind.INGESTION_UPLOAD
+READ_ONLY = JobKind.SOURCES_SCAN
+LANE = LaneName.INGEST
 
 
 @dataclass
@@ -73,12 +77,14 @@ def engine() -> InlineJobEngine:
                 steps=(Step("one", _step("one")), Step("two", _step("two"))),
                 on_failure=_failed,
                 completion_nudges=(READ_ONLY,),
+                label="Mutating probe",
             ),
             JobDefinition(
                 name=READ_ONLY,
                 lane=LANE,
                 steps=(Step("look", _step("look")),),
                 mutating=False,
+                label="Read-only probe",
             ),
         ],
         lanes={**default_lanes(), LANE: Lane(LANE, 2)},
@@ -92,7 +98,7 @@ def engine() -> InlineJobEngine:
 def _run(engine: InlineJobEngine, job: Job, attempt: int = 1) -> None:
     """Run one attempt's body directly, as an engine would."""
     execution = _Execution(
-        submission=Submission(
+        submission=JobSubmission(
             execution_id=f"{job.id}:{attempt}",
             job_id=job.id,
             definition=job.kind,
@@ -100,6 +106,7 @@ def _run(engine: InlineJobEngine, job: Job, attempt: int = 1) -> None:
             lane=LANE,
             priority=WorkPriority.INTERACTIVE,
             attempt=attempt,
+            routing=Deduplicated(f"{job.kind}|{job.subject_key}"),
         ),
         sequence=0,
         status=EngineStatus.RUNNING,
@@ -115,11 +122,11 @@ def _status(job_id: str):
     return status
 
 
-def _nudged(engine: InlineJobEngine) -> set[str]:
+def _nudged(engine: InlineJobEngine) -> set[JobKind]:
     return {
-        ex.submission.subject_key
+        ex.submission.source
         for ex in engine.executions.values()
-        if ex.submission.definition == RECONCILE_DEFINITION
+        if isinstance(ex.submission, PassSubmission)
     }
 
 
@@ -180,7 +187,9 @@ class TestExecuteJob:
         self, engine: InlineJobEngine, make_job
     ) -> None:
         job = make_job(kind=MUTATING)
-        TRACE.behaviour["one"] = lambda ctx: jobs.finish(ctx.job_id, state="cancelled")
+        TRACE.behaviour["one"] = lambda ctx: jobs.finish(
+            ctx.job_id, JobOutcome.CANCELLED
+        )
 
         _run(engine, job)
 
@@ -220,7 +229,9 @@ class TestExecuteJob:
         # A step that knows better (a refused archive) finishes its own Job;
         # the runner never overwrites that verdict with "completed".
         job = make_job(kind=MUTATING)
-        TRACE.behaviour["one"] = lambda ctx: ctx.finish("failed", error="refused")
+        TRACE.behaviour["one"] = lambda ctx: ctx.finish(
+            JobOutcome.FAILED, error="refused"
+        )
 
         _run(engine, job)
 
@@ -346,14 +357,3 @@ class TestExecuteJob:
 
         with pytest.raises(KeyboardInterrupt):
             _run(engine, job)
-
-
-class TestJsonSmall:
-    @pytest.mark.parametrize("value", [None, "text", 3, 2.5, True])
-    def test_checkpoints_plain_scalars(self, value) -> None:
-        assert _json_small(value) is True
-
-    @pytest.mark.parametrize("value", [{"a": 1}, [1, 2], b"bytes", object()])
-    def test_drops_anything_else(self, value) -> None:
-        # A step's return value is a checkpoint, not a data channel.
-        assert _json_small(value) is False

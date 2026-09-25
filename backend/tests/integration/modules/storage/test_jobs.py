@@ -17,9 +17,9 @@ import pytest
 from sqlmodel import Session
 
 from app.core.time import utcnow
-from app.db.models import Job, JobState, VaultMigrationRun, WorkPriority
+from app.db.models import Job, JobKind, JobState, VaultMigrationRun, WorkPriority
 from app.modules.storage import jobs as storage_jobs
-from app.modules.storage.jobs import MIGRATE_DEFINITION, MigrationSource
+from app.modules.storage.jobs import MigrationSource
 from app.modules.storage.vault_migration import VaultMigrations
 from app.modules.work.sources import idle_window, mark_idle
 from app.modules.work.submission import submit
@@ -45,7 +45,7 @@ def _job(session: Session, job_id: str) -> Job:
 
 
 def _copy(work_engine, make_job, run: VaultMigrationRun) -> str:
-    job = make_job(kind=MIGRATE_DEFINITION, subject=_subject(run))
+    job = make_job(kind=JobKind.STORAGE_MIGRATE, subject=_subject(run))
     submit(job.id)
     work_engine.run_one()
     return job.id
@@ -97,7 +97,7 @@ class TestMigrationSource:
         self, db_session: Session, make_vault_migration
     ) -> None:
         make_vault_migration(state="copying")
-        mark_idle(MIGRATE_DEFINITION, seconds=60)
+        mark_idle(JobKind.STORAGE_MIGRATE, seconds=60)
 
         assert SOURCE.pending(db_session, now=utcnow(), limit=10) == []
 
@@ -105,7 +105,7 @@ class TestMigrationSource:
         self, db_session: Session
     ) -> None:
         now = utcnow()
-        mark_idle(MIGRATE_DEFINITION, seconds=60, now=now)
+        mark_idle(JobKind.STORAGE_MIGRATE, seconds=60, now=now)
 
         due = SOURCE.next_due(db_session, now=now)
 
@@ -171,7 +171,7 @@ class TestCopy:
         from app.modules.work.jobs import jobs
 
         run = make_vault_migration(state="copying")
-        job = make_job(kind=MIGRATE_DEFINITION, subject=_subject(run))
+        job = make_job(kind=JobKind.STORAGE_MIGRATE, subject=_subject(run))
         calls: list[str] = []
 
         def advance(_self, requested: str, *, batch_size: int) -> dict:
@@ -208,7 +208,7 @@ class TestCopy:
 
         assert len(calls) == storage_jobs._MAX_CONSECUTIVE_ERRORS
         assert _job(db_session, job_id).state == JobState.FAILED
-        assert idle_window(db_session, MIGRATE_DEFINITION) is not None
+        assert idle_window(db_session, JobKind.STORAGE_MIGRATE) is not None
 
     def test_a_failure_never_shows_the_providers_message(
         self,
@@ -236,7 +236,10 @@ class TestCopy:
     ) -> None:
         run = make_vault_migration(state="copying")
 
-        assert DEFINITIONS[MIGRATE_DEFINITION].retry(db_session, _subject(run)) is True
+        assert (
+            DEFINITIONS[JobKind.STORAGE_MIGRATE].retry(db_session, _subject(run))
+            is True
+        )
 
 
 class TestInventory:
@@ -246,14 +249,14 @@ class TestInventory:
         from app.modules.administration import runtime_config
 
         monkeypatch.setattr(runtime_config, "is_configured", lambda _session: True)
-        source = DEFINITIONS[storage_jobs.INVENTORY_DEFINITION].source
+        source = DEFINITIONS[JobKind.STORAGE_INVENTORY].source
         assert source is not None
 
         assert source.cron(db_session) == "15 * * * *"  # type: ignore[attr-defined]
 
     def test_waits_for_setup(self, db_session: Session) -> None:
         # An unconfigured vault has no storage to sample.
-        source = DEFINITIONS[storage_jobs.INVENTORY_DEFINITION].source
+        source = DEFINITIONS[JobKind.STORAGE_INVENTORY].source
         assert source is not None
 
         assert source.cron(db_session) is None  # type: ignore[attr-defined]

@@ -27,6 +27,7 @@ from app.db.models import (
     EmbeddingSpace,
     IndexGeneration,
     InferenceEndpoint,
+    JobKind,
     PassageVector,
     SearchGenerationLease,
     SearchIndexFailure,
@@ -546,20 +547,17 @@ def _prepare_space(
         session.add(generation)
         session.flush()  # Unique building/profile rejects a competing proposal here.
         # The build is a Job: it drives this generation and reports its progress.
-        from app.modules.search.job_names import (
-            GENERATION_DEFINITION,
-            generation_subject,
-        )
+        from app.modules.search.subjects import generation_subject
         from app.modules.work import service as work_service
         from app.modules.work.submission import nudge_after_commit
 
         generation.job_id = work_service.request(
             session,
-            definition=GENERATION_DEFINITION,
+            definition=JobKind.SEARCH_GENERATION,
             subject_key=generation_subject(generation.id),  # type: ignore[arg-type]
             owner_user_id=actor.id,
         )
-        nudge_after_commit(session, GENERATION_DEFINITION)
+        nudge_after_commit(session, JobKind.SEARCH_GENERATION)
         vector_index.prepare(session, generation)
         session.add(generation)
         audit.record(

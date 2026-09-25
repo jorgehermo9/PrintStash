@@ -29,6 +29,7 @@ from app.db.models import (
     InboxItemResultState,
     InboxItemState,
     Job,
+    JobKind,
     JobState,
     Model,
 )
@@ -452,7 +453,10 @@ class TestDismissItem:
             sha256="e" * 64,
         )
         job = build_job(
-            db_session, kind="ingestion.inbox_import", state=JobState.COMPLETED, owner=owner
+            db_session,
+            kind=JobKind.INGESTION_INBOX_IMPORT,
+            state=JobState.COMPLETED,
+            owner=owner,
         )
         db_session.add(artifact)
         db_session.commit()

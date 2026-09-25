@@ -29,6 +29,7 @@ from app.db.models import (
     FileRevisionStatus,
     FileTagLink,
     FileType,
+    JobKind,
     Metadata,
     Model,
     ModelProvenanceField,
@@ -64,6 +65,7 @@ from app.modules.storage import capacity_estimates, storage
 from app.modules.storage.artifact_content import ArtifactContentError, resolve
 from app.modules.storage.capacity import CapacityManager
 from app.modules.storage.storage_backend.runtime import get_backend
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs as registry
 from app.schemas.family_transfer import PortableFamily
 from app.schemas.models import PartGroupWrite, PartOptionWrite
@@ -2326,7 +2328,7 @@ def run_import_job(
     *, job_id: str, archive_path: Path, user_id: int, session_factory
 ) -> None:
     """Durable job boundary for portable imports; partial progress remains visible."""
-    registry.update(job_id, state="running", stage="ingesting")
+    registry.update(job_id, stage="ingesting")
     try:
         with session_factory.scoped_session() as session:
             user = session.get(User, user_id)
@@ -2341,7 +2343,7 @@ def run_import_job(
                 session.commit()
         registry.finish(
             job_id,
-            state="completed",
+            JobOutcome.COMPLETED,
             completion="complete",
             result=result,
             processed=result["created_files"] + result["skipped_files"],
@@ -2351,10 +2353,7 @@ def run_import_job(
         )
         archive_path.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001 - durable job boundary
-        registry.finish(job_id, state="failed", error=str(exc), retryable=True)
-
-
-IMPORT_DEFINITION = "ingestion.library_import"
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
 
 
 def _import_step(ctx) -> None:
@@ -2367,7 +2366,7 @@ def _import_step(ctx) -> None:
         job = registry.row(session, job_id)
         owner = job.owner_user_id if job is not None else None
     if not leases or owner is None or not Path(leases[0].path).exists():
-        registry.finish(job_id, state="failed", error="staging_expired")
+        registry.finish(job_id, JobOutcome.FAILED, error="staging_expired")
         return
     run_import_job(
         job_id=job_id,
@@ -2398,14 +2397,16 @@ def _retry_import(session, subject_key: str) -> bool:
 
 
 def definitions():
-    from app.modules.work.catalog import INGEST
+    from app.db.models import LaneName
     from app.modules.work.contracts import JobDefinition, Step
 
     return [
         JobDefinition(
-            name=IMPORT_DEFINITION,
-            lane=INGEST,
-            steps=(Step(f"{IMPORT_DEFINITION}.run", _import_step),),
+            name=JobKind.INGESTION_LIBRARY_IMPORT,
+            lane=LaneName.INGEST,
+            steps=(
+                Step(f"{JobKind.INGESTION_LIBRARY_IMPORT.value}.run", _import_step),
+            ),
             cancel=_cancel_import,
             retry=_retry_import,
             label="Library imports",

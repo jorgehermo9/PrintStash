@@ -7,19 +7,12 @@ from collections.abc import Callable
 from sqlmodel import Session, select
 
 from app.core.time import utcnow
-from app.db.models import File
+from app.db.models import File, JobKind, LaneName
 from app.db.scopes import live
-from app.modules.work.catalog import DERIVE_LIGHT, DERIVE_NATIVE
 from app.modules.work.contracts import JobContext, JobDefinition, Step
 
 from . import producers, records
-from .kinds import (
-    GCODE_DEFINITION,
-    MESH_DEFINITION,
-    TOOLPATH_DEFINITION,
-    DerivativeGroup,
-    group,
-)
+from .kinds import DerivativeGroup, group
 from .source import DerivativeSource, file_id_of
 
 
@@ -57,14 +50,14 @@ def _hooks(derivative_group: DerivativeGroup):
 
 
 def _definition(
-    name: str, lane: str, produce: Callable[[int], producers.Outcome]
+    name: JobKind, lane: LaneName, produce: Callable[[int], producers.Outcome]
 ) -> JobDefinition:
     derivative_group = group(name)
     cancel, on_failure, retry = _hooks(derivative_group)
     return JobDefinition(
         name=name,
         lane=lane,
-        steps=(Step(f"{name}.produce", _step(produce)),),
+        steps=(Step(f"{name.value}.produce", _step(produce)),),
         source=DerivativeSource(derivative_group),
         cancel=cancel,
         on_failure=on_failure,
@@ -75,9 +68,17 @@ def _definition(
 
 def definitions() -> list[JobDefinition]:
     return [
-        _definition(MESH_DEFINITION, DERIVE_NATIVE, producers.derive_mesh),
-        _definition(GCODE_DEFINITION, DERIVE_LIGHT, producers.derive_gcode),
-        _definition(TOOLPATH_DEFINITION, DERIVE_NATIVE, producers.derive_toolpath),
+        _definition(
+            JobKind.DERIVATIVES_MESH, LaneName.DERIVE_NATIVE, producers.derive_mesh
+        ),
+        _definition(
+            JobKind.DERIVATIVES_GCODE, LaneName.DERIVE_LIGHT, producers.derive_gcode
+        ),
+        _definition(
+            JobKind.DERIVATIVES_TOOLPATH,
+            LaneName.DERIVE_NATIVE,
+            producers.derive_toolpath,
+        ),
     ]
 
 

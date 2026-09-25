@@ -100,7 +100,10 @@ class TestIngestModel:
 
 class TestIngestArchive:
     def test_archive_import_retains_dxf_bytes(
-        self, tmp_path: Path, client: TestClient, db_session: Session,
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
         auth_headers: dict[str, str],
     ) -> None:
         use_local_storage(tmp_path)
@@ -132,7 +135,9 @@ class TestIngestArchive:
             auth_headers,
         )
         assert result["state"] == "completed", result
-        file_row = db_session.exec(select(File).where(File.file_type == FileType.DXF)).one()
+        file_row = db_session.exec(
+            select(File).where(File.file_type == FileType.DXF)
+        ).one()
         downloaded = client.get(
             f"/api/v1/files/{file_row.id}/download", headers=auth_headers
         )

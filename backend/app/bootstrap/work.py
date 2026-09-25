@@ -21,8 +21,9 @@ import os
 import threading
 from dataclasses import dataclass
 
-from app.core.config import settings
+from app.core.config import ProcessRole, settings
 from app.core.logging import get_logger
+from app.db.models import LaneName
 from app.modules.work import catalog as catalog_module
 from app.modules.work import executors, fences
 from app.modules.work.catalog import WorkCatalog
@@ -88,18 +89,14 @@ def build_catalog() -> WorkCatalog:
     from app.db.session import get_session_factory
 
     catalog = WorkCatalog(definitions())
-    try:
-        with get_session_factory().scoped_session() as session:
-            catalog.apply_overrides(session)
-    except Exception:  # noqa: BLE001 - overrides are optional; defaults still run
-        logger.warning("lane overrides unavailable; using configured concurrency")
+    with get_session_factory().scoped_session() as session:
+        catalog.apply_overrides(session)
     return catalog
 
 
-def listen_lanes(catalog: WorkCatalog) -> list[str] | None:
+def listen_lanes() -> list[LaneName] | None:
     """The lanes this process executes; ``None`` means every lane."""
-    role = settings.process_role
-    if role == "api" and not settings.api_runs_jobs:
+    if settings.process_role is ProcessRole.API and not settings.api_runs_jobs:
         return []
     return None
 
@@ -118,7 +115,7 @@ def validate_topology() -> None:
     from sqlalchemy.engine import make_url
 
     role = settings.process_role
-    split = role == "worker" or (role == "api" and not settings.api_runs_jobs)
+    split = listen_lanes() == [] or role is ProcessRole.WORKER
     if not split:
         return
     backend = make_url(settings.db_url).get_backend_name()
@@ -198,7 +195,7 @@ def start(
     validate_topology()
     catalog = catalog or build_catalog()
     engine = engine or build_engine(catalog)
-    lanes = listen_lanes(catalog)
+    lanes = listen_lanes()
     events.bind(publisher)
     jobs.clear_listeners()
     jobs.subscribe(events.job_changed)
@@ -206,7 +203,7 @@ def start(
     engine.launch(listen_lanes=lanes)
     executors.register(
         role=settings.process_role,
-        lanes=sorted(catalog.lanes) if lanes is None else lanes,
+        lanes=list(catalog.lanes) if lanes is None else lanes,
     )
     if sole_api:
         retired = executors.retire_predecessors()
@@ -340,8 +337,12 @@ def after_restore() -> None:
         return
     runtime.engine.reset()
     catalog_module.bind(runtime.engine, runtime.catalog)
-    runtime.engine.launch(listen_lanes=listen_lanes(runtime.catalog))
-    executors.register(role=settings.process_role, lanes=sorted(runtime.catalog.lanes))
+    lanes = listen_lanes()
+    runtime.engine.launch(listen_lanes=lanes)
+    executors.register(
+        role=settings.process_role,
+        lanes=list(runtime.catalog.lanes) if lanes is None else lanes,
+    )
     # The snapshot's "a pass is already queued" marks belong to the engine of
     # the process that took it; the reset engine will never run those passes.
     forget_queued_passes()

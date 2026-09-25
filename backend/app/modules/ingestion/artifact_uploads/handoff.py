@@ -20,6 +20,7 @@ from app.db.models import (
     ArtifactUploadState,
     FileRevisionStatus,
     FileType,
+    JobKind,
     Model,
     StagingLease,
 )
@@ -30,11 +31,10 @@ from app.modules.ingestion.ingestion import (
     add_gcode_revision_to_model,
     ingest_staged_file,
 )
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs as registry
 
 from .manager import SqlArtifactUploadManager
-
-DEFINITION = "ingestion.artifact_upload"
 
 
 def subject_key(upload_id: str) -> str:
@@ -69,10 +69,10 @@ def run_verified_upload_ingestion(
 
     if staged_path is None or not staged_path.exists():
         registry.finish(
-            job_id, state="failed", error="staging_expired", retryable=False
+            job_id, JobOutcome.FAILED, error="staging_expired", retryable=False
         )
     elif purpose == "revision":
-        registry.update(job_id, state="running", label="Attaching revision")
+        registry.update(job_id, label="Attaching revision")
         try:
             with session_factory.scoped_session() as session:
                 model = session.exec(
@@ -94,14 +94,14 @@ def run_verified_upload_ingestion(
                 )
                 registry.finish(
                     job_id,
-                    state="completed",
+                    JobOutcome.COMPLETED,
                     model_id=model.id,
                     file_id=file_row.id,
                 )
         except Exception:
             registry.finish(
                 job_id,
-                state="failed",
+                JobOutcome.FAILED,
                 error="artifact_revision_ingestion_failed",
                 retryable=True,
             )
@@ -115,7 +115,7 @@ def run_verified_upload_ingestion(
         if file_type is None:
             registry.finish(
                 job_id,
-                state="failed",
+                JobOutcome.FAILED,
                 error="artifact_upload_purpose_not_supported",
                 retryable=False,
             )
@@ -213,21 +213,21 @@ def _recover_uploads() -> dict[str, int]:
 
 
 def definitions():
-    from app.modules.work.catalog import INGEST
+    from app.db.models import LaneName
     from app.modules.work.contracts import JobDefinition, Step
     from app.modules.work.sources import fixed, scheduled
 
     return [
         scheduled(
-            "ingest.upload_recovery",
+            JobKind.INGESTION_UPLOAD_RECOVERY,
             cron=fixed("55 * * * *"),
             run=_recover_uploads,
             label="Resumable upload expiry",
         ),
         JobDefinition(
-            name=DEFINITION,
-            lane=INGEST,
-            steps=(Step(f"{DEFINITION}.run", _step),),
+            name=JobKind.INGESTION_ARTIFACT_UPLOAD,
+            lane=LaneName.INGEST,
+            steps=(Step(f"{JobKind.INGESTION_ARTIFACT_UPLOAD.value}.run", _step),),
             cancel=_cancel,
             on_failure=_on_failure,
             retry=lambda _session, _subject: False,

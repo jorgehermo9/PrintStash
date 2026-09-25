@@ -24,7 +24,9 @@ from app.core.config import _overlay, settings
 from app.core.time import utcnow
 from app.db.models import (
     Job,
+    JobKind,
     JobState,
+    LaneName,
     ReconcileCursor,
     WorkExecutor,
     WorkLaneOverride,
@@ -32,8 +34,8 @@ from app.db.models import (
 )
 from app.modules.work import catalog as catalog_module
 from app.modules.work import executors, fences
-from app.modules.work.catalog import INGEST, RECONCILE_DEFINITION, WorkCatalog
-from app.modules.work.contracts import EngineStatus, Submission
+from app.modules.work.catalog import WorkCatalog
+from app.modules.work.contracts import EngineStatus, PassSubmission, Submission
 from app.modules.work.jobs import jobs
 
 POSTGRES = "postgresql://printstash:secret@db/printstash"
@@ -42,11 +44,11 @@ POSTGRES = "postgresql://printstash:secret@db/printstash"
 _BUILD_ENGINE = work_bootstrap.build_engine
 
 
-def _passes(engine) -> set[str]:
+def _passes(engine) -> set[JobKind]:
     return {
-        execution.submission.subject_key
+        execution.submission.source
         for execution in engine.executions.values()
-        if execution.submission.definition == RECONCILE_DEFINITION
+        if isinstance(execution.submission, PassSubmission)
     }
 
 
@@ -56,19 +58,26 @@ class TestDefinitions:
 
         assert len(names) == len(set(names))
         assert {
-            "work.housekeeping",
-            "ingestion.upload",
-            "derivatives.mesh",
-            "notifications.deliver",
-            "administration.audit",
-            "backups.create",
-            "printing.dispatch",
+            JobKind.WORK_HOUSEKEEPING,
+            JobKind.INGESTION_UPLOAD,
+            JobKind.DERIVATIVES_MESH,
+            JobKind.NOTIFICATIONS_DELIVER,
+            JobKind.ADMINISTRATION_AUDIT,
+            JobKind.BACKUPS_CREATE,
+            JobKind.PRINTING_DISPATCH,
         } <= set(names)
+
+    def test_every_kind_has_exactly_one_definition(self) -> None:
+        # A member no definition answers to is a dead name the database would
+        # still accept; a definition outside the enum cannot exist at all.
+        names = [definition.name for definition in work_bootstrap.definitions()]
+
+        assert sorted(names) == sorted(JobKind)
 
     def test_includes_similarity_when_its_package_is_installed(self) -> None:
         names = {definition.name for definition in work_bootstrap.definitions()}
 
-        assert "similarity.analyze" in names
+        assert JobKind.SIMILARITY_ANALYZE in names
 
     def test_leaves_similarity_out_when_its_package_is_absent(
         self, monkeypatch
@@ -84,12 +93,12 @@ class TestDefinitions:
 
 class TestBuildCatalog:
     def test_applies_an_administrators_lane_override(self, db_session: Session) -> None:
-        db_session.add(WorkLaneOverride(lane=INGEST, concurrency=7))
+        db_session.add(WorkLaneOverride(lane=LaneName.INGEST, concurrency=7))
         db_session.commit()
 
         catalog = work_bootstrap.build_catalog()
 
-        assert catalog.lanes[INGEST].concurrency == 7
+        assert catalog.lanes[LaneName.INGEST].concurrency == 7
 
     def test_unreadable_overrides_fall_back_to_configured_concurrency(
         self, monkeypatch
@@ -101,7 +110,10 @@ class TestBuildCatalog:
 
         catalog = work_bootstrap.build_catalog()
 
-        assert catalog.lanes[INGEST].concurrency == settings.jobs_ingest_concurrency
+        assert (
+            catalog.lanes[LaneName.INGEST].concurrency
+            == settings.jobs_ingest_concurrency
+        )
 
 
 class TestListenLanes:
@@ -238,7 +250,7 @@ class TestStart:
         priorities = {
             execution.submission.priority
             for execution in work_engine.executions.values()
-            if execution.submission.definition == RECONCILE_DEFINITION
+            if isinstance(execution.submission, PassSubmission)
         }
 
         assert priorities == {WorkPriority.BACKFILL}
@@ -248,12 +260,14 @@ class TestStart:
     ) -> None:
         # The mark says "a pass is already waiting", but the process that
         # queued it died, so that pass never runs.
-        db_session.add(ReconcileCursor(source="sources.scan", pass_queued_at=utcnow()))
+        db_session.add(
+            ReconcileCursor(source=JobKind.SOURCES_SCAN, pass_queued_at=utcnow())
+        )
         db_session.commit()
 
         work_bootstrap.start(engine=work_engine, catalog=work_catalog)
         try:
-            assert "sources.scan" in _passes(work_engine)
+            assert JobKind.SOURCES_SCAN in _passes(work_engine)
         finally:
             work_bootstrap.stop()
 
@@ -276,11 +290,11 @@ class TestStart:
         from app.modules.work.submission import nudge
 
         previous = make_work_executor("previous-api", role="all")
-        nudge("sources.scan")
+        nudge(JobKind.SOURCES_SCAN)
         (lost,) = [
             execution
             for execution in work_engine.executions.values()
-            if execution.submission.definition == RECONCILE_DEFINITION
+            if isinstance(execution.submission, PassSubmission)
         ]
         lost.status = EngineStatus.RUNNING
         lost.executor_id = previous.executor_id
@@ -311,9 +325,9 @@ class TestStart:
             Submission(
                 execution_id="old-job:1",
                 job_id="old-job",
-                definition="ingestion.upload",
+                definition=JobKind.INGESTION_UPLOAD,
                 subject_key="ingest_request/old-job",
-                lane=INGEST,
+                lane=LaneName.INGEST,
                 priority=WorkPriority.INTERACTIVE,
             )
         )
@@ -341,7 +355,9 @@ class TestStart:
         )
         try:
             job_id = jobs.create(
-                definition="work.housekeeping", subject_key="test/1", owner_user_id=None
+                definition=JobKind.WORK_HOUSEKEEPING,
+                subject_key="test/1",
+                owner_user_id=None,
             )
         finally:
             work_bootstrap.stop()
@@ -453,16 +469,16 @@ class TestAfterRestore:
         # The archive recorded "a pass is already waiting" for the engine of
         # the process that took it. That engine is gone, so the pass never runs.
         work_engine.drain()
-        cursor = db_session.get(ReconcileCursor, "sources.scan") or ReconcileCursor(
-            source="sources.scan"
-        )
+        cursor = db_session.get(
+            ReconcileCursor, JobKind.SOURCES_SCAN
+        ) or ReconcileCursor(source=JobKind.SOURCES_SCAN)
         cursor.pass_queued_at = utcnow()
         db_session.add(cursor)
         db_session.commit()
 
         work_bootstrap.after_restore()
 
-        assert "sources.scan" in _passes(work_engine)
+        assert JobKind.SOURCES_SCAN in _passes(work_engine)
 
     def test_does_nothing_without_running_work(self) -> None:
         assert work_bootstrap.current() is None
@@ -489,7 +505,9 @@ class TestAfterRestore:
         self, make_job, db_session: Session
     ) -> None:
         # An API that runs no jobs still restores; the database fact holds.
-        snapshot = make_job(kind="backups.create", state=JobState.RUNNING, attempts=1)
+        snapshot = make_job(
+            kind=JobKind.BACKUPS_CREATE, state=JobState.RUNNING, attempts=1
+        )
 
         work_bootstrap.after_restore()
 

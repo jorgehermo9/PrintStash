@@ -37,7 +37,7 @@ import app.modules.backups.backup.verification as backup_verification
 import app.modules.storage.storage_backend.local as storage_local
 from app.api.v1 import backup as backup_api
 from app.core.time import utcnow
-from app.db.models import IngestRequestKind, OwnedStorageObject, StagingLease
+from app.db.models import IngestRequestKind, JobKind, OwnedStorageObject, StagingLease
 from app.modules.backups import backup_destination
 from app.modules.backups.backup_catalogue import BackupIdentityConflictError
 from app.modules.backups.backup_destination import RemoteBackupDestination
@@ -122,7 +122,7 @@ class TestCreateBackup:
 
         job = _backup_job(client, admin_headers)
 
-        assert (job["kind"], job["state"]) == ("backups.create", "completed")
+        assert (job["kind"], job["state"]) == (JobKind.BACKUPS_CREATE, "completed")
         assert job["result"]["backup_id"]
         assert job["result"]["file_count"] == 1
         assert job["result"]["outcome"] == "completed"

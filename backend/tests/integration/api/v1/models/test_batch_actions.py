@@ -621,7 +621,9 @@ class TestBatchRevisionLabels:
             session.flush()
             raise RuntimeError("injected batch failure")
 
-        monkeypatch.setattr(models_revision_labels, "set_revision_labels", fail_after_first)
+        monkeypatch.setattr(
+            models_revision_labels, "set_revision_labels", fail_after_first
+        )
 
         with pytest.raises(RuntimeError, match="injected batch failure"):
             client.patch(

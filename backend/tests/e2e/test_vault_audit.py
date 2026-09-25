@@ -57,11 +57,10 @@ def _run_due_audit(session) -> int:
 
     Returns the id of the newest run: the one the due policy just admitted.
     """
-    from app.db.models import VaultAuditRun
-    from app.modules.administration.audit_jobs import DEFINITION
+    from app.db.models import JobKind, VaultAuditRun
     from app.modules.work import nudge
 
-    nudge(DEFINITION)
+    nudge(JobKind.ADMINISTRATION_AUDIT)
     settle()
     session.expire_all()
     run_id = session.exec(select(func.max(VaultAuditRun.id))).one()

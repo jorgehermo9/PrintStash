@@ -28,11 +28,12 @@ from app.core.time import ensure_utc, utcnow
 from app.db.affected import affected
 from app.db.models import (
     ArtifactDerivative,
+    DerivativeKind,
     DerivativeRegeneration,
     DerivativeState,
     File,
 )
-from app.schemas.jobs import DerivativeRead
+from app.schemas.jobs import DerivativeRead, DerivativeStatus
 
 from .kinds import recipes_for
 
@@ -40,7 +41,7 @@ STALE_IN_FLIGHT = timedelta(hours=1)
 _SATISFIED = {DerivativeState.READY, DerivativeState.SKIPPED}
 
 
-def regenerations(session: Session) -> dict[str, datetime]:
+def regenerations(session: Session) -> dict[DerivativeKind, datetime]:
     return {
         row.kind: ensure_utc(row.requested_at)
         for row in session.exec(select(DerivativeRegeneration)).all()
@@ -56,7 +57,7 @@ def satisfied(
     """The Python mirror of the source's SQL predicate, for one row."""
     if row is None:
         return False
-    state = DerivativeState(row.state)
+    state = row.state
     updated = ensure_utc(row.updated_at)
     if state in _SATISFIED:
         return regenerated_at is None or updated >= regenerated_at
@@ -69,7 +70,7 @@ def satisfied(
     return now - updated < STALE_IN_FLIGHT
 
 
-def rows_for(session: Session, file: File) -> dict[str, ArtifactDerivative]:
+def rows_for(session: Session, file: File) -> dict[DerivativeKind, ArtifactDerivative]:
     """This Artifact's rows at the current recipe of each applicable kind."""
     assert file.id is not None
     recipes = recipes_for(file)
@@ -84,8 +85,8 @@ def rows_for(session: Session, file: File) -> dict[str, ArtifactDerivative]:
 
 
 def needed(
-    session: Session, file: File, kinds: dict[str, int], *, now: datetime
-) -> set[str]:
+    session: Session, file: File, kinds: dict[DerivativeKind, int], *, now: datetime
+) -> set[DerivativeKind]:
     """Which of ``kinds`` still need deriving for ``file`` right now."""
     current = rows_for(session, file)
     regen = regenerations(session)
@@ -97,7 +98,7 @@ def needed(
 
 
 def begin(
-    session: Session, file: File, kind: str, recipe: int, *, now: datetime
+    session: Session, file: File, kind: DerivativeKind, recipe: int, *, now: datetime
 ) -> ArtifactDerivative:
     assert file.id is not None
     row = session.exec(
@@ -145,7 +146,7 @@ def mark_skipped(
 ) -> None:
     """Nothing to produce for these bytes (G-code without an embedded image)."""
     row.state = DerivativeState.SKIPPED
-    row.failure_reason = reason[:64]
+    row.failure_reason = reason
     row.next_attempt_at = None
     row.updated_at = now
     session.add(row)
@@ -161,7 +162,7 @@ def mark_failed(
 ) -> None:
     """Record a failure; a deterministic one exhausts the attempts at once."""
     row.state = DerivativeState.FAILED
-    row.failure_reason = reason[:64]
+    row.failure_reason = reason
     if deterministic:
         row.attempts = max(row.attempts, settings.derivative_max_attempts)
     if row.attempts >= settings.derivative_max_attempts:
@@ -181,7 +182,7 @@ def fail_in_flight(
         select(ArtifactDerivative).where(
             ArtifactDerivative.file_id == file_id,
             col(ArtifactDerivative.state).in_(
-                [DerivativeState.QUEUED.value, DerivativeState.RUNNING.value]
+                [DerivativeState.QUEUED, DerivativeState.RUNNING]
             ),
         )
     ).all()
@@ -191,7 +192,7 @@ def fail_in_flight(
 
 
 def cancel(
-    session: Session, file: File, kinds: dict[str, int], *, now: datetime
+    session: Session, file: File, kinds: dict[DerivativeKind, int], *, now: datetime
 ) -> None:
     """Withdraw intent: every kind of the group is cancelled at its recipe."""
     current = rows_for(session, file)
@@ -203,16 +204,19 @@ def cancel(
         if row.state in {DerivativeState.READY, DerivativeState.SKIPPED}:
             continue
         row.state = DerivativeState.CANCELLED
+        row.failure_reason = None
         row.next_attempt_at = None
         row.updated_at = now
         session.add(row)
 
 
-def reset(session: Session, file: File, kinds: dict[str, int] | None = None) -> int:
+def reset(
+    session: Session, file: File, kinds: dict[DerivativeKind, int] | None = None
+) -> int:
     """Make failed or cancelled kinds pending again (a retry)."""
     assert file.id is not None
     recipes = recipes_for(file)
-    wanted = kinds or recipes
+    wanted = recipes if kinds is None else kinds
     removed = 0
     for kind, recipe in wanted.items():
         removed += affected(
@@ -222,14 +226,14 @@ def reset(session: Session, file: File, kinds: dict[str, int] | None = None) -> 
                 col(ArtifactDerivative.kind) == kind,
                 col(ArtifactDerivative.recipe_version) == recipe,
                 col(ArtifactDerivative.state).in_(
-                    [DerivativeState.FAILED.value, DerivativeState.CANCELLED.value]
+                    [DerivativeState.FAILED, DerivativeState.CANCELLED]
                 ),
             ),
         )
     return removed
 
 
-def invalidate(session: Session, file: File, kinds: list[str]) -> int:
+def invalidate(session: Session, file: File, kinds: list[DerivativeKind]) -> int:
     """Forget ``kinds`` at their current recipe, whatever their state.
 
     Used when an output is known to be broken despite its row (an audit found
@@ -241,7 +245,7 @@ def invalidate(session: Session, file: File, kinds: list[str]) -> int:
     removed = 0
     for kind in kinds:
         if kind not in recipes:
-            continue
+            raise ValueError(f"derivative_not_applicable:{kind}")
         removed += affected(
             session,
             delete(ArtifactDerivative).where(
@@ -265,10 +269,12 @@ def read(
         row = current.get(kind)
         if row is None:
             reads.append(
-                DerivativeRead(kind=kind, recipe_version=recipe, state="pending")
+                DerivativeRead(
+                    kind=kind, recipe_version=recipe, state=DerivativeStatus.PENDING
+                )
             )
             continue
-        state = DerivativeState(row.state).value
+        state = DerivativeStatus(row.state.value)
         stale = (
             row.state in _SATISFIED
             and kind in regen
@@ -278,7 +284,7 @@ def read(
             DerivativeRead(
                 kind=kind,
                 recipe_version=recipe,
-                state="pending" if stale else state,  # type: ignore[arg-type]
+                state=DerivativeStatus.PENDING if stale else state,
                 attempts=row.attempts,
                 failure_reason=row.failure_reason,
                 updated_at=row.updated_at,

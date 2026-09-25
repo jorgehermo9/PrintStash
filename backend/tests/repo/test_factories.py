@@ -66,8 +66,10 @@ class TestGeneratedIdentities:
         first = factories.build_document(db_session, "First")
         second = factories.build_document(db_session, "Second")
         factories.build_search_reconciliation_state(
-            db_session, SubjectType.DOCUMENT,
-            watermark_at=second.updated_at, watermark_id=second.id,
+            db_session,
+            SubjectType.DOCUMENT,
+            watermark_at=second.updated_at,
+            watermark_id=second.id,
             partition_after_id=first.id,
         )
 

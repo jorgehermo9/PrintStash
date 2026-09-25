@@ -21,22 +21,14 @@ kind's recipe version is read relative to the Artifact's group.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import and_, func, or_
 from sqlmodel import col
 
-from app.db.models import SENTINEL_FILE_HASH, File, FileType
-
-METADATA = "metadata"
-THUMBNAIL = "thumbnail"
-TOOLPATH = "toolpath"
-
-MESH_DEFINITION = "derivatives.mesh"
-GCODE_DEFINITION = "derivatives.gcode"
-TOOLPATH_DEFINITION = "derivatives.toolpath"
+from app.db.models import SENTINEL_FILE_HASH, DerivativeKind, File, FileType, JobKind
 
 # Recipe versions. Bump rule: see the module docstring.
 MESH_GEOMETRY_RECIPE = 1
@@ -51,96 +43,105 @@ BINARY_GCODE_SUFFIXES = (".bgcode", ".bgc")
 
 @dataclass(frozen=True)
 class DerivativeGroup:
-    """One producer: a job definition and the kinds it derives together."""
+    """One producer: a job definition and the kinds it derives together.
 
-    definition: str
-    kinds: dict[str, int]
+    ``applies`` is the SQL predicate over ``files`` selecting the Artifacts
+    this group derives for; ``applies_to`` is the same rule for one row.
+    Both are stated per group, so a group is never assumed by elimination.
+    """
+
+    definition: JobKind
+    kinds: dict[DerivativeKind, int]
     label: str
+    applies: Callable[[], Any]
+    applies_to: Callable[[File], bool]
 
-    def applies(self) -> Any:
-        """SQL predicate over ``files``: Artifacts this group derives for."""
-        real = col(File.sha256) != SENTINEL_FILE_HASH
-        if self.definition == MESH_DEFINITION:
-            return and_(real, col(File.file_type).in_(MESH_TYPES))
-        if self.definition == GCODE_DEFINITION:
-            return and_(real, col(File.file_type) == FileType.GCODE)
-        lowered = func.lower(File.original_filename)
-        return and_(
-            real,
-            col(File.file_type) == FileType.GCODE,
-            or_(*(lowered.like(f"%{suffix}") for suffix in BINARY_GCODE_SUFFIXES)),
-        )
 
-    def applies_to(self, file: File) -> bool:
-        if file.sha256 == SENTINEL_FILE_HASH:
-            return False
-        if self.definition == MESH_DEFINITION:
-            return file.file_type in MESH_TYPES
-        if self.definition == GCODE_DEFINITION:
-            return file.file_type == FileType.GCODE
-        return (
-            file.file_type == FileType.GCODE
-            and file.original_filename.lower().endswith(BINARY_GCODE_SUFFIXES)
-        )
+def _real() -> Any:
+    return col(File.sha256) != SENTINEL_FILE_HASH
+
+
+def _is_binary_gcode(file: File) -> bool:
+    return file.file_type == FileType.GCODE and file.original_filename.lower().endswith(
+        BINARY_GCODE_SUFFIXES
+    )
 
 
 GROUPS: tuple[DerivativeGroup, ...] = (
     DerivativeGroup(
-        MESH_DEFINITION,
-        {METADATA: MESH_GEOMETRY_RECIPE, THUMBNAIL: MESH_THUMBNAIL_RECIPE},
-        "Mesh geometry and thumbnails",
+        definition=JobKind.DERIVATIVES_MESH,
+        kinds={
+            DerivativeKind.METADATA: MESH_GEOMETRY_RECIPE,
+            DerivativeKind.THUMBNAIL: MESH_THUMBNAIL_RECIPE,
+        },
+        label="Mesh geometry and thumbnails",
+        applies=lambda: and_(_real(), col(File.file_type).in_(MESH_TYPES)),
+        applies_to=lambda file: (
+            file.sha256 != SENTINEL_FILE_HASH and file.file_type in MESH_TYPES
+        ),
     ),
     DerivativeGroup(
-        GCODE_DEFINITION,
-        {METADATA: GCODE_METADATA_RECIPE, THUMBNAIL: GCODE_THUMBNAIL_RECIPE},
-        "G-code metadata and thumbnails",
+        definition=JobKind.DERIVATIVES_GCODE,
+        kinds={
+            DerivativeKind.METADATA: GCODE_METADATA_RECIPE,
+            DerivativeKind.THUMBNAIL: GCODE_THUMBNAIL_RECIPE,
+        },
+        label="G-code metadata and thumbnails",
+        applies=lambda: and_(_real(), col(File.file_type) == FileType.GCODE),
+        applies_to=lambda file: (
+            file.sha256 != SENTINEL_FILE_HASH and file.file_type == FileType.GCODE
+        ),
     ),
     DerivativeGroup(
-        TOOLPATH_DEFINITION, {TOOLPATH: TOOLPATH_RECIPE}, "Toolpath previews"
+        definition=JobKind.DERIVATIVES_TOOLPATH,
+        kinds={DerivativeKind.TOOLPATH: TOOLPATH_RECIPE},
+        label="Toolpath previews",
+        applies=lambda: and_(
+            _real(),
+            col(File.file_type) == FileType.GCODE,
+            or_(
+                *(
+                    func.lower(File.original_filename).like(f"%{suffix}")
+                    for suffix in BINARY_GCODE_SUFFIXES
+                )
+            ),
+        ),
+        applies_to=lambda file: (
+            file.sha256 != SENTINEL_FILE_HASH and _is_binary_gcode(file)
+        ),
     ),
 )
-KINDS = (METADATA, THUMBNAIL, TOOLPATH)
+_BY_DEFINITION = {candidate.definition: candidate for candidate in GROUPS}
 
 
-def group(definition: str) -> DerivativeGroup:
-    for candidate in GROUPS:
-        if candidate.definition == definition:
-            return candidate
-    raise LookupError(f"unknown_derivative_group:{definition}")
+def group(definition: JobKind) -> DerivativeGroup:
+    """The producer group behind ``definition``; only derivative kinds have one."""
+    try:
+        return _BY_DEFINITION[definition]
+    except KeyError:
+        raise LookupError(f"not_a_derivative_definition:{definition.value}") from None
+
+
+def is_derivative(definition: JobKind) -> bool:
+    return definition in _BY_DEFINITION
 
 
 def groups_for(file: File) -> list[DerivativeGroup]:
     return [candidate for candidate in GROUPS if candidate.applies_to(file)]
 
 
-def recipes_for(file: File) -> dict[str, int]:
+def recipes_for(file: File) -> dict[DerivativeKind, int]:
     """Every kind that applies to ``file``, at its current recipe version."""
-    recipes: dict[str, int] = {}
+    recipes: dict[DerivativeKind, int] = {}
     for candidate in groups_for(file):
         recipes.update(candidate.kinds)
     return recipes
 
 
-def definition_for_kind(kind: str) -> str:
-    """The first group deriving ``kind`` (used to nudge after a regenerate)."""
-    if kind not in KINDS:
-        raise LookupError(f"unknown_derivative_kind:{kind}")
-    for candidate in GROUPS:
-        if kind in candidate.kinds:
-            return candidate.definition
-    raise LookupError(f"unknown_derivative_kind:{kind}")
-
-
-def definitions_for_kind(kind: str) -> list[str]:
+def definitions_for_kind(kind: DerivativeKind) -> list[JobKind]:
+    """Every group deriving ``kind``; each kind has at least one."""
     return [candidate.definition for candidate in GROUPS if kind in candidate.kinds]
 
 
-def kinds_for_definition(definition: str) -> list[str]:
-    for candidate in GROUPS:
-        if candidate.definition == definition:
-            return list(candidate.kinds)
-    return []
-
-
-def all_definitions() -> Iterable[str]:
-    return (candidate.definition for candidate in GROUPS)
+def all_definitions() -> tuple[JobKind, ...]:
+    return tuple(_BY_DEFINITION)

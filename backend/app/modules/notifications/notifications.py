@@ -42,6 +42,7 @@ from app.core.url_safety import (
     resolve_public_target,
 )
 from app.db.models import (
+    JobKind,
     Model,
     NotificationChannel,
     NotificationDelivery,
@@ -81,7 +82,7 @@ _STUCK_SENDING_SECONDS = 300
 _MAX_RETRY_AFTER_SECONDS = 3600
 # Consecutive permanently-failed deliveries before a channel is auto-disabled.
 _CIRCUIT_BREAKER_THRESHOLD = 10
-# Delivered/failed rows older than this are pruned by ``notify.retention``.
+# Delivered/failed rows older than this are pruned by ``notifications.retention``.
 _DELIVERY_RETENTION_DAYS = 30
 
 
@@ -230,7 +231,7 @@ def enqueue_for_event(
     )
     from app.modules.work.submission import nudge_after_commit
 
-    nudge_after_commit(session, DELIVER_DEFINITION)
+    nudge_after_commit(session, JobKind.NOTIFICATIONS_DELIVER)
     return len(matching)
 
 
@@ -412,9 +413,6 @@ async def _send_one(item: Dict[str, Any]) -> None:
         )
 
 
-DELIVER_DEFINITION = "notifications.deliver"
-
-
 def _claim_delivery(delivery_id: int) -> Dict[str, Any] | None:
     """Claim one delivery for its Job: PENDING (or its own stale SENDING) -> SENDING.
 
@@ -538,21 +536,21 @@ def _channel_partition(subject: str) -> str:
 
 
 def definitions():
-    from app.modules.work.catalog import NOTIFY
+    from app.db.models import LaneName
     from app.modules.work.contracts import JobDefinition, Step
     from app.modules.work.sources import fixed, scheduled
 
     return [
         scheduled(
-            "notify.retention",
+            JobKind.NOTIFICATIONS_RETENTION,
             cron=fixed("25 * * * *"),
             run=prune_deliveries,
             label="Notification history retention",
         ),
         JobDefinition(
-            name=DELIVER_DEFINITION,
-            lane=NOTIFY,
-            steps=(Step(f"{DELIVER_DEFINITION}.send", _deliver_step),),
+            name=JobKind.NOTIFICATIONS_DELIVER,
+            lane=LaneName.NOTIFY,
+            steps=(Step(f"{JobKind.NOTIFICATIONS_DELIVER.value}.send", _deliver_step),),
             source=DeliverySource(),
             cancel=_cancel_delivery,
             partition=_channel_partition,
@@ -566,7 +564,7 @@ def prune_deliveries(retention_days: int = _DELIVERY_RETENTION_DAYS) -> int:
     """Delete terminal (SENT/FAILED) deliveries older than ``retention_days``.
 
     Bounds unbounded growth of the outbox. PENDING/SENDING rows are never
-    pruned. Run hourly by the ``notify.retention`` schedule. Returns the number
+    pruned. Run hourly by the ``notifications.retention`` schedule. Returns the number
     deleted.
     """
     cutoff = utcnow() - timedelta(days=max(1, retention_days))
@@ -1005,5 +1003,5 @@ def enqueue_storage_event(
     if deliveries:
         from app.modules.work.submission import nudge_after_commit
 
-        nudge_after_commit(session, DELIVER_DEFINITION)
+        nudge_after_commit(session, JobKind.NOTIFICATIONS_DELIVER)
     return deliveries

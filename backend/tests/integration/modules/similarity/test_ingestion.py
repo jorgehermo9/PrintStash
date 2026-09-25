@@ -3,7 +3,7 @@
 import pytest
 from sqlmodel import select
 
-from app.db.models import GeometryFingerprint, SimilarityRun
+from app.db.models import GeometryFingerprint, JobKind, SimilarityRun
 from app.db.session import get_session_factory
 from app.modules.media.fingerprints import FingerprintResult, extract
 from app.modules.media.mesh_resources import prepare_loaded_mesh
@@ -93,7 +93,7 @@ class TestIngestDerivative:
         run = db_session.exec(select(SimilarityRun)).one()
         assert (run.actor_id, run.trigger, run.scope) == (admin.id, "ingest", "models")
         assert run.scope_ids_json == f"[{model.id}]"
-        assert nudged == ["similarity.analyze"]
+        assert nudged == [JobKind.SIMILARITY_ANALYZE]
 
     def test_no_active_administrator_means_no_system_run(
         self, db_session, make_file, make_model, make_user

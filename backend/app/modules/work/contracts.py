@@ -20,26 +20,33 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from app.db.models.types import WorkPriority
+from app.db.models.types import JobKind, JobState, LaneName, WorkPriority
 
 if TYPE_CHECKING:
     from sqlmodel import Session
 
 __all__ = [
     "ActiveExecution",
+    "Deduplicated",
     "EngineEvidence",
     "EngineStatus",
+    "ExecutionKind",
     "JobContext",
     "JobDefinition",
     "JobEngine",
+    "JobOutcome",
+    "JobSubmission",
     "Lane",
     "LaneDepth",
+    "Partitioned",
+    "PassSubmission",
     "RetryPolicy",
+    "SkipReason",
     "Step",
     "StepRunner",
     "SubmitOutcome",
@@ -49,6 +56,18 @@ __all__ = [
     "WorkSource",
     "narrower_priority",
 ]
+
+
+class JobOutcome(StrEnum):
+    """How a Job ended: the terminal subset of ``JobState``, and nothing else."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    @property
+    def state(self) -> JobState:
+        return JobState(self.value)
 
 
 def narrower_priority(parent: WorkPriority, requested: WorkPriority) -> WorkPriority:
@@ -100,7 +119,7 @@ class Lane:
     claim instead.
     """
 
-    name: str
+    name: LaneName
     concurrency: int
     scope: Literal["worker", "global"] = "worker"
     partitioned: bool = False
@@ -122,7 +141,7 @@ class JobContext(Protocol):
     """What a running step may ask of the engine. Nothing else is available."""
 
     job_id: str
-    definition: str
+    definition: JobKind
     subject_key: str
     priority: WorkPriority
     execution_id: str
@@ -132,13 +151,13 @@ class JobContext(Protocol):
         """Merge display-safe progress, counts or result into the Job."""
         ...
 
-    def finish(self, state: str, **fields: Any) -> None:
+    def finish(self, outcome: JobOutcome, **fields: Any) -> None:
         """Record the Job's terminal outcome from inside a step."""
         ...
 
     def cancelled(self) -> bool: ...
 
-    def nudge(self, source: str) -> None:
+    def nudge(self, source: JobKind) -> None:
         """Ask the reconciler to run one source's pass soon."""
         ...
 
@@ -155,6 +174,12 @@ class Step:
     retry: RetryPolicy = NO_RETRY
 
 
+class SkipReason(StrEnum):
+    """Why a source declined an occurrence it reports."""
+
+    PREVIOUS_STILL_RUNNING = "previous_still_running"
+
+
 @dataclass(frozen=True)
 class WorkItem:
     """One subject a source reports as needing work, as the source renders it."""
@@ -162,12 +187,9 @@ class WorkItem:
     subject_key: str
     priority: WorkPriority = WorkPriority.BACKFILL
     owner_user_id: int | None = None
-    partition_key: str | None = None
-    delay_seconds: float | None = None
-    # A schedule occurrence the source consciously declines (for example
-    # ``previous_still_running``) is recorded as a cancelled Job carrying this
-    # reason: a skip is a verdict, not an absence.
-    skip_reason: str | None = None
+    # A schedule occurrence the source consciously declines is recorded as a
+    # cancelled Job carrying this reason: a skip is a verdict, not an absence.
+    skip: SkipReason | None = None
     # A schedule occurrence the reconciler records once its Job exists.
     occurrence_at: datetime | None = None
 
@@ -213,17 +235,19 @@ class JobDefinition:
     created by the request and is its own pending marker.
     """
 
-    name: str
-    lane: str
+    name: JobKind
+    lane: LaneName
     steps: tuple[Step, ...]
+    # What administrators see for this kind of work (Settings → Background work).
+    label: str
     source: WorkSource | None = None
     cancel: CancelHook = _no_hook
     on_failure: FailureHook = _no_hook
     retry: RetryHook = _no_retry_hook
     # Sources this definition's completions should nudge (always its own).
-    completion_nudges: tuple[str, ...] = ()
+    completion_nudges: tuple[JobKind, ...] = ()
     # On a partitioned lane: the partition a subject belongs to (a printer id,
-    # a notification channel). Required there, ignored elsewhere.
+    # a notification channel). Required there and refused elsewhere.
     partition: Callable[[str], str] | None = None
     # Whether each step is admitted as a write-capable operation (drained by a
     # restore, deferred while one holds the fence). Only work that itself takes
@@ -234,16 +258,17 @@ class JobDefinition:
     # backup request is not: the restored database is its own snapshot, taken
     # while that very request ran, and a restore supersedes it.
     survives_restore: bool = True
-    label: str = ""
 
     def __post_init__(self) -> None:
         if not self.steps:
             raise ValueError("job_definition_without_steps")
         if len({step.name for step in self.steps}) != len(self.steps):
             raise ValueError("job_definition_duplicate_step")
+        if not self.label.strip():
+            raise ValueError("job_definition_without_label")
 
 
-class EngineStatus(str, Enum):
+class EngineStatus(StrEnum):
     """The engine's own view of one execution, reduced to what decisions need."""
 
     QUEUED = "queued"
@@ -256,21 +281,28 @@ class EngineStatus(str, Enum):
 
 @dataclass(frozen=True)
 class EngineEvidence:
-    """What the engine knows about one execution id, or that it knows nothing."""
+    """What the engine knows about one execution it has a record of.
 
-    status: EngineStatus | None
+    ``app_version`` and ``executor_id`` are what the engine recorded, which a
+    durable engine may not have for an execution no process has claimed yet.
+    """
+
+    status: EngineStatus
     app_version: str | None = None
     executor_id: str | None = None
 
-    @property
-    def absent(self) -> bool:
-        return self.status is None
+
+class ExecutionKind(StrEnum):
+    """The two things an engine executes: a Job attempt or a reconcile pass."""
+
+    JOB = "job"
+    PASS = "pass"
 
 
 @dataclass(frozen=True)
 class ActiveExecution:
     execution_id: str
-    definition: str
+    kind: ExecutionKind
     status: EngineStatus
     app_version: str | None
     executor_id: str | None
@@ -282,27 +314,60 @@ class LaneDepth:
     running: int
 
 
-class SubmitOutcome(str, Enum):
+class SubmitOutcome(StrEnum):
     ACCEPTED = "accepted"
     EXISTING = "existing"
     DEDUPLICATED = "deduplicated"
 
 
 @dataclass(frozen=True)
-class Submission:
-    """One execution request, fully resolved by the work layer."""
+class Deduplicated:
+    """A Job on an ordinary lane: at most one active execution per ``key``."""
+
+    key: str
+
+
+@dataclass(frozen=True)
+class Partitioned:
+    """A Job on a partitioned lane, bounded per ``key`` (a printer, a channel).
+
+    Engines cannot deduplicate a partitioned queue; the active-subject claim on
+    the Job row keeps it single-flight instead.
+    """
+
+    key: str
+
+
+@dataclass(frozen=True)
+class JobSubmission:
+    """One attempt of one Job, fully resolved by the work layer."""
 
     execution_id: str
     job_id: str
-    definition: str
+    definition: JobKind
     subject_key: str
-    lane: str
+    lane: LaneName
     priority: WorkPriority
-    dedupe_key: str | None = None
-    partition_key: str | None = None
+    attempt: int
+    routing: Deduplicated | Partitioned
     delay_seconds: float | None = None
-    attempt: int = 1
-    metadata: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PassSubmission:
+    """One reconcile pass over one definition's source, on the reconcile lane."""
+
+    execution_id: str
+    source: JobKind
+    priority: WorkPriority
+    delay_seconds: float | None = None
+
+    @property
+    def lane(self) -> LaneName:
+        return LaneName.RECONCILE
+
+
+Submission = JobSubmission | PassSubmission
 
 
 class StepRunner(Protocol):
@@ -334,7 +399,7 @@ class JobEngine(abc.ABC):
     """
 
     @abc.abstractmethod
-    def launch(self, *, listen_lanes: Sequence[str] | None) -> None:
+    def launch(self, *, listen_lanes: Sequence[LaneName] | None) -> None:
         """Start executing. ``listen_lanes=None`` listens to every lane."""
 
     @abc.abstractmethod
@@ -348,16 +413,16 @@ class JobEngine(abc.ABC):
 
     @abc.abstractmethod
     def evidence(self, execution_ids: Sequence[str]) -> dict[str, EngineEvidence]:
-        """What the engine knows about each id; unknown ids map to absent."""
+        """What the engine knows about each id; an id it has no record of is left out."""
 
     @abc.abstractmethod
     def active(self) -> list[ActiveExecution]: ...
 
     @abc.abstractmethod
-    def lane_depth(self, lane: str) -> LaneDepth: ...
+    def lane_depth(self, lane: LaneName) -> LaneDepth: ...
 
     @abc.abstractmethod
-    def set_lane_concurrency(self, lane: str, concurrency: int) -> None: ...
+    def set_lane_concurrency(self, lane: LaneName, concurrency: int) -> None: ...
 
     @abc.abstractmethod
     def foreign_version_executions(self) -> list[str]:

@@ -41,6 +41,7 @@ from app.core.time import utcnow
 from app.db.models import (
     CollectionRole,
     FileType,
+    JobKind,
     Model,
     OperatorGateState,
     Printer,
@@ -2010,7 +2011,7 @@ class TestFleet:
         )
 
         assert response.status_code == 201
-        assert nudged == ["printing.dispatch"]
+        assert nudged == [JobKind.PRINTING_DISPATCH]
 
     def test_patch_routing_maps_fleet_error_to_404(
         self,

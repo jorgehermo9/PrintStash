@@ -18,9 +18,13 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.core.time import utcnow
-from app.db.models import ArtifactDerivative, DerivativeRegeneration, DerivativeState
+from app.db.models import (
+    ArtifactDerivative,
+    DerivativeKind,
+    DerivativeRegeneration,
+    DerivativeState,
+)
 from app.modules.derivatives import records
-from app.modules.derivatives.kinds import METADATA, THUMBNAIL
 
 
 @pytest.fixture
@@ -30,7 +34,9 @@ def mesh(make_model, make_file):
 
 def _row(**fields) -> ArtifactDerivative:
     fields.setdefault("updated_at", utcnow())
-    return ArtifactDerivative(file_id=1, kind=THUMBNAIL, recipe_version=1, **fields)
+    return ArtifactDerivative(
+        file_id=1, kind=DerivativeKind.THUMBNAIL, recipe_version=1, **fields
+    )
 
 
 class TestSatisfied:
@@ -94,39 +100,46 @@ class TestNeeded:
     def test_lists_the_kinds_still_owed(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
-        make_derivative(mesh, METADATA)
+        make_derivative(mesh, DerivativeKind.METADATA)
 
         needed = records.needed(
-            db_session, mesh, {METADATA: 1, THUMBNAIL: 1}, now=utcnow()
+            db_session,
+            mesh,
+            {DerivativeKind.METADATA: 1, DerivativeKind.THUMBNAIL: 1},
+            now=utcnow(),
         )
 
-        assert needed == {THUMBNAIL}
+        assert needed == {DerivativeKind.THUMBNAIL}
 
     def test_a_row_at_an_older_recipe_does_not_count(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         # A recipe bump is the code saying the output changed.
-        make_derivative(mesh, THUMBNAIL, recipe_version=0)
+        make_derivative(mesh, DerivativeKind.THUMBNAIL, recipe_version=0)
 
-        assert records.needed(db_session, mesh, {THUMBNAIL: 1}, now=utcnow()) == {
-            THUMBNAIL
-        }
+        assert records.needed(
+            db_session, mesh, {DerivativeKind.THUMBNAIL: 1}, now=utcnow()
+        ) == {DerivativeKind.THUMBNAIL}
 
     def test_a_regeneration_makes_a_ready_kind_owed_again(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
-        make_derivative(mesh, THUMBNAIL, updated_at=utcnow() - timedelta(hours=1))
-        db_session.add(DerivativeRegeneration(kind=THUMBNAIL, requested_at=utcnow()))
+        make_derivative(
+            mesh, DerivativeKind.THUMBNAIL, updated_at=utcnow() - timedelta(hours=1)
+        )
+        db_session.add(
+            DerivativeRegeneration(kind=DerivativeKind.THUMBNAIL, requested_at=utcnow())
+        )
         db_session.commit()
 
-        assert records.needed(db_session, mesh, {THUMBNAIL: 1}, now=utcnow()) == {
-            THUMBNAIL
-        }
+        assert records.needed(
+            db_session, mesh, {DerivativeKind.THUMBNAIL: 1}, now=utcnow()
+        ) == {DerivativeKind.THUMBNAIL}
 
 
 class TestBegin:
     def test_opens_a_running_attempt(self, db_session: Session, mesh) -> None:
-        row = records.begin(db_session, mesh, THUMBNAIL, 1, now=utcnow())
+        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
 
         assert (row.state, row.attempts) == (DerivativeState.RUNNING, 1)
 
@@ -135,14 +148,14 @@ class TestBegin:
     ) -> None:
         make_derivative(
             mesh,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.FAILED,
             attempts=2,
             failure_reason="render_failed",
             next_attempt_at=utcnow(),
         )
 
-        row = records.begin(db_session, mesh, THUMBNAIL, 1, now=utcnow())
+        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
 
         assert (row.attempts, row.failure_reason, row.next_attempt_at) == (
             3,
@@ -153,7 +166,7 @@ class TestBegin:
 
 class TestOutcomes:
     def test_ready_records_what_was_published(self, db_session: Session, mesh) -> None:
-        row = records.begin(db_session, mesh, THUMBNAIL, 1, now=utcnow())
+        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
 
         records.mark_ready(
             db_session,
@@ -172,7 +185,7 @@ class TestOutcomes:
     def test_ready_without_a_key_keeps_the_published_one(
         self, db_session: Session, mesh
     ) -> None:
-        row = records.begin(db_session, mesh, METADATA, 1, now=utcnow())
+        row = records.begin(db_session, mesh, DerivativeKind.METADATA, 1, now=utcnow())
         row.storage_key = "kept"
 
         records.mark_ready(db_session, row, now=utcnow())
@@ -182,7 +195,7 @@ class TestOutcomes:
     def test_skipped_records_why_nothing_was_produced(
         self, db_session: Session, mesh
     ) -> None:
-        row = records.begin(db_session, mesh, THUMBNAIL, 1, now=utcnow())
+        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
 
         records.mark_skipped(db_session, row, "x" * 100, now=utcnow())
 
@@ -195,7 +208,7 @@ class TestOutcomes:
         self, db_session: Session, mesh
     ) -> None:
         now = utcnow()
-        row = records.begin(db_session, mesh, THUMBNAIL, 1, now=now)
+        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=now)
         row.attempts = 3
 
         records.mark_failed(db_session, row, "storage", now=now, deterministic=False)
@@ -209,7 +222,7 @@ class TestOutcomes:
 
         _overlay["derivative_backoff_seconds"] = 86400
         now = utcnow()
-        row = records.begin(db_session, mesh, THUMBNAIL, 1, now=now)
+        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=now)
         row.attempts = 2
 
         records.mark_failed(db_session, row, "storage", now=now, deterministic=False)
@@ -220,7 +233,7 @@ class TestOutcomes:
         self, db_session: Session, mesh
     ) -> None:
         # Retrying bytes that cannot render only repeats the failure.
-        row = records.begin(db_session, mesh, THUMBNAIL, 1, now=utcnow())
+        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
 
         records.mark_failed(
             db_session, row, "invalid_source", now=utcnow(), deterministic=True
@@ -232,8 +245,8 @@ class TestOutcomes:
     def test_a_lost_execution_fails_only_its_in_flight_rows(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
-        make_derivative(mesh, METADATA, state=DerivativeState.RUNNING)
-        make_derivative(mesh, THUMBNAIL)
+        make_derivative(mesh, DerivativeKind.METADATA, state=DerivativeState.RUNNING)
+        make_derivative(mesh, DerivativeKind.THUMBNAIL)
 
         assert records.fail_in_flight(db_session, mesh.id, "lost", now=utcnow()) == 1
 
@@ -242,8 +255,8 @@ class TestOutcomes:
             for row in db_session.exec(select(ArtifactDerivative)).all()
         }
         assert states == {
-            METADATA: DerivativeState.FAILED,
-            THUMBNAIL: DerivativeState.READY,
+            DerivativeKind.METADATA: DerivativeState.FAILED,
+            DerivativeKind.THUMBNAIL: DerivativeState.READY,
         }
 
 
@@ -251,50 +264,62 @@ class TestWithdrawAndRetry:
     def test_cancelling_withdraws_every_unfinished_kind(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
-        make_derivative(mesh, METADATA)
+        make_derivative(mesh, DerivativeKind.METADATA)
 
-        records.cancel(db_session, mesh, {METADATA: 1, THUMBNAIL: 1}, now=utcnow())
+        records.cancel(
+            db_session,
+            mesh,
+            {DerivativeKind.METADATA: 1, DerivativeKind.THUMBNAIL: 1},
+            now=utcnow(),
+        )
         db_session.commit()
 
         states = {
             row.kind: row.state for row in records.rows_for(db_session, mesh).values()
         }
         assert states == {
-            METADATA: DerivativeState.READY,
-            THUMBNAIL: DerivativeState.CANCELLED,
+            DerivativeKind.METADATA: DerivativeState.READY,
+            DerivativeKind.THUMBNAIL: DerivativeState.CANCELLED,
         }
 
     def test_a_retry_forgets_every_unsuccessful_attempt(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
-        make_derivative(mesh, METADATA)
-        make_derivative(mesh, THUMBNAIL, state=DerivativeState.FAILED, exhausted=True)
+        make_derivative(mesh, DerivativeKind.METADATA)
+        make_derivative(
+            mesh, DerivativeKind.THUMBNAIL, state=DerivativeState.FAILED, exhausted=True
+        )
 
         assert records.reset(db_session, mesh) == 1
 
-        assert set(records.rows_for(db_session, mesh)) == {METADATA}
+        assert set(records.rows_for(db_session, mesh)) == {DerivativeKind.METADATA}
 
     def test_a_retry_can_target_one_kind(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
-        make_derivative(mesh, METADATA, state=DerivativeState.CANCELLED)
-        make_derivative(mesh, THUMBNAIL, state=DerivativeState.CANCELLED)
+        make_derivative(mesh, DerivativeKind.METADATA, state=DerivativeState.CANCELLED)
+        make_derivative(mesh, DerivativeKind.THUMBNAIL, state=DerivativeState.CANCELLED)
 
-        records.reset(db_session, mesh, {THUMBNAIL: 1})
+        records.reset(db_session, mesh, {DerivativeKind.THUMBNAIL: 1})
 
-        assert set(records.rows_for(db_session, mesh)) == {METADATA}
+        assert set(records.rows_for(db_session, mesh)) == {DerivativeKind.METADATA}
 
     def test_invalidating_forgets_a_kind_whatever_its_state(
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         # An audit found the output broken even though its row says ready.
-        make_derivative(mesh, THUMBNAIL)
-        make_derivative(mesh, THUMBNAIL, recipe_version=0)
+        make_derivative(mesh, DerivativeKind.THUMBNAIL)
+        make_derivative(mesh, DerivativeKind.THUMBNAIL, recipe_version=0)
 
-        assert records.invalidate(db_session, mesh, [THUMBNAIL, "toolpath"]) == 1
+        assert (
+            records.invalidate(db_session, mesh, [DerivativeKind.THUMBNAIL, "toolpath"])
+            == 1
+        )
 
         remaining = db_session.exec(select(ArtifactDerivative)).all()
-        assert [(row.kind, row.recipe_version) for row in remaining] == [(THUMBNAIL, 0)]
+        assert [(row.kind, row.recipe_version) for row in remaining] == [
+            (DerivativeKind.THUMBNAIL, 0)
+        ]
 
 
 class TestRead:
@@ -303,7 +328,7 @@ class TestRead:
     ) -> None:
         make_derivative(
             mesh,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.FAILED,
             failure_reason="render_failed",
             exhausted=True,
@@ -311,9 +336,9 @@ class TestRead:
 
         reads = {read.kind: read for read in records.read(db_session, mesh)}
 
-        assert reads[METADATA].state == "pending"
+        assert reads[DerivativeKind.METADATA].state == "pending"
         assert (
-            reads[THUMBNAIL].state,
-            reads[THUMBNAIL].failure_reason,
-            reads[THUMBNAIL].retryable,
+            reads[DerivativeKind.THUMBNAIL].state,
+            reads[DerivativeKind.THUMBNAIL].failure_reason,
+            reads[DerivativeKind.THUMBNAIL].retryable,
         ) == ("failed", "render_failed", True)

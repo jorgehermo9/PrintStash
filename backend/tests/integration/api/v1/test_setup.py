@@ -216,7 +216,7 @@ class TestCompleteSetup:
         self, client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            'app.modules.storage.storage_backend.local.enroll_legacy_local_root',
+            "app.modules.storage.storage_backend.local.enroll_legacy_local_root",
             lambda *args, **kwargs: False,
         )
 
@@ -230,7 +230,7 @@ class TestCompleteSetup:
     ) -> None:
         with monkeypatch.context() as patch:
             patch.setattr(
-                'app.modules.storage.storage_backend.local.enroll_legacy_local_root',
+                "app.modules.storage.storage_backend.local.enroll_legacy_local_root",
                 lambda *args, **kwargs: False,
             )
             _complete(client)
@@ -903,7 +903,8 @@ class TestLibraryLocationDiscovery:
         directory = runtime_dirs / "files"
         directory.mkdir()
         monkeypatch.setattr(
-            "app.modules.sources.library_locations.mounted_directories", lambda: [directory]
+            "app.modules.sources.library_locations.mounted_directories",
+            lambda: [directory],
         )
         assert (
             client.get("/api/v1/libraries/locations", headers=auth_headers).json() == []
@@ -915,7 +916,8 @@ class TestLibraryLocationDiscovery:
         directory = tmp_path / "models-to-connect"
         directory.mkdir()
         monkeypatch.setattr(
-            "app.modules.sources.library_locations.mounted_directories", lambda: [directory]
+            "app.modules.sources.library_locations.mounted_directories",
+            lambda: [directory],
         )
         response = client.get("/api/v1/libraries/locations", headers=auth_headers)
         assert response.json() == [str(directory)]

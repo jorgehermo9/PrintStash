@@ -16,10 +16,9 @@ from typing import Any
 
 from sqlmodel import Session
 
-from app.db.models import FileType, IngestRequest, IngestRequestKind
+from app.db.models import FileType, IngestRequest, IngestRequestKind, LaneName
 from app.db.session import get_session_factory
 from app.modules.work.async_steps import run_async
-from app.modules.work.catalog import INGEST, NETWORK
 from app.modules.work.contracts import JobContext, JobDefinition, Step
 from app.schemas.ingest import UrlIngestRequest
 
@@ -190,11 +189,14 @@ def _retry(session: Session, subject_key: str) -> bool:
     return True
 
 
-def _definition(name: str, lane: str, step: Any, label: str) -> JobDefinition:
+def _definition(
+    kind: IngestRequestKind, lane: LaneName, step: Any, label: str
+) -> JobDefinition:
+    name = requests.DEFINITIONS[kind]
     return JobDefinition(
         name=name,
         lane=lane,
-        steps=(Step(f"{name}.run", step),),
+        steps=(Step(f"{name.value}.run", step),),
         cancel=_cancel,
         retry=_retry,
         label=label,
@@ -203,16 +205,30 @@ def _definition(name: str, lane: str, step: Any, label: str) -> JobDefinition:
 
 def definitions() -> list[JobDefinition]:
     return [
-        _definition("ingestion.upload", INGEST, _upload, "Uploads"),
-        _definition("ingestion.url", NETWORK, _url, "URL imports"),
+        _definition(IngestRequestKind.UPLOAD, LaneName.INGEST, _upload, "Uploads"),
+        _definition(IngestRequestKind.URL, LaneName.NETWORK, _url, "URL imports"),
         _definition(
-            "ingestion.archive_inspect", INGEST, _archive_inspect, "Archive inspection"
+            IngestRequestKind.ARCHIVE_INSPECT,
+            LaneName.INGEST,
+            _archive_inspect,
+            "Archive inspection",
         ),
         _definition(
-            "ingestion.archive_selection", INGEST, _archive_selection, "Archive imports"
+            IngestRequestKind.ARCHIVE_SELECTION,
+            LaneName.INGEST,
+            _archive_selection,
+            "Archive imports",
         ),
         _definition(
-            "ingestion.url_selection", NETWORK, _url_selection, "Model page imports"
+            IngestRequestKind.URL_SELECTION,
+            LaneName.NETWORK,
+            _url_selection,
+            "Model page imports",
         ),
-        _definition("ingestion.collection", NETWORK, _collection, "Collection imports"),
+        _definition(
+            IngestRequestKind.COLLECTION,
+            LaneName.NETWORK,
+            _collection,
+            "Collection imports",
+        ),
     ]

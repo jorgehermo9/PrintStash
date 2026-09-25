@@ -1,6 +1,6 @@
 """Persisted enums shared by domain tables and their public representations."""
 
-from enum import Enum
+from enum import Enum, StrEnum
 
 
 class FileType(str, Enum):
@@ -149,7 +149,7 @@ class StorageObjectState(str, Enum):
     BLOCKED = "blocked"
 
 
-class JobState(str, Enum):
+class JobState(StrEnum):
     """Lifecycle of one background Job, shared by every job definition.
 
     ``interrupted`` is not terminal: the execution was lost (crash, upgrade,
@@ -164,14 +164,87 @@ class JobState(str, Enum):
     CANCELLED = "cancelled"
 
 
-class WorkPriority(str, Enum):
+class WorkPriority(StrEnum):
     """Scheduling tier of a submission; children inherit it and may only lower it."""
 
     INTERACTIVE = "interactive"
     BACKFILL = "backfill"
 
 
-class DerivativeState(str, Enum):
+class JobKind(StrEnum):
+    """Every Job Definition, named ``<owner>.<verb>`` after the owning module.
+
+    A Job's ``kind`` is one of these and nothing else: the catalog refuses a
+    definition whose name is not listed here, and the API publishes the list,
+    so a client can switch over it exhaustively. Adding a definition adds its
+    member here, in the owner's block.
+    """
+
+    ADMINISTRATION_AUDIT = "administration.audit"
+    BACKUPS_AUTOMATIC = "backups.automatic"
+    BACKUPS_CREATE = "backups.create"
+    BACKUPS_RETRY_DESTINATION = "backups.retry_destination"
+    BACKUPS_TRASH_GC = "backups.trash_gc"
+    DERIVATIVES_GCODE = "derivatives.gcode"
+    DERIVATIVES_MESH = "derivatives.mesh"
+    DERIVATIVES_TOOLPATH = "derivatives.toolpath"
+    IDENTITY_RETENTION = "identity.retention"
+    INFERENCE_MODEL_DOWNLOAD = "inference.model_download"
+    INGESTION_ARCHIVE_INSPECT = "ingestion.archive_inspect"
+    INGESTION_ARCHIVE_SELECTION = "ingestion.archive_selection"
+    INGESTION_ARTIFACT_UPLOAD = "ingestion.artifact_upload"
+    INGESTION_COLLECTION = "ingestion.collection"
+    INGESTION_INBOX_IMPORT = "ingestion.inbox_import"
+    INGESTION_INBOX_RESOLVE = "ingestion.inbox_resolve"
+    INGESTION_INBOX_RETENTION = "ingestion.inbox_retention"
+    INGESTION_LIBRARY_IMPORT = "ingestion.library_import"
+    INGESTION_UPLOAD = "ingestion.upload"
+    INGESTION_UPLOAD_RECOVERY = "ingestion.upload_recovery"
+    INGESTION_URL = "ingestion.url"
+    INGESTION_URL_SELECTION = "ingestion.url_selection"
+    NOTIFICATIONS_DELIVER = "notifications.deliver"
+    NOTIFICATIONS_RETENTION = "notifications.retention"
+    PRINTING_DISPATCH = "printing.dispatch"
+    SEARCH_CAPTION = "search.caption"
+    SEARCH_CAPTION_QUEUE = "search.caption_queue"
+    SEARCH_EXPAND = "search.expand"
+    SEARCH_GENERATION = "search.generation"
+    SEARCH_INDEX = "search.index"
+    SEARCH_PROJECT = "search.project"
+    SEARCH_REPAIR = "search.repair"
+    SIMILARITY_ANALYZE = "similarity.analyze"
+    SOURCES_SCAN = "sources.scan"
+    STORAGE_INVENTORY = "storage.inventory"
+    STORAGE_MIGRATE = "storage.migrate"
+    WORK_HOUSEKEEPING = "work.housekeeping"
+
+
+class LaneName(StrEnum):
+    """A lane: a concurrency class of work, and the engine queue behind it."""
+
+    CAPTIONS = "captions"
+    DERIVE_LIGHT = "derive.light"
+    DERIVE_NATIVE = "derive.native"
+    EXPANSION = "expansion"
+    INGEST = "ingest"
+    MAINTENANCE = "maintenance"
+    NETWORK = "network"
+    NOTIFY = "notify"
+    PRINTING = "printing"
+    RECONCILE = "reconcile"
+    SEARCH = "search"
+    SIMILARITY = "similarity"
+
+
+class DerivativeKind(StrEnum):
+    """An output derived from an Artifact's bytes, each at its own recipe."""
+
+    METADATA = "metadata"
+    THUMBNAIL = "thumbnail"
+    TOOLPATH = "toolpath"
+
+
+class DerivativeState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     READY = "ready"
@@ -180,7 +253,7 @@ class DerivativeState(str, Enum):
     CANCELLED = "cancelled"
 
 
-class IngestRequestKind(str, Enum):
+class IngestRequestKind(StrEnum):
     """What an accepted ingest request asks the ``ingest`` jobs to do."""
 
     UPLOAD = "upload"

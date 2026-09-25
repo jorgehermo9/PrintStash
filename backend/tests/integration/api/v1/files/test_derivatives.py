@@ -25,12 +25,13 @@ import app.modules.work as work
 from app.core.time import utcnow
 from app.db.models import (
     CollectionRole,
+    DerivativeKind,
     DerivativeRegeneration,
     DerivativeState,
     File,
+    JobKind,
     User,
 )
-from app.modules.derivatives.kinds import METADATA, THUMBNAIL, TOOLPATH
 from app.modules.identity.auth import create_access_token
 from app.modules.storage.storage_backend.runtime import get_backend
 from tests.factories import (
@@ -106,7 +107,10 @@ class TestListFileDerivatives:
             f"/api/v1/files/{mesh.id}/derivatives", headers=_headers(viewer)
         )
 
-        assert _states(response) == {METADATA: "pending", THUMBNAIL: "pending"}
+        assert _states(response) == {
+            DerivativeKind.METADATA: "pending",
+            DerivativeKind.THUMBNAIL: "pending",
+        }
 
     def test_a_binary_gcode_artifact_also_has_a_toolpath(
         self, client: TestClient, db_session: Session, viewer: User, shelf
@@ -118,7 +122,11 @@ class TestListFileDerivatives:
             f"/api/v1/files/{artifact.id}/derivatives", headers=_headers(viewer)
         )
 
-        assert set(_states(response)) == {METADATA, THUMBNAIL, TOOLPATH}
+        assert set(_states(response)) == {
+            DerivativeKind.METADATA,
+            DerivativeKind.THUMBNAIL,
+            DerivativeKind.TOOLPATH,
+        }
 
     def test_reports_a_failed_attempt_with_its_reason(
         self, client: TestClient, db_session: Session, viewer: User, mesh: File
@@ -126,24 +134,30 @@ class TestListFileDerivatives:
         build_derivative(
             db_session,
             mesh,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.FAILED,
             failure_reason="render_failed",
             exhausted=True,
         )
-        build_derivative(db_session, mesh, METADATA)
+        build_derivative(db_session, mesh, DerivativeKind.METADATA)
 
         response = client.get(
             f"/api/v1/files/{mesh.id}/derivatives", headers=_headers(viewer)
         )
 
         rows = {row["kind"]: row for row in response.json()}
-        assert (rows[THUMBNAIL]["state"], rows[THUMBNAIL]["failure_reason"]) == (
+        assert (
+            rows[DerivativeKind.THUMBNAIL]["state"],
+            rows[DerivativeKind.THUMBNAIL]["failure_reason"],
+        ) == (
             "failed",
             "render_failed",
         )
-        assert rows[THUMBNAIL]["retryable"] is True
-        assert (rows[METADATA]["state"], rows[METADATA]["retryable"]) == (
+        assert rows[DerivativeKind.THUMBNAIL]["retryable"] is True
+        assert (
+            rows[DerivativeKind.METADATA]["state"],
+            rows[DerivativeKind.METADATA]["retryable"],
+        ) == (
             "ready",
             False,
         )
@@ -151,15 +165,17 @@ class TestListFileDerivatives:
     def test_an_output_older_than_a_regenerate_all_reads_as_pending(
         self, client: TestClient, db_session: Session, viewer: User, mesh: File
     ) -> None:
-        build_derivative(db_session, mesh, THUMBNAIL)
-        db_session.add(DerivativeRegeneration(kind=THUMBNAIL, requested_at=utcnow()))
+        build_derivative(db_session, mesh, DerivativeKind.THUMBNAIL)
+        db_session.add(
+            DerivativeRegeneration(kind=DerivativeKind.THUMBNAIL, requested_at=utcnow())
+        )
         db_session.commit()
 
         response = client.get(
             f"/api/v1/files/{mesh.id}/derivatives", headers=_headers(viewer)
         )
 
-        assert _states(response)[THUMBNAIL] == "pending"
+        assert _states(response)[DerivativeKind.THUMBNAIL] == "pending"
 
     def test_an_artifact_the_user_cannot_view_is_not_found(
         self, client: TestClient, db_session: Session, mesh: File
@@ -179,27 +195,30 @@ class TestRetryFileDerivative:
     ) -> None:
         # The headline repair: an exhausted failure is never picked up again on
         # its own, and one retry brings the thumbnail back.
-        build_derivative(db_session, mesh, METADATA)
+        build_derivative(db_session, mesh, DerivativeKind.METADATA)
         build_derivative(
             db_session,
             mesh,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.FAILED,
             exhausted=True,
         )
 
         response = client.post(
-            f"/api/v1/files/{mesh.id}/derivatives/{THUMBNAIL}/retry",
+            f"/api/v1/files/{mesh.id}/derivatives/{DerivativeKind.THUMBNAIL}/retry",
             headers=_headers(editor),
         )
 
         assert response.status_code == 202, response.text
-        assert _states(response)[THUMBNAIL] == "pending"
+        assert _states(response)[DerivativeKind.THUMBNAIL] == "pending"
         drain_work()
         settled = client.get(
             f"/api/v1/files/{mesh.id}/derivatives", headers=_headers(editor)
         )
-        assert _states(settled) == {METADATA: "ready", THUMBNAIL: "ready"}
+        assert _states(settled) == {
+            DerivativeKind.METADATA: "ready",
+            DerivativeKind.THUMBNAIL: "ready",
+        }
         db_session.expire_all()
         published = db_session.get(File, mesh.id)
         assert published is not None and published.thumbnail_path
@@ -213,24 +232,26 @@ class TestRetryFileDerivative:
         mesh: File,
         monkeypatch,
     ) -> None:
-        build_derivative(db_session, mesh, THUMBNAIL, state=DerivativeState.CANCELLED)
+        build_derivative(
+            db_session, mesh, DerivativeKind.THUMBNAIL, state=DerivativeState.CANCELLED
+        )
         nudged: list[str] = []
         monkeypatch.setattr(work, "nudge", lambda name, **_: nudged.append(name))
 
         client.post(
-            f"/api/v1/files/{mesh.id}/derivatives/{THUMBNAIL}/retry",
+            f"/api/v1/files/{mesh.id}/derivatives/{DerivativeKind.THUMBNAIL}/retry",
             headers=_headers(editor),
         )
 
-        assert "derivatives.mesh" in nudged
+        assert JobKind.DERIVATIVES_MESH in nudged
 
     def test_a_ready_derivative_is_not_retryable(
         self, client: TestClient, db_session: Session, editor: User, mesh: File
     ) -> None:
-        build_derivative(db_session, mesh, THUMBNAIL)
+        build_derivative(db_session, mesh, DerivativeKind.THUMBNAIL)
 
         response = client.post(
-            f"/api/v1/files/{mesh.id}/derivatives/{THUMBNAIL}/retry",
+            f"/api/v1/files/{mesh.id}/derivatives/{DerivativeKind.THUMBNAIL}/retry",
             headers=_headers(editor),
         )
 
@@ -241,7 +262,7 @@ class TestRetryFileDerivative:
         self, client: TestClient, editor: User, mesh: File
     ) -> None:
         response = client.post(
-            f"/api/v1/files/{mesh.id}/derivatives/{TOOLPATH}/retry",
+            f"/api/v1/files/{mesh.id}/derivatives/{DerivativeKind.TOOLPATH}/retry",
             headers=_headers(editor),
         )
 
@@ -252,11 +273,15 @@ class TestRetryFileDerivative:
         self, client: TestClient, db_session: Session, viewer: User, mesh: File
     ) -> None:
         build_derivative(
-            db_session, mesh, THUMBNAIL, state=DerivativeState.FAILED, exhausted=True
+            db_session,
+            mesh,
+            DerivativeKind.THUMBNAIL,
+            state=DerivativeState.FAILED,
+            exhausted=True,
         )
 
         response = client.post(
-            f"/api/v1/files/{mesh.id}/derivatives/{THUMBNAIL}/retry",
+            f"/api/v1/files/{mesh.id}/derivatives/{DerivativeKind.THUMBNAIL}/retry",
             headers=_headers(viewer),
         )
 
@@ -267,11 +292,15 @@ class TestRetryFileDerivative:
     ) -> None:
         # The editor may retry, but not through a token scoped to reading.
         build_derivative(
-            db_session, mesh, THUMBNAIL, state=DerivativeState.FAILED, exhausted=True
+            db_session,
+            mesh,
+            DerivativeKind.THUMBNAIL,
+            state=DerivativeState.FAILED,
+            exhausted=True,
         )
 
         response = client.post(
-            f"/api/v1/files/{mesh.id}/derivatives/{THUMBNAIL}/retry",
+            f"/api/v1/files/{mesh.id}/derivatives/{DerivativeKind.THUMBNAIL}/retry",
             headers=bearer(editor, scope="read"),
         )
 
@@ -281,4 +310,4 @@ class TestRetryFileDerivative:
         )
         db_session.expire_all()
         rows = {row["kind"]: row["state"] for row in _states_of(client, editor, mesh)}
-        assert rows[THUMBNAIL] == "failed"
+        assert rows[DerivativeKind.THUMBNAIL] == "failed"

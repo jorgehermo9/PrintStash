@@ -20,12 +20,12 @@ from app.db.models import (
     BackupDestinationResult,
     BackupRetryAttempt,
     BackupRun,
+    JobKind,
 )
 from app.db.session import get_session_factory
 
 from .backup_runs import finish_run, update_result
 
-RETRY_DEFINITION = "backups.retry_destination"
 _OPEN = ("queued", "running")
 
 
@@ -65,7 +65,7 @@ def request_retry(
     try:
         work_service.request(
             session,
-            definition=RETRY_DEFINITION,
+            definition=JobKind.BACKUPS_RETRY_DESTINATION,
             subject_key=subject_key(result_id),
             owner_user_id=owner_user_id,
             job_id=attempt_id,

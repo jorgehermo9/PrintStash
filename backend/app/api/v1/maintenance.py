@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session
 
 from app.core.security import require_superuser
-from app.db.models import User, VaultAuditMode, VaultAuditRun
+from app.db.models import JobKind, User, VaultAuditMode, VaultAuditRun
 from app.db.session import get_session
-from app.modules.administration import audit_jobs, vault_audit, vault_audit_policy
+from app.modules.administration import vault_audit, vault_audit_policy
 from app.modules.work import nudge
 from app.schemas.audit_policy import AuditPolicyRead, AuditPolicyUpdate, policy_read
 from app.schemas.maintenance import (
@@ -29,7 +29,7 @@ def start_audit(
     row, created = vault_audit.create_run(session, current_user.id, payload.mode)
     if created:
         # The PENDING run is the intent; the audit source finds it.
-        nudge(audit_jobs.DEFINITION)
+        nudge(JobKind.ADMINISTRATION_AUDIT)
     return vault_audit.read_run(session, row)
 
 
@@ -129,7 +129,7 @@ def save_audit_policy(
         session, mode, payload.model_dump(exclude_unset=True), user.id
     )
     # A new schedule moves the next slot; the pass re-arms its delayed nudge.
-    nudge(audit_jobs.DEFINITION)
+    nudge(JobKind.ADMINISTRATION_AUDIT)
     return policy_read(policy)
 
 
@@ -140,5 +140,5 @@ def skip_audit(
     session: Session = Depends(get_session),
 ) -> AuditPolicyRead:
     policy = vault_audit_policy.skip_once(session, mode, actor_id=_user.id)
-    nudge(audit_jobs.DEFINITION)
+    nudge(JobKind.ADMINISTRATION_AUDIT)
     return policy_read(policy)

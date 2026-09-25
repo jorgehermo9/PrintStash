@@ -13,7 +13,7 @@ import pytest
 from sqlmodel import Session
 
 from app.core.errors import OperationError
-from app.db.models import IngestRequest, IngestRequestKind, Job, JobState
+from app.db.models import IngestRequest, IngestRequestKind, Job, JobKind, JobState
 from app.modules.ingestion import requests
 
 
@@ -50,7 +50,7 @@ class TestCreate:
         job = db_session.get(Job, request.job_id)
         assert job is not None
         assert (job.kind, job.subject_key, job.state) == (
-            "ingestion.url",
+            JobKind.INGESTION_URL,
             f"ingest_request/{request.job_id}",
             JobState.QUEUED,
         )

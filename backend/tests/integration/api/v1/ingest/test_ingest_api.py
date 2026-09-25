@@ -42,6 +42,7 @@ from app.db.models import (
     InboxItem,
     InboxItemState,
     Job,
+    JobKind,
     JobState,
     Metadata,
     Model,
@@ -665,7 +666,7 @@ class TestIngestModel:
         ).one()
         old_job = build_job(
             db_session,
-            kind="ingestion.inbox_import",
+            kind=JobKind.INGESTION_INBOX_IMPORT,
             state=JobState.COMPLETED,
             owner=owner,
             updated_at=utcnow() - timedelta(days=30),

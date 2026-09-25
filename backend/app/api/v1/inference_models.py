@@ -10,7 +10,7 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.core.errors import ErrorKind, OperationError
 from app.core.security import get_current_user, require_auth, require_superuser
-from app.db.models import User
+from app.db.models import JobKind, User
 from app.db.session import get_session, get_session_factory
 from app.modules.inference import jobs as inference_jobs
 from app.modules.inference import model_cache, model_registry
@@ -116,7 +116,7 @@ def download_model(
         session.rollback()
         raise
     session.commit()
-    nudge(inference_jobs.DOWNLOAD_DEFINITION)
+    nudge(JobKind.INFERENCE_MODEL_DOWNLOAD)
     return DownloadRead(job_id=job_id)
 
 
@@ -131,7 +131,7 @@ def cancel_download(job_id: str, user: User = Depends(get_current_user)):
     if (
         status is None
         or not work_service.visible_to(status, user)
-        or status.kind != inference_jobs.DOWNLOAD_DEFINITION
+        or status.kind != JobKind.INFERENCE_MODEL_DOWNLOAD
         or status.terminal
     ):
         raise OperationError("embedding_download_not_running", kind=ErrorKind.NOT_FOUND)

@@ -38,6 +38,7 @@ from app.db.models import (
     IngestRequest,
     IngestRequestKind,
     Job,
+    JobKind,
     JobState,
     LibrarySourceKind,
     Model,
@@ -237,7 +238,7 @@ def build_document(
 def build_job(
     session: Session,
     *,
-    kind: str = "work.housekeeping",
+    kind: str = JobKind.WORK_HOUSEKEEPING,
     state: JobState = JobState.QUEUED,
     owner: User | None = None,
     subject: str | None = None,

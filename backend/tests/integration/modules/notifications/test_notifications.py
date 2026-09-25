@@ -15,6 +15,7 @@ from sqlmodel import Session
 
 from app.core.url_safety import PinnedTarget, UnsafeUrlError
 from app.db.models import (
+    JobKind,
     NotificationChannel,
     NotificationDelivery,
     NotificationDeliveryStatus,
@@ -435,11 +436,11 @@ def _deliver_due() -> int:
 
     with get_session_factory().scoped_session() as session:
         before = set(session.exec(select(Job.id)).all())
-    nudge(notifications.DELIVER_DEFINITION)
+    nudge(JobKind.NOTIFICATIONS_DELIVER)
     drain_work()
     with get_session_factory().scoped_session() as session:
         rows = session.exec(
-            select(Job).where(Job.kind == notifications.DELIVER_DEFINITION)
+            select(Job).where(Job.kind == JobKind.NOTIFICATIONS_DELIVER)
         ).all()
         return sum(
             1
@@ -771,9 +772,9 @@ class TestDeliveryJob:
             db_session, NotificationEventType.PRINTER_OFFLINE, printer_id=printer.id
         )
         db_session.commit()
-        run_pass(notifications.DELIVER_DEFINITION)
+        run_pass(JobKind.NOTIFICATIONS_DELIVER)
         job = db_session.exec(
-            select(Job).where(Job.kind == notifications.DELIVER_DEFINITION)
+            select(Job).where(Job.kind == JobKind.NOTIFICATIONS_DELIVER)
         ).one()
 
         service.cancel(

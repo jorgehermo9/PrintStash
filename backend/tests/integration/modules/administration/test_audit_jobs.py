@@ -18,7 +18,14 @@ import pytest
 from sqlmodel import Session, select
 
 from app.core.time import ensure_utc, utcnow
-from app.db.models import Job, JobState, VaultAuditRun, VaultAuditRunState, WorkPriority
+from app.db.models import (
+    Job,
+    JobKind,
+    JobState,
+    VaultAuditRun,
+    VaultAuditRunState,
+    WorkPriority,
+)
 from app.modules.administration import audit_jobs
 from app.modules.administration.audit_jobs import AuditSource, subject_key
 from app.modules.work.submission import submit
@@ -40,7 +47,7 @@ def _run(session: Session, run_id: int) -> VaultAuditRun:
 
 
 def _execute(work_engine, make_job, run: VaultAuditRun) -> Job:
-    job = make_job(kind=audit_jobs.DEFINITION, subject=subject_key(run.id))
+    job = make_job(kind=JobKind.ADMINISTRATION_AUDIT, subject=subject_key(run.id))
     submit(job.id)
     work_engine.run_one()
     return job

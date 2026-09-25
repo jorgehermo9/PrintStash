@@ -25,9 +25,11 @@ from app.core.time import utcnow
 from app.db.migrate import run_migrations
 from app.db.models import (
     ArtifactUploadSession,
+    DerivativeKind,
     InboxItem,
     IngestRequest,
     Job,
+    JobKind,
     JobState,
 )
 from app.db.session import (
@@ -36,7 +38,7 @@ from app.db.session import (
     override_session_factory,
 )
 from app.db.url import normalize_database_url
-from app.modules.derivatives.kinds import MESH_DEFINITION, METADATA, THUMBNAIL, group
+from app.modules.derivatives.kinds import group
 from app.modules.derivatives.source import DerivativeSource, subject_key
 from app.modules.work import fences
 from app.modules.work.jobs import ActiveJobExists, JobStore
@@ -105,7 +107,9 @@ class TestOneActiveJobPerSubject:
         outcomes = _race(
             4,
             lambda _index: store.create(
-                definition="sources.scan", subject_key="library/1", owner_user_id=None
+                definition=JobKind.SOURCES_SCAN,
+                subject_key="library/1",
+                owner_user_id=None,
             ),
         )
 
@@ -118,10 +122,10 @@ class TestOneActiveJobPerSubject:
         )
 
     def test_a_finished_job_does_not_hold_its_subject(self, pg) -> None:
-        f.build_job(pg, kind="sources.scan", subject="library/1", **_expired())
+        f.build_job(pg, kind=JobKind.SOURCES_SCAN, subject="library/1", **_expired())
 
         assert JobStore().create(
-            definition="sources.scan", subject_key="library/1", owner_user_id=None
+            definition=JobKind.SOURCES_SCAN, subject_key="library/1", owner_user_id=None
         )
 
 
@@ -192,13 +196,16 @@ class TestReconcile:
             for n in range(3)
         ]
 
-        _race(2, lambda index: run_pass(MESH_DEFINITION, holder=f"process-{index}"))
+        _race(
+            2,
+            lambda index: run_pass(JobKind.DERIVATIVES_MESH, holder=f"process-{index}"),
+        )
 
         # A pass is bounded by its lane's headroom, so it may stop short of
         # every subject (a completion nudge continues it); it never doubles one.
         pg.expire_all()
         subjects = pg.exec(
-            select(Job.subject_key).where(Job.kind == MESH_DEFINITION)
+            select(Job.subject_key).where(Job.kind == JobKind.DERIVATIVES_MESH)
         ).all()
         assert subjects
         assert len(subjects) == len(set(subjects))
@@ -210,10 +217,10 @@ class TestDerivativeSource:
         model = f.build_model(pg, "Anti-join")
         owed = f.build_file(pg, model, filename="owed.stl")
         done = f.build_file(pg, model, filename="done.stl")
-        f.build_derivative(pg, done, METADATA)
-        f.build_derivative(pg, done, THUMBNAIL)
+        f.build_derivative(pg, done, DerivativeKind.METADATA)
+        f.build_derivative(pg, done, DerivativeKind.THUMBNAIL)
 
-        pending = DerivativeSource(group(MESH_DEFINITION)).pending(
+        pending = DerivativeSource(group(JobKind.DERIVATIVES_MESH)).pending(
             pg, now=utcnow(), limit=10
         )
 

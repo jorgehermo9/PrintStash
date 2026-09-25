@@ -14,12 +14,10 @@ import time
 from sqlmodel import Session
 
 from app.core.errors import ErrorKind, OperationError
-from app.db.models import Job, User
+from app.db.models import Job, JobKind, LaneName, User
 from app.db.session import get_session_factory
-from app.modules.work.catalog import NETWORK
-from app.modules.work.contracts import JobContext, JobDefinition, Step
+from app.modules.work.contracts import JobContext, JobDefinition, JobOutcome, Step
 
-DOWNLOAD_DEFINITION = "inference.model_download"
 # Every download shares one subject, so the active-subject index makes "one at
 # a time" a database guarantee rather than a check two requests can both pass.
 # The model a Job installs is its result's ``model_id``.
@@ -67,7 +65,7 @@ def request(session: Session, actor: User, key: str) -> str:
     try:
         return work_service.request(
             session,
-            definition=DOWNLOAD_DEFINITION,
+            definition=JobKind.INFERENCE_MODEL_DOWNLOAD,
             subject_key=DOWNLOAD_SUBJECT,
             owner_user_id=actor.id,
             status={"result": {"model_id": entry.id}},
@@ -78,12 +76,17 @@ def request(session: Session, actor: User, key: str) -> str:
         ) from None
 
 
-def _model_of(job_id: str) -> str | None:
+def _model_of(job_id: str) -> str:
+    """The model a download Job was requested for; ``request`` always records it."""
     from app.modules.work.jobs import jobs
 
     status = jobs.get(job_id)
-    model = (status.result or {}).get("model_id") if status is not None else None
-    return model if isinstance(model, str) else None
+    if status is None or status.result is None:
+        raise RuntimeError(f"download_job_without_model:{job_id}")
+    model = status.result.get("model_id")
+    if not isinstance(model, str):
+        raise RuntimeError(f"download_job_without_model:{job_id}")
+    return model
 
 
 def _download(ctx: JobContext) -> None:
@@ -93,9 +96,6 @@ def _download(ctx: JobContext) -> None:
     from app.modules.inference.model_registry import require
 
     identity = _model_of(ctx.job_id)
-    if identity is None:
-        ctx.finish("failed", error="embedding_download_failed", retryable=False)
-        return
     entry = require(identity)
     sessions = get_session_factory()
     with sessions.scoped_session() as session:
@@ -137,7 +137,7 @@ def _download(ctx: JobContext) -> None:
             exc.code if isinstance(exc, EmbeddingError) else "embedding_download_failed"
         )
         ctx.finish(
-            "failed",
+            JobOutcome.FAILED,
             error=code,
             retryable=True,
             result={"model_id": identity, "error_code": code},
@@ -149,9 +149,11 @@ def _download(ctx: JobContext) -> None:
 def definitions() -> list[JobDefinition]:
     return [
         JobDefinition(
-            name=DOWNLOAD_DEFINITION,
-            lane=NETWORK,
-            steps=(Step(f"{DOWNLOAD_DEFINITION}.install", _download),),
+            name=JobKind.INFERENCE_MODEL_DOWNLOAD,
+            lane=LaneName.NETWORK,
+            steps=(
+                Step(f"{JobKind.INFERENCE_MODEL_DOWNLOAD.value}.install", _download),
+            ),
             # A new download is a new request: it re-checks consent and space.
             retry=lambda _session, _subject: False,
             # It writes only the model cache, which restore does not govern.

@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.security import require_auth, require_superuser
-from app.db.models import User
+from app.db.models import DerivativeKind, LaneName, User
 from app.modules.work import service as work_service
 from app.schemas.jobs import (
     CancelQueued,
@@ -36,7 +36,7 @@ def overview(_user: User = Depends(require_superuser)) -> WorkOverview:
     summary="Set (or reset) a lane's concurrency at runtime",
 )
 def update_lane(
-    lane: str, body: LaneUpdate, user: User = Depends(require_superuser)
+    lane: LaneName, body: LaneUpdate, user: User = Depends(require_superuser)
 ) -> WorkOverview:
     work_service.set_lane_concurrency(lane, body.concurrency, actor=user)
     return work_service.overview()
@@ -62,7 +62,9 @@ def cancel_queued(body: CancelQueued, user: User = Depends(require_superuser)) -
     summary="Re-derive one derivative kind across the library",
 )
 def regenerate(
-    kind: str, body: DerivativeRegenerate, user: User = Depends(require_superuser)
+    kind: DerivativeKind,
+    body: DerivativeRegenerate,
+    user: User = Depends(require_superuser),
 ) -> dict:
     work_service.regenerate_derivatives(kind, mode=body.mode, actor=user)
     return {"kind": kind, "mode": body.mode}

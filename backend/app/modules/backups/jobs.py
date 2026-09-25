@@ -27,17 +27,13 @@ from sqlmodel import Session
 import app.modules.backups.backup.contracts as backup_contracts
 import app.modules.backups.backup.creation as backup_creation
 import app.modules.backups.backup.deletion as backup_deletion
-from app.db.models import SystemConfig
+from app.db.models import JobKind, LaneName, SystemConfig
 from app.db.session import get_session_factory
 from app.modules.backups.backup_destination import BackupTrigger
 from app.modules.backups.backup_schedule import claim_due_backup, parse_backup_time
-from app.modules.backups.retry_commands import RETRY_DEFINITION
-from app.modules.work.catalog import MAINTENANCE
-from app.modules.work.contracts import JobContext, JobDefinition, Step
+from app.modules.work.contracts import JobContext, JobDefinition, JobOutcome, Step
 from app.modules.work.sources import ScheduleSource
 
-CREATE_DEFINITION = "backups.create"
-AUTOMATIC_DEFINITION = "backups.automatic"
 # Every manual backup claims one subject, so a second request while one is
 # queued or running is refused rather than archiving the vault twice.
 MANUAL_SUBJECT = "backup/manual"
@@ -75,14 +71,14 @@ def _archive(ctx: JobContext, trigger: BackupTrigger) -> None:
     settle_job_runs(ctx.job_id)
     try:
         meta = backup_creation.create_backup(trigger=trigger, job_id=ctx.job_id)
-    except backup_contracts.DatabaseBackupNotSupportedError as exc:
-        ctx.finish("failed", error=str(exc) or "database_backup_not_supported")
+    except backup_contracts.DatabaseBackupNotSupportedError:
+        ctx.finish(JobOutcome.FAILED, error="database_backup_not_supported")
         return
     except RuntimeError as exc:
         detail = str(exc)
         if detail in {"backup_destination_required", "backup_all_destinations_failed"}:
             ctx.finish(
-                "failed",
+                JobOutcome.FAILED,
                 error=detail,
                 result={"run_id": getattr(exc, "run_id", None)},
                 retryable=detail == "backup_all_destinations_failed",
@@ -153,9 +149,9 @@ def _automatic_cron(session: Session) -> str | None:
 def definitions() -> list[JobDefinition]:
     return [
         JobDefinition(
-            name=CREATE_DEFINITION,
-            lane=MAINTENANCE,
-            steps=(Step(f"{CREATE_DEFINITION}.archive", _create),),
+            name=JobKind.BACKUPS_CREATE,
+            lane=LaneName.MAINTENANCE,
+            steps=(Step(f"{JobKind.BACKUPS_CREATE.value}.archive", _create),),
             cancel=_settle_runs_of,
             on_failure=lambda session, subject, _reason: _settle_runs_of(
                 session, subject
@@ -164,9 +160,11 @@ def definitions() -> list[JobDefinition]:
             label="Backups",
         ),
         JobDefinition(
-            name=RETRY_DEFINITION,
-            lane=MAINTENANCE,
-            steps=(Step(f"{RETRY_DEFINITION}.publish", _retry_step),),
+            name=JobKind.BACKUPS_RETRY_DESTINATION,
+            lane=LaneName.MAINTENANCE,
+            steps=(
+                Step(f"{JobKind.BACKUPS_RETRY_DESTINATION.value}.publish", _retry_step),
+            ),
             cancel=_settle_retry("backup_retry_cancelled"),
             on_failure=_settle_retry("backup_publication_interrupted"),
             # A new retry is a new request: it re-checks the destination.
@@ -175,10 +173,10 @@ def definitions() -> list[JobDefinition]:
             label="Backup destination retries",
         ),
         JobDefinition(
-            name=AUTOMATIC_DEFINITION,
-            lane=MAINTENANCE,
-            steps=(Step(f"{AUTOMATIC_DEFINITION}.archive", _automatic),),
-            source=ScheduleSource(AUTOMATIC_DEFINITION, _automatic_cron),
+            name=JobKind.BACKUPS_AUTOMATIC,
+            lane=LaneName.MAINTENANCE,
+            steps=(Step(f"{JobKind.BACKUPS_AUTOMATIC.value}.archive", _automatic),),
+            source=ScheduleSource(JobKind.BACKUPS_AUTOMATIC, _automatic_cron),
             retry=lambda _session, _subject: False,
             cancel=_settle_runs_of,
             on_failure=lambda session, subject, _reason: _settle_runs_of(

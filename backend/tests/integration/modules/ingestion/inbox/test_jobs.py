@@ -15,14 +15,14 @@ import pytest
 from sqlmodel import Session
 
 from app.core.time import utcnow
-from app.db.models import InboxItem, InboxItemState, WorkPriority
+from app.db.models import InboxItem, InboxItemState, JobKind, WorkPriority
 from app.modules.ingestion import inbox
 from app.modules.ingestion.inbox import ResolveSource
 
 SOURCE = ResolveSource()
 DEFINITIONS = {definition.name: definition for definition in inbox.definitions()}
-RESOLVE = DEFINITIONS[inbox.RESOLVE_DEFINITION]
-IMPORT = DEFINITIONS[inbox.IMPORT_DEFINITION]
+RESOLVE = DEFINITIONS[JobKind.INGESTION_INBOX_RESOLVE]
+IMPORT = DEFINITIONS[JobKind.INGESTION_INBOX_IMPORT]
 
 
 @pytest.fixture
@@ -153,7 +153,7 @@ class TestFailure:
 
 class TestRetention:
     def test_runs_every_hour(self, db_session: Session) -> None:
-        source = DEFINITIONS["inbox.retention"].source
+        source = DEFINITIONS[JobKind.INGESTION_INBOX_RETENTION].source
         assert source is not None
 
         assert source.cron(db_session) == "35 * * * *"  # type: ignore[attr-defined]

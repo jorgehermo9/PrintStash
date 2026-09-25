@@ -21,22 +21,18 @@ from sqlmodel import Session
 from app.core.time import utcnow
 from app.db.models import (
     SENTINEL_FILE_HASH,
+    DerivativeKind,
     DerivativeRegeneration,
     DerivativeState,
     FileType,
+    JobKind,
     WorkPriority,
 )
 from app.modules.derivatives import source as source_module
-from app.modules.derivatives.kinds import (
-    GCODE_DEFINITION,
-    MESH_DEFINITION,
-    METADATA,
-    THUMBNAIL,
-    group,
-)
+from app.modules.derivatives.kinds import group
 from app.modules.derivatives.source import DerivativeSource, file_id_of, subject_key
 
-MESH = DerivativeSource(group(MESH_DEFINITION))
+MESH = DerivativeSource(group(JobKind.DERIVATIVES_MESH))
 
 
 def _pending(session: Session, *, limit: int = 50, source=MESH):
@@ -77,8 +73,8 @@ class TestPending:
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         artifact = mesh()
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL)
+        make_derivative(artifact, DerivativeKind.METADATA)
+        make_derivative(artifact, DerivativeKind.THUMBNAIL)
 
         assert _pending(db_session) == []
 
@@ -86,7 +82,7 @@ class TestPending:
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         artifact = mesh()
-        make_derivative(artifact, METADATA)
+        make_derivative(artifact, DerivativeKind.METADATA)
 
         assert _subjects(db_session) == [subject_key(artifact.id)]
 
@@ -94,8 +90,8 @@ class TestPending:
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         artifact = mesh()
-        make_derivative(artifact, METADATA, recipe_version=0)
-        make_derivative(artifact, THUMBNAIL, recipe_version=0)
+        make_derivative(artifact, DerivativeKind.METADATA, recipe_version=0)
+        make_derivative(artifact, DerivativeKind.THUMBNAIL, recipe_version=0)
 
         assert _subjects(db_session) == [subject_key(artifact.id)]
 
@@ -104,9 +100,11 @@ class TestPending:
     ) -> None:
         artifact = mesh()
         earlier = utcnow() - timedelta(hours=1)
-        make_derivative(artifact, METADATA, updated_at=earlier)
-        make_derivative(artifact, THUMBNAIL, updated_at=earlier)
-        db_session.add(DerivativeRegeneration(kind=THUMBNAIL, requested_at=utcnow()))
+        make_derivative(artifact, DerivativeKind.METADATA, updated_at=earlier)
+        make_derivative(artifact, DerivativeKind.THUMBNAIL, updated_at=earlier)
+        db_session.add(
+            DerivativeRegeneration(kind=DerivativeKind.THUMBNAIL, requested_at=utcnow())
+        )
         db_session.commit()
 
         assert _subjects(db_session) == [subject_key(artifact.id)]
@@ -125,8 +123,8 @@ class TestPending:
         self, db_session: Session, mesh, make_derivative, fields, pending
     ) -> None:
         artifact = mesh()
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL, **fields)
+        make_derivative(artifact, DerivativeKind.METADATA)
+        make_derivative(artifact, DerivativeKind.THUMBNAIL, **fields)
 
         assert bool(_pending(db_session)) is pending
 
@@ -134,10 +132,10 @@ class TestPending:
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         artifact = mesh()
-        make_derivative(artifact, METADATA)
+        make_derivative(artifact, DerivativeKind.METADATA)
         make_derivative(
             artifact,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.FAILED,
             next_attempt_at=utcnow() - timedelta(seconds=1),
         )
@@ -148,10 +146,10 @@ class TestPending:
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         artifact = mesh()
-        make_derivative(artifact, METADATA)
+        make_derivative(artifact, DerivativeKind.METADATA)
         make_derivative(
             artifact,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.FAILED,
             next_attempt_at=utcnow() + timedelta(minutes=5),
         )
@@ -162,10 +160,10 @@ class TestPending:
         self, db_session: Session, mesh, make_derivative
     ) -> None:
         artifact = mesh()
-        make_derivative(artifact, METADATA)
+        make_derivative(artifact, DerivativeKind.METADATA)
         make_derivative(
             artifact,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.RUNNING,
             updated_at=utcnow() - timedelta(hours=2),
         )
@@ -190,7 +188,7 @@ class TestPending:
         make_file(make_model(), filename="plate.gcode", file_type=FileType.GCODE)
 
         assert _pending(db_session) == []
-        gcode = DerivativeSource(group(GCODE_DEFINITION))
+        gcode = DerivativeSource(group(JobKind.DERIVATIVES_GCODE))
         assert len(_pending(db_session, source=gcode)) == 1
 
     def test_never_returns_more_than_asked(self, db_session: Session, mesh) -> None:
@@ -214,10 +212,12 @@ class TestBoundedScan:
         monkeypatch.setattr(source_module, "WINDOW", 2)
         artifacts = [mesh() for _ in range(4)]
         for artifact in artifacts:
-            make_derivative(artifact, METADATA)
-            make_derivative(artifact, THUMBNAIL)
+            make_derivative(artifact, DerivativeKind.METADATA)
+            make_derivative(artifact, DerivativeKind.THUMBNAIL)
         assert _pending(db_session) == []
-        db_session.add(DerivativeRegeneration(kind=THUMBNAIL, requested_at=utcnow()))
+        db_session.add(
+            DerivativeRegeneration(kind=DerivativeKind.THUMBNAIL, requested_at=utcnow())
+        )
         db_session.commit()
 
         found: set[str] = set()
@@ -249,8 +249,8 @@ class TestBoundedScan:
         def derived_library(size: int) -> None:
             for _ in range(size):
                 artifact = mesh()
-                make_derivative(artifact, METADATA)
-                make_derivative(artifact, THUMBNAIL)
+                make_derivative(artifact, DerivativeKind.METADATA)
+                make_derivative(artifact, DerivativeKind.THUMBNAIL)
 
         # Each size gets a settling pass first: it moves the high-water mark
         # (and the first also creates the cursor), which is one write, not a
@@ -272,11 +272,14 @@ class TestNextDue:
         now = utcnow()
         soon = now + timedelta(minutes=2)
         make_derivative(
-            mesh(), THUMBNAIL, state=DerivativeState.FAILED, next_attempt_at=soon
+            mesh(),
+            DerivativeKind.THUMBNAIL,
+            state=DerivativeState.FAILED,
+            next_attempt_at=soon,
         )
         make_derivative(
             mesh(),
-            METADATA,
+            DerivativeKind.METADATA,
             state=DerivativeState.FAILED,
             next_attempt_at=now + timedelta(hours=1),
         )

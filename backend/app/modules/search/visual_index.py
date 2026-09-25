@@ -24,6 +24,7 @@ from sqlmodel import Session, select
 
 from app.core.time import utcnow
 from app.db.models import (
+    DerivativeKind,
     EmbeddingSpace,
     File,
     IndexGeneration,
@@ -226,11 +227,11 @@ def cached_thumbnail(session, file, recipe, context):
     """
     from app.modules.derivatives import kinds
 
-    current = kinds.recipes_for(file).get(kinds.THUMBNAIL)
+    current = kinds.recipes_for(file).get(DerivativeKind.THUMBNAIL)
     row = session.exec(
         select(ArtifactDerivative).where(
             ArtifactDerivative.file_id == file.id,
-            ArtifactDerivative.kind == kinds.THUMBNAIL,
+            ArtifactDerivative.kind == DerivativeKind.THUMBNAIL,
             ArtifactDerivative.recipe_version == current,
             ArtifactDerivative.state == DerivativeState.READY,
         )
@@ -254,9 +255,8 @@ def cached_thumbnail(session, file, recipe, context):
             if len(payload) + len(chunk) > size:
                 return None
             payload.extend(chunk)
-        if (
-            len(payload) != size
-            or hashlib.sha256(payload).hexdigest() != output.get("sha256")
+        if len(payload) != size or hashlib.sha256(payload).hexdigest() != output.get(
+            "sha256"
         ):
             return None
         return thumbnail_input(bytes(payload), recipe.image_size)

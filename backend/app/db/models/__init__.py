@@ -294,6 +294,9 @@ from .types import (
     CompatibilityPolicy as CompatibilityPolicy,
 )
 from .types import (
+    DerivativeKind as DerivativeKind,
+)
+from .types import (
     DerivativeState as DerivativeState,
 )
 from .types import (
@@ -333,10 +336,16 @@ from .types import (
     IngestRequestKind as IngestRequestKind,
 )
 from .types import (
+    JobKind as JobKind,
+)
+from .types import (
     JobPriority as JobPriority,
 )
 from .types import (
     JobState as JobState,
+)
+from .types import (
+    LaneName as LaneName,
 )
 from .types import (
     LibrarySourceKind as LibrarySourceKind,

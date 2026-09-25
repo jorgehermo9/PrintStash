@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.db.models import Job, JobState, WorkPriority
+from app.db.models import Job, JobKind, JobState, WorkPriority
 from app.modules.work.jobs import (
     _merge,
     _safe_result,
@@ -173,11 +173,17 @@ class TestMerge:
 
         assert "secret" not in payload["failed_items"][0]["reason"]
 
-    def test_fills_in_a_bare_failed_item(self) -> None:
-        payload = _merge({}, {"failed_items": [{}]})
+    def test_refuses_a_failed_item_that_does_not_say_what_failed(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _merge({}, {"failed_items": [{}]})
+
+    def test_redacts_a_failed_item_sanitized_to_nothing(self) -> None:
+        payload = _merge({}, {"failed_items": [{"name": "/", "reason": " "}]})
 
         assert payload["failed_items"] == [
-            {"name": "item", "reason": "import_failed", "retryable": False}
+            {"name": "[redacted]", "reason": "[redacted]", "retryable": False}
         ]
 
     def test_bounds_the_failed_items_list(self) -> None:
@@ -193,11 +199,26 @@ class TestMerge:
         }
 
 
+def _status(**fields) -> JobStatus:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    base = {
+        "job_id": "j",
+        "kind": JobKind.SOURCES_SCAN,
+        "state": JobState.RUNNING,
+        "priority": WorkPriority.BACKFILL,
+        "attempts": 1,
+        "resubmits": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    return JobStatus.model_validate({**base, **fields})
+
+
 class TestStatusOf:
     def test_reads_row_columns_over_the_payload(self) -> None:
         row = Job(
             id="j1",
-            kind="ingest.commit",
+            kind=JobKind.INGESTION_UPLOAD,
             subject_key="s",
             state=JobState.RUNNING,
             priority=WorkPriority.BACKFILL,
@@ -209,21 +230,21 @@ class TestStatusOf:
 
         assert (status.job_id, status.kind, status.state, status.priority) == (
             "j1",
-            "ingest.commit",
+            JobKind.INGESTION_UPLOAD,
             "running",
             "backfill",
         )
         assert (status.stage, status.attempts) == ("hashing", 2)
 
     def test_a_terminal_state_reads_as_terminal(self) -> None:
-        assert JobStatus(job_id="j", kind="k", state="cancelled").terminal is True
-        assert JobStatus(job_id="j", kind="k", state="interrupted").terminal is False
+        assert _status(state=JobState.CANCELLED).terminal is True
+        assert _status(state=JobState.INTERRUPTED).terminal is False
 
     def test_progress_schema_rejects_unknown_stage(self) -> None:
         with pytest.raises(ValueError):
-            JobStatus(job_id="bad", kind="k", state="running", stage="uploading")  # type: ignore[arg-type]
+            _status(stage="uploading")
 
     def test_owner_is_never_serialized(self) -> None:
-        status = JobStatus(job_id="j", kind="k", state="queued", owner_user_id=7)
+        status = _status(owner_user_id=7)
 
         assert "owner_user_id" not in status.model_dump(mode="json")

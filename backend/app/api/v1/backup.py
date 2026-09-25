@@ -31,7 +31,7 @@ import app.runtime.maintenance as backup_maintenance
 from app.core.errors import OperationError
 from app.core.logging import get_logger
 from app.core.security import require_auth, require_superuser
-from app.db.models import User
+from app.db.models import JobKind, User
 from app.db.session import get_session
 from app.modules.backups import jobs as backup_jobs
 from app.modules.backups.backup_capabilities import backup_operations
@@ -67,7 +67,7 @@ def create_backup(
     try:
         work_service.request(
             session,
-            definition=backup_jobs.CREATE_DEFINITION,
+            definition=JobKind.BACKUPS_CREATE,
             subject_key=backup_jobs.MANUAL_SUBJECT,
             owner_user_id=current_user.id,
             job_id=job_id,
@@ -76,7 +76,7 @@ def create_backup(
     except ActiveJobExists as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail="backup_in_progress") from exc
-    nudge(backup_jobs.CREATE_DEFINITION)
+    nudge(JobKind.BACKUPS_CREATE)
     return JobAccepted(job_id=job_id, message="backup queued")
 
 
@@ -125,7 +125,7 @@ def retry_backup_destination(
     session: Session = Depends(get_session),
 ) -> JobAccepted:
     from app.modules.backups.backup_replica_retry import RetryRefused
-    from app.modules.backups.retry_commands import RETRY_DEFINITION, request_retry
+    from app.modules.backups.retry_commands import request_retry
 
     try:
         assert current_user.id is not None
@@ -139,7 +139,7 @@ def retry_backup_destination(
     except RetryRefused as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    nudge(RETRY_DEFINITION)
+    nudge(JobKind.BACKUPS_RETRY_DESTINATION)
     return JobAccepted(job_id=job_id, message="backup retry queued")
 
 
@@ -480,7 +480,11 @@ def delete_backup(backup_id: str, source_ref: str | None = None) -> dict:
         "files. It is strongly recommended to create a fresh backup first."
     ),
 )
-def restore_backup(backup_id: str, source_ref: str | None = None, session: Session = Depends(get_session)) -> dict:
+def restore_backup(
+    backup_id: str,
+    source_ref: str | None = None,
+    session: Session = Depends(get_session),
+) -> dict:
     # Authorization has completed. Release its read transaction before the
     # restore coordinator locks/replaces PostgreSQL tables; keeping that same
     # request's users-table lock until response teardown would deadlock restore.

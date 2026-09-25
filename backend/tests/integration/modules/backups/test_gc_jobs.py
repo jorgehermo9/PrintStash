@@ -12,7 +12,7 @@ import json
 
 from sqlmodel import Session
 
-from app.db.models import Job, JobState
+from app.db.models import Job, JobKind, JobState
 from app.modules.backups import gc_jobs
 from app.modules.work.submission import submit
 
@@ -38,7 +38,8 @@ class TestTrashGc:
         self, db_session: Session, work_engine, make_job
     ) -> None:
         job = make_job(
-            kind=gc_jobs.GC_DEFINITION, subject=f"{gc_jobs.GC_DEFINITION}@now"
+            kind=JobKind.BACKUPS_TRASH_GC,
+            subject=f"{JobKind.BACKUPS_TRASH_GC.value}@now",
         )
 
         submit(job.id)
@@ -70,7 +71,8 @@ class TestTrashGc:
 
         monkeypatch.setattr(maintenance, "restore_in_progress", lambda *_: True)
         job = make_job(
-            kind=gc_jobs.GC_DEFINITION, subject=f"{gc_jobs.GC_DEFINITION}@restore"
+            kind=JobKind.BACKUPS_TRASH_GC,
+            subject=f"{JobKind.BACKUPS_TRASH_GC.value}@restore",
         )
 
         submit(job.id)

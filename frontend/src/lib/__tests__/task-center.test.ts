@@ -172,15 +172,17 @@ describe("trackServerJob", () => {
     const localTitles = ["Upload part-0.stl", "Upload part-1.stl", "Upload part-2.stl"];
     localTitles.forEach((title) => tc.createTask({ title }));
     listJobs.mockResolvedValue(
-      Array.from({ length: 20 }, (_, index) => ({
-        job_id: `historical-job-${index}`,
-        state: "completed",
-        model_id: index + 1,
-        file_id: index + 1,
-        error: null,
-        started_at: null,
-        finished_at: "2026-06-14T11:00:00Z",
-      })),
+      Array.from({ length: 20 }, (_, index) =>
+        aJob({
+          job_id: `historical-job-${index}`,
+          state: "completed",
+          model_id: index + 1,
+          file_id: index + 1,
+          error: null,
+          started_at: null,
+          finished_at: "2026-06-14T11:00:00Z",
+        }),
+      ),
     );
 
     await tc.syncImportJobs();
@@ -212,7 +214,7 @@ describe("clearCompletedTasks", () => {
     tc.clearCompletedTasks();
 
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "server-job-1",
         state: "completed",
         model_id: 1,
@@ -220,7 +222,7 @@ describe("clearCompletedTasks", () => {
         error: null,
         started_at: null,
         finished_at: null,
-      },
+      }),
     ]);
     await tc.syncImportJobs();
 
@@ -357,7 +359,7 @@ describe("groupUploadJobs", () => {
     vi.resetModules();
     tc = await loadTaskCenter();
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "mesh-job",
         state: "completed",
         model_id: 1,
@@ -366,7 +368,7 @@ describe("groupUploadJobs", () => {
         started_at: null,
         finished_at: null,
         progress: 100,
-      },
+      }),
     ]);
 
     await tc.syncImportJobs();
@@ -382,7 +384,7 @@ describe("groupUploadJobs", () => {
     });
     tc.linkTaskToJob(taskId, "mesh-job");
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "mesh-job",
         state: "completed",
         model_id: 1,
@@ -391,7 +393,7 @@ describe("groupUploadJobs", () => {
         started_at: null,
         finished_at: null,
         progress: 100,
-      },
+      }),
     ]);
 
     await tc.waitForImportJob("mesh-job");
@@ -413,7 +415,7 @@ describe("groupUploadJobs", () => {
     tc.linkTaskToJob(taskId, "mesh-job");
     tc.linkTaskToJob(taskId, "gcode-job");
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "mesh-job",
         state: "completed",
         model_id: 1,
@@ -422,8 +424,8 @@ describe("groupUploadJobs", () => {
         started_at: null,
         finished_at: null,
         progress: 100,
-      },
-      {
+      }),
+      aJob({
         job_id: "gcode-job",
         state: "completed",
         model_id: 1,
@@ -432,7 +434,7 @@ describe("groupUploadJobs", () => {
         started_at: null,
         finished_at: null,
         progress: 100,
-      },
+      }),
     ]);
 
     await tc.syncImportJobs();
@@ -485,6 +487,31 @@ describe("syncImportJobs", () => {
     expect(tc.listTasks()[0].detail).toMatch(/no longer available/i);
   });
 
+  it("rejects a waiter whose Job the server no longer reports", async () => {
+    // A vanished Job has no status: the caller is told so, and nothing is
+    // announced as completed on its behalf.
+    const completions = vi.fn<(job: JobStatus) => void>();
+    const unsubscribe = tc.subscribeImportJobCompletions(completions);
+    listJobs.mockResolvedValue([]);
+
+    const waiting = tc.waitForImportJob("vanished-job", "Backup");
+
+    await expect(waiting).rejects.toBeInstanceOf(tc.JobStatusUnavailableError);
+    await expect(waiting).rejects.toMatchObject({ jobId: "vanished-job" });
+    expect(completions).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("titles a non-import Job by its label", async () => {
+    listJobs.mockResolvedValue([
+      aJob({ job_id: "scan-job", kind: "sources.scan", state: "running", label: "Scan NAS" }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks().map((task) => task.title)).toContain("Scan NAS");
+  });
+
   it("fails a grouped upload when a linked server job disappears", async () => {
     const taskId = tc.createTask({
       title: "Upload Benchy",
@@ -494,7 +521,7 @@ describe("syncImportJobs", () => {
     tc.linkTaskToJob(taskId, "mesh-job");
     tc.linkTaskToJob(taskId, "gcode-job");
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "mesh-job",
         state: "completed",
         model_id: 1,
@@ -503,7 +530,7 @@ describe("syncImportJobs", () => {
         started_at: null,
         finished_at: "2026-06-14T12:00:01Z",
         progress: 100,
-      },
+      }),
     ]);
 
     await tc.syncImportJobs();
@@ -521,7 +548,7 @@ describe("syncImportJobs", () => {
     const unsubscribe = tc.subscribeImportJobCompletions(completed);
     tc.trackImportJob("terminal-job", "Import archive");
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "terminal-job",
         state: "completed",
         model_id: 7,
@@ -533,7 +560,7 @@ describe("syncImportJobs", () => {
         completion: "partial",
         succeeded: 2,
         failed: 1,
-      },
+      }),
     ]);
     await tc.syncImportJobs();
     await tc.syncImportJobs();
@@ -545,7 +572,7 @@ describe("syncImportJobs", () => {
     });
 
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "terminal-job",
         state: "running",
         model_id: 7,
@@ -554,7 +581,7 @@ describe("syncImportJobs", () => {
         started_at: null,
         finished_at: null,
         updated_at: "2026-06-14T11:59:59Z",
-      },
+      }),
     ]);
     await tc.syncImportJobs();
     expect(tc.listTasks()[0].status).toBe("completed");
@@ -604,7 +631,7 @@ describe("syncImportJobs", () => {
 
   it("waits through Task Center instead of creating a competing poller", async () => {
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "awaited-job",
         state: "completed",
         model_id: 3,
@@ -612,7 +639,7 @@ describe("syncImportJobs", () => {
         error: null,
         started_at: null,
         finished_at: "2026-06-14T12:00:01Z",
-      },
+      }),
     ]);
     const status = await tc.waitForImportJob("awaited-job", "Await import");
     expect(status.state).toBe("completed");
@@ -633,7 +660,7 @@ describe("createImportJobSynchronizer", () => {
 
   it("polls active jobs and cleanup releases the timer", async () => {
     listJobs.mockResolvedValue([
-      {
+      aJob({
         job_id: "active-job",
         state: "running",
         model_id: null,
@@ -641,7 +668,7 @@ describe("createImportJobSynchronizer", () => {
         error: null,
         started_at: null,
         finished_at: null,
-      },
+      }),
     ]);
     const stop = tc.startImportJobSync();
     await vi.advanceTimersByTimeAsync(0);

@@ -9,7 +9,7 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from app.core.time import utcnow
-from app.db.models import ArtifactUploadState, JobState
+from app.db.models import ArtifactUploadState, JobKind, JobState
 from app.db.session import SQLiteSessionFactory
 from app.modules.ingestion.artifact_uploads import reconcile_artifact_uploads
 from tests._env import use_local_storage
@@ -109,7 +109,7 @@ class TestReconcileArtifactUploads:
         use_local_storage(tmp_path)
         owner = make_user("interrupted-upload-owner")
         job = make_job(
-            kind="ingestion.artifact_upload",
+            kind=JobKind.INGESTION_ARTIFACT_UPLOAD,
             state=JobState.FAILED,
             owner=owner,
             status_json='{"retryable":true}',
@@ -139,7 +139,7 @@ class TestReconcileArtifactUploads:
         use_local_storage(tmp_path)
         owner = make_user("completed-upload-owner")
         job = make_job(
-            kind="ingestion.artifact_upload",
+            kind=JobKind.INGESTION_ARTIFACT_UPLOAD,
             state=JobState.COMPLETED,
             owner=owner,
         )

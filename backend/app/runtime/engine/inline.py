@@ -20,13 +20,18 @@ from datetime import datetime
 from typing import Any
 
 from app.core.config import settings
-from app.modules.work.catalog import RECONCILE_DEFINITION, WorkCatalog
+from app.db.models import LaneName
+from app.modules.work.catalog import WorkCatalog
 from app.modules.work.contracts import (
     ActiveExecution,
+    Deduplicated,
     EngineEvidence,
     EngineStatus,
+    ExecutionKind,
     JobEngine,
+    JobSubmission,
     LaneDepth,
+    PassSubmission,
     RetryPolicy,
     Submission,
     SubmitOutcome,
@@ -42,14 +47,22 @@ class InlineCancelled(BaseException):
 
 
 def _execute(submission: Submission, runner: _Runner) -> None:
-    if submission.definition == RECONCILE_DEFINITION:
+    if isinstance(submission, PassSubmission):
         from app.modules.work.reconciler import execute_pass
 
-        execute_pass(submission.subject_key, runner)
+        execute_pass(submission.source, runner)
     else:
         from app.modules.work.runner import execute_job
 
         execute_job(submission.job_id, submission.attempt, runner)
+
+
+def _dedupe_key(submission: Submission) -> str | None:
+    if isinstance(submission, JobSubmission) and isinstance(
+        submission.routing, Deduplicated
+    ):
+        return submission.routing.key
+    return None
 
 
 def _off_loop(fn: Callable[[], None]) -> None:
@@ -131,14 +144,14 @@ class InlineJobEngine(JobEngine):
         self.clock = 0.0
         self.step_retries: list[tuple[str, int, BaseException]] = []
         self.launched = False
-        self.listen: set[str] | None = None
+        self.listen: set[LaneName] | None = None
         self._sequence = itertools.count()
 
     @property
     def executor_id(self) -> str:
         return self._executor_id
 
-    def launch(self, *, listen_lanes: Sequence[str] | None) -> None:
+    def launch(self, *, listen_lanes: Sequence[LaneName] | None) -> None:
         self.launched = True
         self.listen = set(listen_lanes) if listen_lanes is not None else None
 
@@ -148,8 +161,9 @@ class InlineJobEngine(JobEngine):
     def submit(self, submission: Submission) -> SubmitOutcome:
         if submission.execution_id in self.executions:
             return SubmitOutcome.EXISTING
-        if submission.dedupe_key is not None and any(
-            other.submission.dedupe_key == submission.dedupe_key
+        key = _dedupe_key(submission)
+        if key is not None and any(
+            _dedupe_key(other.submission) == key
             and other.submission.lane == submission.lane
             and other.status in _ACTIVE
             for other in self.executions.values()
@@ -172,23 +186,21 @@ class InlineJobEngine(JobEngine):
             execution.status = EngineStatus.CANCELLED
 
     def evidence(self, execution_ids: Sequence[str]) -> dict[str, EngineEvidence]:
-        found: dict[str, EngineEvidence] = {}
-        for execution_id in execution_ids:
-            execution = self.executions.get(execution_id)
-            found[execution_id] = (
-                EngineEvidence(None)
-                if execution is None
-                else EngineEvidence(
-                    execution.status, execution.app_version, execution.executor_id
-                )
+        return {
+            execution_id: EngineEvidence(
+                execution.status, execution.app_version, execution.executor_id
             )
-        return found
+            for execution_id in execution_ids
+            if (execution := self.executions.get(execution_id)) is not None
+        }
 
     def active(self) -> list[ActiveExecution]:
         return [
             ActiveExecution(
                 execution_id=execution_id,
-                definition=execution.submission.definition,
+                kind=ExecutionKind.PASS
+                if isinstance(execution.submission, PassSubmission)
+                else ExecutionKind.JOB,
                 status=execution.status,
                 app_version=execution.app_version,
                 executor_id=execution.executor_id,
@@ -197,7 +209,7 @@ class InlineJobEngine(JobEngine):
             if execution.status in _ACTIVE
         ]
 
-    def lane_depth(self, lane: str) -> LaneDepth:
+    def lane_depth(self, lane: LaneName) -> LaneDepth:
         queued = running = 0
         for execution in self.executions.values():
             if execution.submission.lane != lane:
@@ -208,7 +220,7 @@ class InlineJobEngine(JobEngine):
                 running += 1
         return LaneDepth(queued=queued, running=running)
 
-    def set_lane_concurrency(self, lane: str, concurrency: int) -> None:
+    def set_lane_concurrency(self, lane: LaneName, concurrency: int) -> None:
         self.concurrency[lane] = concurrency
 
     def foreign_version_executions(self) -> list[str]:

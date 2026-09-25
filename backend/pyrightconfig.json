@@ -27,7 +27,10 @@
     "app/modules/storage/storage_providers.py",
     "app/modules/storage/storage_connections.py",
     "app/modules/library/revisions.py",
-    "app/db/publication.py"
+    "app/db/publication.py",
+    "app/db/enum_columns.py",
+    "app/schemas/jobs.py",
+    "app/modules/search/subjects.py"
   ],
   "pythonVersion": "3.11",
   "venvPath": ".",

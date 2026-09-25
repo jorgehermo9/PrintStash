@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-JobStateName = Literal[
-    "queued", "running", "interrupted", "completed", "failed", "cancelled"
-]
-PriorityName = Literal["interactive", "backfill"]
+from app.core.config import ProcessRole
+from app.db.models.types import (
+    DerivativeKind,
+    JobKind,
+    JobState,
+    LaneName,
+    WorkPriority,
+)
+
 ImportStage = Literal[
     "resolving",
     "downloading",
@@ -21,9 +27,19 @@ ImportStage = Literal[
     "completed",
 ]
 JobCompletion = Literal["complete", "partial"]
-DerivativeStateName = Literal[
-    "pending", "queued", "running", "ready", "skipped", "failed", "cancelled"
-]
+
+
+class DerivativeStatus(StrEnum):
+    """A derivative as a reader sees it: ``pending`` (no attempt at the current
+    recipe yet, or regenerated since) and every stored ``DerivativeState``."""
+
+    PENDING = "pending"
+    QUEUED = "queued"
+    RUNNING = "running"
+    READY = "ready"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class JobFailedItem(BaseModel):
@@ -35,28 +51,29 @@ class JobFailedItem(BaseModel):
 class JobStatus(BaseModel):
     """One background Job: what it is doing, and what it did.
 
-    ``kind`` is the job definition. Counts and ``failed_items`` are filled by
-    definitions that process several items (an archive, a collection); a
-    single-item job reports ``processed``/``total`` of 1. Nothing here is ever
-    read back as the job's input.
+    ``kind`` is the Job Definition, one of a closed set a client can switch
+    on. Counts and ``failed_items`` are filled by definitions that process
+    several items (an archive, a collection); a single-item job reports
+    ``processed``/``total`` of 1. Nothing here is ever read back as the job's
+    input.
     """
 
     job_id: str
-    kind: str
+    kind: JobKind
     owner_user_id: Optional[int] = Field(default=None, exclude=True)
-    state: JobStateName
-    priority: PriorityName = "interactive"
-    attempts: int = 0
-    resubmits: int = 0
+    state: JobState
+    priority: WorkPriority
+    attempts: int
+    resubmits: int
     model_id: Optional[int] = None
     file_id: Optional[int] = None
     error: Optional[str] = None
     retryable: bool = False
-    created_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     committed_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
     step: Optional[int] = None
     total_steps: Optional[int] = None
     label: Optional[str] = None
@@ -75,14 +92,14 @@ class JobStatus(BaseModel):
 
     @property
     def terminal(self) -> bool:
-        return self.state in {"completed", "failed", "cancelled"}
+        return self.state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}
 
 
 class JobAccepted(BaseModel):
     """Returned by every endpoint that accepts background work."""
 
     job_id: str
-    state: JobStateName = "queued"
+    state: JobState = JobState.QUEUED
     message: str = "queued"
 
 
@@ -93,9 +110,9 @@ class DerivativeRead(BaseModel):
     the derivative would supply is unknown until it is ``ready``.
     """
 
-    kind: str
+    kind: DerivativeKind
     recipe_version: int
-    state: DerivativeStateName
+    state: DerivativeStatus
     attempts: int = 0
     failure_reason: Optional[str] = None
     updated_at: Optional[datetime] = None
@@ -103,7 +120,7 @@ class DerivativeRead(BaseModel):
 
 
 class LaneRead(BaseModel):
-    name: str
+    name: LaneName
     concurrency: int
     default_concurrency: int
     overridden: bool
@@ -114,25 +131,25 @@ class LaneRead(BaseModel):
 
 
 class DefinitionRead(BaseModel):
-    name: str
+    name: JobKind
     label: str
-    lane: str
+    lane: LaneName
     queued: int
     running: int
     interrupted: int
     failed: int
     completed: int
-    derivative_kinds: list[str] = Field(default_factory=list)
+    derivative_kinds: list[DerivativeKind]
     next_due_at: Optional[datetime] = None
     last_finished_at: Optional[datetime] = None
 
 
 class ExecutorRead(BaseModel):
     executor_id: str
-    role: str
+    role: ProcessRole
     hostname: str
     app_version: str
-    lanes: list[str]
+    lanes: list[LaneName]
     started_at: datetime
     heartbeat_at: datetime
     stale: bool
@@ -150,11 +167,16 @@ class LaneUpdate(BaseModel):
     concurrency: Optional[int] = Field(default=None, ge=1, le=64)
 
 
-class DerivativeRegenerate(BaseModel):
+class RegenerateMode(StrEnum):
     """``missing`` fills gaps; ``all`` re-derives every Artifact of the kind."""
 
-    mode: Literal["missing", "all"] = "missing"
+    MISSING = "missing"
+    ALL = "all"
+
+
+class DerivativeRegenerate(BaseModel):
+    mode: RegenerateMode = RegenerateMode.MISSING
 
 
 class CancelQueued(BaseModel):
-    definition: str
+    definition: JobKind

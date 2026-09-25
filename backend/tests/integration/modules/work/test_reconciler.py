@@ -21,13 +21,22 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay, settings
 from app.core.time import utcnow
-from app.db.models import Job, JobState, ReconcileCursor, WorkPriority
+from app.db.models import (
+    Job,
+    JobKind,
+    JobState,
+    LaneName,
+    ReconcileCursor,
+    WorkPriority,
+)
 from app.modules.work import catalog as catalog_module
-from app.modules.work.catalog import RECONCILE_DEFINITION, WorkCatalog, default_lanes
+from app.modules.work.catalog import WorkCatalog, default_lanes
 from app.modules.work.contracts import (
     EngineStatus,
     JobDefinition,
     Lane,
+    PassSubmission,
+    SkipReason,
     Step,
     WorkItem,
 )
@@ -39,9 +48,11 @@ from app.modules.work.reconciler import (
 from app.modules.work.submission import execution_id, nudge
 from app.runtime.engine.inline import InlineJobEngine
 
-REQUESTED = "probe.requested"
-SOURCED = "probe.sourced"
-PROBE_LANE = "probe"
+# Probe definitions borrow real kinds and a real lane: the catalog each test
+# binds holds only these two, so nothing else answers to those names.
+REQUESTED = JobKind.INGESTION_UPLOAD
+SOURCED = JobKind.SOURCES_SCAN
+PROBE_LANE = LaneName.MAINTENANCE
 
 
 @dataclass
@@ -89,12 +100,14 @@ def engine() -> InlineJobEngine:
                 name=REQUESTED,
                 lane=PROBE_LANE,
                 steps=(Step(f"{REQUESTED}.run", _noop),),
+                label="Requested probe",
                 on_failure=_failed,
             ),
             JobDefinition(
                 name=SOURCED,
                 lane=PROBE_LANE,
                 steps=(Step(f"{SOURCED}.run", _noop),),
+                label="Sourced probe",
                 source=_Source(),
             ),
         ],
@@ -113,7 +126,7 @@ def _row(session: Session, job_id: str) -> Job:
     return row
 
 
-def _jobs(session: Session, kind: str = SOURCED) -> list[Job]:
+def _jobs(session: Session, kind: JobKind = SOURCED) -> list[Job]:
     session.expire_all()
     return list(session.exec(select(Job).where(Job.kind == kind)).all())
 
@@ -122,12 +135,12 @@ def _items(*subjects: str, **kw) -> list[WorkItem]:
     return [WorkItem(subject_key=subject, **kw) for subject in subjects]
 
 
-def _passes(engine: InlineJobEngine, source: str) -> list:
+def _passes(engine: InlineJobEngine, source: JobKind) -> list:
     return [
         execution
         for execution in engine.executions.values()
-        if execution.submission.definition == RECONCILE_DEFINITION
-        and execution.submission.subject_key == source
+        if isinstance(execution.submission, PassSubmission)
+        and execution.submission.source == source
     ]
 
 
@@ -377,7 +390,7 @@ class TestDiscover:
         occurrence = utcnow().replace(microsecond=0)
         PROBE.items = _items(
             "sched@1",
-            skip_reason="previous_still_running",
+            skip=SkipReason.PREVIOUS_STILL_RUNNING,
             occurrence_at=occurrence,
         )
 

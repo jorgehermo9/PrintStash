@@ -26,7 +26,7 @@ from sqlmodel import select
 
 import app.modules.sources.root_binding as source_root_binding
 from app.core.logging import get_logger
-from app.db.models import ExternalLibrary
+from app.db.models import ExternalLibrary, JobKind
 from app.db.session import get_session_factory
 from app.modules.administration.runtime_config import external_libraries_enabled
 from app.modules.sources import external_library
@@ -251,4 +251,4 @@ class LibraryWatcher:
 
         with get_session_factory().scoped_session() as session:
             external_library.request_scan(session, library_id)
-        nudge(external_library.SCAN_DEFINITION)
+        nudge(JobKind.SOURCES_SCAN)

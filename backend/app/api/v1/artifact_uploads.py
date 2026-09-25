@@ -30,6 +30,7 @@ from app.db.models import (
     ArtifactUploadSession,
     ArtifactUploadState,
     CollectionRole,
+    JobKind,
     Model,
     User,
 )
@@ -479,7 +480,7 @@ def finalize_artifact_upload(
         job_id = uuid.uuid4().hex
         work_service.request(
             session,
-            definition=upload_handoff.DEFINITION,
+            definition=JobKind.INGESTION_ARTIFACT_UPLOAD,
             subject_key=upload_handoff.subject_key(upload.id),
             owner_user_id=current_user.id,
             job_id=job_id,
@@ -519,7 +520,7 @@ def finalize_artifact_upload(
             "job_id": job_id,
         },
     )
-    nudge(upload_handoff.DEFINITION)
+    nudge(JobKind.INGESTION_ARTIFACT_UPLOAD)
     return _upload_read(manager, upload)
 
 

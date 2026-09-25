@@ -396,29 +396,92 @@ export interface JobAccepted {
   message: string;
 }
 
+/**
+ * Every Job Definition, named `<owner>.<verb>`: the backend's `JobKind`, and
+ * nothing else (`tests/repo/test_frontend_enums.py` keeps the two in step).
+ */
+export type JobKind =
+  | "administration.audit"
+  | "backups.automatic"
+  | "backups.create"
+  | "backups.retry_destination"
+  | "backups.trash_gc"
+  | "derivatives.gcode"
+  | "derivatives.mesh"
+  | "derivatives.toolpath"
+  | "identity.retention"
+  | "inference.model_download"
+  | "ingestion.archive_inspect"
+  | "ingestion.archive_selection"
+  | "ingestion.artifact_upload"
+  | "ingestion.collection"
+  | "ingestion.inbox_import"
+  | "ingestion.inbox_resolve"
+  | "ingestion.inbox_retention"
+  | "ingestion.library_import"
+  | "ingestion.upload"
+  | "ingestion.upload_recovery"
+  | "ingestion.url"
+  | "ingestion.url_selection"
+  | "notifications.deliver"
+  | "notifications.retention"
+  | "printing.dispatch"
+  | "search.caption"
+  | "search.caption_queue"
+  | "search.expand"
+  | "search.generation"
+  | "search.index"
+  | "search.project"
+  | "search.repair"
+  | "similarity.analyze"
+  | "sources.scan"
+  | "storage.inventory"
+  | "storage.migrate"
+  | "work.housekeeping";
+
+/** A concurrency class of background work: the backend's `LaneName`. */
+export type LaneName =
+  | "captions"
+  | "derive.light"
+  | "derive.native"
+  | "expansion"
+  | "ingest"
+  | "maintenance"
+  | "network"
+  | "notify"
+  | "printing"
+  | "reconcile"
+  | "search"
+  | "similarity";
+
+/** An output derived from an Artifact's bytes: the backend's `DerivativeKind`. */
+export type DerivativeKind = "metadata" | "thumbnail" | "toolpath";
+
+export type WorkPriority = "interactive" | "backfill";
+
 /** One background Job, from `/api/v1/jobs`. */
 export interface JobStatus {
   job_id: string;
-  /** The job definition, e.g. `ingestion.upload`, `backups.create`. */
-  kind?: string;
+  kind: JobKind;
   state: JobState;
-  priority?: "interactive" | "backfill";
-  attempts?: number;
-  resubmits?: number;
+  priority: WorkPriority;
+  attempts: number;
+  resubmits: number;
   model_id: number | null;
   file_id: number | null;
   error: string | null;
+  retryable: boolean;
+  created_at: string;
+  updated_at: string;
   started_at: string | null;
   finished_at: string | null;
-  created_at?: string | null;
-  committed_at?: string | null;
-  updated_at?: string | null;
-  step?: number | null;
-  total_steps?: number | null;
-  label?: string | null;
-  progress?: number | null;
-  result?: IngestJobResult | null;
-  stage?:
+  committed_at: string | null;
+  step: number | null;
+  total_steps: number | null;
+  label: string | null;
+  progress: number | null;
+  result: IngestJobResult | null;
+  stage:
     | "resolving"
     | "downloading"
     | "inspecting"
@@ -427,16 +490,15 @@ export interface JobStatus {
     | "ingesting"
     | "completed"
     | null;
-  current_item?: string | null;
-  processed?: number;
-  total?: number | null;
-  succeeded?: number;
-  deduplicated?: number;
-  skipped?: number;
-  failed?: number;
-  completion?: "complete" | "partial" | null;
-  retryable?: boolean;
-  failed_items?: Array<{ name: string; reason: string; retryable: boolean }>;
+  current_item: string | null;
+  processed: number;
+  total: number | null;
+  succeeded: number;
+  deduplicated: number;
+  skipped: number;
+  failed: number;
+  completion: "complete" | "partial" | null;
+  failed_items: Array<{ name: string; reason: string; retryable: boolean }>;
 }
 
 /**
@@ -453,8 +515,7 @@ export type DerivativeState =
   | "cancelled";
 
 export interface DerivativeRead {
-  /** `metadata`, `thumbnail`, `toolpath`, … */
-  kind: string;
+  kind: DerivativeKind;
   recipe_version: number;
   state: DerivativeState;
   attempts: number;
@@ -464,7 +525,7 @@ export interface DerivativeRead {
 }
 
 export interface WorkLane {
-  name: string;
+  name: LaneName;
   concurrency: number;
   default_concurrency: number;
   overridden: boolean;
@@ -475,25 +536,25 @@ export interface WorkLane {
 }
 
 export interface WorkDefinition {
-  name: string;
+  name: JobKind;
   label: string;
-  lane: string;
+  lane: LaneName;
   queued: number;
   running: number;
   interrupted: number;
   failed: number;
   completed: number;
-  derivative_kinds: string[];
+  derivative_kinds: DerivativeKind[];
   next_due_at: string | null;
   last_finished_at: string | null;
 }
 
 export interface WorkExecutor {
   executor_id: string;
-  role: string;
+  role: "all" | "api" | "worker";
   hostname: string;
   app_version: string;
-  lanes: string[];
+  lanes: LaneName[];
   started_at: string;
   heartbeat_at: string;
   stale: boolean;

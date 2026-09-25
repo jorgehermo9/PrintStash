@@ -1,24 +1,25 @@
-"""Artifact derivatives and native-memory compute admission."""
+"""Artifact derivatives and administrators' requests to regenerate them."""
 
 from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Column,
     ForeignKey,
     Index,
     Integer,
-    String,
     Text,
     UniqueConstraint,
 )
 from sqlmodel import Field
 
 from app.core.time import utcnow
+from app.db.enum_columns import EnumText, enum_check
 
 from .base import SQLModel
-from .types import DerivativeState
+from .types import DerivativeKind, DerivativeState
 
 
 class ArtifactDerivative(SQLModel, table=True):
@@ -48,6 +49,18 @@ class ArtifactDerivative(SQLModel, table=True):
             "state",
             "next_attempt_at",
         ),
+        enum_check("kind", DerivativeKind),
+        enum_check("state", DerivativeState),
+        # A failed or skipped attempt says why, and nothing else carries a
+        # reason; only a failure waits for a retry.
+        CheckConstraint(
+            "(state IN ('failed', 'skipped')) = (failure_reason IS NOT NULL)",
+            name="reason_iff_failed_or_skipped",
+        ),
+        CheckConstraint(
+            "next_attempt_at IS NULL OR state = 'failed'",
+            name="retry_only_when_failed",
+        ),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -59,15 +72,20 @@ class ArtifactDerivative(SQLModel, table=True):
             index=True,
         )
     )
-    kind: str = Field(max_length=32)
+    kind: DerivativeKind = Field(
+        sa_column=Column(EnumText(DerivativeKind), nullable=False)
+    )
     recipe_version: int
     state: DerivativeState = Field(
         default=DerivativeState.QUEUED,
-        sa_column=Column(String(16), nullable=False),
+        sa_column=Column(EnumText(DerivativeState), nullable=False),
     )
     attempts: int = Field(default=0)
     next_attempt_at: Optional[datetime] = None
-    failure_reason: Optional[str] = Field(default=None, max_length=64)
+    # Why the last attempt failed or was skipped: a code, or a sanitized error.
+    failure_reason: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
     # The storage object this derivative published, when it publishes one.
     # A column rather than JSON because trash, backup ownership and vault
     # migration must find (and remap) every derivative object by key.
@@ -94,8 +112,11 @@ class DerivativeRegeneration(SQLModel, table=True):
     """
 
     __tablename__ = "derivative_regenerations"
+    __table_args__ = (enum_check("kind", DerivativeKind),)
 
-    kind: str = Field(primary_key=True, max_length=32)
+    kind: DerivativeKind = Field(
+        sa_column=Column(EnumText(DerivativeKind), primary_key=True, nullable=False)
+    )
     requested_at: datetime = Field(default_factory=utcnow)
     requested_by: Optional[int] = Field(
         default=None,

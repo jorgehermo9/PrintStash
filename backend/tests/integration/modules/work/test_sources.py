@@ -14,10 +14,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.core.time import utcnow
-from app.db.models import JobState, ReconcileCursor, WorkPriority
+from app.db.models import JobKind, JobState, ReconcileCursor, WorkPriority
+from app.modules.work.contracts import SkipReason
 from app.modules.work.sources import (
     NoPending,
     ScheduleSource,
@@ -31,10 +34,13 @@ from app.modules.work.sources import (
 
 DAILY = "0 3 * * *"
 NOW = datetime(2026, 9, 24, 14, 0, tzinfo=UTC)
+# Probes borrow real kinds; no catalog here runs them.
+SCHEDULE = JobKind.WORK_HOUSEKEEPING
+DRAIN = JobKind.SIMILARITY_ANALYZE
 
 
 def _source(expression: str | None = DAILY) -> ScheduleSource:
-    return ScheduleSource("probe.schedule", lambda _session: expression)
+    return ScheduleSource(SCHEDULE, lambda _session: expression)
 
 
 class TestScheduleSource:
@@ -42,15 +48,15 @@ class TestScheduleSource:
         (item,) = _source().pending(db_session, now=NOW, limit=5)
 
         assert item.occurrence_at == datetime(2026, 9, 24, 3, 0, tzinfo=UTC)
-        assert item.subject_key == "probe.schedule@2026-09-24T03:00:00+00:00"
-        assert (item.priority, item.skip_reason) == (WorkPriority.BACKFILL, None)
+        assert item.subject_key == "work.housekeeping@2026-09-24T03:00:00+00:00"
+        assert (item.priority, item.skip) == (WorkPriority.BACKFILL, None)
 
     def test_an_occurrence_already_recorded_is_not_offered_again(
         self, db_session: Session
     ) -> None:
         db_session.add(
             ReconcileCursor(
-                source="probe.schedule",
+                source=SCHEDULE,
                 last_occurrence_at=datetime(2026, 9, 24, 3, 0, tzinfo=UTC),
             )
         )
@@ -64,7 +70,7 @@ class TestScheduleSource:
         # Offline for a week: one run now, not seven.
         db_session.add(
             ReconcileCursor(
-                source="probe.schedule",
+                source=SCHEDULE,
                 last_occurrence_at=NOW - timedelta(days=7),
             )
         )
@@ -77,11 +83,11 @@ class TestScheduleSource:
     def test_declines_an_occurrence_while_the_previous_one_runs(
         self, db_session: Session, make_job
     ) -> None:
-        make_job(kind="probe.schedule", state=JobState.RUNNING, attempts=1)
+        make_job(kind=SCHEDULE, state=JobState.RUNNING, attempts=1)
 
         (item,) = _source().pending(db_session, now=NOW, limit=5)
 
-        assert item.skip_reason == "previous_still_running"
+        assert item.skip is SkipReason.PREVIOUS_STILL_RUNNING
 
     def test_a_disabled_schedule_offers_nothing(self, db_session: Session) -> None:
         source = _source(None)
@@ -122,12 +128,12 @@ class TestScheduled:
         from app.runtime.engine.inline import InlineJobEngine
 
         definition = scheduled(
-            "probe.periodic", cron=fixed(DAILY), run=lambda: 7, label="Probe"
+            JobKind.IDENTITY_RETENTION, cron=fixed(DAILY), run=lambda: 7, label="Probe"
         )
         catalog = WorkCatalog([definition])
         engine = InlineJobEngine(catalog)
         catalog_module.bind(engine, catalog)
-        job = make_job(kind="probe.periodic")
+        job = make_job(kind=JobKind.IDENTITY_RETENTION)
 
         from app.modules.work.submission import submit
 
@@ -150,12 +156,15 @@ class TestScheduled:
         from app.runtime.engine.inline import InlineJobEngine
 
         definition = scheduled(
-            "probe.quiet", cron=fixed(DAILY), run=lambda: None, label="Quiet"
+            JobKind.NOTIFICATIONS_RETENTION,
+            cron=fixed(DAILY),
+            run=lambda: None,
+            label="Quiet",
         )
         catalog = WorkCatalog([definition])
         engine = InlineJobEngine(catalog)
         catalog_module.bind(engine, catalog)
-        job = make_job(kind="probe.quiet")
+        job = make_job(kind=JobKind.NOTIFICATIONS_RETENTION)
 
         submit(job.id)
         engine.drain()
@@ -170,46 +179,80 @@ class TestIdle:
     def test_parks_a_source_for_a_while(self, db_session: Session) -> None:
         now = utcnow()
 
-        mark_idle("probe.drain", seconds=30, now=now)
+        mark_idle(DRAIN, seconds=30, now=now)
 
-        window = idle_window(db_session, "probe.drain")
+        window = idle_window(db_session, DRAIN)
         assert window is not None
         assert window[1] - window[0] == timedelta(seconds=30)
 
     def test_waking_clears_the_park(self, db_session: Session) -> None:
-        mark_idle("probe.drain", seconds=30)
+        mark_idle(DRAIN, seconds=30)
 
-        clear_idle("probe.drain")
+        clear_idle(DRAIN)
 
         db_session.expire_all()
-        assert idle_window(db_session, "probe.drain") is None
+        assert idle_window(db_session, DRAIN) is None
 
     def test_waking_a_source_never_parked_is_harmless(
         self, db_session: Session
     ) -> None:
-        clear_idle("probe.never-seen")
-        db_session.add(ReconcileCursor(source="probe.unparked"))
+        clear_idle(JobKind.PRINTING_DISPATCH)
+        db_session.add(ReconcileCursor(source=JobKind.STORAGE_MIGRATE))
         db_session.commit()
 
-        clear_idle("probe.unparked")
+        clear_idle(JobKind.STORAGE_MIGRATE)
 
-        assert idle_window(db_session, "probe.unparked") is None
+        assert idle_window(db_session, JobKind.STORAGE_MIGRATE) is None
 
     def test_parking_keeps_the_cursors_other_state(self, db_session: Session) -> None:
-        import json
-
         db_session.add(
-            ReconcileCursor(source="probe.drain", state_json='{"queued_priority":"x"}')
+            ReconcileCursor(
+                source=DRAIN,
+                pass_queued_at=NOW,
+                pass_priority=WorkPriority.INTERACTIVE,
+                scan_high_water=9,
+            )
         )
         db_session.commit()
 
-        mark_idle("probe.drain", seconds=30)
-        clear_idle("probe.drain")
+        mark_idle(DRAIN, seconds=30)
+        clear_idle(DRAIN)
 
         db_session.expire_all()
-        cursor = db_session.get(ReconcileCursor, "probe.drain")
+        cursor = db_session.get(ReconcileCursor, DRAIN)
         assert cursor is not None
-        assert json.loads(cursor.state_json) == {"queued_priority": "x"}
+        assert (cursor.pass_priority, cursor.scan_high_water) == (
+            WorkPriority.INTERACTIVE,
+            9,
+        )
+
+
+class TestCursorInvariants:
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"pass_queued_at": NOW},
+            {"pass_priority": WorkPriority.BACKFILL},
+            {"holder": "executor-1"},
+            {"idle_since": NOW},
+            {"idle_until": NOW},
+        ],
+        ids=[
+            "queued-without-priority",
+            "priority-without-queue",
+            "holder-without-expiry",
+            "idle-without-end",
+            "idle-without-start",
+        ],
+    )
+    def test_the_database_refuses_half_a_pair(
+        self, db_session: Session, fields: dict
+    ) -> None:
+        # Each pair means one thing only together; half of one is a bug.
+        db_session.add(ReconcileCursor(source=DRAIN, **fields))
+
+        with pytest.raises(IntegrityError):
+            db_session.commit()
 
 
 class TestNoPending:

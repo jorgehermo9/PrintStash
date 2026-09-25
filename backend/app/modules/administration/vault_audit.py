@@ -1065,8 +1065,8 @@ def _source_readable(row: File) -> bool:
 
 def _reparse_metadata(session: Session, file_id: int) -> bool:
     """Queue the metadata derivative again; the Job re-derives it off the request."""
+    from app.db.models import DerivativeKind
     from app.modules.derivatives import repair
-    from app.modules.derivatives.kinds import METADATA
 
     row = session.get(File, file_id)
     if row is None or row.deleted_at is not None:
@@ -1076,16 +1076,18 @@ def _reparse_metadata(session: Session, file_id: int) -> bool:
         return True
     if not _source_readable(row):
         return False
-    return repair.request(session, row, [METADATA])
+    return repair.request(session, row, [DerivativeKind.METADATA])
 
 
 def _regenerate_thumbnail(session: Session, model_id: int) -> bool:
     """Queue the representative Artifact's thumbnail derivative again."""
+    from app.db.models import DerivativeKind
     from app.modules.derivatives import repair
-    from app.modules.derivatives.kinds import THUMBNAIL
 
     file = repair.representative(session, model_id)
-    return file is not None and repair.request(session, file, [THUMBNAIL])
+    return file is not None and repair.request(
+        session, file, [DerivativeKind.THUMBNAIL]
+    )
 
 
 def repair_finding(

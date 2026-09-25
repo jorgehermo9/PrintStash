@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.logging import get_logger
 from app.db.session import SessionFactory
 from app.modules.ingestion import import_resolvers, importer, requests
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs as registry
 from app.schemas.ingest import (
     ArchiveEntryRead,
@@ -160,9 +161,9 @@ def _stage_model_files_manifest(
             for f in files
         ],
     )
-    registry.update(
+    registry.finish(
         job_id,
-        state="completed",
+        JobOutcome.COMPLETED,
         result={
             "kind": "model_files_manifest",
             **manifest.model_dump(),
@@ -179,10 +180,10 @@ async def _handle_collection_url(
     session_factory: SessionFactory,
 ) -> None:
     """Resolve a collection URL; either record a review manifest or import all."""
-    registry.update(job_id, state="running", stage="resolving")
+    registry.update(job_id, stage="resolving")
     resolved = await import_resolvers.resolve_collection_url(req.url)
     if not resolved:
-        registry.update(job_id, state="failed", error="collection_resolve_failed")
+        registry.finish(job_id, JobOutcome.FAILED, error="collection_resolve_failed")
         return
     title, members = resolved
     target = collection_target(req.collection, title)
@@ -208,9 +209,9 @@ async def _handle_collection_url(
                 for m in members
             ],
         )
-        registry.update(
+        registry.finish(
             job_id,
-            state="completed",
+            JobOutcome.COMPLETED,
             result={"kind": "collection_manifest", **manifest.model_dump()},
         )
         return
@@ -262,7 +263,7 @@ async def import_from_url(
     is still recorded as the model's ``source_url``).
     """
     try:
-        registry.update(job_id, state="running", stage="resolving")
+        registry.update(job_id, stage="resolving")
         if import_resolvers.classify_collection(req.url):
             await _handle_collection_url(
                 job_id=job_id,
@@ -285,11 +286,11 @@ async def import_from_url(
         registry.update(job_id, stage="downloading")
         staged, original_filename = await importer.download_to_staging(download_url)
     except importer.ImportError_ as exc:
-        registry.update(job_id, state="failed", error=str(exc))
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
         return
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("url import download failed: %s", req.url)
-        registry.update(job_id, state="failed", error=str(exc), retryable=True)
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
         return
 
     suffix = Path(original_filename).suffix.lower()
@@ -307,7 +308,7 @@ async def import_from_url(
             entries = await run_in_threadpool(importer.inspect_archive, staged)
         except importer.ImportError_ as exc:
             staged.unlink(missing_ok=True)
-            registry.update(job_id, state="failed", error=str(exc))
+            registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
             return
         await run_in_threadpool(_lease_archive, job_id, staged, actor_user_id)
         manifest = _record_archive(
@@ -316,9 +317,9 @@ async def import_from_url(
             entries=entries,
             source_url=req.url,
         )
-        registry.update(
+        registry.finish(
             job_id,
-            state="completed",
+            JobOutcome.COMPLETED,
             result={"kind": "archive_manifest", **manifest.model_dump()},
         )
         return
@@ -328,7 +329,7 @@ async def import_from_url(
         # almost always a model *page* (HTML) rather than a direct download
         # link. Use a dedicated code so the UI can tell the user what to paste.
         staged.unlink(missing_ok=True)
-        registry.update(job_id, state="failed", error="url_not_a_direct_file")
+        registry.finish(job_id, JobOutcome.FAILED, error="url_not_a_direct_file")
         return
 
     await run_in_threadpool(
@@ -348,16 +349,14 @@ def inspect_uploaded_archive(
 ) -> None:
     """Inspect an uploaded ZIP the Job already owns and record its manifest."""
     try:
-        registry.update(
-            job_id, state="running", stage="inspecting", current_item=original_filename
-        )
+        registry.update(job_id, stage="inspecting", current_item=original_filename)
         entries = importer.inspect_archive(staged)
         manifest = _record_archive(
             job_id, archive_name=original_filename, entries=entries, source_url=None
         )
-        registry.update(
+        registry.finish(
             job_id,
-            state="completed",
+            JobOutcome.COMPLETED,
             processed=len(entries),
             total=len(entries),
             result={"kind": "archive_manifest", **manifest.model_dump()},
@@ -365,7 +364,7 @@ def inspect_uploaded_archive(
     except importer.ImportError_ as exc:
         # The archive is refused on its content; no retry can accept it, so the
         # staged bytes are released now rather than at lease expiry.
-        registry.update(job_id, state="failed", error=str(exc), retryable=False)
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=False)
         from .ingestion import release_job_staging
 
         release_job_staging(job_id)
@@ -384,16 +383,14 @@ def run_archive_selection(
     session_factory: SessionFactory,
 ) -> None:
     """Extract the chosen entries of an owned archive and import each one."""
-    registry.update(
-        job_id, state="running", stage="extracting", current_item=archive_name
-    )
+    registry.update(job_id, stage="extracting", current_item=archive_name)
     try:
         staged_files = importer.extract_selected(archive, names)
     except importer.ImportError_ as exc:
-        registry.update(job_id, state="failed", error=str(exc))
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
         return
     if not staged_files:
-        registry.update(job_id, state="failed", error="no_importable_files")
+        registry.finish(job_id, JobOutcome.FAILED, error="no_importable_files")
         return
     importer.import_assets(
         job_id=job_id,
@@ -419,21 +416,21 @@ async def run_file_selection_import(
 ) -> None:
     """Download a chosen subset of a page's files and ingest them."""
     try:
-        registry.update(job_id, state="running", stage="resolving")
+        registry.update(job_id, stage="resolving")
         links = await import_resolvers.resolve_selected_download(page_url, files)
         registry.update(job_id, stage="downloading", total=len(links))
         staged_files: list[tuple[Path, str]] = []
         for link in links:
             staged_files.extend(await _download_and_collect(link))
     except importer.ImportError_ as exc:
-        registry.update(job_id, state="failed", error=str(exc))
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
         return
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("file selection import failed: %s", page_url)
-        registry.update(job_id, state="failed", error=str(exc), retryable=True)
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
         return
     if not staged_files:
-        registry.update(job_id, state="failed", error="no_importable_files")
+        registry.finish(job_id, JobOutcome.FAILED, error="no_importable_files")
         return
     await run_in_threadpool(
         importer.import_assets,
@@ -458,13 +455,11 @@ async def run_collection_member_import(
 ) -> None:
     """Stage the selected collection members and ingest them."""
     try:
-        registry.update(
-            job_id, state="running", stage="downloading", total=len(members)
-        )
+        registry.update(job_id, stage="downloading", total=len(members))
         groups = await _stage_members(members)
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("collection member import failed")
-        registry.update(job_id, state="failed", error=str(exc), retryable=True)
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
         return
     await run_in_threadpool(
         importer.import_resolved_groups,

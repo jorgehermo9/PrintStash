@@ -28,6 +28,7 @@ from app.db.models import (
     ExternalLibraryCollectionMode,
     ExternalLibraryTombstone,
     ExternalLibraryWatchMode,
+    JobKind,
     LibrarySourceKind,
     StorageConnection,
     StorageConnectionPurpose,
@@ -447,7 +448,7 @@ def _queue_scan(
     try:
         job_id = work_service.request(
             session,
-            definition=external_library.SCAN_DEFINITION,
+            definition=JobKind.SOURCES_SCAN,
             subject_key=subject,
             owner_user_id=user.id,
         )
@@ -455,7 +456,7 @@ def _queue_scan(
     except ActiveJobExists as exc:
         session.rollback()
         return JobAccepted(job_id=exc.job_id, message="library scan already queued")
-    nudge(external_library.SCAN_DEFINITION)
+    nudge(JobKind.SOURCES_SCAN)
     return JobAccepted(job_id=job_id, message="library scan queued")
 
 

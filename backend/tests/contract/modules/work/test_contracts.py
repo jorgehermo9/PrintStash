@@ -20,9 +20,15 @@ from datetime import timedelta
 import pytest
 
 from app.core.time import utcnow
-from app.db.models import JobState, WorkPriority
+from app.db.models import JobKind, JobState, LaneName, WorkPriority
 from app.modules.work import submission as work_submission
-from app.modules.work.contracts import EngineStatus, Submission, SubmitOutcome
+from app.modules.work.contracts import (
+    Deduplicated,
+    EngineStatus,
+    ExecutionKind,
+    JobSubmission,
+    SubmitOutcome,
+)
 from app.modules.work.jobs import jobs
 from app.modules.work.submission import dedupe_key, execution_id, nudge
 from tests.contract.modules.work._harness import (
@@ -41,15 +47,18 @@ from tests.contract.modules.work._harness import (
 )
 
 
-def _submission(job_id: str, definition: str, subject: str, lane: str, **kw):
-    return Submission(
+def _submission(
+    job_id: str, definition: JobKind, subject: str, lane: LaneName, **kw
+) -> JobSubmission:
+    return JobSubmission(
         execution_id=kw.pop("execution", execution_id(job_id, 1)),
         job_id=job_id,
         definition=definition,
         subject_key=subject,
         lane=lane,
         priority=kw.pop("priority", WorkPriority.INTERACTIVE),
-        dedupe_key=kw.pop("dedupe", dedupe_key(definition, subject)),
+        attempt=1,
+        routing=Deduplicated(kw.pop("dedupe", dedupe_key(definition, subject))),
         **kw,
     )
 
@@ -134,7 +143,7 @@ class TestRunning:
 class TestIdentity:
     def test_an_execution_id_runs_exactly_once(self, harness: Harness) -> None:
         job_id = harness.job(PLAIN, "exactly/1")
-        submission = _submission(job_id, PLAIN, "exactly/1", FAST, dedupe=None)
+        submission = _submission(job_id, PLAIN, "exactly/1", FAST)
 
         first = harness.engine.submit(submission)
         again = harness.engine.submit(submission)
@@ -147,7 +156,7 @@ class TestIdentity:
         self, harness: Harness
     ) -> None:
         job_id = harness.job(PLAIN, "exactly/2")
-        submission = _submission(job_id, PLAIN, "exactly/2", FAST, dedupe=None)
+        submission = _submission(job_id, PLAIN, "exactly/2", FAST)
         harness.engine.submit(submission)
         harness.settle()
 
@@ -183,7 +192,7 @@ class TestIdentity:
             SubmitOutcome.ACCEPTED,
             SubmitOutcome.DEDUPLICATED,
         )
-        assert harness.engine.evidence(["not-a-job:1"])["not-a-job:1"].absent
+        assert "not-a-job:1" not in harness.engine.evidence(["not-a-job:1"])
 
     def test_a_dedupe_key_is_free_again_once_its_execution_ends(
         self, harness: Harness
@@ -275,7 +284,7 @@ class TestScheduling:
         harness.settle()
 
         assert depth.queued + depth.running == 2
-        assert len([a for a in active if a.definition]) >= 2
+        assert len([a for a in active if a.kind is ExecutionKind.JOB]) >= 2
         after = harness.engine.lane_depth(SERIAL)
         assert (after.queued, after.running) == (0, 0)
 
@@ -319,9 +328,7 @@ class TestCancelling:
 
 class TestEvidence:
     def test_an_unknown_execution_is_absent(self, harness: Harness) -> None:
-        assert harness.engine.evidence(["never-submitted:1"])[
-            "never-submitted:1"
-        ].absent
+        assert "never-submitted:1" not in harness.engine.evidence(["never-submitted:1"])
 
     def test_a_finished_execution_reads_as_succeeded(self, harness: Harness) -> None:
         job_id = harness.job(PLAIN, "evidence/1")
@@ -356,9 +363,9 @@ class TestEvidence:
         removed = harness.engine.prune_history(older_than=utcnow() + timedelta(days=1))
 
         assert removed >= 1
-        assert harness.engine.evidence([execution_id(job_id, 1)])[
-            execution_id(job_id, 1)
-        ].absent
+        assert execution_id(job_id, 1) not in harness.engine.evidence(
+            [execution_id(job_id, 1)]
+        )
 
     def test_pruning_keeps_an_active_execution(self, harness: Harness) -> None:
         gate = threading.Event()
@@ -371,7 +378,7 @@ class TestEvidence:
         gate.set()
         harness.settle()
 
-        assert not evidence[execution_id(job_id, 1)].absent
+        assert execution_id(job_id, 1) in evidence
 
 
 class TestSubmittingFromInsideWork:
@@ -446,9 +453,9 @@ class TestReset:
 
         if harness.kind == "dbos":
             harness.relaunch(app_version="contract-reset", listen_lanes=None)
-        assert harness.engine.evidence([execution_id(job_id, 1)])[
-            execution_id(job_id, 1)
-        ].absent
+        assert execution_id(job_id, 1) not in harness.engine.evidence(
+            [execution_id(job_id, 1)]
+        )
         # The application's record of the Job is untouched: the engine's state
         # is disposable, the Job row is not.
         assert harness.state(job_id) == JobState.COMPLETED.value

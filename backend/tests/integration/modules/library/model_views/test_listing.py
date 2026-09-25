@@ -121,8 +121,12 @@ class TestListItems:
         tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         created = set(_make_models(db_session, count=15, ts=tied))
 
-        first = [m.id for m in models_listing.list_items(db_session, superuser, limit=100)]
-        second = [m.id for m in models_listing.list_items(db_session, superuser, limit=100)]
+        first = [
+            m.id for m in models_listing.list_items(db_session, superuser, limit=100)
+        ]
+        second = [
+            m.id for m in models_listing.list_items(db_session, superuser, limit=100)
+        ]
         assert first == second, "ordering must be deterministic across calls"
 
         # Among the tied-timestamp models, order is strictly id-descending.
@@ -137,11 +141,17 @@ class TestListItems:
         )
 
         for query in ("dragon", "DRAGON", "Dragon", "drAGon"):
-            found = {item.id for item in models_listing.list_items(db_session, superuser, q=query)}
+            found = {
+                item.id
+                for item in models_listing.list_items(db_session, superuser, q=query)
+            }
             assert m.id in found, f"case-insensitive search failed for {query!r}"
 
         # A non-matching query must not return it.
-        miss = {item.id for item in models_listing.list_items(db_session, superuser, q="griffin")}
+        miss = {
+            item.id
+            for item in models_listing.list_items(db_session, superuser, q="griffin")
+        }
         assert m.id not in miss
 
     def test_list_items_excludes_external_sentinel(
@@ -412,7 +422,9 @@ class TestListTrashed:
 
 
 class TestReadItemsByIds:
-    def test_bounds_card_work_to_requested_identities(self, db_session, make_user, make_model):
+    def test_bounds_card_work_to_requested_identities(
+        self, db_session, make_user, make_model
+    ):
         from tests.fakes.sqlite_work import sqlite_work
 
         actor = make_user(superuser=True)

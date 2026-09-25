@@ -2492,8 +2492,7 @@
       "CancelQueued": {
         "properties": {
           "definition": {
-            "title": "Definition",
-            "type": "string"
+            "$ref": "#/components/schemas/JobKind"
           }
         },
         "required": [
@@ -3822,7 +3821,7 @@
           },
           "derivative_kinds": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/DerivativeKind"
             },
             "title": "Derivative Kinds",
             "type": "array"
@@ -3840,8 +3839,7 @@
             "type": "string"
           },
           "lane": {
-            "title": "Lane",
-            "type": "string"
+            "$ref": "#/components/schemas/LaneName"
           },
           "last_finished_at": {
             "anyOf": [
@@ -3856,8 +3854,7 @@
             "title": "Last Finished At"
           },
           "name": {
-            "title": "Name",
-            "type": "string"
+            "$ref": "#/components/schemas/JobKind"
           },
           "next_due_at": {
             "anyOf": [
@@ -3888,10 +3885,21 @@
           "running",
           "interrupted",
           "failed",
-          "completed"
+          "completed",
+          "derivative_kinds"
         ],
         "title": "DefinitionRead",
         "type": "object"
+      },
+      "DerivativeKind": {
+        "description": "An output derived from an Artifact's bytes, each at its own recipe.",
+        "enum": [
+          "metadata",
+          "thumbnail",
+          "toolpath"
+        ],
+        "title": "DerivativeKind",
+        "type": "string"
       },
       "DerivativeRead": {
         "description": "One derivative kind of one Artifact at the current recipe.\n\n``pending`` means no attempt exists yet at the current recipe; every value\nthe derivative would supply is unknown until it is ``ready``.",
@@ -3913,8 +3921,7 @@
             "title": "Failure Reason"
           },
           "kind": {
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/DerivativeKind"
           },
           "recipe_version": {
             "title": "Recipe Version",
@@ -3926,17 +3933,7 @@
             "type": "boolean"
           },
           "state": {
-            "enum": [
-              "pending",
-              "queued",
-              "running",
-              "ready",
-              "skipped",
-              "failed",
-              "cancelled"
-            ],
-            "title": "State",
-            "type": "string"
+            "$ref": "#/components/schemas/DerivativeStatus"
           },
           "updated_at": {
             "anyOf": [
@@ -3960,20 +3957,28 @@
         "type": "object"
       },
       "DerivativeRegenerate": {
-        "description": "``missing`` fills gaps; ``all`` re-derives every Artifact of the kind.",
         "properties": {
           "mode": {
-            "default": "missing",
-            "enum": [
-              "missing",
-              "all"
-            ],
-            "title": "Mode",
-            "type": "string"
+            "$ref": "#/components/schemas/RegenerateMode",
+            "default": "missing"
           }
         },
         "title": "DerivativeRegenerate",
         "type": "object"
+      },
+      "DerivativeStatus": {
+        "description": "A derivative as a reader sees it: ``pending`` (no attempt at the current\nrecipe yet, or regenerated since) and every stored ``DerivativeState``.",
+        "enum": [
+          "pending",
+          "queued",
+          "running",
+          "ready",
+          "skipped",
+          "failed",
+          "cancelled"
+        ],
+        "title": "DerivativeStatus",
+        "type": "string"
       },
       "DocumentCreate": {
         "additionalProperties": false,
@@ -4539,14 +4544,13 @@
           },
           "lanes": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/LaneName"
             },
             "title": "Lanes",
             "type": "array"
           },
           "role": {
-            "title": "Role",
-            "type": "string"
+            "$ref": "#/components/schemas/ProcessRole"
           },
           "stale": {
             "title": "Stale",
@@ -7652,17 +7656,8 @@
             "type": "string"
           },
           "state": {
-            "default": "queued",
-            "enum": [
-              "queued",
-              "running",
-              "interrupted",
-              "completed",
-              "failed",
-              "cancelled"
-            ],
-            "title": "State",
-            "type": "string"
+            "$ref": "#/components/schemas/JobState",
+            "default": "queued"
           }
         },
         "required": [
@@ -7694,6 +7689,50 @@
         "title": "JobFailedItem",
         "type": "object"
       },
+      "JobKind": {
+        "description": "Every Job Definition, named ``<owner>.<verb>`` after the owning module.\n\nA Job's ``kind`` is one of these and nothing else: the catalog refuses a\ndefinition whose name is not listed here, and the API publishes the list,\nso a client can switch over it exhaustively. Adding a definition adds its\nmember here, in the owner's block.",
+        "enum": [
+          "administration.audit",
+          "backups.automatic",
+          "backups.create",
+          "backups.retry_destination",
+          "backups.trash_gc",
+          "derivatives.gcode",
+          "derivatives.mesh",
+          "derivatives.toolpath",
+          "identity.retention",
+          "inference.model_download",
+          "ingestion.archive_inspect",
+          "ingestion.archive_selection",
+          "ingestion.artifact_upload",
+          "ingestion.collection",
+          "ingestion.inbox_import",
+          "ingestion.inbox_resolve",
+          "ingestion.inbox_retention",
+          "ingestion.library_import",
+          "ingestion.upload",
+          "ingestion.upload_recovery",
+          "ingestion.url",
+          "ingestion.url_selection",
+          "notifications.deliver",
+          "notifications.retention",
+          "printing.dispatch",
+          "search.caption",
+          "search.caption_queue",
+          "search.expand",
+          "search.generation",
+          "search.index",
+          "search.project",
+          "search.repair",
+          "similarity.analyze",
+          "sources.scan",
+          "storage.inventory",
+          "storage.migrate",
+          "work.housekeeping"
+        ],
+        "title": "JobKind",
+        "type": "string"
+      },
       "JobPriority": {
         "enum": [
           "low",
@@ -7703,11 +7742,23 @@
         "title": "JobPriority",
         "type": "string"
       },
+      "JobState": {
+        "description": "Lifecycle of one background Job, shared by every job definition.\n\n``interrupted`` is not terminal: the execution was lost (crash, upgrade,\nrestore) and the reconciler resubmits the same Job as its next attempt.",
+        "enum": [
+          "queued",
+          "running",
+          "interrupted",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "JobState",
+        "type": "string"
+      },
       "JobStatus": {
-        "description": "One background Job: what it is doing, and what it did.\n\n``kind`` is the job definition. Counts and ``failed_items`` are filled by\ndefinitions that process several items (an archive, a collection); a\nsingle-item job reports ``processed``/``total`` of 1. Nothing here is ever\nread back as the job's input.",
+        "description": "One background Job: what it is doing, and what it did.\n\n``kind`` is the Job Definition, one of a closed set a client can switch\non. Counts and ``failed_items`` are filled by definitions that process\nseveral items (an archive, a collection); a single-item job reports\n``processed``/``total`` of 1. Nothing here is ever read back as the job's\ninput.",
         "properties": {
           "attempts": {
-            "default": 0,
             "title": "Attempts",
             "type": "integer"
           },
@@ -7739,16 +7790,9 @@
             "title": "Completion"
           },
           "created_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
           },
           "current_item": {
             "anyOf": [
@@ -7817,8 +7861,7 @@
             "type": "string"
           },
           "kind": {
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/JobKind"
           },
           "label": {
             "anyOf": [
@@ -7843,13 +7886,7 @@
             "title": "Model Id"
           },
           "priority": {
-            "default": "interactive",
-            "enum": [
-              "interactive",
-              "backfill"
-            ],
-            "title": "Priority",
-            "type": "string"
+            "$ref": "#/components/schemas/WorkPriority"
           },
           "processed": {
             "default": 0,
@@ -7868,7 +7905,6 @@
             "title": "Progress"
           },
           "resubmits": {
-            "default": 0,
             "title": "Resubmits",
             "type": "integer"
           },
@@ -7927,16 +7963,7 @@
             "title": "Started At"
           },
           "state": {
-            "enum": [
-              "queued",
-              "running",
-              "interrupted",
-              "completed",
-              "failed",
-              "cancelled"
-            ],
-            "title": "State",
-            "type": "string"
+            "$ref": "#/components/schemas/JobState"
           },
           "step": {
             "anyOf": [
@@ -7977,25 +8004,42 @@
             "title": "Total Steps"
           },
           "updated_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
         "required": [
           "job_id",
           "kind",
-          "state"
+          "state",
+          "priority",
+          "attempts",
+          "resubmits",
+          "created_at",
+          "updated_at"
         ],
         "title": "JobStatus",
         "type": "object"
+      },
+      "LaneName": {
+        "description": "A lane: a concurrency class of work, and the engine queue behind it.",
+        "enum": [
+          "captions",
+          "derive.light",
+          "derive.native",
+          "expansion",
+          "ingest",
+          "maintenance",
+          "network",
+          "notify",
+          "printing",
+          "reconcile",
+          "search",
+          "similarity"
+        ],
+        "title": "LaneName",
+        "type": "string"
       },
       "LaneRead": {
         "properties": {
@@ -8008,8 +8052,7 @@
             "type": "integer"
           },
           "name": {
-            "title": "Name",
-            "type": "string"
+            "$ref": "#/components/schemas/LaneName"
           },
           "overridden": {
             "title": "Overridden",
@@ -15181,6 +15224,16 @@
         "title": "PrinterUpdate",
         "type": "object"
       },
+      "ProcessRole": {
+        "description": "What one process of a deployment does (``VAULT_PROCESS_ROLE``).\n\n``all`` serves HTTP and runs every Job; ``api`` is the HTTP process of a\ndeployment with workers; ``worker`` runs Jobs and serves nothing.",
+        "enum": [
+          "all",
+          "api",
+          "worker"
+        ],
+        "title": "ProcessRole",
+        "type": "string"
+      },
       "ProvenanceCaptureSummaryRead": {
         "properties": {
           "adapter_version": {
@@ -15731,6 +15784,15 @@
         ],
         "title": "RefreshRequest",
         "type": "object"
+      },
+      "RegenerateMode": {
+        "description": "``missing`` fills gaps; ``all`` re-derives every Artifact of the kind.",
+        "enum": [
+          "missing",
+          "all"
+        ],
+        "title": "RegenerateMode",
+        "type": "string"
       },
       "RetainRequest": {
         "properties": {
@@ -20412,6 +20474,15 @@
         ],
         "title": "WorkOverview",
         "type": "object"
+      },
+      "WorkPriority": {
+        "description": "Scheduling tier of a submission; children inherit it and may only lower it.",
+        "enum": [
+          "interactive",
+          "backfill"
+        ],
+        "title": "WorkPriority",
+        "type": "string"
       }
     },
     "securitySchemes": {
@@ -21103,8 +21174,7 @@
             "name": "kind",
             "required": true,
             "schema": {
-              "title": "Kind",
-              "type": "string"
+              "$ref": "#/components/schemas/DerivativeKind"
             }
           }
         ],
@@ -21162,8 +21232,7 @@
             "name": "lane",
             "required": true,
             "schema": {
-              "title": "Lane",
-              "type": "string"
+              "$ref": "#/components/schemas/LaneName"
             }
           }
         ],
@@ -27630,8 +27699,7 @@
             "name": "kind",
             "required": true,
             "schema": {
-              "title": "Kind",
-              "type": "string"
+              "$ref": "#/components/schemas/DerivativeKind"
             }
           }
         ],
@@ -30411,7 +30479,7 @@
             "schema": {
               "default": [],
               "items": {
-                "type": "string"
+                "$ref": "#/components/schemas/JobKind"
               },
               "title": "Kind",
               "type": "array"

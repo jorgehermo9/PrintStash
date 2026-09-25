@@ -22,16 +22,14 @@ from datetime import datetime, timedelta
 from sqlmodel import Session, col, select
 
 from app.core.time import utcnow
-from app.db.models import SimilarityRun, WorkPriority
+from app.db.models import JobKind, LaneName, SimilarityRun, WorkPriority
 from app.db.session import get_session_factory
-from app.modules.work.catalog import SIMILARITY
 from app.modules.work.contracts import JobContext, JobDefinition, Step, WorkItem
 from app.modules.work.sources import clear_idle, idle_window, mark_idle
 
 from . import runs
 from .configuration import read_settings
 
-DEFINITION = "similarity.analyze"
 SLICE_SECONDS = 50.0
 IDLE_SECONDS = 30.0
 
@@ -51,7 +49,7 @@ class AnalysisSource:
         enabled = read_settings(session).enabled
         if enabled:
             runs.schedule_due(session)
-        parked = idle_window(session, DEFINITION)
+        parked = idle_window(session, JobKind.SIMILARITY_ANALYZE)
         if parked is not None and now < parked[1]:
             return []
         query = select(SimilarityRun.id, SimilarityRun.trigger).where(
@@ -71,7 +69,7 @@ class AnalysisSource:
         ]
 
     def next_due(self, session: Session, *, now: datetime) -> datetime | None:
-        parked = idle_window(session, DEFINITION)
+        parked = idle_window(session, JobKind.SIMILARITY_ANALYZE)
         if parked is not None and now < parked[1]:
             return parked[1]
         config = read_settings(session)
@@ -99,9 +97,9 @@ def _advance(ctx: JobContext) -> None:
             break
         units += 1
     if units == 0:
-        mark_idle(DEFINITION, seconds=IDLE_SECONDS)
+        mark_idle(JobKind.SIMILARITY_ANALYZE, seconds=IDLE_SECONDS)
     else:
-        clear_idle(DEFINITION)
+        clear_idle(JobKind.SIMILARITY_ANALYZE)
     ctx.update(result={"units": units, "sliced_at": utcnow().isoformat()})
 
 
@@ -129,9 +127,9 @@ def _on_failure(session: Session, subject: str, reason: str) -> None:
 def definitions() -> list[JobDefinition]:
     return [
         JobDefinition(
-            name=DEFINITION,
-            lane=SIMILARITY,
-            steps=(Step(f"{DEFINITION}.advance", _advance),),
+            name=JobKind.SIMILARITY_ANALYZE,
+            lane=LaneName.SIMILARITY,
+            steps=(Step(f"{JobKind.SIMILARITY_ANALYZE.value}.advance", _advance),),
             source=AnalysisSource(),
             cancel=_cancel,
             on_failure=_on_failure,

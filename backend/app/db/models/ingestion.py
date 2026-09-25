@@ -16,6 +16,7 @@ from sqlalchemy import (
 from sqlmodel import Field
 
 from app.core.time import utcnow
+from app.db.enum_columns import EnumText, enum_check
 
 from .base import SQLModel
 from .types import (
@@ -101,6 +102,7 @@ class IngestRequest(SQLModel, table=True):
     """
 
     __tablename__ = "ingest_requests"
+    __table_args__ = (enum_check("kind", IngestRequestKind),)
 
     job_id: str = Field(
         sa_column=Column(
@@ -109,7 +111,9 @@ class IngestRequest(SQLModel, table=True):
             primary_key=True,
         )
     )
-    kind: IngestRequestKind = Field(sa_column=Column(String(24), nullable=False))
+    kind: IngestRequestKind = Field(
+        sa_column=Column(EnumText(IngestRequestKind), nullable=False)
+    )
     owner_user_id: int = Field(foreign_key="users.id", index=True)
     original_filename: Optional[str] = Field(default=None, max_length=512)
     model_name: Optional[str] = Field(default=None, max_length=255)

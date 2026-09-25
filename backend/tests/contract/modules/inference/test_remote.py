@@ -60,9 +60,7 @@ class TestRemoteEmbeddingProvider:
         assert fake.calls[0]["body"]["input"] == ["boat"]
 
     @pytest.mark.parametrize("fault", ["401", "500"])
-    def test_redacts_failed_request_secrets(
-        self, remote, caplog, fault
-    ):
+    def test_redacts_failed_request_secrets(self, remote, caplog, fault):
         fake, provider = remote
         fake.fault = fault
         caplog.set_level("DEBUG")

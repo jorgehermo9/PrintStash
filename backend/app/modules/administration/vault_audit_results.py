@@ -287,8 +287,8 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
     """Only derived outputs with live, verified, managed source identity qualify."""
     from PIL import Image
 
+    from app.db.models import DerivativeKind, DerivativeState
     from app.modules.administration import audit
-    from app.modules.derivatives.kinds import METADATA, THUMBNAIL
     from app.modules.derivatives.repair import now as rederive_now
 
     assert run.id is not None
@@ -342,15 +342,21 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
                 # nothing, since the producer is what fills it.
                 ok = (
                     present is not None
-                    or rederive_now(file.id, [METADATA]).get(METADATA) == "ready"
+                    or rederive_now(file.id, [DerivativeKind.METADATA]).get(
+                        DerivativeKind.METADATA
+                    )
+                    == DerivativeState.READY
                 )
             elif finding.repair_action == "regenerate_thumbnail" and finding.code in {
                 "thumbnail_missing",
                 "thumbnail_unreadable",
             }:
-                outcome = rederive_now(file.id, [THUMBNAIL])
+                outcome = rederive_now(file.id, [DerivativeKind.THUMBNAIL])
                 session.refresh(file)
-                if outcome.get(THUMBNAIL) == "ready" and file.thumbnail_path:
+                if (
+                    outcome.get(DerivativeKind.THUMBNAIL) == DerivativeState.READY
+                    and file.thumbnail_path
+                ):
                     with (
                         get_backend().local_path(file.thumbnail_path) as path,
                         Image.open(path) as image,

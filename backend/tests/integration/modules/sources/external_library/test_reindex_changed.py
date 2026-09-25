@@ -19,9 +19,8 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
-from app.db.models import DerivativeState, File
+from app.db.models import DerivativeKind, DerivativeState, File
 from app.modules.derivatives import records
-from app.modules.derivatives.kinds import METADATA
 from app.modules.sources import external_library
 from app.runtime.engine.inline import InlineJobEngine
 from tests._env import use_local_storage
@@ -57,7 +56,7 @@ class TestReindexChanged:
         make_derivative,
     ) -> None:
         path, file_row = _indexed(tmp_path, db_session)
-        make_derivative(file_row, METADATA, state=DerivativeState.READY)
+        make_derivative(file_row, DerivativeKind.METADATA, state=DerivativeState.READY)
         _edit(path)
         stat = path.stat()
 
@@ -65,7 +64,7 @@ class TestReindexChanged:
             db_session, file_row, path, stat.st_size, stat.st_mtime
         )
 
-        assert METADATA not in records.rows_for(db_session, file_row)
+        assert DerivativeKind.METADATA not in records.rows_for(db_session, file_row)
 
     def test_rederives_the_changed_bytes(
         self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
@@ -81,7 +80,9 @@ class TestReindexChanged:
         work_engine.drain()
 
         db_session.expire_all()
-        row = records.rows_for(db_session, db_session.get(File, file_row.id))[METADATA]
+        row = records.rows_for(db_session, db_session.get(File, file_row.id))[
+            DerivativeKind.METADATA
+        ]
         assert row.state == DerivativeState.READY
 
     def test_keeps_the_old_signature_when_invalidation_fails(
@@ -113,7 +114,7 @@ class TestReindexChanged:
         self, tmp_path: Path, db_session: Session, make_derivative
     ) -> None:
         path, file_row = _indexed(tmp_path, db_session)
-        make_derivative(file_row, METADATA, state=DerivativeState.READY)
+        make_derivative(file_row, DerivativeKind.METADATA, state=DerivativeState.READY)
         stat = path.stat()
 
         changed = external_library._reindex_changed(
@@ -121,4 +122,4 @@ class TestReindexChanged:
         )
 
         assert changed is False
-        assert METADATA in records.rows_for(db_session, file_row)
+        assert DerivativeKind.METADATA in records.rows_for(db_session, file_row)

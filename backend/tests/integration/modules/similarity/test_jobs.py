@@ -21,10 +21,10 @@ import pytest
 from sqlmodel import Session
 
 from app.core.time import utcnow
-from app.db.models import Job, JobState, SimilarityRun, WorkPriority
+from app.db.models import Job, JobKind, JobState, SimilarityRun, WorkPriority
 from app.modules.similarity import jobs as similarity_jobs
 from app.modules.similarity.configuration import update_settings
-from app.modules.similarity.jobs import DEFINITION, AnalysisSource, subject_key
+from app.modules.similarity.jobs import AnalysisSource, subject_key
 from app.modules.similarity.processing import SimilarityProcessor
 from app.modules.work.sources import idle_window, mark_idle
 from app.modules.work.submission import execution_id, submit
@@ -45,7 +45,7 @@ def enabled(db_session: Session, admin) -> None:
 
 
 def _advance(session: Session, work_engine, make_job, run: SimilarityRun) -> dict:
-    job = make_job(kind=DEFINITION, subject=subject_key(run.id))
+    job = make_job(kind=JobKind.SIMILARITY_ANALYZE, subject=subject_key(run.id))
     submit(job.id)
     work_engine.run_one()
     session.expire_all()
@@ -131,7 +131,7 @@ class TestAnalysisSource:
         self, db_session: Session, admin, make_similarity_run, enabled
     ) -> None:
         make_similarity_run(admin)
-        mark_idle(DEFINITION, seconds=30)
+        mark_idle(JobKind.SIMILARITY_ANALYZE, seconds=30)
 
         assert SOURCE.pending(db_session, now=utcnow(), limit=10) == []
 
@@ -168,7 +168,7 @@ class TestNextDue:
         self, db_session: Session
     ) -> None:
         now = utcnow()
-        mark_idle(DEFINITION, seconds=30, now=now)
+        mark_idle(JobKind.SIMILARITY_ANALYZE, seconds=30, now=now)
 
         due = SOURCE.next_due(db_session, now=now)
 
@@ -230,7 +230,7 @@ class TestAdvance:
         result = _advance(db_session, work_engine, make_job, make_similarity_run(admin))
 
         assert result["units"] == 0
-        assert idle_window(db_session, DEFINITION) is not None
+        assert idle_window(db_session, JobKind.SIMILARITY_ANALYZE) is not None
 
     def test_a_slice_that_moved_work_unparks_the_source(
         self,
@@ -241,13 +241,13 @@ class TestAdvance:
         make_similarity_run,
         monkeypatch,
     ) -> None:
-        mark_idle(DEFINITION, seconds=30)
+        mark_idle(JobKind.SIMILARITY_ANALYZE, seconds=30)
         _units(monkeypatch, 1)
 
         _advance(db_session, work_engine, make_job, make_similarity_run(admin))
 
         db_session.expire_all()
-        assert idle_window(db_session, DEFINITION) is None
+        assert idle_window(db_session, JobKind.SIMILARITY_ANALYZE) is None
 
     def test_a_cancelled_job_stops_advancing(
         self,
@@ -261,7 +261,7 @@ class TestAdvance:
         from app.modules.work.jobs import jobs
 
         run = make_similarity_run(admin)
-        job = make_job(kind=DEFINITION, subject=subject_key(run.id))
+        job = make_job(kind=JobKind.SIMILARITY_ANALYZE, subject=subject_key(run.id))
         done: list[int] = []
 
         def work_one(_self, _run_id: int, _writer: str) -> bool:

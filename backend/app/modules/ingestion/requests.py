@@ -17,17 +17,18 @@ from sqlmodel import Session
 
 from app.core.errors import ErrorKind, OperationError
 from app.core.secrets import decrypt_secret, encrypt_secret
-from app.db.models import IngestRequest, IngestRequestKind, User, WorkPriority
+from app.db.models import IngestRequest, IngestRequestKind, JobKind, User, WorkPriority
 from app.db.session import get_session_factory
 from app.modules.work import service as work_service
 
-DEFINITIONS: dict[IngestRequestKind, str] = {
-    IngestRequestKind.UPLOAD: "ingestion.upload",
-    IngestRequestKind.URL: "ingestion.url",
-    IngestRequestKind.ARCHIVE_INSPECT: "ingestion.archive_inspect",
-    IngestRequestKind.ARCHIVE_SELECTION: "ingestion.archive_selection",
-    IngestRequestKind.URL_SELECTION: "ingestion.url_selection",
-    IngestRequestKind.COLLECTION: "ingestion.collection",
+# The Job Definition that carries out each kind of request; every kind has one.
+DEFINITIONS: dict[IngestRequestKind, JobKind] = {
+    IngestRequestKind.UPLOAD: JobKind.INGESTION_UPLOAD,
+    IngestRequestKind.URL: JobKind.INGESTION_URL,
+    IngestRequestKind.ARCHIVE_INSPECT: JobKind.INGESTION_ARCHIVE_INSPECT,
+    IngestRequestKind.ARCHIVE_SELECTION: JobKind.INGESTION_ARCHIVE_SELECTION,
+    IngestRequestKind.URL_SELECTION: JobKind.INGESTION_URL_SELECTION,
+    IngestRequestKind.COLLECTION: JobKind.INGESTION_COLLECTION,
 }
 
 

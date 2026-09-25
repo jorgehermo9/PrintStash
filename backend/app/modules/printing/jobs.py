@@ -19,10 +19,9 @@ from datetime import datetime
 from sqlmodel import Session, col, select
 
 from app.core.time import utcnow
-from app.db.models import PrintJob, PrintJobState, WorkPriority
+from app.db.models import JobKind, LaneName, PrintJob, PrintJobState, WorkPriority
 from app.db.scopes import live
 from app.modules.work.async_steps import run_async
-from app.modules.work.catalog import PRINTING
 from app.modules.work.contracts import JobContext, JobDefinition, Step, WorkItem
 from app.modules.work.sources import clear_idle, idle_window, mark_idle
 
@@ -57,8 +56,8 @@ def wake_dispatch() -> None:
     """New or released fleet work: unpark the dispatcher and nudge it."""
     from app.modules.work import nudge
 
-    clear_idle(DISPATCH_DEFINITION)
-    nudge(DISPATCH_DEFINITION)
+    clear_idle(JobKind.PRINTING_DISPATCH)
+    nudge(JobKind.PRINTING_DISPATCH)
 
 
 class DispatchSource:
@@ -75,7 +74,7 @@ class DispatchSource:
             col(PrintJob.dispatch_claimed_at).is_not(None),
             live(PrintJob),
         )
-        parked = idle_window(session, DISPATCH_DEFINITION)
+        parked = idle_window(session, JobKind.PRINTING_DISPATCH)
         if parked is not None and now < parked[1]:
             # Parked: only work queued since the drain gave up can wake it.
             queued = queued.where(PrintJob.created_at > parked[0])
@@ -87,7 +86,7 @@ class DispatchSource:
         return [WorkItem(subject_key=SUBJECT, priority=WorkPriority.INTERACTIVE)]
 
     def next_due(self, session: Session, *, now: datetime) -> datetime | None:
-        parked = idle_window(session, DISPATCH_DEFINITION)
+        parked = idle_window(session, JobKind.PRINTING_DISPATCH)
         return parked[1] if parked is not None and now < parked[1] else None
 
 
@@ -103,9 +102,9 @@ def _drain(ctx: JobContext) -> None:
         drain_dispatch_queue(_builder(), budget_seconds=SLICE_SECONDS)
     )
     if dispatched == 0:
-        mark_idle(DISPATCH_DEFINITION, seconds=IDLE_SECONDS)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=IDLE_SECONDS)
     else:
-        clear_idle(DISPATCH_DEFINITION)
+        clear_idle(JobKind.PRINTING_DISPATCH)
     ctx.update(
         result={
             "dispatched": dispatched,
@@ -133,10 +132,10 @@ def scheduler_snapshot() -> dict[str, object]:
     from app.modules.work import bound
 
     with get_session_factory().scoped_session() as session:
-        cursor = session.get(ReconcileCursor, DISPATCH_DEFINITION)
+        cursor = session.get(ReconcileCursor, JobKind.PRINTING_DISPATCH)
         latest = session.exec(
             select(Job)
-            .where(Job.kind == DISPATCH_DEFINITION)
+            .where(Job.kind == JobKind.PRINTING_DISPATCH)
             .order_by(col(Job.updated_at).desc())
             .limit(1)
         ).first()
@@ -152,9 +151,9 @@ def scheduler_snapshot() -> dict[str, object]:
 def definitions() -> list[JobDefinition]:
     return [
         JobDefinition(
-            name=DISPATCH_DEFINITION,
-            lane=PRINTING,
-            steps=(Step(f"{DISPATCH_DEFINITION}.drain", _drain),),
+            name=JobKind.PRINTING_DISPATCH,
+            lane=LaneName.PRINTING,
+            steps=(Step(f"{JobKind.PRINTING_DISPATCH.value}.drain", _drain),),
             source=DispatchSource(),
             retry=lambda _session, _subject: True,
             label="Fleet dispatch",

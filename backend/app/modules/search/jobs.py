@@ -38,25 +38,26 @@ from app.core.time import ensure_utc
 from app.db.models import (
     EmbeddingSpace,
     IndexGeneration,
+    JobKind,
+    LaneName,
     SearchProjectionRequest,
     SubjectCaption,
     WorkPriority,
 )
 from app.db.session import get_session_factory
-from app.modules.search.job_names import (
-    CAPTION_DEFINITION,
-    CAPTION_QUEUE_DEFINITION,
-    EXPAND_DEFINITION,
-    GENERATION_DEFINITION,
-    INDEX_DEFINITION,
-    PROJECT_DEFINITION,
-    REPAIR_DEFINITION,
+from app.modules.search.subjects import (
+    caption_of,
     caption_subject,
+    generation_of,
     generation_subject,
 )
-from app.modules.search.job_names import subject_id as _id_of
-from app.modules.work.catalog import CAPTIONS, EXPANSION, SEARCH
-from app.modules.work.contracts import JobContext, JobDefinition, Step, WorkItem
+from app.modules.work.contracts import (
+    JobContext,
+    JobDefinition,
+    JobOutcome,
+    Step,
+    WorkItem,
+)
 from app.modules.work.sources import ScheduleSource, interval_cron
 
 logger = get_logger(__name__)
@@ -344,7 +345,7 @@ def _build(ctx: JobContext) -> None:
     projects one batch of library changes first: an upload made during an
     hours-long rebuild still becomes searchable.
     """
-    generation_id = _id_of(ctx.subject_key)
+    generation_id = generation_of(ctx.subject_key)
     while not ctx.cancelled():
         _admitted(_project_unit)
         settled = _generation_progress(ctx, generation_id)
@@ -353,7 +354,7 @@ def _build(ctx: JobContext) -> None:
             return
         if settled is not None:
             ctx.finish(
-                "failed",
+                JobOutcome.FAILED,
                 error=f"search_generation_{settled}",
                 retryable=False,
                 result={"state": settled, "generation_id": generation_id},
@@ -370,7 +371,7 @@ def _cancel_generation(session: Session, subject: str) -> None:
     from app.core.errors import OperationError
     from app.modules.search import generations
 
-    row = session.get(IndexGeneration, _id_of(subject))
+    row = session.get(IndexGeneration, generation_of(subject))
     if row is None or row.state != "building" or row.version_token is None:
         return
     try:
@@ -497,7 +498,7 @@ def _caption(ctx: JobContext) -> None:
     def unit() -> bool:
         captioned.append(
             CaptionProcessor(get_session_factory()).work_on(
-                _id_of(ctx.subject_key), job_id=ctx.job_id
+                caption_of(ctx.subject_key), job_id=ctx.job_id
             )
         )
         return True
@@ -505,24 +506,24 @@ def _caption(ctx: JobContext) -> None:
     if _admitted_soon(ctx, unit, patience=_CAPTION_YIELD_SECONDS) is None:
         # Maintenance holds the vault, or a long user write outlasted the
         # wait; the caption stays due and the next pass starts a new attempt.
-        ctx.finish("failed", error="caption_deferred", retryable=True)
+        ctx.finish(JobOutcome.FAILED, error="caption_deferred", retryable=True)
         return
     outcome = captioned[0]
     if outcome.error is not None:
         ctx.finish(
-            "failed",
+            JobOutcome.FAILED,
             error=outcome.error,
             retryable=outcome.retry,
-            result={"caption_id": _id_of(ctx.subject_key)},
+            result={"caption_id": caption_of(ctx.subject_key)},
         )
         return
-    ctx.update(result={"caption_id": _id_of(ctx.subject_key), **outcome.result})
+    ctx.update(result={"caption_id": caption_of(ctx.subject_key), **outcome.result})
 
 
 def _cancel_caption(session: Session, subject: str) -> None:
     from app.modules.search.caption_worker import withdraw
 
-    withdraw(session, _id_of(subject))
+    withdraw(session, caption_of(subject))
 
 
 class CaptionQueueSource:
@@ -552,7 +553,7 @@ def _queue_captions(ctx: JobContext) -> None:
     queued = counted[0] if counted else 0
     ctx.update(result={"queued": queued})
     if queued:
-        ctx.nudge(CAPTION_DEFINITION)
+        ctx.nudge(JobKind.SEARCH_CAPTION)
 
 
 # --- search.expand -----------------------------------------------------------
@@ -583,18 +584,18 @@ def definitions() -> list[JobDefinition]:
     # ``mutating=False`` throughout: every unit admits itself (``_admitted``).
     return [
         JobDefinition(
-            name=PROJECT_DEFINITION,
-            lane=SEARCH,
-            steps=(Step(f"{PROJECT_DEFINITION}.drain", _project),),
+            name=JobKind.SEARCH_PROJECT,
+            lane=LaneName.SEARCH,
+            steps=(Step(f"{JobKind.SEARCH_PROJECT.value}.drain", _project),),
             source=ProjectionSource(),
-            completion_nudges=(PROJECT_DEFINITION, INDEX_DEFINITION),
+            completion_nudges=(JobKind.SEARCH_PROJECT, JobKind.SEARCH_INDEX),
             mutating=False,
             label="Search projection",
         ),
         JobDefinition(
-            name=GENERATION_DEFINITION,
-            lane=SEARCH,
-            steps=(Step(f"{GENERATION_DEFINITION}.build", _build),),
+            name=JobKind.SEARCH_GENERATION,
+            lane=LaneName.SEARCH,
+            steps=(Step(f"{JobKind.SEARCH_GENERATION.value}.build", _build),),
             source=GenerationSource(),
             cancel=_cancel_generation,
             retry=lambda _session, _subject: False,
@@ -602,49 +603,51 @@ def definitions() -> list[JobDefinition]:
             label="Search index builds",
         ),
         JobDefinition(
-            name=INDEX_DEFINITION,
-            lane=SEARCH,
-            steps=(Step(f"{INDEX_DEFINITION}.drain", _index),),
+            name=JobKind.SEARCH_INDEX,
+            lane=LaneName.SEARCH,
+            steps=(Step(f"{JobKind.SEARCH_INDEX.value}.drain", _index),),
             source=IndexSource(),
-            completion_nudges=(INDEX_DEFINITION,),
+            completion_nudges=(JobKind.SEARCH_INDEX,),
             mutating=False,
             label="Search indexing",
         ),
         JobDefinition(
-            name=REPAIR_DEFINITION,
-            lane=SEARCH,
-            steps=(Step(f"{REPAIR_DEFINITION}.run", _repair_step),),
-            source=ScheduleSource(REPAIR_DEFINITION, _repair_cron),
-            completion_nudges=(PROJECT_DEFINITION, INDEX_DEFINITION),
+            name=JobKind.SEARCH_REPAIR,
+            lane=LaneName.SEARCH,
+            steps=(Step(f"{JobKind.SEARCH_REPAIR.value}.run", _repair_step),),
+            source=ScheduleSource(JobKind.SEARCH_REPAIR, _repair_cron),
+            completion_nudges=(JobKind.SEARCH_PROJECT, JobKind.SEARCH_INDEX),
             mutating=False,
             label="Search repair",
         ),
         JobDefinition(
-            name=CAPTION_QUEUE_DEFINITION,
-            lane=CAPTIONS,
-            steps=(Step(f"{CAPTION_QUEUE_DEFINITION}.sweep", _queue_captions),),
+            name=JobKind.SEARCH_CAPTION_QUEUE,
+            lane=LaneName.CAPTIONS,
+            steps=(
+                Step(f"{JobKind.SEARCH_CAPTION_QUEUE.value}.sweep", _queue_captions),
+            ),
             source=CaptionQueueSource(),
             mutating=False,
             label="Caption queue",
         ),
         JobDefinition(
-            name=CAPTION_DEFINITION,
-            lane=CAPTIONS,
-            steps=(Step(f"{CAPTION_DEFINITION}.caption", _caption),),
+            name=JobKind.SEARCH_CAPTION,
+            lane=LaneName.CAPTIONS,
+            steps=(Step(f"{JobKind.SEARCH_CAPTION.value}.caption", _caption),),
             source=CaptionSource(),
             cancel=_cancel_caption,
             # A failed attempt comes back through the source after its backoff.
             retry=lambda _session, _subject: False,
-            completion_nudges=(CAPTION_DEFINITION,),
+            completion_nudges=(JobKind.SEARCH_CAPTION,),
             mutating=False,
             label="Captions",
         ),
         JobDefinition(
-            name=EXPAND_DEFINITION,
-            lane=EXPANSION,
-            steps=(Step(f"{EXPAND_DEFINITION}.drain", _expand),),
+            name=JobKind.SEARCH_EXPAND,
+            lane=LaneName.EXPANSION,
+            steps=(Step(f"{JobKind.SEARCH_EXPAND.value}.drain", _expand),),
             source=ExpansionSource(),
-            completion_nudges=(EXPAND_DEFINITION,),
+            completion_nudges=(JobKind.SEARCH_EXPAND,),
             mutating=False,
             label="Search expansion",
         ),

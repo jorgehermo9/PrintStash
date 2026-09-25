@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from sqlmodel import select
 
-from app.db.models import BackupRun, Job, JobState, SystemConfig
+from app.db.models import BackupRun, Job, JobKind, JobState, SystemConfig
 from app.modules.backups import jobs as backup_jobs
 from app.modules.backups.backup_destination import BackupTrigger
 from app.modules.work import service as work_service
@@ -33,12 +33,12 @@ def _manual_backup(env: BackupEnv, engine: InlineJobEngine) -> str:
     with env.new_session() as session:
         job_id = work_service.request(
             session,
-            definition=backup_jobs.CREATE_DEFINITION,
+            definition=JobKind.BACKUPS_CREATE,
             subject_key="job/manual-backup",
             owner_user_id=None,
         )
         session.commit()
-    nudge(backup_jobs.CREATE_DEFINITION)
+    nudge(JobKind.BACKUPS_CREATE)
     engine.drain()
     return job_id
 
@@ -88,7 +88,7 @@ class TestCreate:
 
 class TestAutomatic:
     def _run(self, engine: InlineJobEngine) -> None:
-        nudge(backup_jobs.AUTOMATIC_DEFINITION)
+        nudge(JobKind.BACKUPS_AUTOMATIC)
         engine.drain()
 
     def test_archives_with_the_automatic_trigger_when_due(
@@ -148,7 +148,7 @@ class TestAutomatic:
         with backup_env.new_session() as session:
             assert (
                 session.exec(
-                    select(Job).where(Job.kind == backup_jobs.AUTOMATIC_DEFINITION)
+                    select(Job).where(Job.kind == JobKind.BACKUPS_AUTOMATIC)
                 ).all()
                 == []
             )
@@ -175,17 +175,15 @@ class TestAutomatic:
         with backup_env.new_session() as session:
             config = session.get(SystemConfig, 1)
             job = session.exec(
-                select(Job).where(Job.kind == backup_jobs.AUTOMATIC_DEFINITION)
+                select(Job).where(Job.kind == JobKind.BACKUPS_AUTOMATIC)
             ).one()
         assert config is not None and config.automatic_backup_last_attempt_at
         assert job.state == JobState.FAILED
 
 
-CREATE = next(
-    d for d in backup_jobs.definitions() if d.name == backup_jobs.CREATE_DEFINITION
-)
+CREATE = next(d for d in backup_jobs.definitions() if d.name == JobKind.BACKUPS_CREATE)
 RETRY = next(
-    d for d in backup_jobs.definitions() if d.name == backup_jobs.RETRY_DEFINITION
+    d for d in backup_jobs.definitions() if d.name == JobKind.BACKUPS_RETRY_DESTINATION
 )
 
 
@@ -204,7 +202,7 @@ class TestCreateHooks:
         from app.db.models import BackupDestinationResult
         from tests.factories import build_backup_destination_result, build_backup_run
 
-        job = make_job(kind=backup_jobs.CREATE_DEFINITION, subject="backup/manual")
+        job = make_job(kind=JobKind.BACKUPS_CREATE, subject="backup/manual")
         with backup_env.new_session() as session:
             run = build_backup_run(session, job_id=job.id, outcome="running")
             result = build_backup_destination_result(session, run, outcome="publishing")
@@ -226,7 +224,7 @@ class TestCreateHooks:
         from tests.factories import build_backup_run
 
         job = make_job(
-            kind=backup_jobs.CREATE_DEFINITION,
+            kind=JobKind.BACKUPS_CREATE,
             subject="backup/manual",
             state=JobState.RUNNING,
             attempts=1,
@@ -268,7 +266,10 @@ class TestRetryDestination:
 
         status = jobs.get(attempt_id)
         assert status is not None
-        assert (status.kind, status.state) == (backup_jobs.RETRY_DEFINITION, "queued")
+        assert (status.kind, status.state) == (
+            JobKind.BACKUPS_RETRY_DESTINATION,
+            "queued",
+        )
         assert _outcome(backup_env, BackupRetryAttempt, attempt_id) == "queued"
 
     def test_a_destination_being_retried_is_refused(

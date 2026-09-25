@@ -64,9 +64,7 @@ class TestBackupRestore:
             f"/api/v1/backups/{backup['backup_id']}/restore", headers=headers
         )
         assert restored.status_code == 200, restored.text
-        downloaded = await api.get(
-            f"/api/v1/files/{file_id}/download", headers=headers
-        )
+        downloaded = await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
         assert downloaded.status_code == 200, downloaded.text
         assert downloaded.content == original
 

@@ -36,14 +36,19 @@ from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.modules.work.catalog import RECONCILE_DEFINITION, WorkCatalog
+from app.db.models import JobKind, LaneName
+from app.modules.work.catalog import WorkCatalog
 from app.modules.work.contracts import (
     ActiveExecution,
+    Deduplicated,
     EngineEvidence,
     EngineStatus,
+    ExecutionKind,
     JobEngine,
+    JobSubmission,
     Lane,
     LaneDepth,
+    PassSubmission,
     RetryPolicy,
     Submission,
     SubmitOutcome,
@@ -178,7 +183,7 @@ class DbosJobEngine(JobEngine):
         self.app_version = app_version or settings.app_version
         self.polling = polling_interval_seconds
         self.tick_seconds = tick_seconds or settings.jobs_reconcile_interval_seconds
-        self._queues: dict[str, Queue] = {}
+        self._queues: dict[LaneName, Queue] = {}
         self._launched = False
         self._lock = threading.Lock()
 
@@ -218,7 +223,7 @@ class DbosJobEngine(JobEngine):
         def reconcile_workflow(source: str) -> None:
             from app.modules.work.reconciler import execute_pass
 
-            execute_pass(source, runner)
+            execute_pass(JobKind(source), runner)
 
         @DBOS.scheduled(_tick_cron(self.tick_seconds))
         @DBOS.workflow(name=TICK_WORKFLOW)
@@ -231,7 +236,7 @@ class DbosJobEngine(JobEngine):
         self._job_workflow = job_workflow
         self._reconcile_workflow = reconcile_workflow
 
-    def launch(self, *, listen_lanes: Sequence[str] | None) -> None:
+    def launch(self, *, listen_lanes: Sequence[LaneName] | None) -> None:
         with self._lock:
             if self._launched:
                 return
@@ -239,7 +244,7 @@ class DbosJobEngine(JobEngine):
             DBOS(config=self._config())
             self._register_workflows()
             if listen_lanes is not None:
-                DBOS.listen_queues(list(listen_lanes))
+                DBOS.listen_queues([lane.value for lane in listen_lanes])
             DBOS.launch()
             for lane in self.catalog.lanes.values():
                 self._queues[lane.name] = self._register_queue(lane)
@@ -268,7 +273,7 @@ class DbosJobEngine(JobEngine):
             options["limiter"] = {"limit": limit, "period": period}
         # The application database owns concurrency (including overrides), so
         # every launch writes it: the engine's copy is disposable.
-        return DBOS.register_queue(lane.name, **options)
+        return DBOS.register_queue(lane.name.value, **options)
 
     def shutdown(self) -> None:
         with self._lock:
@@ -288,16 +293,17 @@ class DbosJobEngine(JobEngine):
         if DBOS.get_workflow_status(submission.execution_id) is not None:
             return SubmitOutcome.EXISTING
         options: dict[str, Any] = {"priority": PRIORITY_RANK[submission.priority]}
-        if submission.dedupe_key is not None:
-            options["deduplication_id"] = submission.dedupe_key
-        if submission.partition_key is not None:
-            options["queue_partition_key"] = submission.partition_key
+        if isinstance(submission, JobSubmission):
+            if isinstance(submission.routing, Deduplicated):
+                options["deduplication_id"] = submission.routing.key
+            else:
+                options["queue_partition_key"] = submission.routing.key
         if submission.delay_seconds:
             options["delay_seconds"] = submission.delay_seconds
         try:
             with SetWorkflowID(submission.execution_id), SetEnqueueOptions(**options):
-                if submission.definition == RECONCILE_DEFINITION:
-                    queue.enqueue(self._reconcile_workflow, submission.subject_key)
+                if isinstance(submission, PassSubmission):
+                    queue.enqueue(self._reconcile_workflow, submission.source.value)
                 else:
                     queue.enqueue(
                         self._job_workflow, submission.job_id, submission.attempt
@@ -315,7 +321,7 @@ class DbosJobEngine(JobEngine):
         return _detached(self._evidence, execution_ids)
 
     def _evidence(self, execution_ids: Sequence[str]) -> dict[str, EngineEvidence]:
-        found = {execution_id: EngineEvidence(None) for execution_id in execution_ids}
+        found: dict[str, EngineEvidence] = {}
         ids = list(execution_ids)
         for offset in range(0, len(ids), _PRUNE_BATCH):
             chunk = ids[offset : offset + _PRUNE_BATCH]
@@ -323,7 +329,7 @@ class DbosJobEngine(JobEngine):
                 workflow_ids=chunk, load_input=False, load_output=False
             ):
                 found[status.workflow_id] = EngineEvidence(
-                    _STATUS.get(str(status.status)),
+                    _STATUS[str(status.status)],
                     status.app_version,
                     status.executor_id,
                 )
@@ -336,12 +342,9 @@ class DbosJobEngine(JobEngine):
         return [
             ActiveExecution(
                 execution_id=status.workflow_id,
-                # A pass is named as the port names it, like the inline engine.
-                definition=(
-                    RECONCILE_DEFINITION
-                    if status.name == RECONCILE_WORKFLOW
-                    else str(status.name)
-                ),
+                kind=ExecutionKind.PASS
+                if status.name == RECONCILE_WORKFLOW
+                else ExecutionKind.JOB,
                 status=_STATUS[str(status.status)],
                 app_version=status.app_version,
                 executor_id=status.executor_id,
@@ -354,13 +357,13 @@ class DbosJobEngine(JobEngine):
             )
         ]
 
-    def lane_depth(self, lane: str) -> LaneDepth:
+    def lane_depth(self, lane: LaneName) -> LaneDepth:
         return _detached(self._lane_depth, lane)
 
-    def _lane_depth(self, lane: str) -> LaneDepth:
+    def _lane_depth(self, lane: LaneName) -> LaneDepth:
         queued = running = 0
         for status in DBOS.list_workflows(
-            queue_name=lane, status=_ACTIVE, load_input=False, load_output=False
+            queue_name=lane.value, status=_ACTIVE, load_input=False, load_output=False
         ):
             if str(status.status) == "PENDING":
                 running += 1
@@ -368,10 +371,8 @@ class DbosJobEngine(JobEngine):
                 queued += 1
         return LaneDepth(queued=queued, running=running)
 
-    def set_lane_concurrency(self, lane: str, concurrency: int) -> None:
-        queue = self._queues.get(lane)
-        if queue is None:
-            return
+    def set_lane_concurrency(self, lane: LaneName, concurrency: int) -> None:
+        queue = self._queues[lane]
         definition = self.catalog.lanes[lane]
         if definition.partitioned:
             queue.set_partition_concurrency(concurrency)

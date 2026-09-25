@@ -28,10 +28,10 @@ from typing import Any
 from sqlmodel import SQLModel
 
 from app.db import session as db_session_module
-from app.db.models import Job, WorkPriority
+from app.db.models import Job, JobKind, JobState, LaneName, WorkPriority
 from app.db.session import get_session_factory, override_session_factory
 from app.modules.work import catalog as catalog_module
-from app.modules.work.catalog import MAINTENANCE, RECONCILE, WorkCatalog
+from app.modules.work.catalog import WorkCatalog, default_lanes
 from app.modules.work.contracts import (
     JobContext,
     JobDefinition,
@@ -43,15 +43,15 @@ from app.modules.work.contracts import (
 )
 from app.modules.work.jobs import TERMINAL_STATES, jobs
 
-FAST = "contract.fast"
-SERIAL = MAINTENANCE  # a global lane, concurrency one
+# The contract catalog borrows real lanes and kinds; it holds only these four
+# definitions, so nothing else answers to those names.
+FAST = LaneName.DERIVE_LIGHT  # a per-worker lane, concurrency four
+SERIAL = LaneName.MAINTENANCE  # a global lane, concurrency one
 
-PLAIN = "contract.plain"
-RETRYING = "contract.retrying"
-SERIAL_JOB = "contract.serial"
-DISCOVERED = "contract.discovered"
-
-_TERMINAL = {state.value for state in TERMINAL_STATES}
+PLAIN = JobKind.INGESTION_UPLOAD
+RETRYING = JobKind.INGESTION_URL
+SERIAL_JOB = JobKind.BACKUPS_CREATE
+DISCOVERED = JobKind.SOURCES_SCAN
 
 
 class Flaky(Exception):
@@ -127,9 +127,9 @@ def _drop_discovered(_session, subject: str) -> None:
 
 def contract_catalog() -> WorkCatalog:
     lanes = {
+        **default_lanes(),
         FAST: Lane(FAST, 4),
         SERIAL: Lane(SERIAL, 1, scope="global"),
-        RECONCILE: Lane(RECONCILE, 4, scope="global"),
     }
     first = Step(f"{PLAIN}.first", _first)
     return WorkCatalog(
@@ -138,6 +138,7 @@ def contract_catalog() -> WorkCatalog:
                 name=PLAIN,
                 lane=FAST,
                 steps=(first, Step(f"{PLAIN}.second", _second)),
+                label="Plain",
             ),
             JobDefinition(
                 name=RETRYING,
@@ -151,11 +152,13 @@ def contract_catalog() -> WorkCatalog:
                         ),
                     ),
                 ),
+                label="Retrying",
             ),
             JobDefinition(
                 name=SERIAL_JOB,
                 lane=SERIAL,
                 steps=(Step(f"{SERIAL_JOB}.first", _first),),
+                label="Serial",
             ),
             JobDefinition(
                 name=DISCOVERED,
@@ -163,6 +166,7 @@ def contract_catalog() -> WorkCatalog:
                 steps=(Step(f"{DISCOVERED}.first", _found),),
                 source=_DiscoverySource(),
                 cancel=_drop_discovered,
+                label="Discovered",
             ),
         ],
         lanes=lanes,
@@ -187,7 +191,9 @@ class Harness:
     def wait_for(self, predicate: Callable[[], bool], timeout: float = 30.0) -> None:
         raise NotImplementedError
 
-    def relaunch(self, *, app_version: str, listen_lanes: list[str] | None) -> None:
+    def relaunch(
+        self, *, app_version: str, listen_lanes: list[LaneName] | None
+    ) -> None:
         raise NotImplementedError
 
     def started(self, subject: str) -> None:
@@ -201,7 +207,7 @@ class Harness:
 
     def job(
         self,
-        definition: str,
+        definition: JobKind,
         subject: str,
         *,
         priority: WorkPriority = WorkPriority.INTERACTIVE,
@@ -216,7 +222,7 @@ class Harness:
             priority=priority,
         )
 
-    def state(self, job_id: str) -> str:
+    def state(self, job_id: str) -> JobState:
         status = jobs.get(job_id)
         assert status is not None
         return status.state
@@ -226,7 +232,7 @@ class Harness:
 
         with get_session_factory().scoped_session() as session:
             return not session.exec(
-                select(Job.id).where(col(Job.state).not_in(list(_TERMINAL)))
+                select(Job.id).where(col(Job.state).not_in(list(TERMINAL_STATES)))
             ).first()
 
 
@@ -254,7 +260,9 @@ class InlineHarness(Harness):
         self.engine.drain()  # type: ignore[attr-defined]
         assert predicate()
 
-    def relaunch(self, *, app_version: str, listen_lanes: list[str] | None) -> None:
+    def relaunch(
+        self, *, app_version: str, listen_lanes: list[LaneName] | None
+    ) -> None:
         self.engine.app_version = app_version  # type: ignore[attr-defined]
         self.engine.launch(listen_lanes=listen_lanes)
 
@@ -299,7 +307,9 @@ class DbosHarness(Harness):
             assert time.monotonic() < deadline, "engine did not converge"
             time.sleep(0.05)
 
-    def relaunch(self, *, app_version: str, listen_lanes: list[str] | None) -> None:
+    def relaunch(
+        self, *, app_version: str, listen_lanes: list[LaneName] | None
+    ) -> None:
         self.engine.shutdown()
         self.engine = self._build(app_version=app_version)
         self.engine.launch(listen_lanes=listen_lanes)

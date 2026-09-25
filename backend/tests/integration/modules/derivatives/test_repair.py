@@ -13,9 +13,14 @@ import pytest
 from sqlmodel import Session, select
 
 import app.modules.work as work
-from app.db.models import ArtifactDerivative, DerivativeState, Model
+from app.db.models import (
+    ArtifactDerivative,
+    DerivativeKind,
+    DerivativeState,
+    JobKind,
+    Model,
+)
 from app.modules.derivatives import repair
-from app.modules.derivatives.kinds import MESH_DEFINITION, METADATA, THUMBNAIL
 from tests.factories import content
 
 
@@ -89,13 +94,13 @@ class TestRequest:
         self, db_session: Session, make_model, make_file, make_derivative, nudged
     ) -> None:
         artifact = make_file(make_model(), filename="part.stl")
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL)
+        make_derivative(artifact, DerivativeKind.METADATA)
+        make_derivative(artifact, DerivativeKind.THUMBNAIL)
 
-        assert repair.request(db_session, artifact, [THUMBNAIL]) is True
+        assert repair.request(db_session, artifact, [DerivativeKind.THUMBNAIL]) is True
 
-        assert _kinds(db_session, artifact.id) == {METADATA}
-        assert nudged == [MESH_DEFINITION]
+        assert _kinds(db_session, artifact.id) == {DerivativeKind.METADATA}
+        assert nudged == [JobKind.DERIVATIVES_MESH]
 
     def test_a_kind_no_group_produces_for_the_artifact_nudges_nothing(
         self, db_session: Session, make_model, make_file, nudged
@@ -111,17 +116,19 @@ class TestNow:
         self, db_session: Session, stored, make_derivative
     ) -> None:
         artifact = stored("cube.stl", content.binary_stl())
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL, storage_key="thumbs/missing.webp")
+        make_derivative(artifact, DerivativeKind.METADATA)
+        make_derivative(
+            artifact, DerivativeKind.THUMBNAIL, storage_key="thumbs/missing.webp"
+        )
 
-        outcome = repair.now(artifact.id, [THUMBNAIL])
+        outcome = repair.now(artifact.id, [DerivativeKind.THUMBNAIL])
 
-        assert outcome == {THUMBNAIL: "ready"}
+        assert outcome == {DerivativeKind.THUMBNAIL: "ready"}
         db_session.expire_all()
         row = db_session.exec(
             select(ArtifactDerivative).where(
                 ArtifactDerivative.file_id == artifact.id,
-                ArtifactDerivative.kind == THUMBNAIL,
+                ArtifactDerivative.kind == DerivativeKind.THUMBNAIL,
             )
         ).one()
         assert row.state == DerivativeState.READY
@@ -132,12 +139,12 @@ class TestNow:
         # one of a never-derived Artifact yields the other as well.
         artifact = stored("plate.gcode", content.gcode(marker="repair"))
 
-        assert repair.now(artifact.id, [METADATA]) == {
-            METADATA: "ready",
-            THUMBNAIL: "skipped",
+        assert repair.now(artifact.id, [DerivativeKind.METADATA]) == {
+            DerivativeKind.METADATA: "ready",
+            DerivativeKind.THUMBNAIL: "skipped",
         }
 
     def test_a_trashed_artifact_is_not_repaired(self, make_model, make_file) -> None:
         artifact = make_file(make_model(), filename="part.stl", trashed=True)
 
-        assert repair.now(artifact.id, [THUMBNAIL]) == {}
+        assert repair.now(artifact.id, [DerivativeKind.THUMBNAIL]) == {}

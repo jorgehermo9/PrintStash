@@ -44,7 +44,7 @@ export function taskStatusOf(state: JobState): TaskStatus {
 }
 
 function titleForJob(job: JobStatus): MessageDescriptor | string {
-  if (!job.kind || job.kind.startsWith("ingestion.")) {
+  if (job.kind.startsWith("ingestion.")) {
     return uiMessage("Import");
   }
   return job.label ?? job.kind;
@@ -106,7 +106,19 @@ let tasks: TaskItem[] = loadTasks();
 const dismissedJobIds = loadDismissedJobIds();
 const emittedTerminalJobIds = loadIdSet(EMITTED_TERMINALS_KEY);
 const terminalJobs = new Map<string, JobStatus>();
-const terminalWaiters = new Map<string, Set<(job: JobStatus) => void>>();
+interface TerminalWaiter {
+  resolve: (job: JobStatus) => void;
+  reject: (error: Error) => void;
+}
+const terminalWaiters = new Map<string, Set<TerminalWaiter>>();
+
+/** The server no longer reports a Job this browser was waiting on. */
+export class JobStatusUnavailableError extends Error {
+  constructor(readonly jobId: string) {
+    super("job_status_unavailable");
+    this.name = "JobStatusUnavailableError";
+  }
+}
 let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncSubscribers = 0;
@@ -369,12 +381,20 @@ function isActive(job: JobStatus): boolean {
 function publishTerminal(job: JobStatus): void {
   if (!isTerminal(job)) return;
   terminalJobs.set(job.job_id, job);
-  for (const resolve of terminalWaiters.get(job.job_id) ?? []) resolve(job);
+  for (const waiter of terminalWaiters.get(job.job_id) ?? []) waiter.resolve(job);
   terminalWaiters.delete(job.job_id);
   if (emittedTerminalJobIds.has(job.job_id) || !isBrowser()) return;
   emittedTerminalJobIds.add(job.job_id);
   persistIdSet(EMITTED_TERMINALS_KEY, emittedTerminalJobIds);
   window.dispatchEvent(new CustomEvent<JobStatus>(TERMINAL_EVENT, { detail: job }));
+}
+
+/** A Job that vanished has no status to report: its waiters fail, nobody is told it completed. */
+function rejectLostJob(jobId: string): void {
+  for (const waiter of terminalWaiters.get(jobId) ?? []) {
+    waiter.reject(new JobStatusUnavailableError(jobId));
+  }
+  terminalWaiters.delete(jobId);
 }
 
 function applyJob(job: JobStatus): void {
@@ -493,10 +513,19 @@ export function waitForImportJob(
   if (known) return Promise.resolve(known);
   return new Promise((resolve, reject) => {
     const stopSync = startImportJobSync();
-    const waiter = (job: JobStatus) => {
+    const settle = () => {
       clearTimeout(timeout);
       stopSync();
-      resolve(job);
+    };
+    const waiter: TerminalWaiter = {
+      resolve: (job) => {
+        settle();
+        resolve(job);
+      },
+      reject: (error) => {
+        settle();
+        reject(error);
+      },
     };
     const timeout = setTimeout(() => {
       terminalWaiters.get(jobId)?.delete(waiter);
@@ -571,19 +600,7 @@ export async function syncImportJobs(): Promise<boolean> {
       detail: unavailableDetail,
       retryable: true,
     });
-    for (const jobId of missingJobIds) {
-      publishTerminal({
-        job_id: jobId,
-        state: "failed",
-        model_id: null,
-        file_id: null,
-        error: "job_status_unavailable",
-        retryable: true,
-        started_at: null,
-        finished_at: null,
-        updated_at: new Date().toISOString(),
-      });
-    }
+    for (const jobId of missingJobIds) rejectLostJob(jobId);
   }
   return jobs.some(isActive);
 }

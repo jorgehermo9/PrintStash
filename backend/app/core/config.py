@@ -7,6 +7,7 @@ runtime overrides (DB-backed) on top. See ADR-0002.
 from __future__ import annotations
 
 import asyncio
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -42,6 +43,18 @@ DEFAULT_JWT_SECRET = "changeme_jwt_secret_please_change"
 # ceiling still bounds what a lying `content-length` or an endless stream can
 # make the process buffer.
 MULTIPART_OVERHEAD_BYTES = 16 * 1024 * 1024
+
+
+class ProcessRole(StrEnum):
+    """What one process of a deployment does (``VAULT_PROCESS_ROLE``).
+
+    ``all`` serves HTTP and runs every Job; ``api`` is the HTTP process of a
+    deployment with workers; ``worker`` runs Jobs and serves nothing.
+    """
+
+    ALL = "all"
+    API = "api"
+    WORKER = "worker"
 
 
 class Settings(BaseSettings):
@@ -162,9 +175,9 @@ class Settings(BaseSettings):
     # Background work (see docs/architecture/background-work.md). The reconciler
     # tick is a safety net: hot paths and job completions nudge the one source
     # that has new work, so the interval only bounds how long a lost nudge waits.
-    process_role: Literal["all", "api", "worker"] = "all"
+    process_role: ProcessRole = ProcessRole.ALL
     api_runs_jobs: bool = True
-    executor_id: str = ""
+    executor_id: str | None = Field(default=None, min_length=1, max_length=128)
     shared_storage: bool = False
     jobs_reconcile_interval_seconds: int = Field(default=300, ge=10, le=86400)
     jobs_reconcile_batch: int = Field(default=500, ge=1, le=10000)
@@ -186,9 +199,9 @@ class Settings(BaseSettings):
     derivative_backoff_seconds: int = Field(default=30, ge=1, le=86400)
     fence_heartbeat_seconds: int = Field(default=15, ge=1, le=3600)
     fence_ttl_seconds: int = Field(default=60, ge=3, le=86400)
-    # Lane concurrency. ``derive_native`` 0 derives it from the native budget.
+    # Lane concurrency. Unset ``derive_native`` follows ``max_render_jobs``.
     jobs_ingest_concurrency: int = Field(default=2, ge=1, le=64)
-    jobs_derive_native_concurrency: int = Field(default=0, ge=0, le=64)
+    jobs_derive_native_concurrency: int | None = Field(default=None, ge=1, le=64)
     jobs_derive_light_concurrency: int = Field(default=4, ge=1, le=64)
     jobs_similarity_concurrency: int = Field(default=1, ge=1, le=16)
     jobs_network_concurrency: int = Field(default=4, ge=1, le=64)

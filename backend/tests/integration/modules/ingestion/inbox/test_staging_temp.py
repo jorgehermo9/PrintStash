@@ -27,7 +27,12 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.core.time import utcnow
-from app.db.models import CaptureUploadSlot, CaptureUploadSlotState, StagingLease
+from app.db.models import (
+    CaptureUploadSlot,
+    CaptureUploadSlotState,
+    JobKind,
+    StagingLease,
+)
 from app.modules.ingestion import inbox, staging_leases
 from app.schemas.inbox import CaptureUploadSlotsCreate
 from tests.factories import build_job, build_user
@@ -320,7 +325,7 @@ class TestCaptureStagingLeaseEdges:
         row, slots = inbox.create_capture_upload_slots(
             db_session, owner, _payload(b"payload")
         )
-        job = build_job(db_session, kind="ingestion.inbox_import", owner=owner)
+        job = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=owner)
         staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=job.id
         )

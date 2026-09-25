@@ -17,21 +17,20 @@ from sqlmodel import Session, col, select
 from app.core.logging import get_logger
 from app.core.time import ensure_utc
 from app.db.models import (
+    JobKind,
+    LaneName,
     VaultAuditPolicy,
     VaultAuditRun,
     VaultAuditRunState,
     WorkPriority,
 )
 from app.db.session import get_session_factory
-from app.modules.work.catalog import MAINTENANCE
 from app.modules.work.contracts import JobContext, JobDefinition, Step, WorkItem
 
 from . import vault_audit, vault_audit_policy
 from .vault_audit_observability import prune_details, refresh_metrics
 
 logger = get_logger(__name__)
-
-DEFINITION = "administration.audit"
 
 
 def subject_key(run_id: int) -> str:
@@ -132,9 +131,9 @@ def _on_failure(session: Session, subject: str, reason: str) -> None:
 def definitions() -> list[JobDefinition]:
     return [
         JobDefinition(
-            name=DEFINITION,
-            lane=MAINTENANCE,
-            steps=(Step(f"{DEFINITION}.execute", _execute),),
+            name=JobKind.ADMINISTRATION_AUDIT,
+            lane=LaneName.MAINTENANCE,
+            steps=(Step(f"{JobKind.ADMINISTRATION_AUDIT.value}.execute", _execute),),
             source=AuditSource(),
             cancel=_cancel,
             on_failure=_on_failure,

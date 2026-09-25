@@ -19,12 +19,13 @@ import app.modules.work.service as service
 from app.core.errors import ErrorKind, OperationError
 from app.db.models import (
     ArtifactDerivative,
+    DerivativeKind,
     DerivativeState,
     Job,
+    JobKind,
     JobState,
     WorkPriority,
 )
-from app.modules.derivatives.kinds import MESH_DEFINITION, THUMBNAIL
 from app.modules.derivatives.source import subject_key
 from app.modules.work.jobs import status_of
 from app.modules.work.submission import execution_id
@@ -72,7 +73,7 @@ class TestRequest:
     ) -> None:
         job_id = service.request(
             db_session,
-            definition="sources.scan",
+            definition=JobKind.SOURCES_SCAN,
             subject_key="library/1",
             owner_user_id=owner.id,
             priority=WorkPriority.BACKFILL,
@@ -93,7 +94,7 @@ class TestRequest:
         # The Job and the intent it describes commit together or not at all.
         job_id = service.request(
             db_session,
-            definition="sources.scan",
+            definition=JobKind.SOURCES_SCAN,
             subject_key="library/1",
             owner_user_id=None,
         )
@@ -121,7 +122,9 @@ class TestCancel:
     def test_withdraws_the_subjects_intent(
         self, db_session: Session, make_job, owner, mesh
     ) -> None:
-        job = make_job(kind=MESH_DEFINITION, subject=subject_key(mesh.id), owner=owner)
+        job = make_job(
+            kind=JobKind.DERIVATIVES_MESH, subject=subject_key(mesh.id), owner=owner
+        )
 
         status = service.cancel(job.id, actor=owner)
 
@@ -132,14 +135,14 @@ class TestCancel:
                 select(ArtifactDerivative).where(ArtifactDerivative.file_id == mesh.id)
             ).all()
         }
-        assert states[THUMBNAIL] == DerivativeState.CANCELLED
+        assert states[DerivativeKind.THUMBNAIL] == DerivativeState.CANCELLED
 
     def test_stops_the_attempt_the_engine_is_running(
         self, work_engine, make_job, owner
     ) -> None:
         from app.modules.work.submission import submit
 
-        job = make_job(kind="sources.scan", owner=owner)
+        job = make_job(kind=JobKind.SOURCES_SCAN, owner=owner)
         submit(job.id)
 
         service.cancel(job.id, actor=owner)
@@ -154,7 +157,7 @@ class TestCancel:
             raise AssertionError("nothing was submitted")
 
         monkeypatch.setattr(work_engine, "cancel", unexpected)
-        job = make_job(kind="sources.scan", owner=owner)
+        job = make_job(kind=JobKind.SOURCES_SCAN, owner=owner)
 
         service.cancel(job.id, actor=owner)
 
@@ -167,7 +170,7 @@ class TestCancel:
         # the engine still runs once it is reachable again.
         from app.modules.work.submission import submit
 
-        job = make_job(kind="sources.scan", owner=owner)
+        job = make_job(kind=JobKind.SOURCES_SCAN, owner=owner)
         submit(job.id)
 
         def unreachable(_execution_id):
@@ -203,26 +206,37 @@ class TestCancelQueued:
     def test_withdraws_every_queued_job_of_one_definition(
         self, db_session: Session, make_job, admin
     ) -> None:
-        queued = [make_job(kind="sources.scan") for _ in range(2)]
-        running = make_job(kind="sources.scan", state=JobState.RUNNING, attempts=1)
-        other = make_job(kind="backups.create")
+        queued = [make_job(kind=JobKind.SOURCES_SCAN) for _ in range(2)]
+        running = make_job(
+            kind=JobKind.SOURCES_SCAN, state=JobState.RUNNING, attempts=1
+        )
+        other = make_job(kind=JobKind.BACKUPS_CREATE)
 
-        assert service.cancel_queued("sources.scan", actor=admin) == 2
+        assert service.cancel_queued(JobKind.SOURCES_SCAN, actor=admin) == 2
 
         assert {_state(db_session, job.id) for job in queued} == {JobState.CANCELLED}
         assert _state(db_session, running.id) == JobState.RUNNING
         assert _state(db_session, other.id) == JobState.QUEUED
 
     def test_is_for_administrators_only(self, make_job, owner) -> None:
-        make_job(kind="sources.scan")
+        make_job(kind=JobKind.SOURCES_SCAN)
 
-        error = _refused(lambda: service.cancel_queued("sources.scan", actor=owner))
+        error = _refused(
+            lambda: service.cancel_queued(JobKind.SOURCES_SCAN, actor=owner)
+        )
 
         assert (error.code, error.kind) == ("admin_required", ErrorKind.FORBIDDEN)
 
-    def test_an_unknown_definition_is_refused(self, admin) -> None:
+    def test_a_definition_this_process_lacks_is_refused(
+        self, admin, work_engine
+    ) -> None:
+        from app.modules.work import catalog as catalog_module
+        from app.modules.work.catalog import WorkCatalog
+
+        catalog_module.bind(work_engine, WorkCatalog())
+
         with pytest.raises(LookupError):
-            service.cancel_queued("not.a.definition", actor=admin)
+            service.cancel_queued(JobKind.SEARCH_CAPTION, actor=admin)
 
 
 class TestSupersedeRestored:
@@ -230,7 +244,9 @@ class TestSupersedeRestored:
         self, db_session: Session, make_job
     ) -> None:
         # The archive captured its own backup Job mid-run.
-        snapshot = make_job(kind="backups.create", state=JobState.RUNNING, attempts=1)
+        snapshot = make_job(
+            kind=JobKind.BACKUPS_CREATE, state=JobState.RUNNING, attempts=1
+        )
 
         assert service.supersede_restored() == 1
 
@@ -242,7 +258,7 @@ class TestSupersedeRestored:
     def test_leaves_work_the_restore_still_owes(
         self, db_session: Session, make_job
     ) -> None:
-        scan = make_job(kind="sources.scan", state=JobState.RUNNING, attempts=1)
+        scan = make_job(kind=JobKind.SOURCES_SCAN, state=JobState.RUNNING, attempts=1)
 
         assert service.supersede_restored() == 0
 
@@ -251,7 +267,7 @@ class TestSupersedeRestored:
     def test_leaves_a_finished_backup_alone(
         self, db_session: Session, make_job
     ) -> None:
-        done = make_job(kind="backups.create", state=JobState.COMPLETED)
+        done = make_job(kind=JobKind.BACKUPS_CREATE, state=JobState.COMPLETED)
 
         assert service.supersede_restored() == 0
 
@@ -262,9 +278,11 @@ class TestRetry:
     def test_queues_the_same_job_again(
         self, db_session: Session, make_job, owner, mesh, make_derivative, nudged
     ) -> None:
-        make_derivative(mesh, THUMBNAIL, state=DerivativeState.FAILED, exhausted=True)
+        make_derivative(
+            mesh, DerivativeKind.THUMBNAIL, state=DerivativeState.FAILED, exhausted=True
+        )
         job = make_job(
-            kind=MESH_DEFINITION,
+            kind=JobKind.DERIVATIVES_MESH,
             subject=subject_key(mesh.id),
             owner=owner,
             state=JobState.FAILED,
@@ -278,14 +296,16 @@ class TestRetry:
         row = db_session.get(Job, job.id)
         assert row is not None
         assert (row.resubmits, row.finished_at) == (0, None)
-        assert nudged == [MESH_DEFINITION]
+        assert nudged == [JobKind.DERIVATIVES_MESH]
 
     def test_returns_the_subject_to_pending(
         self, db_session: Session, make_job, owner, mesh, make_derivative, nudged
     ) -> None:
-        make_derivative(mesh, THUMBNAIL, state=DerivativeState.FAILED, exhausted=True)
+        make_derivative(
+            mesh, DerivativeKind.THUMBNAIL, state=DerivativeState.FAILED, exhausted=True
+        )
         job = make_job(
-            kind=MESH_DEFINITION,
+            kind=JobKind.DERIVATIVES_MESH,
             subject=subject_key(mesh.id),
             owner=owner,
             state=JobState.FAILED,
@@ -304,7 +324,7 @@ class TestRetry:
         self, make_job, owner, mesh, nudged
     ) -> None:
         job = make_job(
-            kind=MESH_DEFINITION,
+            kind=JobKind.DERIVATIVES_MESH,
             subject=subject_key(mesh.id),
             owner=owner,
             state=JobState.CANCELLED,
@@ -331,9 +351,12 @@ class TestRetry:
         self, make_job, owner
     ) -> None:
         failed = make_job(
-            kind="sources.scan", subject="library/1", owner=owner, state=JobState.FAILED
+            kind=JobKind.SOURCES_SCAN,
+            subject="library/1",
+            owner=owner,
+            state=JobState.FAILED,
         )
-        make_job(kind="sources.scan", subject="library/1")
+        make_job(kind=JobKind.SOURCES_SCAN, subject="library/1")
 
         error = _refused(lambda: service.retry(failed.id, actor=owner))
 
@@ -344,7 +367,7 @@ class TestRetry:
     ) -> None:
         trashed = make_file(make_model(), filename="part.stl", trashed=True)
         job = make_job(
-            kind=MESH_DEFINITION,
+            kind=JobKind.DERIVATIVES_MESH,
             subject=subject_key(trashed.id),
             owner=owner,
             state=JobState.FAILED,

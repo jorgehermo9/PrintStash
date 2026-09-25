@@ -26,18 +26,36 @@ def read(session: Session, user: User) -> SearchStatus:
         enabled=settings.enabled, semantic_ready=False, legs=["lexical"], generations=[]
     )
     visible = visible_subjects(session, user)
-    owner_visible = exists(select(visible.c.id).where(
-        visible.c.kind == SearchProjectionRequest.source_kind,
-        visible.c.id == SearchProjectionRequest.source_id,
-    ))
-    dependency_visible = exists(select(SearchDependency.id).join(visible, and_(
-        visible.c.kind == SearchDependency.subject_type,
-        visible.c.id == SearchDependency.subject_id,
-    )).where(SearchDependency.source_kind == SearchProjectionRequest.source_kind,
-             SearchDependency.source_id == SearchProjectionRequest.source_id))
-    result.backlog = session.exec(select(SearchProjectionRequest.id).where(
-        or_(owner_visible, dependency_visible),
-    ).limit(1)).first() is not None
+    owner_visible = exists(
+        select(visible.c.id).where(
+            visible.c.kind == SearchProjectionRequest.source_kind,
+            visible.c.id == SearchProjectionRequest.source_id,
+        )
+    )
+    dependency_visible = exists(
+        select(SearchDependency.id)
+        .join(
+            visible,
+            and_(
+                visible.c.kind == SearchDependency.subject_type,
+                visible.c.id == SearchDependency.subject_id,
+            ),
+        )
+        .where(
+            SearchDependency.source_kind == SearchProjectionRequest.source_kind,
+            SearchDependency.source_id == SearchProjectionRequest.source_id,
+        )
+    )
+    result.backlog = (
+        session.exec(
+            select(SearchProjectionRequest.id)
+            .where(
+                or_(owner_visible, dependency_visible),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
     try:
         active = semantic.registry(session, settings)
     except (ValueError, TypeError):

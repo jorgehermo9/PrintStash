@@ -755,10 +755,9 @@ def make_user_search_preferences(db_session: Session) -> MakeUserSearchPreferenc
     return _bound(factories.build_user_search_preferences, db_session)
 
 
-
-
 @pytest.fixture
 def make_search_projection_request(db_session: Session) -> MakeSearchProjectionRequest:
     return _bound(factories.build_search_projection_request, db_session)
+
 
 __all__ += ["make_search_projection_request"]

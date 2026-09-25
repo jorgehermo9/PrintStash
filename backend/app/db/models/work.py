@@ -9,18 +9,20 @@ serialized: every attempt rebuilds what it needs from the subject row.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, Text, text
 from sqlmodel import Field
 
+from app.core.config import ProcessRole
 from app.core.time import utcnow
+from app.db.enum_columns import EnumText, enum_check
 
 from .base import SQLModel
-from .types import JobState, WorkPriority
+from .types import JobKind, JobState, LaneName, WorkPriority
 
 # Non-terminal states. At most one Job per (definition, subject) may be in one of
 # these at a time; the partial unique index below is the claim that enforces it,
 # so two reconciler passes racing on the same subject cannot both create work.
-ACTIVE_JOB_STATES = ("queued", "running", "interrupted")
+ACTIVE_JOB_STATES = (JobState.QUEUED, JobState.RUNNING, JobState.INTERRUPTED)
 
 
 class Job(SQLModel, table=True):
@@ -46,22 +48,27 @@ class Job(SQLModel, table=True):
             "state",
             "updated_at",
         ),
+        enum_check("kind", JobKind),
+        enum_check("priority", WorkPriority),
+        enum_check("state", JobState),
     )
 
     id: str = Field(primary_key=True, max_length=64)
-    # The job definition's registered name, e.g. ``ingestion.upload``.
-    kind: str = Field(max_length=64, index=True)
+    # The Job Definition this Job is an instance of.
+    kind: JobKind = Field(
+        sa_column=Column(EnumText(JobKind), nullable=False, index=True)
+    )
     subject_key: str = Field(max_length=255, index=True)
     owner_user_id: Optional[int] = Field(
         default=None, foreign_key="users.id", index=True
     )
     priority: WorkPriority = Field(
         default=WorkPriority.INTERACTIVE,
-        sa_column=Column(String(16), nullable=False),
+        sa_column=Column(EnumText(WorkPriority), nullable=False),
     )
     state: JobState = Field(
         default=JobState.QUEUED,
-        sa_column=Column(String(16), nullable=False, index=True),
+        sa_column=Column(EnumText(JobState), nullable=False, index=True),
     )
     # Display-safe progress, counts and result. Never replayed as input.
     status_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
@@ -88,10 +95,35 @@ class ReconcileCursor(SQLModel, table=True):
     """
 
     __tablename__ = "reconcile_cursors"
+    __table_args__ = (
+        enum_check("source", JobKind),
+        enum_check("pass_priority", WorkPriority),
+        # A queued pass always records its priority; a held claim, its expiry;
+        # a parked drain, both ends of its window.
+        CheckConstraint(
+            "(pass_queued_at IS NULL) = (pass_priority IS NULL)",
+            name="pass_queued_with_priority",
+        ),
+        CheckConstraint(
+            "(holder IS NULL) = (holder_expires_at IS NULL)",
+            name="holder_with_expiry",
+        ),
+        CheckConstraint(
+            "(idle_since IS NULL) = (idle_until IS NULL)",
+            name="idle_window_complete",
+        ),
+    )
 
-    source: str = Field(primary_key=True, max_length=64)
+    # The definition whose source this cursor paces.
+    source: JobKind = Field(
+        sa_column=Column(EnumText(JobKind), primary_key=True, nullable=False)
+    )
     nudged_at: Optional[datetime] = None
+    # A pass waiting in the engine, and the priority it was queued at.
     pass_queued_at: Optional[datetime] = None
+    pass_priority: Optional[WorkPriority] = Field(
+        default=None, sa_column=Column(EnumText(WorkPriority), nullable=True)
+    )
     holder: Optional[str] = Field(default=None, max_length=128)
     holder_expires_at: Optional[datetime] = None
     last_pass_started_at: Optional[datetime] = None
@@ -101,8 +133,13 @@ class ReconcileCursor(SQLModel, table=True):
     # For schedule sources: the newest occurrence already turned into a Job.
     # Kept here rather than derived from Job rows, which retention prunes.
     last_occurrence_at: Optional[datetime] = None
-    # Source-owned scan bookkeeping (a derivative source's rotating window).
-    state_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    # A drain source parked after a pass that could make no progress.
+    idle_since: Optional[datetime] = None
+    idle_until: Optional[datetime] = None
+    # A derivative source's scan: the newest Artifact id it has offered, and
+    # where its rotating window over older Artifacts stands.
+    scan_high_water: int = Field(default=0, sa_column_kwargs={"server_default": "0"})
+    scan_position: int = Field(default=0, sa_column_kwargs={"server_default": "0"})
 
 
 class WorkFence(SQLModel, table=True):
@@ -127,12 +164,14 @@ class WorkExecutor(SQLModel, table=True):
     """A process that runs jobs, with its role and last heartbeat."""
 
     __tablename__ = "work_executors"
+    __table_args__ = (enum_check("role", ProcessRole),)
 
     executor_id: str = Field(primary_key=True, max_length=128)
-    role: str = Field(max_length=16)
+    role: ProcessRole = Field(sa_column=Column(EnumText(ProcessRole), nullable=False))
     hostname: str = Field(max_length=255)
     pid: int
     app_version: str = Field(max_length=64)
+    # The lanes it executes, comma-separated; empty when it runs none.
     lanes: str = Field(default="", sa_column=Column(Text, nullable=False))
     # Write-capable operations in flight at the last heartbeat. A restore
     # drains every live executor by waiting for each to report zero after the
@@ -150,8 +189,11 @@ class WorkLaneOverride(SQLModel, table=True):
     """
 
     __tablename__ = "work_lane_overrides"
+    __table_args__ = (enum_check("lane", LaneName),)
 
-    lane: str = Field(primary_key=True, max_length=32)
+    lane: LaneName = Field(
+        sa_column=Column(EnumText(LaneName), primary_key=True, nullable=False)
+    )
     concurrency: int = Field(sa_column=Column(Integer, nullable=False))
     updated_by: Optional[int] = Field(
         default=None,

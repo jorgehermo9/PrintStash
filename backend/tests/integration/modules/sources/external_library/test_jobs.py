@@ -17,9 +17,15 @@ from sqlmodel import Session, select
 
 import app.modules.work as work
 from app.core.time import ensure_utc, utcnow
-from app.db.models import ExternalLibrary, ExternalLibraryScanStatus, File, WorkPriority
+from app.db.models import (
+    ExternalLibrary,
+    ExternalLibraryScanStatus,
+    File,
+    JobKind,
+    WorkPriority,
+)
 from app.modules.sources import external_library
-from app.modules.sources.external_library import SCAN_DEFINITION, ScanSource
+from app.modules.sources.external_library import ScanSource
 from tests.factories import build_external_library
 from tests.integration.api.v1._ingest_assertions import drain_work
 from tests.integration.modules.sources.external_library._helpers import (
@@ -122,7 +128,7 @@ class TestScanJob:
             db_session, root, name="nas", enabled=True, scan_requested_at=utcnow()
         )
 
-        work.nudge(SCAN_DEFINITION)
+        work.nudge(JobKind.SOURCES_SCAN)
         drain_work()
 
         scanned = _reread(db_session, library.id)
@@ -143,7 +149,7 @@ class TestScanJob:
         )
         build_external_library(db_session, reachable, name="reachable", enabled=True)
 
-        work.nudge(SCAN_DEFINITION)
+        work.nudge(JobKind.SOURCES_SCAN)
         drain_work()
 
         assert "kept.gcode" in db_session.exec(select(File.original_filename)).all()

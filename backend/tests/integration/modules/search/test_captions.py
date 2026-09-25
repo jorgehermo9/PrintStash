@@ -556,6 +556,7 @@ class TestCaptions:
         finally:
             bind_content_projection(previous_projection)
         from tests.search_projection import drain_search
+
         drain_search(db_session)
         coexisting = db_session.exec(
             select(SearchPassage)

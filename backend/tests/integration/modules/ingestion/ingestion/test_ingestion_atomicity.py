@@ -26,6 +26,7 @@ from app.core.config import _overlay
 from app.db.models import (
     File,
     FileType,
+    JobKind,
     Metadata,
     Model,
     ModelProvenanceField,
@@ -37,7 +38,6 @@ from app.db.session import (
     _set_sqlite_pragmas,
     get_session_factory,
 )
-from app.modules.derivatives.kinds import MESH_DEFINITION
 from app.modules.ingestion import ingestion
 from app.modules.library import provenance
 from app.modules.storage.storage_backend.contracts import StorageConfigurationError
@@ -117,7 +117,11 @@ class TestPersistArtifact:
 
         try:
             with monkeypatch.context() as patch:
-                patch.setattr(LocalStorageBackend, "_open_pinned_parent", replace_before_publication)
+                patch.setattr(
+                    LocalStorageBackend,
+                    "_open_pinned_parent",
+                    replace_before_publication,
+                )
                 with pytest.raises(StorageConfigurationError):
                     _persist(
                         db_session,
@@ -149,7 +153,10 @@ class TestPersistArtifact:
         )
         assert destination.read_bytes() == original
         assert saved.path == str(destination)
-        assert len(db_session.exec(select(File).where(File.model_id == model.id)).all()) == 1
+        assert (
+            len(db_session.exec(select(File).where(File.model_id == model.id)).all())
+            == 1
+        )
 
     def test_persist_never_overwrites_an_unclaimed_destination(
         self, db_session: Session, storage, model: Model, tmp_path: Path
@@ -570,7 +577,7 @@ class TestDerivativeHandoff:
     ) -> None:
         _persist(db_session, model, _staged(tmp_path))
 
-        cursor = db_session.get(ReconcileCursor, MESH_DEFINITION)
+        cursor = db_session.get(ReconcileCursor, JobKind.DERIVATIVES_MESH)
         assert cursor is not None and cursor.nudged_at is not None
 
     def test_never_nudges_for_an_artifact_that_did_not_commit(
@@ -591,4 +598,4 @@ class TestDerivativeHandoff:
             _persist(db_session, model, _staged(tmp_path))
 
         db_session.rollback()
-        assert db_session.get(ReconcileCursor, MESH_DEFINITION) is None
+        assert db_session.get(ReconcileCursor, JobKind.DERIVATIVES_MESH) is None

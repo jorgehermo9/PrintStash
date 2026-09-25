@@ -31,7 +31,8 @@ from sqlmodel import Session, select
 from app.core.config import _overlay, settings
 from app.core.metrics import jobs_terminal, stuck_jobs
 from app.core.time import ensure_utc, utcnow
-from app.db.models import Job, JobState, StagingLease, User, WorkPriority
+from app.db.models import Job, JobKind, JobState, StagingLease, User, WorkPriority
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import ActiveJobExists, JobStore
 from tests.factories import build_user
 
@@ -85,7 +86,7 @@ class TestCreate:
         self, store: JobStore, owner: User, db_session: Session
     ) -> None:
         job_id = store.create(
-            definition="ingest.commit",
+            definition=JobKind.INGESTION_UPLOAD,
             subject_key="ingest/1",
             owner_user_id=owner.id,
             priority=WorkPriority.BACKFILL,
@@ -94,7 +95,7 @@ class TestCreate:
 
         row = _row(db_session, job_id)
         assert (row.kind, row.subject_key, row.owner_user_id) == (
-            "ingest.commit",
+            JobKind.INGESTION_UPLOAD,
             "ingest/1",
             owner.id,
         )
@@ -104,7 +105,7 @@ class TestCreate:
 
     def test_uses_a_caller_supplied_id(self, store: JobStore, owner: User) -> None:
         job_id = store.create(
-            definition="ingest.commit",
+            definition=JobKind.INGESTION_UPLOAD,
             subject_key="ingest/given",
             owner_user_id=owner.id,
             job_id="given-id",
@@ -119,7 +120,9 @@ class TestCreate:
         store.subscribe(lambda status: seen.append(status.state))
 
         store.create(
-            definition="ingest.commit", subject_key="s/1", owner_user_id=owner.id
+            definition=JobKind.INGESTION_UPLOAD,
+            subject_key="s/1",
+            owner_user_id=owner.id,
         )
 
         assert seen == ["queued"]
@@ -133,7 +136,9 @@ class TestCreate:
         store.subscribe(broken)
 
         job_id = store.create(
-            definition="ingest.commit", subject_key="s/2", owner_user_id=owner.id
+            definition=JobKind.INGESTION_UPLOAD,
+            subject_key="s/2",
+            owner_user_id=owner.id,
         )
 
         assert _row(db_session, job_id).state == JobState.QUEUED
@@ -142,12 +147,16 @@ class TestCreate:
         self, store: JobStore, owner: User
     ) -> None:
         first = store.create(
-            definition="ingest.commit", subject_key="s/dup", owner_user_id=owner.id
+            definition=JobKind.INGESTION_UPLOAD,
+            subject_key="s/dup",
+            owner_user_id=owner.id,
         )
 
         with pytest.raises(ActiveJobExists) as error:
             store.create(
-                definition="ingest.commit", subject_key="s/dup", owner_user_id=owner.id
+                definition=JobKind.INGESTION_UPLOAD,
+                subject_key="s/dup",
+                owner_user_id=owner.id,
             )
 
         assert error.value.job_id == first
@@ -155,10 +164,14 @@ class TestCreate:
     def test_a_finished_job_does_not_claim_its_subject(
         self, store: JobStore, owner: User, make_job
     ) -> None:
-        make_job(kind="ingest.commit", subject="s/again", state=JobState.COMPLETED)
+        make_job(
+            kind=JobKind.INGESTION_UPLOAD, subject="s/again", state=JobState.COMPLETED
+        )
 
         job_id = store.create(
-            definition="ingest.commit", subject_key="s/again", owner_user_id=owner.id
+            definition=JobKind.INGESTION_UPLOAD,
+            subject_key="s/again",
+            owner_user_id=owner.id,
         )
 
         assert store.get(job_id).state == "queued"  # type: ignore[union-attr]
@@ -166,10 +179,12 @@ class TestCreate:
     def test_one_subject_is_claimed_per_definition(
         self, store: JobStore, owner: User, make_job
     ) -> None:
-        make_job(kind="derivatives.mesh", subject="file/1")
+        make_job(kind=JobKind.DERIVATIVES_MESH, subject="file/1")
 
         job_id = store.create(
-            definition="derivatives.gcode", subject_key="file/1", owner_user_id=None
+            definition=JobKind.DERIVATIVES_GCODE,
+            subject_key="file/1",
+            owner_user_id=None,
         )
 
         assert store.get(job_id) is not None
@@ -179,12 +194,12 @@ class TestCreate:
     ) -> None:
         # Both creators passed the existence check; the index decides, and the
         # loser is told who won rather than handed an IntegrityError.
-        winner = make_job(kind="ingest.commit", subject="s/race")
+        winner = make_job(kind=JobKind.INGESTION_UPLOAD, subject="s/race")
 
         with patch.object(JobStore, "_active_id", side_effect=[None, winner.id]):
             with pytest.raises(ActiveJobExists) as error:
                 store.create(
-                    definition="ingest.commit",
+                    definition=JobKind.INGESTION_UPLOAD,
                     subject_key="s/race",
                     owner_user_id=owner.id,
                 )
@@ -194,11 +209,11 @@ class TestCreate:
     def test_an_integrity_error_with_no_winner_is_raised(
         self, store: JobStore, owner: User, make_job
     ) -> None:
-        taken = make_job(kind="ingest.commit", subject="s/pk")
+        taken = make_job(kind=JobKind.INGESTION_UPLOAD, subject="s/pk")
 
         with pytest.raises(IntegrityError):
             store.create(
-                definition="ingest.commit",
+                definition=JobKind.INGESTION_UPLOAD,
                 subject_key="s/other",
                 owner_user_id=owner.id,
                 job_id=taken.id,
@@ -210,7 +225,7 @@ class TestCreate:
         # The intent (an upload request) and its Job commit together or not at
         # all; a Job without its intent is an orphan the reconciler fails.
         job_id = store.create(
-            definition="ingest.commit",
+            definition=JobKind.INGESTION_UPLOAD,
             subject_key="s/txn",
             owner_user_id=owner.id,
             session=db_session,
@@ -222,11 +237,11 @@ class TestCreate:
     def test_refuses_a_claimed_subject_inside_the_callers_transaction(
         self, store: JobStore, owner: User, db_session: Session, make_job
     ) -> None:
-        existing = make_job(kind="ingest.commit", subject="s/txn-dup")
+        existing = make_job(kind=JobKind.INGESTION_UPLOAD, subject="s/txn-dup")
 
         with pytest.raises(ActiveJobExists) as error:
             store.create(
-                definition="ingest.commit",
+                definition=JobKind.INGESTION_UPLOAD,
                 subject_key="s/txn-dup",
                 owner_user_id=owner.id,
                 session=db_session,
@@ -237,11 +252,11 @@ class TestCreate:
     def test_reports_the_active_job_of_a_subject(
         self, store: JobStore, make_job
     ) -> None:
-        active = make_job(kind="sources.scan", subject="library/3")
-        make_job(kind="sources.scan", subject="library/4", state=JobState.FAILED)
+        active = make_job(kind=JobKind.SOURCES_SCAN, subject="library/3")
+        make_job(kind=JobKind.SOURCES_SCAN, subject="library/4", state=JobState.FAILED)
 
-        assert store.active_for_subject("sources.scan", "library/3") == active.id
-        assert store.active_for_subject("sources.scan", "library/4") is None
+        assert store.active_for_subject(JobKind.SOURCES_SCAN, "library/3") == active.id
+        assert store.active_for_subject(JobKind.SOURCES_SCAN, "library/4") is None
 
 
 class TestUpdate:
@@ -249,7 +264,7 @@ class TestUpdate:
         self, store: JobStore, make_job
     ) -> None:
         job = make_job()
-        store.update(job.id, state="running", stage="resolving", processed=0)
+        store.update(job.id, stage="resolving", processed=0)
         assert store.get(job.id).total is None  # type: ignore[union-attr]
 
         store.update(job.id, stage="ingesting", total=3, processed=1)
@@ -265,14 +280,14 @@ class TestUpdate:
         # 100% is a promise that the work is over; only finishing makes it.
         job = make_job()
 
-        store.update(job.id, state="running", progress=reported)
+        store.update(job.id, progress=reported)
 
         assert store.get(job.id).progress == shown  # type: ignore[union-attr]
 
     def test_progress_never_moves_backwards(self, store: JobStore, make_job) -> None:
         # Steps report independently; a late, lower report must not rewind the bar.
         job = make_job()
-        store.update(job.id, state="running", progress=60)
+        store.update(job.id, progress=60)
 
         store.update(job.id, progress=20)
 
@@ -280,41 +295,20 @@ class TestUpdate:
 
     def test_a_finished_job_reads_as_complete(self, store: JobStore, make_job) -> None:
         job = make_job()
-        store.update(job.id, state="running", progress=40)
+        store.update(job.id, progress=40)
 
-        store.finish(job.id, state=JobState.COMPLETED)
+        store.finish(job.id, JobOutcome.COMPLETED)
 
         assert store.get(job.id).progress == 100  # type: ignore[union-attr]
 
     def test_counts_are_never_negative(self, store: JobStore, make_job) -> None:
         job = make_job()
 
-        store.update(job.id, state="running", processed=-3, failed=-1)
+        store.update(job.id, processed=-3, failed=-1)
 
         status = store.get(job.id)
         assert status is not None
         assert (status.processed, status.failed) == (0, 0)
-
-    def test_running_stamps_the_start_once(
-        self, store: JobStore, make_job, db_session: Session
-    ) -> None:
-        job = make_job()
-        store.update(job.id, state="running")
-        started = _row(db_session, job.id).started_at
-
-        store.update(job.id, state="running", progress=10)
-
-        assert started is not None
-        assert _row(db_session, job.id).started_at == started
-
-    def test_pending_is_read_as_queued(
-        self, store: JobStore, make_job, db_session: Session
-    ) -> None:
-        job = make_job(state=JobState.RUNNING)
-
-        store.update(job.id, state="pending")
-
-        assert _row(db_session, job.id).state == JobState.QUEUED
 
     def test_a_terminal_job_never_changes_again(
         self, store: JobStore, make_job, db_session: Session
@@ -324,13 +318,13 @@ class TestUpdate:
         job = make_job(state=JobState.COMPLETED)
         before = _row(db_session, job.id).status_json
 
-        store.update(job.id, state="running", error="late", progress=5)
+        store.update(job.id, error="late", progress=5)
 
         row = _row(db_session, job.id)
         assert (row.state, row.status_json) == (JobState.COMPLETED, before)
 
     def test_a_missing_job_is_ignored(self, store: JobStore) -> None:
-        store.update("no-such-job", state="running")
+        store.update("no-such-job", progress=1)
 
         assert store.get("no-such-job") is None
 
@@ -356,11 +350,11 @@ class TestUpdate:
         assert store.get(job.id).stage == stage  # type: ignore[union-attr]
 
     def test_notifies_listeners_of_each_change(self, store: JobStore, make_job) -> None:
-        job = make_job()
+        job = make_job(state=JobState.RUNNING)
         seen: list[tuple[str, float | None]] = []
         store.subscribe(lambda status: seen.append((status.state, status.progress)))
 
-        store.update(job.id, state="running", progress=30)
+        store.update(job.id, progress=30)
 
         assert seen == [("running", 30.0)]
 
@@ -371,7 +365,9 @@ class TestFinish:
     ) -> None:
         job = make_job(state=JobState.RUNNING)
 
-        store.finish(job.id, state="completed", succeeded=2, failed=1, retryable=True)
+        store.finish(
+            job.id, JobOutcome.COMPLETED, succeeded=2, failed=1, retryable=True
+        )
 
         # Distinct from both "completed" and "failed": some models arrived and
         # some did not, and the user has to be told which without being told the
@@ -383,14 +379,14 @@ class TestFinish:
     ) -> None:
         job = make_job(state=JobState.RUNNING)
 
-        store.finish(job.id, state="completed", succeeded=1, skipped=1)
+        store.finish(job.id, JobOutcome.COMPLETED, succeeded=1, skipped=1)
 
         assert store.get(job.id).completion == "partial"  # type: ignore[union-attr]
 
     def test_a_clean_success_is_complete(self, store: JobStore, make_job) -> None:
         job = make_job(state=JobState.RUNNING)
 
-        store.finish(job.id, state="completed", succeeded=3)
+        store.finish(job.id, JobOutcome.COMPLETED, succeeded=3)
 
         status = store.get(job.id)
         assert status is not None
@@ -405,7 +401,7 @@ class TestFinish:
     ) -> None:
         job = make_job(state=JobState.RUNNING)
 
-        store.finish(job.id, state="completed", completion="partial")
+        store.finish(job.id, JobOutcome.COMPLETED, completion="partial")
 
         assert store.get(job.id).completion == "partial"  # type: ignore[union-attr]
 
@@ -416,7 +412,7 @@ class TestFinish:
 
         store.finish(
             job.id,
-            state="failed",
+            JobOutcome.FAILED,
             error="download_failed",
             retryable=True,
             completion="partial",
@@ -438,7 +434,7 @@ class TestFinish:
         # Job cancelled before an executor picked it up.
         job = make_job()
 
-        store.finish(job.id, state="cancelled")
+        store.finish(job.id, JobOutcome.CANCELLED)
 
         row = _row(db_session, job.id)
         assert row.state == JobState.CANCELLED
@@ -449,21 +445,43 @@ class TestFinish:
     def test_records_the_terminal_outcome_metric(
         self, store: JobStore, make_job
     ) -> None:
-        job = make_job(kind="backups.create", state=JobState.RUNNING)
-        counter = jobs_terminal.labels(kind="backups.create", result="complete")
+        job = make_job(kind=JobKind.BACKUPS_CREATE, state=JobState.RUNNING)
+        counter = jobs_terminal.labels(kind=JobKind.BACKUPS_CREATE, result="complete")
         before = counter._value.get()
 
-        store.finish(job.id, state="completed")
+        store.finish(job.id, JobOutcome.COMPLETED)
 
         assert counter._value.get() == before + 1
 
-    def test_refuses_a_state_that_is_not_terminal(
-        self, store: JobStore, make_job
+    def test_a_failure_must_say_why(
+        self, store: JobStore, make_job, db_session: Session
     ) -> None:
-        job = make_job()
+        job = make_job(state=JobState.RUNNING)
 
-        with pytest.raises(ValueError, match="terminal_state_required"):
-            store.finish(job.id, state="running")
+        with pytest.raises(ValueError, match="failed_job_requires_error"):
+            store.finish(job.id, JobOutcome.FAILED)
+
+        assert _row(db_session, job.id).state == JobState.RUNNING
+
+    def test_the_first_terminal_write_wins(
+        self, store: JobStore, make_job, db_session: Session
+    ) -> None:
+        # A cancel racing a step that then finishes: the cancel stands.
+        job = make_job(state=JobState.RUNNING)
+        store.finish(job.id, JobOutcome.CANCELLED, error="cancelled_by_user")
+
+        store.finish(job.id, JobOutcome.COMPLETED)
+
+        assert _row(db_session, job.id).state == JobState.CANCELLED
+
+    def test_refuses_a_truncating_subject_key(self, store: JobStore) -> None:
+        # Cutting a long key short would claim another subject's Jobs.
+        with pytest.raises(ValueError, match="job_subject_key_length"):
+            store.create(
+                definition=JobKind.SOURCES_SCAN,
+                subject_key="s" * 256,
+                owner_user_id=None,
+            )
 
 
 class TestListForUser:
@@ -484,7 +502,7 @@ class TestListForUser:
     ) -> None:
         # System Jobs (derivatives, scans) are high-volume; they would bury
         # every user's own imports in the Task Center.
-        system = make_job(kind="derivatives.mesh")
+        system = make_job(kind=JobKind.DERIVATIVES_MESH)
 
         default = store.list_for_user(owner.id, is_superuser=True)  # type: ignore[arg-type]
         asked = store.list_for_user(owner.id, is_superuser=True, include_system=True)  # type: ignore[arg-type]
@@ -495,17 +513,17 @@ class TestListForUser:
     def test_a_user_never_sees_system_jobs(
         self, store: JobStore, owner: User, make_job
     ) -> None:
-        make_job(kind="derivatives.mesh")
+        make_job(kind=JobKind.DERIVATIVES_MESH)
 
         assert store.list_for_user(owner.id, include_system=True) == []  # type: ignore[arg-type]
 
     def test_filters_by_definition(
         self, store: JobStore, owner: User, make_job
     ) -> None:
-        wanted = make_job(kind="ingest.commit", owner=owner)
-        make_job(kind="backups.create", owner=owner)
+        wanted = make_job(kind=JobKind.INGESTION_UPLOAD, owner=owner)
+        make_job(kind=JobKind.BACKUPS_CREATE, owner=owner)
 
-        listed = store.list_for_user(owner.id, kinds=["ingest.commit"])  # type: ignore[arg-type]
+        listed = store.list_for_user(owner.id, kinds=[JobKind.INGESTION_UPLOAD])  # type: ignore[arg-type]
 
         assert [job.job_id for job in listed] == [wanted.id]
 
@@ -607,10 +625,10 @@ class TestFailed:
 
 class TestCounts:
     def test_counts_jobs_per_definition_state(self, store: JobStore, make_job) -> None:
-        make_job(kind="sources.scan")
-        make_job(kind="sources.scan", state=JobState.FAILED)
-        make_job(kind="sources.scan", state=JobState.FAILED)
-        make_job(kind="backups.create", state=JobState.RUNNING)
+        make_job(kind=JobKind.SOURCES_SCAN)
+        make_job(kind=JobKind.SOURCES_SCAN, state=JobState.FAILED)
+        make_job(kind=JobKind.SOURCES_SCAN, state=JobState.FAILED)
+        make_job(kind=JobKind.BACKUPS_CREATE, state=JobState.RUNNING)
 
         assert store.counts_by_definition() == {
             "sources.scan": {"queued": 1, "failed": 2},
@@ -663,7 +681,9 @@ class TestPrune:
         day_old = utcnow() - timedelta(
             hours=settings.jobs_system_retention_hours, minutes=5
         )
-        make_job(kind="derivatives.mesh", state=JobState.FAILED, updated_at=day_old)
+        make_job(
+            kind=JobKind.DERIVATIVES_MESH, state=JobState.FAILED, updated_at=day_old
+        )
         user = make_job(owner=owner, state=JobState.FAILED, updated_at=day_old).id
 
         store.prune()

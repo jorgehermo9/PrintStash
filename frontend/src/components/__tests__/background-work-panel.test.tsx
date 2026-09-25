@@ -236,7 +236,12 @@ describe("BackgroundWorkPanel", () => {
       await waitFor(() => expect(socket.onmessage).not.toBeNull());
 
       socket.onmessage?.({
-        data: JSON.stringify({ type: "job", job_id: "j", kind: "derivatives.mesh", state: "completed" }),
+        data: JSON.stringify({
+          type: "job",
+          job_id: "j",
+          kind: "derivatives.mesh",
+          state: "completed",
+        }),
       });
 
       await waitFor(() => expect(api.overview).toHaveBeenCalledTimes(2));

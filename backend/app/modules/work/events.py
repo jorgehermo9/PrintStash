@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from app.core.logging import get_logger
+from app.db.models import DerivativeKind, DerivativeState
 from app.schemas.jobs import JobStatus
 
 logger = get_logger(__name__)
@@ -56,7 +57,9 @@ def job_changed(status: JobStatus) -> None:
     _publish("work:admin", notice)
 
 
-def derivative_changed(*, model_id: int, file_id: int, kind: str, state: str) -> None:
+def derivative_changed(
+    *, model_id: int, file_id: int, kind: DerivativeKind, state: DerivativeState
+) -> None:
     _publish(
         f"model:{model_id}",
         {

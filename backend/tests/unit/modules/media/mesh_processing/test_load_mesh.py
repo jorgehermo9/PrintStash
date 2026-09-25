@@ -114,9 +114,7 @@ class TestLoadMesh:
 
         p = tmp_path / "broken-graph.3mf"
         p.write_bytes(b"placeholder")
-        monkeypatch.setattr(
-            trimesh, "load_scene", lambda *a, **k: UnflattenableScene()
-        )
+        monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: UnflattenableScene())
 
         assert mesh_processing._load_mesh(p) is None
 

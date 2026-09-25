@@ -81,6 +81,10 @@ class TestPostgresBackup:
         assert result.json()["body"] == "Mount the shelf"
         # ASGITransport does not start the background projection worker.
         drain_search(postgres_e2e_db)
-        found = await api.get("/api/v1/search", params={"q": "Bracket"}, headers=headers)
+        found = await api.get(
+            "/api/v1/search", params={"q": "Bracket"}, headers=headers
+        )
         assert found.status_code == 200, found.text
-        assert [(item["subject_type"], item["subject_id"]) for item in found.json()["items"]] == [("document", document_id)]
+        assert [
+            (item["subject_type"], item["subject_id"]) for item in found.json()["items"]
+        ] == [("document", document_id)]

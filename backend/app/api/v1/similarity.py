@@ -30,10 +30,10 @@ class RunCreate(BaseModel):
 async def _wake(request: Request, run_id: int) -> None:
     """A run was created or changed: its analysis Job should run now."""
     del request, run_id
-    from app.modules.similarity.jobs import DEFINITION
+    from app.db.models import JobKind
     from app.modules.work import nudge
 
-    nudge(DEFINITION)
+    nudge(JobKind.SIMILARITY_ANALYZE)
 
 
 @router.get("/similarity/status")

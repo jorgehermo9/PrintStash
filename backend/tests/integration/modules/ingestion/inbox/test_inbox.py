@@ -31,6 +31,7 @@ from app.db.models import (
     InboxItemState,
     InboxSourceKind,
     Job,
+    JobKind,
     Model,
     ModelProvenanceSource,
     StagingLease,
@@ -39,6 +40,7 @@ from app.db.models import (
 )
 from app.db.session import get_session_factory
 from app.modules.ingestion import import_resolvers, importer, inbox, staging_leases
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs
 from app.modules.work.submission import nudge
 from app.runtime.engine.inline import InlineJobEngine
@@ -254,7 +256,7 @@ class TestReconcileInterruptedItems:
     ) -> None:
         owner = _make_user(db_session, "reconcile-active-job")
         job_id = jobs.create(
-            definition=inbox.IMPORT_DEFINITION,
+            definition=JobKind.INGESTION_INBOX_IMPORT,
             subject_key="inbox_item/active",
             owner_user_id=owner.id,
         )
@@ -275,11 +277,11 @@ class TestReconcileInterruptedItems:
     ) -> None:
         owner = _make_user(db_session, "reconcile-importing-ok")
         job_id = jobs.create(
-            definition=inbox.IMPORT_DEFINITION,
+            definition=JobKind.INGESTION_INBOX_IMPORT,
             subject_key=f"inbox_item/test-{owner.id}",
             owner_user_id=owner.id,
         )
-        jobs.update(job_id, state="completed", model_id=imported_model.id)
+        jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
         row = _make_item(
             db_session, owner, state=InboxItemState.IMPORTING, job_id=job_id
         )
@@ -398,13 +400,13 @@ class TestReconcileInterruptedItems:
             ),
         )
         job_id = jobs.create(
-            definition=inbox.IMPORT_DEFINITION,
+            definition=JobKind.INGESTION_INBOX_IMPORT,
             subject_key=f"inbox_item/test-{owner.id}",
             owner_user_id=owner.id,
         )
-        jobs.update(
+        jobs.finish(
             job_id,
-            state="completed",
+            JobOutcome.COMPLETED,
             model_id=model.id,
             result={
                 "items": [
@@ -564,7 +566,7 @@ class TestReconcileInterruptedItems:
         )
         db_session.add_all([link, result])
         job_id = jobs.create(
-            definition=inbox.IMPORT_DEFINITION,
+            definition=JobKind.INGESTION_INBOX_IMPORT,
             subject_key=f"inbox_item/test-{owner.id}",
             owner_user_id=owner.id,
         )
@@ -670,11 +672,11 @@ class TestReconcileInterruptedItems:
     ) -> None:
         owner = _make_user(db_session, "reconcile-v2-no-results")
         job_id = jobs.create(
-            definition=inbox.IMPORT_DEFINITION,
+            definition=JobKind.INGESTION_INBOX_IMPORT,
             subject_key=f"inbox_item/test-{owner.id}",
             owner_user_id=owner.id,
         )
-        jobs.update(job_id, state="completed", model_id=imported_model.id)
+        jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
         row = _make_item(
             db_session,
             owner,
@@ -1175,7 +1177,7 @@ def _import_through_job(
     row = session.get(InboxItem, item_id)
     assert row is not None
     job_id = inbox.begin_import(session, row, selected)
-    nudge(inbox.IMPORT_DEFINITION)
+    nudge(JobKind.INGESTION_INBOX_IMPORT)
     engine.drain()
     session.expire_all()
     return job_id
@@ -1197,7 +1199,7 @@ class TestBeginImportThroughJob:
 
         status = jobs.get(job_id or "")
         assert status is not None
-        assert (status.kind, status.state) == (inbox.IMPORT_DEFINITION, "queued")
+        assert (status.kind, status.state) == (JobKind.INGESTION_INBOX_IMPORT, "queued")
 
     def test_moves_the_item_to_importing_under_its_job(
         self, db_session: Session
@@ -1288,7 +1290,7 @@ class TestRunImportJob:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            jobs.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1353,7 +1355,7 @@ class TestRunImportJob:
         )
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            jobs.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1397,7 +1399,7 @@ class TestRunImportJob:
             assert copied.read_bytes() == b"browser-owned-package"
             assert name == "widget.3mf"
             copied.unlink()
-            jobs.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1457,7 +1459,7 @@ class TestRunImportJob:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            jobs.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1500,7 +1502,7 @@ class TestRunImportJob:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            jobs.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1535,7 +1537,7 @@ class TestRunImportJob:
         monkeypatch.setattr(inbox, "_download_assets", fake_download_assets)
 
         def fake_import_assets(*, job_id: str, **_kwargs) -> None:
-            jobs.update(job_id, state="failed", error="ingest_exploded")
+            jobs.finish(job_id, JobOutcome.FAILED, error="ingest_exploded")
 
         monkeypatch.setattr(importer, "import_assets", fake_import_assets)
 
@@ -1712,7 +1714,7 @@ class TestRetry:
         assert returned.job_id is None
 
         def complete_import(*, job_id: str, **_kwargs) -> None:
-            jobs.update(job_id, state="completed", model_id=imported_model.id)
+            jobs.finish(job_id, JobOutcome.COMPLETED, model_id=imported_model.id)
 
         monkeypatch.setattr(inbox.importer, "import_assets", complete_import)
         _import_through_job(db_session, work_engine, row.id, [])

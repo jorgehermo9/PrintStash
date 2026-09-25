@@ -20,6 +20,7 @@ from app.db.models import (
     Collection,
     Document,
     File,
+    JobKind,
     Model,
     ModelProvenanceSource,
     MultipartModel,
@@ -164,11 +165,10 @@ class LibraryProjection:
                 )
             )
         if sources:
-            from app.modules.search.job_names import PROJECT_DEFINITION
             from app.modules.work.submission import nudge_after_commit
 
             # The request row is the intent; the nudge only makes it prompt.
-            nudge_after_commit(session, PROJECT_DEFINITION)
+            nudge_after_commit(session, JobKind.SEARCH_PROJECT)
 
 
 def process_pending(session: Session, *, limit: int = 8) -> int:

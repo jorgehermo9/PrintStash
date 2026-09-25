@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.config import settings
-from app.db.models import WorkPriority
+from app.db.models import JobKind, LaneName, WorkPriority
 from app.modules.work.contracts import (
     JobDefinition,
     Lane,
@@ -76,32 +76,50 @@ class TestRetryPolicy:
 class TestLane:
     def test_refuses_a_lane_that_can_run_nothing(self) -> None:
         with pytest.raises(ValueError, match="lane_concurrency_below_one"):
-            Lane("empty", 0)
+            Lane(LaneName.INGEST, 0)
 
     def test_headroom_scales_with_concurrency(self) -> None:
-        assert Lane("wide", 3).headroom == 3 * settings.jobs_lane_headroom_factor
+        assert (
+            Lane(LaneName.INGEST, 3).headroom == 3 * settings.jobs_lane_headroom_factor
+        )
 
 
 class TestJobDefinition:
     def test_refuses_a_definition_without_steps(self) -> None:
         with pytest.raises(ValueError, match="job_definition_without_steps"):
-            JobDefinition(name="empty", lane="ingest", steps=())
+            JobDefinition(
+                name=JobKind.SOURCES_SCAN, lane=LaneName.INGEST, steps=(), label="Empty"
+            )
 
     def test_refuses_two_steps_with_one_name(self) -> None:
         # Step names are checkpoint keys: a duplicate would replay one step's
         # recorded result as the other's.
         with pytest.raises(ValueError, match="job_definition_duplicate_step"):
             JobDefinition(
-                name="dup",
-                lane="ingest",
+                name=JobKind.SOURCES_SCAN,
+                lane=LaneName.INGEST,
                 steps=(Step("same", _noop), Step("same", _noop)),
+                label="Duplicate",
             )
 
     def test_every_hook_is_optional(self) -> None:
         definition = JobDefinition(
-            name="bare", lane="ingest", steps=(Step("a", _noop),)
+            name=JobKind.SOURCES_SCAN,
+            lane=LaneName.INGEST,
+            steps=(Step("a", _noop),),
+            label="Bare",
         )
 
         assert definition.retry(None, "subject") is True  # type: ignore[arg-type]
         assert definition.cancel(None, "subject") is None  # type: ignore[arg-type]
         assert definition.mutating is True
+
+    def test_refuses_a_definition_without_a_label(self) -> None:
+        # The admin page names every definition; a blank label is a bug.
+        with pytest.raises(ValueError, match="job_definition_without_label"):
+            JobDefinition(
+                name=JobKind.SOURCES_SCAN,
+                lane=LaneName.INGEST,
+                steps=(Step("a", _noop),),
+                label="  ",
+            )

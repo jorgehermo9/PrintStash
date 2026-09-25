@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.core.config import _overlay
-from app.db.models import FileType, JobState
+from app.db.models import FileType, JobKind, JobState
 from app.modules.work.jobs import jobs
 from tests.factories import build_file, build_model, build_print_job
 
@@ -29,17 +29,23 @@ class TestMetricsEndpoint:
         self, client: TestClient
     ) -> None:
         job_id = jobs.create(
-            definition="ingestion.upload", subject_key="metrics/1", owner_user_id=None
+            definition=JobKind.INGESTION_UPLOAD,
+            subject_key="metrics/1",
+            owner_user_id=None,
         )
         jobs.finish(job_id, state=JobState.COMPLETED)
 
         body = client.get("/metrics").text
 
-        assert 'printstash_jobs_total{kind="ingestion.upload",result="complete"}' in body
+        assert (
+            'printstash_jobs_total{kind="ingestion.upload",result="complete"}' in body
+        )
 
     def test_metrics_reports_jobs_by_state(self, client: TestClient) -> None:
         jobs.create(
-            definition="ingestion.upload", subject_key="metrics/2", owner_user_id=None
+            definition=JobKind.INGESTION_UPLOAD,
+            subject_key="metrics/2",
+            owner_user_id=None,
         )
 
         body = client.get("/metrics").text

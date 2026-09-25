@@ -14,23 +14,17 @@ from __future__ import annotations
 
 from sqlmodel import Session, col, select
 
-from app.db.models import File, Model
+from app.db.models import DerivativeKind, DerivativeState, File, JobKind, Model
 from app.db.scopes import live
 from app.db.session import get_session_factory
 
 from . import producers, records
-from .kinds import (
-    GCODE_DEFINITION,
-    MESH_DEFINITION,
-    MESH_TYPES,
-    TOOLPATH_DEFINITION,
-    groups_for,
-)
+from .kinds import MESH_TYPES, groups_for, recipes_for
 
 _PRODUCERS = {
-    MESH_DEFINITION: producers.derive_mesh,
-    GCODE_DEFINITION: producers.derive_gcode,
-    TOOLPATH_DEFINITION: producers.derive_toolpath,
+    JobKind.DERIVATIVES_MESH: producers.derive_mesh,
+    JobKind.DERIVATIVES_GCODE: producers.derive_gcode,
+    JobKind.DERIVATIVES_TOOLPATH: producers.derive_toolpath,
 }
 
 
@@ -52,10 +46,22 @@ def representative(session: Session, model_id: int) -> File | None:
     ).first()
 
 
-def request(session: Session, file: File, kinds: list[str]) -> bool:
-    """Make ``kinds`` pending for ``file`` and nudge its producers."""
+def _applicable(file: File, kinds: list[DerivativeKind]) -> list[DerivativeKind]:
+    recipes = recipes_for(file)
+    return [kind for kind in kinds if kind in recipes]
+
+
+def request(session: Session, file: File, kinds: list[DerivativeKind]) -> bool:
+    """Make ``kinds`` pending for ``file`` and nudge its producers.
+
+    ``False`` when none of them is derived for this Artifact at all (a DXF
+    has no metadata derivative): there is nothing to repair it with.
+    """
     from app.modules.work import nudge
 
+    kinds = _applicable(file, kinds)
+    if not kinds:
+        return False
     records.invalidate(session, file, kinds)
     session.commit()
     groups = [group for group in groups_for(file) if set(kinds) & set(group.kinds)]
@@ -64,12 +70,19 @@ def request(session: Session, file: File, kinds: list[str]) -> bool:
     return bool(groups)
 
 
-def now(file_id: int, kinds: list[str]) -> dict[str, str]:
-    """Invalidate and derive ``kinds`` for one Artifact in this thread."""
+def now(
+    file_id: int, kinds: list[DerivativeKind]
+) -> dict[DerivativeKind, DerivativeState]:
+    """Invalidate and derive ``kinds`` for one Artifact in this thread.
+
+    Only the kinds that apply to the Artifact are derived; a kind missing from
+    the result was not derived.
+    """
     with get_session_factory().scoped_session() as session:
         file = session.exec(select(File).where(File.id == file_id, live(File))).first()
         if file is None:
             return {}
+        kinds = _applicable(file, kinds)
         records.invalidate(session, file, kinds)
         session.commit()
         groups = [
@@ -77,7 +90,7 @@ def now(file_id: int, kinds: list[str]) -> dict[str, str]:
             for group in groups_for(file)
             if set(kinds) & set(group.kinds)
         ]
-    outcome: dict[str, str] = {}
+    outcome: dict[DerivativeKind, DerivativeState] = {}
     for definition in groups:
         outcome.update(_PRODUCERS[definition](file_id).kinds)
     return outcome

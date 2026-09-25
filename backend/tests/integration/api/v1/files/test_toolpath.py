@@ -10,8 +10,7 @@ than the configured limit is refused rather than streamed.
 import pytest
 
 from app.core.config import _overlay
-from app.db.models import DerivativeState, FileType
-from app.modules.derivatives.kinds import TOOLPATH
+from app.db.models import DerivativeKind, DerivativeState, FileType
 from app.modules.storage.storage_backend.runtime import get_backend
 
 
@@ -113,7 +112,9 @@ class TestBinaryToolpath:
     ) -> None:
         get_backend().write_bytes(b"G1 X1 E1\n", "_derivatives/plate-toolpath.gcode")
         make_derivative(
-            bgcode, TOOLPATH, storage_key="_derivatives/plate-toolpath.gcode"
+            bgcode,
+            DerivativeKind.TOOLPATH,
+            storage_key="_derivatives/plate-toolpath.gcode",
         )
 
         response = client.get(
@@ -135,7 +136,7 @@ class TestBinaryToolpath:
     def test_a_toolpath_being_derived_reports_its_state(
         self, client, auth_headers, bgcode, make_derivative
     ) -> None:
-        make_derivative(bgcode, TOOLPATH, state=DerivativeState.RUNNING)
+        make_derivative(bgcode, DerivativeKind.TOOLPATH, state=DerivativeState.RUNNING)
 
         response = client.get(
             f"/api/v1/files/{bgcode.id}/toolpath", headers=auth_headers
@@ -148,7 +149,7 @@ class TestBinaryToolpath:
     ) -> None:
         make_derivative(
             bgcode,
-            TOOLPATH,
+            DerivativeKind.TOOLPATH,
             state=DerivativeState.FAILED,
             failure_reason="toolpath_invalid_bgcode",
             exhausted=True,
@@ -168,7 +169,9 @@ class TestBinaryToolpath:
     ) -> None:
         _overlay["toolpath_output_max_mb"] = 1
         get_backend().write_bytes(b"G1\n" * 400_000, "_derivatives/huge.gcode")
-        make_derivative(bgcode, TOOLPATH, storage_key="_derivatives/huge.gcode")
+        make_derivative(
+            bgcode, DerivativeKind.TOOLPATH, storage_key="_derivatives/huge.gcode"
+        )
 
         response = client.get(
             f"/api/v1/files/{bgcode.id}/toolpath", headers=auth_headers

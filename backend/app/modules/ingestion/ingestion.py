@@ -51,6 +51,7 @@ from app.modules.storage.storage_backend.contracts import StorageCollisionError
 from app.modules.storage.storage_backend.local import LocalStorageBackend
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_ownership import provider_ref_for_backend, publish_file
+from app.modules.work.contracts import JobOutcome
 
 if TYPE_CHECKING:
     from app.modules.library.provenance import ProvenanceContext
@@ -970,7 +971,6 @@ def ingest_staged_file(
     key = ingestion_key or job_id
     jobs.update(
         job_id,
-        state="running",
         current_item=artifact.original_filename,
         total=1,
     )
@@ -987,14 +987,14 @@ def ingest_staged_file(
         logger.exception("ingestion commit failed", extra={"job_id": job_id})
         committed = _committed_by_key(key, session_factory)
         if committed is None:
-            jobs.finish(job_id, state="failed", error=str(exc), retryable=True)
+            jobs.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
             return None
         # The Artifact is durable even though a later step failed: report what
         # exists rather than a failure the user would retry into a duplicate.
         model_id, file_id = committed
         jobs.finish(
             job_id,
-            state="completed",
+            JobOutcome.COMPLETED,
             completion="partial",
             model_id=model_id,
             file_id=file_id,
@@ -1008,7 +1008,7 @@ def ingest_staged_file(
     _fault_injection_checkpoint("before_terminal", job_id)
     jobs.finish(
         job_id,
-        state="completed",
+        JobOutcome.COMPLETED,
         completion="complete",
         model_id=outcome.model_id,
         file_id=outcome.file_id,

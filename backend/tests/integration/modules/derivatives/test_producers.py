@@ -21,6 +21,7 @@ from app.core.config import _overlay, settings
 from app.core.errors import ErrorKind, OperationError
 from app.db.models import (
     ArtifactDerivative,
+    DerivativeKind,
     DerivativeState,
     File,
     FileType,
@@ -28,7 +29,6 @@ from app.db.models import (
     Model,
 )
 from app.modules.derivatives import producers
-from app.modules.derivatives.kinds import METADATA, THUMBNAIL, TOOLPATH
 from app.modules.ingestion import extensions
 from app.modules.media import toolpath
 from app.modules.media.thumbnail_publication import ThumbnailPublicationError
@@ -88,11 +88,14 @@ class TestDeriveMesh:
 
         outcome = producers.derive_mesh(artifact.id)
 
-        assert outcome.kinds == {METADATA: "ready", THUMBNAIL: "ready"}
+        assert outcome.kinds == {
+            DerivativeKind.METADATA: "ready",
+            DerivativeKind.THUMBNAIL: "ready",
+        }
         rows = _rows(db_session, artifact.id)
         assert {kind: row.state for kind, row in rows.items()} == {
-            METADATA: DerivativeState.READY,
-            THUMBNAIL: DerivativeState.READY,
+            DerivativeKind.METADATA: DerivativeState.READY,
+            DerivativeKind.THUMBNAIL: DerivativeState.READY,
         }
         meta = db_session.exec(
             select(Metadata).where(Metadata.file_id == artifact.id)
@@ -101,7 +104,7 @@ class TestDeriveMesh:
         published = db_session.get(File, artifact.id)
         assert published is not None and published.thumbnail_path
         assert get_backend().exists(published.thumbnail_path)
-        assert rows[THUMBNAIL].storage_key == published.thumbnail_path
+        assert rows[DerivativeKind.THUMBNAIL].storage_key == published.thumbnail_path
 
     def test_the_thumbnail_represents_its_model(
         self, db_session: Session, stored
@@ -120,19 +123,19 @@ class TestDeriveMesh:
         producers.derive_mesh(artifact.id)
 
         assert {(n["channel"], n["kind"], n["state"]) for n in announced} == {
-            (f"model:{artifact.model_id}", METADATA, "ready"),
-            (f"model:{artifact.model_id}", THUMBNAIL, "ready"),
+            (f"model:{artifact.model_id}", DerivativeKind.METADATA, "ready"),
+            (f"model:{artifact.model_id}", DerivativeKind.THUMBNAIL, "ready"),
         }
 
     def test_derives_only_what_is_still_owed(
         self, db_session: Session, stored, make_derivative
     ) -> None:
         artifact = stored("cube.stl", content.binary_stl())
-        make_derivative(artifact, METADATA)
+        make_derivative(artifact, DerivativeKind.METADATA)
 
         outcome = producers.derive_mesh(artifact.id)
 
-        assert outcome.kinds == {THUMBNAIL: "ready"}
+        assert outcome.kinds == {DerivativeKind.THUMBNAIL: "ready"}
         assert (
             db_session.exec(
                 select(Metadata).where(Metadata.file_id == artifact.id)
@@ -144,8 +147,8 @@ class TestDeriveMesh:
         self, stored, make_derivative, announced
     ) -> None:
         artifact = stored("cube.stl", content.binary_stl())
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL)
+        make_derivative(artifact, DerivativeKind.METADATA)
+        make_derivative(artifact, DerivativeKind.THUMBNAIL)
 
         assert producers.derive_mesh(artifact.id).kinds == {}
         assert announced == []
@@ -169,7 +172,10 @@ class TestDeriveMesh:
 
         outcome = producers.derive_mesh(artifact.id)
 
-        assert outcome.kinds == {METADATA: "failed", THUMBNAIL: "failed"}
+        assert outcome.kinds == {
+            DerivativeKind.METADATA: "failed",
+            DerivativeKind.THUMBNAIL: "failed",
+        }
         rows = _rows(db_session, artifact.id)
         assert all(row.failure_reason == "invalid_source" for row in rows.values())
         assert all(row.next_attempt_at is not None for row in rows.values())
@@ -197,7 +203,10 @@ class TestDeriveMesh:
 
         outcome = producers.derive_mesh(artifact.id)
 
-        assert outcome.kinds == {METADATA: "ready", THUMBNAIL: "ready"}
+        assert outcome.kinds == {
+            DerivativeKind.METADATA: "ready",
+            DerivativeKind.THUMBNAIL: "ready",
+        }
 
     def test_a_render_that_cannot_work_is_terminal(
         self, db_session: Session, stored
@@ -208,8 +217,8 @@ class TestDeriveMesh:
 
         outcome = producers.derive_mesh(artifact.id)
 
-        assert outcome.kinds[THUMBNAIL] == "failed"
-        row = _rows(db_session, artifact.id)[THUMBNAIL]
+        assert outcome.kinds[DerivativeKind.THUMBNAIL] == "failed"
+        row = _rows(db_session, artifact.id)[DerivativeKind.THUMBNAIL]
         assert row.attempts == settings.derivative_max_attempts
         assert row.next_attempt_at is None
 
@@ -225,8 +234,11 @@ class TestDeriveMesh:
 
         outcome = producers.derive_mesh(artifact.id)
 
-        assert outcome.kinds == {METADATA: "ready", THUMBNAIL: "failed"}
-        row = _rows(db_session, artifact.id)[THUMBNAIL]
+        assert outcome.kinds == {
+            DerivativeKind.METADATA: "ready",
+            DerivativeKind.THUMBNAIL: "failed",
+        }
+        row = _rows(db_session, artifact.id)[DerivativeKind.THUMBNAIL]
         assert (row.failure_reason, row.next_attempt_at is not None) == (
             "storage",
             True,
@@ -242,13 +254,19 @@ class TestDeriveGcode:
 
         outcome = producers.derive_gcode(artifact.id)
 
-        assert outcome.kinds == {METADATA: "ready", THUMBNAIL: "ready"}
+        assert outcome.kinds == {
+            DerivativeKind.METADATA: "ready",
+            DerivativeKind.THUMBNAIL: "ready",
+        }
         meta = db_session.exec(
             select(Metadata).where(Metadata.file_id == artifact.id)
         ).one()
         assert meta.slicer_name
         rows = _rows(db_session, artifact.id)
-        assert json.loads(rows[THUMBNAIL].output_json)["strategy"] == "embedded"
+        assert (
+            json.loads(rows[DerivativeKind.THUMBNAIL].output_json)["strategy"]
+            == "embedded"
+        )
 
     def test_gcode_without_an_embedded_image_skips_its_thumbnail(
         self, db_session: Session, stored
@@ -257,8 +275,11 @@ class TestDeriveGcode:
 
         outcome = producers.derive_gcode(artifact.id)
 
-        assert outcome.kinds == {METADATA: "ready", THUMBNAIL: "skipped"}
-        row = _rows(db_session, artifact.id)[THUMBNAIL]
+        assert outcome.kinds == {
+            DerivativeKind.METADATA: "ready",
+            DerivativeKind.THUMBNAIL: "skipped",
+        }
+        row = _rows(db_session, artifact.id)[DerivativeKind.THUMBNAIL]
         assert row.failure_reason == "no_embedded_thumbnail"
 
     def test_records_the_material_each_tool_needs(
@@ -310,9 +331,11 @@ class TestDeriveGcode:
         self, db_session: Session, stored, make_derivative
     ) -> None:
         artifact = stored("plain.gcode", content.gcode(marker="owed"))
-        make_derivative(artifact, METADATA)
+        make_derivative(artifact, DerivativeKind.METADATA)
 
-        assert producers.derive_gcode(artifact.id).kinds == {THUMBNAIL: "skipped"}
+        assert producers.derive_gcode(artifact.id).kinds == {
+            DerivativeKind.THUMBNAIL: "skipped"
+        }
         assert (
             db_session.exec(
                 select(Metadata).where(Metadata.file_id == artifact.id)
@@ -324,8 +347,8 @@ class TestDeriveGcode:
         self, stored, make_derivative
     ) -> None:
         artifact = stored("plain.gcode", content.gcode(marker="done"))
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL)
+        make_derivative(artifact, DerivativeKind.METADATA)
+        make_derivative(artifact, DerivativeKind.THUMBNAIL)
 
         assert producers.derive_gcode(artifact.id).kinds == {}
 
@@ -348,8 +371,8 @@ class TestDeriveGcode:
 
         outcome = producers.derive_gcode(artifact.id)
 
-        assert outcome.kinds[THUMBNAIL] == "failed"
-        row = _rows(db_session, artifact.id)[THUMBNAIL]
+        assert outcome.kinds[DerivativeKind.THUMBNAIL] == "failed"
+        row = _rows(db_session, artifact.id)[DerivativeKind.THUMBNAIL]
         assert (row.failure_reason, row.next_attempt_at) == ("invalid_source", None)
 
     def test_a_profile_detection_failure_does_not_fail_the_metadata(
@@ -363,7 +386,10 @@ class TestDeriveGcode:
         monkeypatch.setattr(profile_detection, "upsert_detected_profiles", broken)
         artifact = stored("plain.gcode", content.gcode(marker="profiles"))
 
-        assert producers.derive_gcode(artifact.id).kinds[METADATA] == "ready"
+        assert (
+            producers.derive_gcode(artifact.id).kinds[DerivativeKind.METADATA]
+            == "ready"
+        )
 
     def test_unreadable_bytes_fail_transiently(
         self, db_session: Session, stored, remove_blob_key
@@ -373,7 +399,10 @@ class TestDeriveGcode:
 
         outcome = producers.derive_gcode(artifact.id)
 
-        assert outcome.kinds == {METADATA: "failed", THUMBNAIL: "failed"}
+        assert outcome.kinds == {
+            DerivativeKind.METADATA: "failed",
+            DerivativeKind.THUMBNAIL: "failed",
+        }
 
 
 class TestDeriveToolpath:
@@ -400,8 +429,8 @@ class TestDeriveToolpath:
 
         outcome = producers.derive_toolpath(bgcode.id)
 
-        assert outcome.kinds == {TOOLPATH: "ready"}
-        row = _rows(db_session, bgcode.id)[TOOLPATH]
+        assert outcome.kinds == {DerivativeKind.TOOLPATH: "ready"}
+        row = _rows(db_session, bgcode.id)[DerivativeKind.TOOLPATH]
         assert row.storage_key is not None
         assert get_backend().read_bytes(row.storage_key) == b"G1 X1\n"
 
@@ -418,8 +447,8 @@ class TestDeriveToolpath:
 
         outcome = producers.derive_toolpath(bgcode.id)
 
-        assert outcome.kinds == {TOOLPATH: "failed"}
-        row = _rows(db_session, bgcode.id)[TOOLPATH]
+        assert outcome.kinds == {DerivativeKind.TOOLPATH: "failed"}
+        row = _rows(db_session, bgcode.id)[DerivativeKind.TOOLPATH]
         assert (row.failure_reason, row.next_attempt_at) == (
             "toolpath_invalid_bgcode",
             None,
@@ -432,8 +461,8 @@ class TestDeriveToolpath:
 
         outcome = producers.derive_toolpath(bgcode.id)
 
-        assert outcome.kinds == {TOOLPATH: "failed"}
-        row = _rows(db_session, bgcode.id)[TOOLPATH]
+        assert outcome.kinds == {DerivativeKind.TOOLPATH: "failed"}
+        row = _rows(db_session, bgcode.id)[DerivativeKind.TOOLPATH]
         assert row.failure_reason == "file_blob_unavailable"
         assert row.next_attempt_at is not None
 
@@ -447,8 +476,10 @@ class TestDeriveToolpath:
 
         monkeypatch.setattr(toolpath, "convert", unreadable)
 
-        assert producers.derive_toolpath(bgcode.id).kinds == {TOOLPATH: "failed"}
-        row = _rows(db_session, bgcode.id)[TOOLPATH]
+        assert producers.derive_toolpath(bgcode.id).kinds == {
+            DerivativeKind.TOOLPATH: "failed"
+        }
+        row = _rows(db_session, bgcode.id)[DerivativeKind.TOOLPATH]
         assert (row.failure_reason, row.next_attempt_at is not None) == (
             "invalid_source",
             True,
@@ -471,21 +502,26 @@ class TestDeriveToolpath:
 
         outcome = producers.derive_toolpath(bgcode.id)
 
-        assert outcome.kinds == {TOOLPATH: "failed"}
-        row = _rows(db_session, bgcode.id)[TOOLPATH]
+        assert outcome.kinds == {DerivativeKind.TOOLPATH: "failed"}
+        row = _rows(db_session, bgcode.id)[DerivativeKind.TOOLPATH]
         assert row.failure_reason == "toolpath_converter_unavailable"
         assert row.next_attempt_at is not None
 
     def test_a_toolpath_already_derived_is_left_alone(
         self, bgcode, make_derivative
     ) -> None:
-        make_derivative(bgcode, TOOLPATH)
+        make_derivative(bgcode, DerivativeKind.TOOLPATH)
 
         assert producers.derive_toolpath(bgcode.id).kinds == {}
 
 
 class TestOutcome:
     def test_reports_its_kinds_in_a_stable_order(self) -> None:
-        outcome = producers.Outcome({THUMBNAIL: "ready", METADATA: "failed"})
+        outcome = producers.Outcome(
+            {DerivativeKind.THUMBNAIL: "ready", DerivativeKind.METADATA: "failed"}
+        )
 
-        assert list(outcome.as_result()["derivatives"]) == [METADATA, THUMBNAIL]
+        assert list(outcome.as_result()["derivatives"]) == [
+            DerivativeKind.METADATA,
+            DerivativeKind.THUMBNAIL,
+        ]

@@ -15,9 +15,8 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.core.metrics import lane_depth
 from app.core.time import utcnow
-from app.db.models import Job, JobState, WorkExecutor
+from app.db.models import Job, JobKind, JobState, LaneName, WorkExecutor
 from app.modules.work import housekeeping
-from app.modules.work.catalog import MAINTENANCE
 
 
 def _result(session: Session, job_id: str) -> dict:
@@ -31,7 +30,7 @@ class TestHousekeeping:
     def test_runs_on_a_fixed_quarter_hour_schedule(self) -> None:
         definition = housekeeping.definition()
 
-        assert definition.lane == MAINTENANCE
+        assert definition.lane == LaneName.MAINTENANCE
         assert definition.source is not None
         assert definition.source.cron(None) == "*/15 * * * *"  # type: ignore[attr-defined]
 
@@ -42,9 +41,9 @@ class TestHousekeeping:
 
         expired = utcnow() - timedelta(hours=settings.jobs_system_retention_hours + 1)
         old_id = make_job(
-            kind="derivatives.mesh", state=JobState.COMPLETED, updated_at=expired
+            kind=JobKind.DERIVATIVES_MESH, state=JobState.COMPLETED, updated_at=expired
         ).id
-        job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
+        job = make_job(kind=JobKind.WORK_HOUSEKEEPING, subject="work.housekeeping@now")
 
         submit(job.id)
         work_engine.run_one()
@@ -63,7 +62,7 @@ class TestHousekeeping:
         )
         db_session.add(gone)
         db_session.commit()
-        job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
+        job = make_job(kind=JobKind.WORK_HOUSEKEEPING, subject="work.housekeeping@now")
 
         submit(job.id)
         work_engine.run_one()
@@ -76,10 +75,10 @@ class TestHousekeeping:
     ) -> None:
         from app.modules.work.submission import submit
 
-        earlier = make_job(kind="sources.scan")
+        earlier = make_job(kind=JobKind.SOURCES_SCAN)
         submit(earlier.id)
         work_engine.drain()
-        job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
+        job = make_job(kind=JobKind.WORK_HOUSEKEEPING, subject="work.housekeeping@now")
 
         submit(job.id)
         work_engine.drain()
@@ -91,9 +90,9 @@ class TestHousekeeping:
     ) -> None:
         from app.modules.work.submission import submit
 
-        job = make_job(kind=housekeeping.DEFINITION, subject="work.housekeeping@now")
+        job = make_job(kind=JobKind.WORK_HOUSEKEEPING, subject="work.housekeeping@now")
         submit(job.id)
-        queued = make_job(kind="ingestion.upload")
+        queued = make_job(kind=JobKind.INGESTION_UPLOAD)
         submit(queued.id)
 
         work_engine.run_one()

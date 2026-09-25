@@ -54,6 +54,7 @@ from app.db.models import SUFFIX_TO_FILE_TYPE
 from app.db.session import SessionFactory, get_session_factory
 from app.modules.ingestion.ingestion import StagedArtifact, commit_staged_artifact
 from app.modules.storage.capacity import CapacityManager, CapacityResource
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs as registry
 
 if TYPE_CHECKING:
@@ -367,12 +368,10 @@ def import_assets(
     """
     total = len(staged_files)
     if total == 0:
-        registry.update(job_id, state="failed", error="no_importable_files")
+        registry.finish(job_id, JobOutcome.FAILED, error="no_importable_files")
         return
     override = model_name.strip() if model_name and total == 1 else None
-    registry.update(
-        job_id, state="running", total_steps=total, total=total, stage="ingesting"
-    )
+    registry.update(job_id, total_steps=total, total=total, stage="ingesting")
     results: list[dict] = []
     done = 0
     for index, staged_file in enumerate(staged_files):
@@ -424,9 +423,9 @@ def import_assets(
     imported = [r for r in results if r.get("model_id")]
     failures = [r for r in results if r.get("error")]
     deduplicated = sum(bool(r.get("deduplicated")) for r in imported)
-    registry.update(
+    registry.finish(
         job_id,
-        state="completed" if imported else "failed",
+        JobOutcome.COMPLETED if imported else JobOutcome.FAILED,
         model_id=imported[0]["model_id"] if imported else None,
         result={"imported": len(imported), "total": total, "items": results},
         processed=len(results),
@@ -501,7 +500,6 @@ def import_resolved_groups(
     total = sum(len(g.staged_files) for g in groups)
     registry.update(
         job_id,
-        state="running",
         total_steps=max(total, 1),
         total=total,
         stage="ingesting",
@@ -557,9 +555,9 @@ def import_resolved_groups(
             if len(member_errors) == 1
             else "collection_import_failed"
         )
-        registry.update(
+        registry.finish(
             job_id,
-            state="failed",
+            JobOutcome.FAILED,
             error=error,
             result=result,
             processed=len(results),
@@ -577,9 +575,9 @@ def import_resolved_groups(
         )
         return
 
-    registry.update(
+    registry.finish(
         job_id,
-        state="completed",
+        JobOutcome.COMPLETED,
         model_id=imported[0]["model_id"],
         result=result,
         processed=len(results),

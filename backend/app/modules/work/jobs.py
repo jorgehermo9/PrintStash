@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from sqlalchemy import delete, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -22,9 +22,18 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import ensure_utc, utcnow
 from app.db.affected import affected
-from app.db.models import ACTIVE_JOB_STATES, Job, JobState, StagingLease, WorkPriority
+from app.db.models import (
+    ACTIVE_JOB_STATES,
+    Job,
+    JobKind,
+    JobState,
+    StagingLease,
+    WorkPriority,
+)
 from app.db.session import get_session_factory
 from app.schemas.jobs import JobFailedItem, JobStatus
+
+from .contracts import JobOutcome
 
 logger = get_logger(__name__)
 
@@ -34,6 +43,7 @@ _SECRET_QUERY = re.compile(
 )
 _ABS_PATH = re.compile(r"(?<![\w.-])(?:[A-Za-z]:[\\/]|/)[^\s:]+")
 _MAX_FAILED_ITEMS = 100
+_MAX_SUBJECT_KEY = 255
 _STATUS_FIELDS = frozenset(JobStatus.model_fields) - {
     "job_id",
     "kind",
@@ -97,18 +107,14 @@ def _safe_result(value: Any, key: str | None = None) -> Any:
     return value
 
 
-def _state(value: str | JobState) -> JobState:
-    return value if isinstance(value, JobState) else JobState(value)
-
-
 def status_of(row: Job) -> JobStatus:
-    payload = json.loads(row.status_json or "{}")
+    payload = json.loads(row.status_json)
     return JobStatus(
         job_id=row.id,
         kind=row.kind,
         owner_user_id=row.owner_user_id,
-        state=_state(row.state).value,
-        priority=WorkPriority(row.priority).value,
+        state=row.state,
+        priority=row.priority,
         attempts=row.attempts,
         resubmits=row.resubmits,
         created_at=row.created_at,
@@ -116,6 +122,16 @@ def status_of(row: Job) -> JobStatus:
         finished_at=row.finished_at,
         updated_at=row.updated_at,
         **{k: v for k, v in payload.items() if k in _STATUS_FIELDS},
+    )
+
+
+def _safe_failed_item(item: JobFailedItem) -> JobFailedItem:
+    """A failed item's display-safe form; a name or reason sanitized to nothing
+    is reported as redacted rather than dropped, so the count still adds up."""
+    return JobFailedItem(
+        name=safe_item(item.name) or "[redacted]",
+        reason=safe_error(item.reason) or "[redacted]",
+        retryable=item.retryable,
     )
 
 
@@ -137,25 +153,7 @@ def _merge(payload: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
             payload[key] = max(0, int(value))
         elif key == "failed_items":
             payload[key] = [
-                JobFailedItem(
-                    name=safe_item(
-                        item.name
-                        if isinstance(item, JobFailedItem)
-                        else str(item.get("name", "item"))
-                    )
-                    or "item",
-                    reason=safe_error(
-                        item.reason
-                        if isinstance(item, JobFailedItem)
-                        else str(item.get("reason", "import_failed"))
-                    )
-                    or "import_failed",
-                    retryable=(
-                        item.retryable
-                        if isinstance(item, JobFailedItem)
-                        else bool(item.get("retryable", False))
-                    ),
-                ).model_dump()
+                _safe_failed_item(JobFailedItem.model_validate(item)).model_dump()
                 for item in list(value)[:_MAX_FAILED_ITEMS]
             ]
         elif isinstance(value, datetime):
@@ -192,7 +190,7 @@ class JobStore:
     def create(
         self,
         *,
-        definition: str,
+        definition: JobKind,
         subject_key: str,
         owner_user_id: int | None,
         priority: WorkPriority = WorkPriority.INTERACTIVE,
@@ -206,12 +204,15 @@ class JobStore:
         commits it together with the intent it records). Without one it commits
         on its own session.
         """
+        if not 0 < len(subject_key) <= _MAX_SUBJECT_KEY:
+            # A truncated key would claim another subject's Jobs.
+            raise ValueError(f"job_subject_key_length:{len(subject_key)}")
         new_id = job_id or uuid.uuid4().hex
         now = utcnow()
         row = Job(
             id=new_id,
-            kind=definition[:64],
-            subject_key=subject_key[:255],
+            kind=definition,
+            subject_key=subject_key,
             owner_user_id=owner_user_id,
             priority=priority,
             state=JobState.QUEUED,
@@ -246,7 +247,9 @@ class JobStore:
         return new_id
 
     @staticmethod
-    def _active_id(session: Session, definition: str, subject_key: str) -> str | None:
+    def _active_id(
+        session: Session, definition: JobKind, subject_key: str
+    ) -> str | None:
         return session.exec(
             select(Job.id).where(
                 Job.kind == definition,
@@ -255,30 +258,40 @@ class JobStore:
             )
         ).first()
 
-    def active_for_subject(self, definition: str, subject_key: str) -> str | None:
+    def active_for_subject(self, definition: JobKind, subject_key: str) -> str | None:
         with get_session_factory().scoped_session() as session:
             return self._active_id(session, definition, subject_key)
 
     # -- status -------------------------------------------------------------
 
-    def update(
-        self, job_id: str, *, state: str | JobState | None = None, **fields: Any
+    def update(self, job_id: str, **fields: Any) -> None:
+        """Merge progress into an active Job.
+
+        A terminal Job is immutable: a step still reporting after its Job was
+        cancelled (the cancel races the running step) changes nothing.
+        """
+        self._write(job_id, None, fields)
+
+    def finish(self, job_id: str, outcome: JobOutcome, **fields: Any) -> None:
+        """The single terminal transition for every Job; the first one wins.
+
+        A failure always says why: ``error`` is required with ``FAILED``.
+        """
+        if outcome is JobOutcome.FAILED and not fields.get("error"):
+            raise ValueError("failed_job_requires_error")
+        self._write(job_id, outcome, fields)
+
+    def _write(
+        self, job_id: str, outcome: JobOutcome | None, fields: dict[str, Any]
     ) -> None:
-        """Merge progress into a Job. A terminal Job is immutable."""
         with get_session_factory().scoped_session() as session:
             row = session.get(Job, job_id)
-            if row is None or _state(row.state) in TERMINAL_STATES:
+            if row is None or row.state in TERMINAL_STATES:
                 return
-            payload = _merge(json.loads(row.status_json or "{}"), fields)
+            payload = _merge(json.loads(row.status_json), fields)
             now = utcnow()
-            if state is not None:
-                target = JobState.QUEUED if state == "pending" else _state(state)
-                if target in TERMINAL_STATES:
-                    self._apply_terminal(row, payload, target, now)
-                else:
-                    if target is JobState.RUNNING and row.started_at is None:
-                        row.started_at = now
-                    row.state = target
+            if outcome is not None:
+                self._apply_terminal(row, payload, outcome, now)
             row.status_json = json.dumps(payload, separators=(",", ":"))
             row.updated_at = now
             session.add(row)
@@ -287,45 +300,39 @@ class JobStore:
             status = status_of(row)
         self._changed(status)
 
-    def finish(self, job_id: str, *, state: str | JobState, **fields: Any) -> None:
-        """The single terminal transition for every Job."""
-        target = _state(state)
-        if target not in TERMINAL_STATES:
-            raise ValueError("terminal_state_required")
-        self.update(job_id, state=target, **fields)
-
     @staticmethod
     def _apply_terminal(
-        row: Job, payload: dict[str, Any], target: JobState, now: datetime
+        row: Job, payload: dict[str, Any], outcome: JobOutcome, now: datetime
     ) -> None:
         if row.started_at is None:
             # Even a Job that failed before useful work keeps the only valid
             # sequence: queued -> running -> terminal.
             row.started_at = now
-        row.state = target
+        row.state = outcome.state
         row.finished_at = now
         payload["progress"] = 100.0
         payload["stage"] = "completed"
-        if target is JobState.COMPLETED and payload.get("completion") is None:
-            payload["completion"] = (
+        if outcome is JobOutcome.COMPLETED:
+            payload.setdefault(
+                "completion",
                 "partial"
                 if payload.get("failed") or payload.get("skipped")
-                else "complete"
+                else "complete",
             )
-        if target is not JobState.COMPLETED:
-            payload["completion"] = None
+            result = payload["completion"]
+        else:
+            payload.pop("completion", None)
+            result = outcome.value
         from app.core.metrics import record_job_terminal
 
         duration = (ensure_utc(now) - ensure_utc(row.started_at)).total_seconds()
-        record_job_terminal(
-            row.kind, payload.get("completion") or target.value, duration
-        )
+        record_job_terminal(row.kind, result, duration)
         logger.info(
             "job_terminal job_id=%s kind=%s duration_s=%.3f result=%s",
             row.id,
-            row.kind,
+            row.kind.value,
             duration,
-            payload.get("completion") or target.value,
+            result,
         )
 
     def get(self, job_id: str) -> Optional[JobStatus]:
@@ -345,7 +352,7 @@ class JobStore:
         is_superuser: bool = False,
         terminal_limit: int = 20,
         tracked_job_ids: tuple[str, ...] = (),
-        kinds: Iterable[str] | None = None,
+        kinds: Iterable[JobKind] | None = None,
         include_system: bool = False,
     ) -> list[JobStatus]:
         """Active Jobs, the most recent terminal ones, and any tracked by id.
@@ -372,7 +379,7 @@ class JobStore:
             ).all()
             terminal = session.exec(
                 select(Job)
-                .where(*scope, col(Job.state).in_([s.value for s in TERMINAL_STATES]))
+                .where(*scope, col(Job.state).in_(TERMINAL_STATES))
                 .order_by(col(Job.updated_at).desc())
                 .limit(terminal_limit)
             ).all()
@@ -397,16 +404,16 @@ class JobStore:
             ).all()
             return [status_of(row) for row in rows]
 
-    def counts_by_definition(self) -> dict[str, dict[str, int]]:
+    def counts_by_definition(self) -> dict[JobKind, dict[JobState, int]]:
         with get_session_factory().scoped_session() as session:
             rows = session.exec(
                 select(Job.kind, Job.state, func.count(col(Job.id))).group_by(
                     Job.kind, Job.state
                 )
             ).all()
-        counts: dict[str, dict[str, int]] = {}
-        for kind, state, count in rows:
-            counts.setdefault(str(kind), {})[_state(state).value] = int(count)
+        counts: dict[JobKind, dict[JobState, int]] = {}
+        for kind, state, count in cast(Sequence[tuple[JobKind, JobState, int]], rows):
+            counts.setdefault(kind, {})[state] = int(count)
         return counts
 
     def snapshot_counts(self) -> dict[str, int]:
@@ -416,8 +423,8 @@ class JobStore:
             rows = session.exec(
                 select(Job.state, func.count(col(Job.id))).group_by(Job.state)
             ).all()
-            for state, count in rows:
-                counts[_state(state).value] = int(count)
+            for state, count in cast(Sequence[tuple[JobState, int]], rows):
+                counts[state.value] = int(count)
             stuck = session.exec(
                 select(func.count(col(Job.id))).where(
                     col(Job.state).in_(ACTIVE_JOB_STATES),
@@ -443,7 +450,7 @@ class JobStore:
         now = now or utcnow()
         user_cutoff = now - timedelta(days=settings.jobs_retention_days)
         system_cutoff = now - timedelta(hours=settings.jobs_system_retention_hours)
-        terminal = [s.value for s in TERMINAL_STATES]
+        terminal = list(TERMINAL_STATES)
         unleased = ~col(Job.id).in_(
             select(StagingLease.job_id).where(col(StagingLease.job_id).is_not(None))
         )

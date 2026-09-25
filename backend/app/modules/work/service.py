@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import cast
 
 from sqlalchemy import delete, func
 from sqlmodel import Session, col, select
@@ -20,10 +21,13 @@ from app.core.time import utcnow
 from app.db.models import (
     ACTIVE_JOB_STATES,
     ArtifactDerivative,
+    DerivativeKind,
     DerivativeRegeneration,
     DerivativeState,
     Job,
+    JobKind,
     JobState,
+    LaneName,
     User,
     WorkLaneOverride,
     WorkPriority,
@@ -34,11 +38,13 @@ from app.schemas.jobs import (
     ExecutorRead,
     JobStatus,
     LaneRead,
+    RegenerateMode,
     WorkOverview,
 )
 
 from . import catalog as catalog_module
 from . import executors
+from .contracts import JobOutcome
 from .jobs import TERMINAL_STATES, ActiveJobExists, jobs, status_of
 from .submission import execution_id, nudge
 
@@ -48,7 +54,7 @@ logger = get_logger(__name__)
 def request(
     session: Session,
     *,
-    definition: str,
+    definition: JobKind,
     subject_key: str,
     owner_user_id: int | None,
     priority: WorkPriority = WorkPriority.INTERACTIVE,
@@ -92,7 +98,7 @@ def cancel(job_id: str, *, actor: User) -> JobStatus:
         definition.cancel(session, row.subject_key)
         session.commit()
         attempts = row.attempts
-    jobs.finish(job_id, state=JobState.CANCELLED, error="cancelled_by_user")
+    jobs.finish(job_id, JobOutcome.CANCELLED, error="cancelled_by_user")
     if attempts:
         try:
             catalog_module.get_engine().cancel(execution_id(job_id, attempts))
@@ -120,13 +126,16 @@ def supersede_restored() -> int:
     if not superseded:
         return 0
     with get_session_factory().scoped_session() as session:
-        rows = list(
-            session.exec(
-                select(Job.id, Job.kind, Job.subject_key).where(
-                    col(Job.kind).in_(superseded),
-                    col(Job.state).in_(ACTIVE_JOB_STATES),
-                )
-            ).all()
+        rows = cast(
+            list[tuple[str, JobKind, str]],
+            list(
+                session.exec(
+                    select(Job.id, Job.kind, Job.subject_key).where(
+                        col(Job.kind).in_(superseded),
+                        col(Job.state).in_(ACTIVE_JOB_STATES),
+                    )
+                ).all()
+            ),
         )
         # Withdraw each one's intent the way a cancel does, so what it had
         # started (a backup run, a destination retry) settles too.
@@ -137,14 +146,14 @@ def supersede_restored() -> int:
     for job_id in ids:
         jobs.finish(
             job_id,
-            state=JobState.CANCELLED,
+            JobOutcome.CANCELLED,
             error="superseded_by_restore",
             retryable=False,
         )
     return len(ids)
 
 
-def cancel_queued(definition: str, *, actor: User) -> int:
+def cancel_queued(definition: JobKind, *, actor: User) -> int:
     """Withdraw every queued (not yet running) Job of one definition."""
     if not actor.is_superuser:
         raise OperationError("admin_required", kind=ErrorKind.FORBIDDEN)
@@ -166,7 +175,7 @@ def retry(job_id: str, *, actor: User) -> JobStatus:
     status = jobs.get(job_id)
     if status is None or not visible_to(status, actor):
         raise OperationError("job_not_found", kind=ErrorKind.NOT_FOUND)
-    if status.state not in {JobState.FAILED.value, JobState.CANCELLED.value}:
+    if status.state not in {JobState.FAILED, JobState.CANCELLED}:
         raise OperationError("job_not_retryable", kind=ErrorKind.CONFLICT)
     definition = catalog_module.get_catalog().definition(status.kind)
     with get_session_factory().scoped_session() as session:
@@ -186,7 +195,7 @@ def retry(job_id: str, *, actor: User) -> JobStatus:
             session.rollback()
             raise OperationError("job_subject_gone", kind=ErrorKind.GONE)
         now = utcnow()
-        payload = json.loads(row.status_json or "{}")
+        payload = json.loads(row.status_json)
         payload = {
             key: value
             for key, value in payload.items()
@@ -205,10 +214,11 @@ def retry(job_id: str, *, actor: User) -> JobStatus:
     return result
 
 
-def set_lane_concurrency(lane: str, concurrency: int | None, *, actor: User) -> None:
+def set_lane_concurrency(
+    lane: LaneName, concurrency: int | None, *, actor: User
+) -> None:
+    """Override one lane's concurrency; ``None`` returns it to its default."""
     catalog = catalog_module.get_catalog()
-    if lane not in catalog.lanes:
-        raise OperationError("lane_not_found", kind=ErrorKind.NOT_FOUND)
     with get_session_factory().scoped_session() as session:
         if concurrency is None:
             session.execute(
@@ -229,13 +239,13 @@ def set_lane_concurrency(lane: str, concurrency: int | None, *, actor: User) -> 
     )
 
 
-def regenerate_derivatives(kind: str, *, mode: str, actor: User) -> None:
+def regenerate_derivatives(
+    kind: DerivativeKind, *, mode: RegenerateMode, actor: User
+) -> None:
     """``missing`` just nudges; ``all`` marks every output of ``kind`` stale."""
-    from app.modules.derivatives.kinds import KINDS, definitions_for_kind
+    from app.modules.derivatives.kinds import definitions_for_kind
 
-    if kind not in KINDS:
-        raise OperationError("derivative_kind_not_found", kind=ErrorKind.NOT_FOUND)
-    if mode == "all":
+    if mode is RegenerateMode.ALL:
         with get_session_factory().scoped_session() as session:
             row = session.get(DerivativeRegeneration, kind) or DerivativeRegeneration(
                 kind=kind
@@ -249,7 +259,7 @@ def regenerate_derivatives(kind: str, *, mode: str, actor: User) -> None:
 
 
 def overview(*, now: datetime | None = None) -> WorkOverview:
-    from app.modules.derivatives.kinds import kinds_for_definition
+    from app.modules.derivatives import kinds
 
     now = now or utcnow()
     catalog = catalog_module.get_catalog()
@@ -262,11 +272,8 @@ def overview(*, now: datetime | None = None) -> WorkOverview:
             LaneRead(
                 name=name,
                 concurrency=lane.concurrency,
-                default_concurrency=defaults[name].concurrency
-                if name in defaults
-                else lane.concurrency,
-                overridden=name in defaults
-                and lane.concurrency != defaults[name].concurrency,
+                default_concurrency=defaults[name].concurrency,
+                overridden=lane.concurrency != defaults[name].concurrency,
                 scope=lane.scope,
                 partitioned=lane.partitioned,
                 queued=depth.queued,
@@ -292,14 +299,16 @@ def overview(*, now: datetime | None = None) -> WorkOverview:
             definitions.append(
                 DefinitionRead(
                     name=name,
-                    label=definition.label or name,
+                    label=definition.label,
                     lane=definition.lane,
-                    queued=per_state.get("queued", 0),
-                    running=per_state.get("running", 0),
-                    interrupted=per_state.get("interrupted", 0),
-                    failed=per_state.get("failed", 0),
-                    completed=per_state.get("completed", 0),
-                    derivative_kinds=kinds_for_definition(name),
+                    queued=per_state.get(JobState.QUEUED, 0),
+                    running=per_state.get(JobState.RUNNING, 0),
+                    interrupted=per_state.get(JobState.INTERRUPTED, 0),
+                    failed=per_state.get(JobState.FAILED, 0),
+                    completed=per_state.get(JobState.COMPLETED, 0),
+                    derivative_kinds=list(kinds.group(name).kinds)
+                    if kinds.is_derivative(name)
+                    else [],
                     next_due_at=next_due,
                     last_finished_at=last,
                 )
@@ -317,7 +326,7 @@ def overview(*, now: datetime | None = None) -> WorkOverview:
             role=row.role,
             hostname=row.hostname,
             app_version=row.app_version,
-            lanes=[lane for lane in row.lanes.split(",") if lane],
+            lanes=executors.lanes_of(row),
             started_at=row.started_at,
             heartbeat_at=row.heartbeat_at,
             stale=executors.is_stale(row, now=now),

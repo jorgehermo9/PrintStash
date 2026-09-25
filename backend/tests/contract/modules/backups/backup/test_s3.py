@@ -96,11 +96,15 @@ class TestBackupS3:
         remote = backup_catalogue.get_backup(meta.id)
         assert remote is not None
         assert remote.location == "s3"
-        cache = backup_catalogue.get_backup_archive_path(meta.id, source_ref=remote.source_ref)
+        cache = backup_catalogue.get_backup_archive_path(
+            meta.id, source_ref=remote.source_ref
+        )
         assert cache.parent.name == ".cloud-cache"
         assert cache.exists()
 
-        assert backup_deletion.delete_backup(meta.id, source_ref=remote.source_ref) is True
+        assert (
+            backup_deletion.delete_backup(meta.id, source_ref=remote.source_ref) is True
+        )
         assert not cache.exists()
 
         with pytest.raises(botocore.exceptions.ClientError):

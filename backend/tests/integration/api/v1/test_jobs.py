@@ -32,6 +32,7 @@ from app.db.models import (
     IngestRequest,
     IngestRequestKind,
     Job,
+    JobKind,
     JobState,
     StagingLease,
     User,
@@ -95,7 +96,7 @@ class TestListJobs:
     ) -> None:
         mine = make_job(owner=owner)
         theirs = make_job(owner=stranger)
-        make_job(kind="derivatives.mesh")
+        make_job(kind=JobKind.DERIVATIVES_MESH)
 
         response = client.get("/api/v1/jobs", headers=_headers(admin))
 
@@ -104,7 +105,7 @@ class TestListJobs:
     def test_an_administrator_asks_for_system_jobs(
         self, client: TestClient, admin: User, make_job
     ) -> None:
-        system = make_job(kind="derivatives.mesh")
+        system = make_job(kind=JobKind.DERIVATIVES_MESH)
 
         response = client.get(
             "/api/v1/jobs", headers=_headers(admin), params={"include_system": True}
@@ -125,11 +126,13 @@ class TestListJobs:
     def test_filters_by_definition(
         self, client: TestClient, owner: User, make_job
     ) -> None:
-        wanted = make_job(owner=owner, kind="ingestion.url")
-        make_job(owner=owner, kind="backups.create")
+        wanted = make_job(owner=owner, kind=JobKind.INGESTION_URL)
+        make_job(owner=owner, kind=JobKind.BACKUPS_CREATE)
 
         response = client.get(
-            "/api/v1/jobs", headers=_headers(owner), params={"kind": "ingestion.url"}
+            "/api/v1/jobs",
+            headers=_headers(owner),
+            params={"kind": JobKind.INGESTION_URL},
         )
 
         assert [job["job_id"] for job in response.json()] == [wanted.id]
@@ -214,7 +217,7 @@ class TestGetJob:
     def test_a_system_job_is_not_found_for_a_user(
         self, client: TestClient, owner: User, make_job
     ) -> None:
-        job = make_job(kind="derivatives.mesh")
+        job = make_job(kind=JobKind.DERIVATIVES_MESH)
 
         response = client.get(f"/api/v1/jobs/{job.id}", headers=_headers(owner))
 
@@ -436,7 +439,7 @@ class TestRetryJob:
     ) -> None:
         request = make_ingest_request(owner, state=JobState.FAILED)
         make_job(
-            kind="ingestion.url",
+            kind=JobKind.INGESTION_URL,
             owner=owner,
             subject=f"ingest_request/{request.job_id}",
         )
@@ -452,7 +455,7 @@ class TestRetryJob:
         self, client: TestClient, owner: User, make_job
     ) -> None:
         job = make_job(
-            kind="ingestion.url",
+            kind=JobKind.INGESTION_URL,
             owner=owner,
             state=JobState.FAILED,
             subject="ingest_request/vanished",

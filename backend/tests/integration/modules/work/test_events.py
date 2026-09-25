@@ -13,6 +13,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from app.core.time import utcnow
+from app.db.models import JobKind, JobState, WorkPriority
 from app.modules.work import events
 from app.schemas.jobs import JobStatus
 
@@ -36,7 +38,18 @@ def publisher() -> Iterator[Recorder]:
 
 
 def _status(**fields) -> JobStatus:
-    return JobStatus(job_id="j1", kind="ingestion.upload", state="running", **fields)
+    now = utcnow()
+    return JobStatus(
+        job_id="j1",
+        kind=JobKind.INGESTION_UPLOAD,
+        state=JobState.RUNNING,
+        priority=WorkPriority.INTERACTIVE,
+        attempts=1,
+        resubmits=0,
+        created_at=now,
+        updated_at=now,
+        **fields,
+    )
 
 
 class TestJobChanged:
@@ -47,7 +60,7 @@ class TestJobChanged:
         assert publisher.sent[0][1] == {
             "type": "job",
             "job_id": "j1",
-            "kind": "ingestion.upload",
+            "kind": JobKind.INGESTION_UPLOAD,
             "state": "running",
             "progress": 40.0,
         }

@@ -53,6 +53,7 @@ _admin_security_lock = threading.RLock()
 class GcApprovalRequest(BaseModel):
     digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
+
 _RESOURCE_MODEL = {
     "models": Model,
     "files": File,
@@ -308,9 +309,7 @@ def list_audit(
 
 def _gc_read(session: Session, run: GcRun) -> dict:
     items = session.exec(
-        select(GcItem)
-        .where(GcItem.run_id == run.id)
-        .order_by(GcItem.id.asc())  # type: ignore[attr-defined]
+        select(GcItem).where(GcItem.run_id == run.id).order_by(GcItem.id.asc())  # type: ignore[attr-defined]
     ).all()
     body = run.model_dump(mode="json")
     body["items"] = [item.model_dump(mode="json") for item in items]
@@ -350,9 +349,7 @@ def run_gc(
 def read_active_gc_plan(session: Session = Depends(get_session)) -> dict | None:
     """Return the durable active plan so UI reloads cannot lose the interlock."""
     run = session.exec(
-        select(GcRun)
-        .where(GcRun.active_slot == 1)
-        .order_by(GcRun.id.desc())  # type: ignore[attr-defined]
+        select(GcRun).where(GcRun.active_slot == 1).order_by(GcRun.id.desc())  # type: ignore[attr-defined]
     ).first()
     return None if run is None else _gc_read(session, run)
 

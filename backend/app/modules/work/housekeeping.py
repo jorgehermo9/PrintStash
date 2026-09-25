@@ -7,17 +7,15 @@ from datetime import timedelta
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import utcnow
+from app.db.models import JobKind, LaneName
 
 from . import catalog as catalog_module
 from . import executors
-from .catalog import MAINTENANCE
 from .contracts import JobContext, JobDefinition, Step
 from .jobs import jobs
 from .sources import ScheduleSource, fixed
 
 logger = get_logger(__name__)
-
-DEFINITION = "work.housekeeping"
 
 
 def _run(ctx: JobContext) -> None:
@@ -45,9 +43,9 @@ def _run(ctx: JobContext) -> None:
 
 def definition() -> JobDefinition:
     return JobDefinition(
-        name=DEFINITION,
-        lane=MAINTENANCE,
+        name=JobKind.WORK_HOUSEKEEPING,
+        lane=LaneName.MAINTENANCE,
         steps=(Step("work.housekeeping", _run),),
-        source=ScheduleSource(DEFINITION, fixed("*/15 * * * *")),
+        source=ScheduleSource(JobKind.WORK_HOUSEKEEPING, fixed("*/15 * * * *")),
         label="Background work upkeep",
     )

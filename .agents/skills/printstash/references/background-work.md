@@ -20,17 +20,24 @@ Work Source, Nudge, Lane, Fence, Derivative, Recipe) are in `CONTEXT.md`.
 
 ## Add a Job Definition
 
-1. In `app/modules/<owner>/jobs.py`, build a `JobDefinition` with its `name`
-   (`<owner>.<verb>`), `lane` (from `work.catalog`), ordered `Step`s, and a
-   `label` for the admin page.
-2. Declare what cancel does to the Subject (`cancel`), and, when meaningful,
+1. Add the kind to `JobKind` in `app/db/models/types.py` (`<owner>.<verb>`,
+   in its owner's block) and to the `JobKind` union in
+   `frontend/src/types/models.ts`, then autogenerate the migration that
+   re-creates the `jobs.kind` and `reconcile_cursors.source` CHECKs
+   (`tests/repo/test_frontend_enums.py` and `test_models_versus_chain` fail
+   until both exist).
+2. In `app/modules/<owner>/jobs.py`, build a `JobDefinition` with that
+   `JobKind` as its `name`, a `LaneName` as its `lane`, ordered `Step`s, and a
+   `label` for the admin page. A step finishes its Job only with a
+   `JobOutcome`; a `FAILED` outcome always carries an `error`.
+3. Declare what cancel does to the Subject (`cancel`), and, when meaningful,
    `retry` (return `False` when the Subject is gone) and `on_failure`. A
    cancel that does not withdraw intent is a bug: the reconciler resubmits it.
-3. Requested work: record the Job with `work.service.request(...)` in the same
+4. Requested work: record the Job with `work.service.request(...)` in the same
    transaction as its intent, commit, then `nudge(definition)`. Discovered work:
    give the definition a `source` (below) and nudge from the hot path.
-4. Register it in `app/bootstrap/work.py:definitions()`.
-5. Steps must be idempotent: a crash re-runs a step, and a resubmitted attempt
+5. Register it in `app/bootstrap/work.py:definitions()`.
+6. Steps must be idempotent: a crash re-runs a step, and a resubmitted attempt
    re-runs all of them. Check `ctx.cancelled()` between units of long work, and
    report progress with `ctx.update(...)`.
 
@@ -49,7 +56,8 @@ Work Source, Nudge, Lane, Fence, Derivative, Recipe) are in `CONTEXT.md`.
 ## Lanes
 
 Reuse a lane unless the work has a genuinely different cost profile. A new lane
-needs a concurrency setting in `core/config.py` (`JOBS_<LANE>_CONCURRENCY`), an
+is a `LaneName` member (and its frontend union and CHECK migration), a
+concurrency setting in `core/config.py` (`JOBS_<LANE>_CONCURRENCY`), an
 entry in `catalog.default_lanes()`, and docs in `background-work.md`.
 
 ## Derivative kinds and recipes

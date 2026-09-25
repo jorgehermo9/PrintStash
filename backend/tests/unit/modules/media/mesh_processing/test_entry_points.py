@@ -517,9 +517,7 @@ class TestRenderThumbnail:
             zf.writestr("Metadata/thumbnail.png", png)
 
         monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: _fake_mesh(10))
-        monkeypatch.setattr(
-            mesh_render, "render_mesh_thumbnail", lambda *a, **k: None
-        )
+        monkeypatch.setattr(mesh_render, "render_mesh_thumbnail", lambda *a, **k: None)
         assert mesh_operations.render_thumbnail(p) == png
 
     def test_render_thumbnail_is_none_when_nothing_can_be_rendered(
@@ -528,9 +526,7 @@ class TestRenderThumbnail:
         p = tmp_path / "cube.stl"
         _write_binary_stl(p, 10)
         monkeypatch.setattr(mesh_processing, "_load_mesh", lambda _p: _fake_mesh(10))
-        monkeypatch.setattr(
-            mesh_render, "render_mesh_thumbnail", lambda *a, **k: None
-        )
+        monkeypatch.setattr(mesh_render, "render_mesh_thumbnail", lambda *a, **k: None)
         assert mesh_operations.render_thumbnail(p) is None
 
     def test_render_thumbnail_over_cap_with_embedded_fallback_disabled_returns_none(

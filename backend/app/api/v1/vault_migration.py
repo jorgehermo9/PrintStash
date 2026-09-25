@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from app.core.security import require_superuser
-from app.db.models import User
+from app.db.models import JobKind, User
 from app.db.session import get_session, get_session_factory
 from app.modules.storage.vault_migration import VaultMigrations
 from app.schemas.vault_migration import MigrationPolicy, MigrationRunRead
@@ -72,10 +72,9 @@ def status(run_id: str, _user: User = Depends(require_superuser)):
 
 def _copying(result):
     """The run is copying: its ``storage.migrate`` Job does the copy."""
-    from app.modules.storage.jobs import MIGRATE_DEFINITION
     from app.modules.work import nudge
 
-    nudge(MIGRATE_DEFINITION)
+    nudge(JobKind.STORAGE_MIGRATE)
     return result
 
 

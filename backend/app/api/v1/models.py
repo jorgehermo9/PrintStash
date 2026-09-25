@@ -54,6 +54,7 @@ from app.db.models import (
     File,
     FileRevisionStatus,
     FileType,
+    JobKind,
     Metadata,
     Model,
     ModelProvenanceSource,
@@ -702,7 +703,7 @@ def import_library_archive(
         job_id = uuid.uuid4().hex
         work_service.request(
             session,
-            definition=library_transfer.IMPORT_DEFINITION,
+            definition=JobKind.INGESTION_LIBRARY_IMPORT,
             subject_key=f"job/{job_id}",
             owner_user_id=current_user.id,
             job_id=job_id,
@@ -727,7 +728,7 @@ def import_library_archive(
         session.rollback()
         Path(name).unlink(missing_ok=True)
         raise
-    nudge(library_transfer.IMPORT_DEFINITION)
+    nudge(JobKind.INGESTION_LIBRARY_IMPORT)
     return JobAccepted(job_id=job_id)
 
 

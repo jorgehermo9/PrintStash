@@ -129,7 +129,11 @@ class _NativeUploadBackend:
 
 class TestArtifactUploads:
     def test_resumable_dxf_upload_persists_the_original_bytes(
-        self, client: TestClient, auth_headers: dict[str, str], db_session: Session, tmp_path
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        db_session: Session,
+        tmp_path,
     ) -> None:
         use_local_storage(tmp_path)
         payload = b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n"

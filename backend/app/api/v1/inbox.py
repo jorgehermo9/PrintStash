@@ -20,7 +20,7 @@ from sqlmodel import Session
 from app.core.browser_device_auth import require_user_or_browser_import_user
 from app.core.config import settings
 from app.core.security import require_auth, require_user
-from app.db.models import InboxItemState, InboxSourceKind, User
+from app.db.models import InboxItemState, InboxSourceKind, JobKind, User
 from app.db.session import get_session
 from app.modules.ingestion import importer, inbox, staging_leases
 from app.modules.storage import storage
@@ -57,13 +57,13 @@ async def capture(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     assert row.id is not None
     if row.state == InboxItemState.CAPTURED:
-        nudge(inbox.RESOLVE_DEFINITION)
+        nudge(JobKind.INGESTION_INBOX_RESOLVE)
     return inbox.read(row, session)
 
 
 def _start_import(session: Session, row, selected_ids: list[str]) -> None:
     if inbox.begin_import(session, row, selected_ids) is not None:
-        nudge(inbox.IMPORT_DEFINITION)
+        nudge(JobKind.INGESTION_INBOX_IMPORT)
     session.refresh(row)
 
 
@@ -261,7 +261,7 @@ def batch_items(
             row = inbox.retry(session, row)
             assert row.id is not None
             if row.state == InboxItemState.CAPTURED:
-                nudge(inbox.RESOLVE_DEFINITION)
+                nudge(JobKind.INGESTION_INBOX_RESOLVE)
         elif payload.action == "import":
             if row.state != InboxItemState.REVIEW:
                 continue
@@ -317,7 +317,7 @@ def resolve_item(
         session.add(row)
         session.commit()
         session.refresh(row)
-    nudge(inbox.RESOLVE_DEFINITION)
+    nudge(JobKind.INGESTION_INBOX_RESOLVE)
     return inbox.read(row, session)
 
 
@@ -353,7 +353,7 @@ def retry_item(
     row = inbox.retry(session, inbox.require_visible(session, current_user, item_id))
     assert row.id is not None
     if row.state == InboxItemState.CAPTURED:
-        nudge(inbox.RESOLVE_DEFINITION)
+        nudge(JobKind.INGESTION_INBOX_RESOLVE)
     elif row.state == InboxItemState.REVIEW:
         _start_import(session, row, inbox.selected_ids(row.manifest_json))
     return inbox.read(row, session)

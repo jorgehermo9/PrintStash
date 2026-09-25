@@ -43,6 +43,7 @@ from app.db.models import (
     InboxItemResultState,
     InboxItemState,
     Job,
+    JobKind,
     ModelProvenanceSource,
     ModelSourceCover,
     StagingLease,
@@ -474,8 +475,8 @@ class TestUploadCaptureSlot:
             ).id
             == slots[0].id
         )
-        first = build_job(db_session, kind="ingestion.inbox_import", owner=owner)
-        second = build_job(db_session, kind="ingestion.inbox_import", owner=owner)
+        first = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=owner)
+        second = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=owner)
         inbox.staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=first.id
         )
@@ -959,7 +960,7 @@ class TestRetry:
         )
         row.state = InboxItemState.FAILED
         row.retryable = True
-        job = build_job(db_session, kind="ingestion.inbox_import", owner=owner)
+        job = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=owner)
         row.job_id = job.id
         inbox.staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=job.id

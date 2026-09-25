@@ -40,6 +40,7 @@ from app.db.models import (
     InboxItemResult,
     InboxItemState,
     InboxSourceKind,
+    JobKind,
     ModelProvenanceSource,
     StagingLease,
     StorageDeleteIntent,
@@ -67,6 +68,7 @@ from app.modules.storage.storage_deletion import enqueue_creation_receipt
 from app.modules.storage.storage_ownership import publish_file
 from app.modules.storage.storage_paths import unlink_managed_file
 from app.modules.work import service as work_service
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs as registry
 from app.modules.work.jobs import safe_error, safe_item
 from app.schemas.inbox import (
@@ -1553,7 +1555,9 @@ def run_import_job(item_id: int, job_id: str) -> None:
     with session_factory.scoped_session() as session:
         row = session.get(InboxItem, item_id)
         if row is None or row.state != InboxItemState.IMPORTING or row.job_id != job_id:
-            registry.finish(job_id, state="cancelled", error="pending_import_moved_on")
+            registry.finish(
+                job_id, JobOutcome.CANCELLED, error="pending_import_moved_on"
+            )
             return
         context = _import_context(session, row, job_id)
     run_async(_run_import(item_id, context, session_factory))
@@ -1680,12 +1684,8 @@ async def _run_import(
         )
         await asyncio.to_thread(_finish_import, item_id, job_id, session_factory)
     except Exception as exc:
-        registry.update(job_id, state="failed", error=str(exc), retryable=True)
+        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
         await asyncio.to_thread(_fail_import, item_id, exc, session_factory)
-
-
-IMPORT_DEFINITION = "ingestion.inbox_import"
-RESOLVE_DEFINITION = "ingestion.inbox_resolve"
 
 
 def begin_import(
@@ -1716,7 +1716,7 @@ def begin_import(
     row.updated_at = utcnow()
     job_id = work_service.request(
         session,
-        definition=IMPORT_DEFINITION,
+        definition=JobKind.INGESTION_INBOX_IMPORT,
         subject_key=f"inbox_item/{row.id}",
         owner_user_id=row.owner_user_id,
     )
@@ -2317,21 +2317,23 @@ def _retention() -> dict[str, int]:
 
 
 def definitions():
-    from app.modules.work.catalog import NETWORK
+    from app.db.models import LaneName
     from app.modules.work.contracts import JobDefinition, Step
     from app.modules.work.sources import fixed, scheduled
 
     return [
         scheduled(
-            "inbox.retention",
+            JobKind.INGESTION_INBOX_RETENTION,
             cron=fixed("35 * * * *"),
             run=_retention,
             label="Pending Import retention",
         ),
         JobDefinition(
-            name=RESOLVE_DEFINITION,
-            lane=NETWORK,
-            steps=(Step(f"{RESOLVE_DEFINITION}.run", _resolve_step),),
+            name=JobKind.INGESTION_INBOX_RESOLVE,
+            lane=LaneName.NETWORK,
+            steps=(
+                Step(f"{JobKind.INGESTION_INBOX_RESOLVE.value}.run", _resolve_step),
+            ),
             source=ResolveSource(),
             cancel=_withdraw,
             on_failure=_failed,
@@ -2341,9 +2343,9 @@ def definitions():
             label="Pending Import resolution",
         ),
         JobDefinition(
-            name=IMPORT_DEFINITION,
-            lane=NETWORK,
-            steps=(Step(f"{IMPORT_DEFINITION}.run", _import_step),),
+            name=JobKind.INGESTION_INBOX_IMPORT,
+            lane=LaneName.NETWORK,
+            steps=(Step(f"{JobKind.INGESTION_INBOX_IMPORT.value}.run", _import_step),),
             cancel=_withdraw,
             on_failure=_failed,
             retry=lambda _session, _subject: False,

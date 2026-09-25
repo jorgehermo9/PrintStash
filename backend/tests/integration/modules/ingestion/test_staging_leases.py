@@ -48,7 +48,7 @@ from sqlmodel import Session, select
 import app.modules.ingestion.staging_cleanup as staging_cleanup
 from alembic import command
 from app.core.time import utcnow
-from app.db.models import InboxItem, StagingLease, User
+from app.db.models import InboxItem, JobKind, StagingLease, User
 from app.modules.ingestion import staging_leases
 from tests.factories import build_job, build_user
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
@@ -121,7 +121,7 @@ class TestTransfer:
             select(StagingLease).where(StagingLease.inbox_item_id == inbox.id)
         ).one()
         assert lease.job_id is None
-        job = build_job(db_session, kind="ingestion.inbox_import", owner=user)
+        job = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=user)
         transferred = staging_leases.transfer_inbox_to_job(
             db_session, inbox_item_id=inbox.id, job_id=job.id
         )

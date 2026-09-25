@@ -26,6 +26,7 @@ from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.models import (
     FileType,
+    JobKind,
     MaterialSlotState,
     MaterialSource,
     NotificationEventType,
@@ -707,10 +708,9 @@ class PrinterHub:
             if status == PrinterStatus.READY and prev_status != PrinterStatus.READY:
                 # A printer just became free: queued fleet work may now route
                 # to it, so the dispatcher should look now, not at its next wait.
-                from app.modules.printing.jobs import DISPATCH_DEFINITION
                 from app.modules.work.submission import nudge_after_commit
 
-                nudge_after_commit(session, DISPATCH_DEFINITION)
+                nudge_after_commit(session, JobKind.PRINTING_DISPATCH)
             session.commit()
 
     async def _sync_active_job(

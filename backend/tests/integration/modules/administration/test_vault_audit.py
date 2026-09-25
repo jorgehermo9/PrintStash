@@ -26,6 +26,7 @@ from app.db.models import (
     FileType,
     InboxItem,
     InboxItemState,
+    JobKind,
     JobState,
     Model,
     MultipartModel,
@@ -1325,7 +1326,7 @@ class TestCheckBackgroundJobs:
         run = _make_run(db_session, user)
         build_job(
             db_session,
-            kind="derivatives.mesh",
+            kind=JobKind.DERIVATIVES_MESH,
             state=JobState.RUNNING,
             updated_at=utcnow() - timedelta(hours=2),
         )

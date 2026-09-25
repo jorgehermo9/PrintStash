@@ -21,7 +21,6 @@ over a fully derived library of any size costs the same:
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
@@ -110,31 +109,27 @@ class DerivativeSource:
     def __init__(self, group: DerivativeGroup) -> None:
         self.group = group
 
-    def _state(self, session: Session) -> tuple[ReconcileCursor, dict[str, int]]:
+    def _cursor(self, session: Session) -> ReconcileCursor:
         cursor = session.get(ReconcileCursor, self.group.definition)
         if cursor is None:
             cursor = ReconcileCursor(source=self.group.definition)
             session.add(cursor)
             session.flush()
-        state = json.loads(cursor.state_json or "{}")
-        return cursor, {
-            "high_water": int(state.get("high_water", 0)),
-            "position": int(state.get("position", 0)),
-        }
+        return cursor
 
     def pending(
         self, session: Session, *, now: datetime, limit: int
     ) -> Sequence[WorkItem]:
         if limit <= 0:
             return []
-        cursor, state = self._state(session)
+        cursor = self._cursor(session)
         predicate = pending_predicate(self.group, session, now=now)
         items: list[WorkItem] = []
         seen: set[int] = set()
 
         fresh = session.exec(
             select(File.id, File.uploaded_at)
-            .where(predicate, col(File.id) > state["high_water"])
+            .where(predicate, col(File.id) > cursor.scan_high_water)
             .order_by(col(File.id))
             .limit(limit)
         ).all()
@@ -152,26 +147,28 @@ class DerivativeSource:
             )
         if len(fresh) < limit:
             top = session.exec(select(func.max(File.id))).one()
-            state["high_water"] = int(top or 0)
+            cursor.scan_high_water = int(top or 0)
         elif fresh:
-            state["high_water"] = int(fresh[-1][0] or 0)
+            cursor.scan_high_water = max(seen)
 
         room = limit - len(items)
         if room > 0:
-            start = state["position"]
+            start = cursor.scan_position
             window = session.exec(
                 select(File.id)
                 .where(
                     predicate,
                     col(File.id) > start,
                     col(File.id) <= start + WINDOW,
-                    col(File.id) <= state["high_water"],
+                    col(File.id) <= cursor.scan_high_water,
                 )
                 .order_by(col(File.id))
                 .limit(room)
             ).all()
+            last = start
             for file_id in window:
                 assert file_id is not None
+                last = file_id
                 if file_id in seen:
                     continue
                 items.append(
@@ -180,11 +177,12 @@ class DerivativeSource:
                     )
                 )
             if len(window) >= room and window:
-                state["position"] = int(window[-1] or start)
+                cursor.scan_position = last
             else:
                 advanced = start + WINDOW
-                state["position"] = 0 if advanced >= state["high_water"] else advanced
-        cursor.state_json = json.dumps(state, separators=(",", ":"))
+                cursor.scan_position = (
+                    0 if advanced >= cursor.scan_high_water else advanced
+                )
         session.add(cursor)
         session.commit()
         return items

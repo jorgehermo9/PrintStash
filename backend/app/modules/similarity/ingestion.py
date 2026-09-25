@@ -56,8 +56,8 @@ def after_commit(
                 ):
                     raise
             else:
-                from app.modules.similarity.jobs import DEFINITION
+                from app.db.models import JobKind
                 from app.modules.work import nudge
 
-                nudge(DEFINITION)
+                nudge(JobKind.SIMILARITY_ANALYZE)
         return state

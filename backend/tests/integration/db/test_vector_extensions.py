@@ -24,6 +24,7 @@ class TestVectorExtensions:
 
         def fail(connection):
             raise sqlite3.OperationalError("cannot load")
+
         monkeypatch.setattr(sqlite_vec, "load", fail)
         with sqlite3.connect(":memory:") as connection:
             assert not load_sqlite_vector_extension(connection)
@@ -37,7 +38,9 @@ class TestVectorExtensions:
         engine = create_async_engine_for_db("sqlite:///:memory:")
         try:
             async with engine.connect() as connection:
-                assert (await connection.execute(text("SELECT vec_version()"))).scalar_one() == "v0.1.6"
+                assert (
+                    await connection.execute(text("SELECT vec_version()"))
+                ).scalar_one() == "v0.1.6"
                 with pytest.raises(DBAPIError, match="not authorized"):
                     await connection.execute(text("SELECT load_extension('untrusted')"))
         finally:

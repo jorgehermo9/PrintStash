@@ -284,8 +284,8 @@ class TestVisualIndex:
         from printstash_core.inference.context import InferenceContext
         from printstash_core.search.visual_inputs import VisualRecipe
 
-        from app.db.models import DerivativeState
-        from app.modules.derivatives.kinds import THUMBNAIL, recipes_for
+        from app.db.models import DerivativeKind, DerivativeState
+        from app.modules.derivatives.kinds import recipes_for
         from app.modules.storage.storage_backend.local import LocalStorageBackend
         from tests.factories import build_derivative
 
@@ -319,11 +319,12 @@ class TestVisualIndex:
         build_derivative(
             db_session,
             file,
-            THUMBNAIL,
+            DerivativeKind.THUMBNAIL,
             state=DerivativeState.RUNNING
             if changed == "state"
             else DerivativeState.READY,
-            recipe_version=recipes_for(file)[THUMBNAIL] + (changed == "recipe"),
+            recipe_version=recipes_for(file)[DerivativeKind.THUMBNAIL]
+            + (changed == "recipe"),
             storage_key=key,
             output_json=json.dumps(output),
         )
@@ -822,7 +823,7 @@ def cached_preview(make_model, make_file, make_derivative):
     from PIL import Image
     from printstash_core.search.visual_inputs import VisualRecipe
 
-    from app.modules.derivatives.kinds import THUMBNAIL
+    from app.db.models import DerivativeKind
     from app.modules.storage.storage_backend.runtime import get_backend
 
     file = make_file(make_model(), file_type=FileType.STL)
@@ -835,7 +836,7 @@ def cached_preview(make_model, make_file, make_derivative):
     backend.write_bytes(payload, key)
     row = make_derivative(
         file,
-        THUMBNAIL,
+        DerivativeKind.THUMBNAIL,
         storage_key=key,
         output_json=json.dumps(
             {

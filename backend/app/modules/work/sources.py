@@ -16,10 +16,18 @@ from datetime import datetime, timedelta, timezone
 from croniter import croniter
 from sqlmodel import Session, col, select
 
-from app.core.time import ensure_utc
-from app.db.models import ACTIVE_JOB_STATES, Job, ReconcileCursor, WorkPriority
+from app.core.time import ensure_utc, utcnow
+from app.db.models import (
+    ACTIVE_JOB_STATES,
+    Job,
+    JobKind,
+    LaneName,
+    ReconcileCursor,
+    WorkPriority,
+)
+from app.db.session import get_session_factory
 
-from .contracts import WorkItem
+from .contracts import JobContext, JobDefinition, SkipReason, Step, WorkItem
 
 CronFn = Callable[[Session], str | None]
 
@@ -50,17 +58,14 @@ def interval_cron(seconds: int) -> str:
 class ScheduleSource:
     """A schedule declared in code; ``cron`` returns ``None`` while disabled."""
 
-    definition: str
+    definition: JobKind
     cron: CronFn
     priority: WorkPriority = WorkPriority.BACKFILL
-
-    def _expression(self, session: Session) -> str | None:
-        return self.cron(session)
 
     def pending(
         self, session: Session, *, now: datetime, limit: int
     ) -> Sequence[WorkItem]:
-        expression = self._expression(session)
+        expression = self.cron(session)
         if expression is None or limit <= 0:
             return []
         occurrence = latest_occurrence(expression, now=now)
@@ -76,23 +81,26 @@ class ScheduleSource:
                 Job.kind == self.definition, col(Job.state).in_(ACTIVE_JOB_STATES)
             )
         ).first()
+        at = occurrence.astimezone(timezone.utc).isoformat()
         return [
             WorkItem(
-                subject_key=f"{self.definition}@{occurrence.astimezone(timezone.utc).isoformat()}",
+                subject_key=f"{self.definition.value}@{at}",
                 priority=self.priority,
                 occurrence_at=occurrence,
-                skip_reason="previous_still_running" if running else None,
+                skip=SkipReason.PREVIOUS_STILL_RUNNING if running else None,
             )
         ]
 
     def next_due(self, session: Session, *, now: datetime) -> datetime | None:
-        expression = self._expression(session)
+        expression = self.cron(session)
         if expression is None:
             return None
         return next_occurrence(expression, now=now)
 
 
-def mark_idle(definition: str, *, seconds: float, now: datetime | None = None) -> None:
+def mark_idle(
+    definition: JobKind, *, seconds: float, now: datetime | None = None
+) -> None:
     """Park a drain-style source after a pass that could make no progress.
 
     A drain (fleet dispatch, similarity, migration copying) has one subject
@@ -101,57 +109,35 @@ def mark_idle(definition: str, *, seconds: float, now: datetime | None = None) -
     this gate a no-progress drain would resubmit itself in a tight loop. The
     source stays quiet until ``seconds`` pass or genuinely new work arrives.
     """
-    import json
-
-    from app.core.time import utcnow
-    from app.db.session import get_session_factory
-
     now = now or utcnow()
     with get_session_factory().scoped_session() as session:
         cursor = session.get(ReconcileCursor, definition) or ReconcileCursor(
             source=definition
         )
-        state = json.loads(cursor.state_json or "{}")
-        state["idle_since"] = now.isoformat()
-        state["idle_until"] = (now + timedelta(seconds=seconds)).isoformat()
-        cursor.state_json = json.dumps(state, separators=(",", ":"))
+        cursor.idle_since = now
+        cursor.idle_until = now + timedelta(seconds=seconds)
         session.add(cursor)
         session.commit()
 
 
-def clear_idle(definition: str) -> None:
-    import json
-
-    from app.db.session import get_session_factory
-
+def clear_idle(definition: JobKind) -> None:
     with get_session_factory().scoped_session() as session:
         cursor = session.get(ReconcileCursor, definition)
-        if cursor is None:
+        if cursor is None or cursor.idle_until is None:
             return
-        state = json.loads(cursor.state_json or "{}")
-        if "idle_until" not in state:
-            return
-        state.pop("idle_since", None)
-        state.pop("idle_until", None)
-        cursor.state_json = json.dumps(state, separators=(",", ":"))
+        cursor.idle_since = cursor.idle_until = None
         session.add(cursor)
         session.commit()
 
 
-def idle_window(session: Session, definition: str) -> tuple[datetime, datetime] | None:
+def idle_window(
+    session: Session, definition: JobKind
+) -> tuple[datetime, datetime] | None:
     """``(idle_since, idle_until)`` of a parked drain, if it is parked."""
-    import json
-
     cursor = session.get(ReconcileCursor, definition)
-    if cursor is None:
+    if cursor is None or cursor.idle_since is None or cursor.idle_until is None:
         return None
-    state = json.loads(cursor.state_json or "{}")
-    if "idle_until" not in state or "idle_since" not in state:
-        return None
-    return (
-        ensure_utc(datetime.fromisoformat(state["idle_since"])),
-        ensure_utc(datetime.fromisoformat(state["idle_until"])),
-    )
+    return ensure_utc(cursor.idle_since), ensure_utc(cursor.idle_until)
 
 
 def fixed(expression: str) -> CronFn:
@@ -175,28 +161,28 @@ def when_configured(expression: str) -> CronFn:
 
 
 def scheduled(
-    name: str,
+    name: JobKind,
     *,
     cron: CronFn,
     run: Callable[[], object],
     label: str,
-    lane: str = "maintenance",
-):
+    lane: LaneName = LaneName.MAINTENANCE,
+) -> JobDefinition:
     """A code-declared periodic job whose single step calls ``run``.
 
     The step records what ``run`` returned (a count, a summary) as the Job's
     result, so the admin page shows what each occurrence did.
     """
-    from .contracts import JobDefinition, Step
 
-    def step(ctx) -> None:
+    def step(ctx: JobContext) -> None:
         outcome = run()
-        ctx.update(result={"outcome": outcome} if outcome is not None else None)
+        if outcome is not None:
+            ctx.update(result={"outcome": outcome})
 
     return JobDefinition(
         name=name,
         lane=lane,
-        steps=(Step(f"{name}.run", step),),
+        steps=(Step(f"{name.value}.run", step),),
         source=ScheduleSource(name, cron),
         label=label,
     )

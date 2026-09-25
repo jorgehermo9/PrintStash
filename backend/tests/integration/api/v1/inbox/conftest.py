@@ -25,6 +25,7 @@ from app.db.models import (
     InboxItem,
     InboxItemState,
     Job,
+    JobKind,
     JobState,
     StagingLease,
     StorageDeleteIntent,
@@ -84,7 +85,7 @@ def queued_imports() -> Callable[[], list[tuple[int, list[str]]]]:
                 select(InboxItem)
                 .join(Job, col(Job.id) == col(InboxItem.job_id))
                 .where(
-                    col(Job.kind) == inbox.IMPORT_DEFINITION,
+                    col(Job.kind) == JobKind.INGESTION_INBOX_IMPORT,
                     col(Job.state) == JobState.QUEUED,
                 )
                 .order_by(col(InboxItem.id))

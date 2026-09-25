@@ -21,7 +21,14 @@ from sqlmodel import Session, select
 
 import app.modules.work as work
 from app.core.time import utcnow
-from app.db.models import Job, JobState, PrintJobState, ReconcileCursor, WorkPriority
+from app.db.models import (
+    Job,
+    JobKind,
+    JobState,
+    PrintJobState,
+    ReconcileCursor,
+    WorkPriority,
+)
 from app.modules.printing import jobs as dispatch_jobs
 from app.modules.printing import printer_jobs
 from app.modules.work.sources import idle_window, mark_idle
@@ -95,7 +102,7 @@ class TestDispatchSource:
         build_print_job(
             db_session, artifact, created_at=utcnow() - timedelta(minutes=1)
         )
-        mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=30)
 
         assert _pending(db_session) == []
 
@@ -103,7 +110,7 @@ class TestDispatchSource:
         self, db_session: Session, artifact
     ) -> None:
         now = utcnow()
-        mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30, now=now)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=30, now=now)
         build_print_job(db_session, artifact, created_at=now + timedelta(seconds=1))
 
         assert len(_pending(db_session, now=now + timedelta(seconds=2))) == 1
@@ -111,7 +118,7 @@ class TestDispatchSource:
     def test_a_parked_source_still_settles_stranded_uploads(
         self, db_session: Session, artifact
     ) -> None:
-        mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=30)
         build_print_job(
             db_session,
             artifact,
@@ -126,7 +133,7 @@ class TestDispatchSource:
     ) -> None:
         now = utcnow()
         build_print_job(db_session, artifact, created_at=now - timedelta(minutes=1))
-        mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30, now=now)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=30, now=now)
 
         assert len(_pending(db_session, now=now + timedelta(seconds=31))) == 1
 
@@ -134,7 +141,7 @@ class TestDispatchSource:
         self, db_session: Session
     ) -> None:
         now = utcnow()
-        mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30, now=now)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=30, now=now)
 
         due = SOURCE.next_due(db_session, now=now)
 
@@ -146,7 +153,7 @@ class TestDispatchSource:
 
     def test_an_expired_park_has_no_due_time(self, db_session: Session) -> None:
         now = utcnow()
-        mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30, now=now)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=30, now=now)
 
         assert SOURCE.next_due(db_session, now=now + timedelta(minutes=1)) is None
 
@@ -155,13 +162,13 @@ class TestWakeDispatch:
     def test_wakes_a_parked_dispatcher(self, db_session: Session, monkeypatch) -> None:
         nudged: list[str] = []
         monkeypatch.setattr(work, "nudge", lambda name, **_: nudged.append(name))
-        mark_idle(dispatch_jobs.DISPATCH_DEFINITION, seconds=30)
+        mark_idle(JobKind.PRINTING_DISPATCH, seconds=30)
 
         dispatch_jobs.wake_dispatch()
 
         db_session.expire_all()
-        assert idle_window(db_session, dispatch_jobs.DISPATCH_DEFINITION) is None
-        assert nudged == [dispatch_jobs.DISPATCH_DEFINITION]
+        assert idle_window(db_session, JobKind.PRINTING_DISPATCH) is None
+        assert nudged == [JobKind.PRINTING_DISPATCH]
 
     def test_waking_an_unparked_dispatcher_only_nudges(
         self, db_session: Session, monkeypatch
@@ -171,16 +178,14 @@ class TestWakeDispatch:
 
         dispatch_jobs.wake_dispatch()
 
-        assert (
-            db_session.get(ReconcileCursor, dispatch_jobs.DISPATCH_DEFINITION) is None
-        )
-        assert nudged == [dispatch_jobs.DISPATCH_DEFINITION]
+        assert db_session.get(ReconcileCursor, JobKind.PRINTING_DISPATCH) is None
+        assert nudged == [JobKind.PRINTING_DISPATCH]
 
 
 def _dispatch_job(db_session: Session) -> Job:
     db_session.expire_all()
     job = db_session.exec(
-        select(Job).where(Job.kind == dispatch_jobs.DISPATCH_DEFINITION)
+        select(Job).where(Job.kind == JobKind.PRINTING_DISPATCH)
     ).first()
     assert job is not None
     return job
@@ -210,7 +215,7 @@ class TestDispatchJob:
         monkeypatch.setattr(printer_jobs, "dispatch_next", dispatch_one)
         dispatch_jobs.bind_provider_builder(lambda _printer: None)
         try:
-            work.nudge(dispatch_jobs.DISPATCH_DEFINITION)
+            work.nudge(JobKind.PRINTING_DISPATCH)
             drain_work()
         finally:
             dispatch_jobs.bind_provider_builder(None)
@@ -219,7 +224,7 @@ class TestDispatchJob:
         result = json.loads(job.status_json)["result"]
         assert job.state == JobState.COMPLETED
         assert (result["dispatched"], result["stranded_settled"]) == (1, 0)
-        assert idle_window(db_session, dispatch_jobs.DISPATCH_DEFINITION) is None
+        assert idle_window(db_session, JobKind.PRINTING_DISPATCH) is None
 
     def test_a_pass_that_routes_nothing_parks_the_source(
         self, db_session: Session, artifact, monkeypatch
@@ -234,14 +239,14 @@ class TestDispatchJob:
         monkeypatch.setattr(printer_jobs, "dispatch_next", nothing_eligible)
         dispatch_jobs.bind_provider_builder(lambda _printer: None)
         try:
-            work.nudge(dispatch_jobs.DISPATCH_DEFINITION)
+            work.nudge(JobKind.PRINTING_DISPATCH)
             drain_work()
         finally:
             dispatch_jobs.bind_provider_builder(None)
 
         job = _dispatch_job(db_session)
         assert json.loads(job.status_json)["result"]["dispatched"] == 0
-        assert idle_window(db_session, dispatch_jobs.DISPATCH_DEFINITION) is not None
+        assert idle_window(db_session, JobKind.PRINTING_DISPATCH) is not None
         assert _pending(db_session) == []
 
     def test_a_pass_settles_a_stranded_upload_as_outcome_unknown(
@@ -255,7 +260,7 @@ class TestDispatchJob:
         )
         dispatch_jobs.bind_provider_builder(lambda _printer: None)
         try:
-            work.nudge(dispatch_jobs.DISPATCH_DEFINITION)
+            work.nudge(JobKind.PRINTING_DISPATCH)
             drain_work()
         finally:
             dispatch_jobs.bind_provider_builder(None)

@@ -325,13 +325,13 @@ def rederive(file_id: int) -> None:
     derived, then waits for the new recipe to settle.
     """
     from app.core.config import ensure_dirs
-    from app.db.models import File
+    from app.db.models import DerivativeKind, File, JobKind
     from app.db.session import get_session_factory
     from app.main import app
     from app.modules.derivatives import kinds, producers
 
-    mesh = kinds.group(kinds.MESH_DEFINITION)
-    mesh.kinds[kinds.THUMBNAIL] = mesh.kinds[kinds.THUMBNAIL] + 1
+    mesh = kinds.group(JobKind.DERIVATIVES_MESH)
+    mesh.kinds[DerivativeKind.THUMBNAIL] = mesh.kinds[DerivativeKind.THUMBNAIL] + 1
     shown_while_deriving: list[str | None] = []
     original = producers.derive_mesh
 

@@ -106,9 +106,7 @@ class TestWithWorkers:
 
         assert worker == api
 
-    def test_every_process_mounts_the_same_volumes(
-        self, split: dict[str, Any]
-    ) -> None:
+    def test_every_process_mounts_the_same_volumes(self, split: dict[str, Any]) -> None:
         # A worker committing an upload reads the bytes the API staged.
         api = _mounts(split["api"])
 

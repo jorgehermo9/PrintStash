@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session
 
-from app.db.models import User
+from app.db.models import JobKind, User
 from app.modules.ingestion import importer
 from app.modules.ingestion.importer import ResolvedGroup
 from app.modules.work.jobs import jobs
@@ -29,7 +29,7 @@ def _run(session: Session, owner: User, groups: list[ResolvedGroup]) -> object:
     a foreign key: an id that merely happens to be free is refused, here and in
     production.
     """
-    job = build_job(session, kind="ingestion.collection", owner=owner)
+    job = build_job(session, kind=JobKind.INGESTION_COLLECTION, owner=owner)
     importer.import_resolved_groups(
         job_id=job.id,
         groups=groups,

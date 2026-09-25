@@ -72,7 +72,7 @@ class TestDecide:
         # The attempt was recorded moments ago; the engine may not show it yet.
         job = _job(updated_at=NOW - timedelta(seconds=5))
 
-        decision = _decide(job, EngineEvidence(None))
+        decision = _decide(job, None)
 
         assert (decision.verdict, decision.reason) == (
             Verdict.NONE,
@@ -80,7 +80,7 @@ class TestDecide:
         )
 
     def test_interrupts_an_execution_the_engine_lost(self) -> None:
-        decision = _decide(_job(), EngineEvidence(None))
+        decision = _decide(_job(), None)
 
         assert (decision.verdict, decision.reason) == (
             Verdict.INTERRUPT,

@@ -7,66 +7,52 @@ import time: the catalog a process runs is exactly the one bootstrap built.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.db.models import WorkLaneOverride
+from app.db.models import JobKind, LaneName, WorkLaneOverride
 
 from .contracts import JobDefinition, JobEngine, Lane
 
-INGEST = "ingest"
-DERIVE_NATIVE = "derive.native"
-DERIVE_LIGHT = "derive.light"
-SIMILARITY = "similarity"
-NETWORK = "network"
-NOTIFY = "notify"
-PRINTING = "printing"
-MAINTENANCE = "maintenance"
-SEARCH = "search"
-CAPTIONS = "captions"
-EXPANSION = "expansion"
-RECONCILE = "reconcile"
-
-# The reconciler's own executions. Not a Job: its bookkeeping is the cursor.
-RECONCILE_DEFINITION = "work.reconcile"
+# How many reconcile passes run at once, deployment-wide.
+RECONCILE_CONCURRENCY = 4
 
 
 def _native_default() -> int:
-    """One native process per budget share, never fewer than one."""
-    configured = settings.jobs_derive_native_concurrency
-    if configured:
-        return configured
-    return max(1, int(settings.max_render_jobs) or 1)
+    """One native process per render slot unless configured on its own."""
+    if settings.jobs_derive_native_concurrency is not None:
+        return settings.jobs_derive_native_concurrency
+    return max(1, settings.max_render_jobs)
 
 
-def default_lanes() -> dict[str, Lane]:
+def default_lanes() -> dict[LaneName, Lane]:
     """Every lane with its configured (environment) concurrency."""
-    return {
-        lane.name: lane
-        for lane in (
-            Lane(INGEST, settings.jobs_ingest_concurrency),
-            Lane(DERIVE_NATIVE, _native_default()),
-            Lane(DERIVE_LIGHT, settings.jobs_derive_light_concurrency),
-            Lane(SIMILARITY, settings.jobs_similarity_concurrency, scope="global"),
-            Lane(NETWORK, settings.jobs_network_concurrency),
-            Lane(
-                NOTIFY,
-                settings.jobs_notify_concurrency,
-                partitioned=True,
-                rate_limit=(settings.jobs_notify_rate_per_minute, 60.0),
-            ),
-            # Fleet routing is one fleet-wide decision: one dispatcher, anywhere.
-            Lane(PRINTING, settings.jobs_printing_concurrency, scope="global"),
-            Lane(MAINTENANCE, settings.jobs_maintenance_concurrency, scope="global"),
-            Lane(SEARCH, settings.jobs_search_concurrency, scope="global"),
-            Lane(CAPTIONS, settings.jobs_captions_concurrency, scope="global"),
-            Lane(EXPANSION, settings.jobs_expansion_concurrency, scope="global"),
-            Lane(RECONCILE, 4, scope="global"),
-        )
-    }
+    lanes = (
+        Lane(LaneName.INGEST, settings.jobs_ingest_concurrency),
+        Lane(LaneName.DERIVE_NATIVE, _native_default()),
+        Lane(LaneName.DERIVE_LIGHT, settings.jobs_derive_light_concurrency),
+        Lane(LaneName.SIMILARITY, settings.jobs_similarity_concurrency, scope="global"),
+        Lane(LaneName.NETWORK, settings.jobs_network_concurrency),
+        Lane(
+            LaneName.NOTIFY,
+            settings.jobs_notify_concurrency,
+            partitioned=True,
+            rate_limit=(settings.jobs_notify_rate_per_minute, 60.0),
+        ),
+        # Fleet routing is one fleet-wide decision: one dispatcher, anywhere.
+        Lane(LaneName.PRINTING, settings.jobs_printing_concurrency, scope="global"),
+        Lane(
+            LaneName.MAINTENANCE, settings.jobs_maintenance_concurrency, scope="global"
+        ),
+        Lane(LaneName.SEARCH, settings.jobs_search_concurrency, scope="global"),
+        Lane(LaneName.CAPTIONS, settings.jobs_captions_concurrency, scope="global"),
+        Lane(LaneName.EXPANSION, settings.jobs_expansion_concurrency, scope="global"),
+        Lane(LaneName.RECONCILE, RECONCILE_CONCURRENCY, scope="global"),
+    )
+    return {lane.name: lane for lane in lanes}
 
 
 class WorkCatalog:
@@ -76,29 +62,38 @@ class WorkCatalog:
         self,
         definitions: Iterable[JobDefinition] = (),
         *,
-        lanes: dict[str, Lane] | None = None,
+        lanes: Mapping[LaneName, Lane] | None = None,
     ) -> None:
-        self.lanes: dict[str, Lane] = dict(lanes or default_lanes())
-        self.definitions: dict[str, JobDefinition] = {}
+        self.lanes: dict[LaneName, Lane] = dict(
+            default_lanes() if lanes is None else lanes
+        )
+        missing = set(LaneName) - set(self.lanes)
+        if missing:
+            raise ValueError(f"lanes_missing:{','.join(sorted(missing))}")
+        self.definitions: dict[JobKind, JobDefinition] = {}
         for definition in definitions:
             self.add(definition)
 
     def add(self, definition: JobDefinition) -> None:
-        if definition.name == RECONCILE_DEFINITION:
-            raise ValueError("reserved_job_definition")
+        if definition.lane is LaneName.RECONCILE:
+            raise ValueError(f"reserved_lane:{definition.name.value}")
         if definition.name in self.definitions:
-            raise ValueError(f"duplicate_job_definition:{definition.name}")
-        if definition.lane not in self.lanes:
-            raise ValueError(f"unknown_lane:{definition.lane}")
+            raise ValueError(f"duplicate_job_definition:{definition.name.value}")
+        if self.lanes[definition.lane].partitioned != (
+            definition.partition is not None
+        ):
+            # A partitioned lane routes by partition and nothing else can.
+            raise ValueError(f"partition_mismatch:{definition.name.value}")
         self.definitions[definition.name] = definition
 
-    def definition(self, name: str) -> JobDefinition:
+    def definition(self, name: JobKind) -> JobDefinition:
+        """The definition behind ``name``; a process that lacks it cannot run it."""
         try:
             return self.definitions[name]
-        except KeyError as exc:
-            raise LookupError(f"unknown_job_definition:{name}") from exc
+        except KeyError:
+            raise LookupError(f"unknown_job_definition:{name.value}") from None
 
-    def lane_for(self, definition: str) -> Lane:
+    def lane_for(self, definition: JobKind) -> Lane:
         return self.lanes[self.definition(definition).lane]
 
     def apply_overrides(self, session: Session) -> None:
@@ -109,9 +104,8 @@ class WorkCatalog:
             for row in session.exec(select(WorkLaneOverride)).all()
         }
         for name, lane in list(self.lanes.items()):
-            base = defaults.get(name, lane)
             self.lanes[name] = replace(
-                lane, concurrency=overrides.get(name, base.concurrency)
+                lane, concurrency=overrides.get(name, defaults[name].concurrency)
             )
 
 

@@ -29,7 +29,7 @@ import {
   ExternalLibrariesPanel,
   type ExternalLibrariesApi,
 } from "@/components/external-libraries-panel";
-import { aStorageConnection } from "@/test-support/factories";
+import { aJob as aSharedJob, aStorageConnection } from "@/test-support/factories";
 import { renderApp } from "@/test-support/render";
 import type {
   ExternalLibrary,
@@ -80,16 +80,13 @@ function aVolume(over: Partial<ExternalLibrary> = {}): ExternalLibrary {
 }
 
 function aJob(over: Partial<JobStatus> = {}): JobStatus {
-  return {
+  return aSharedJob({
     job_id: "job-1",
-    state: "completed",
+    kind: "sources.scan",
     model_id: null,
     file_id: null,
-    error: null,
-    started_at: FROZEN_NOW,
-    finished_at: FROZEN_NOW,
     ...over,
-  };
+  });
 }
 
 /**

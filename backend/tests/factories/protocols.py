@@ -47,6 +47,7 @@ from app.db.models import (
     IngestRequest,
     IngestRequestKind,
     Job,
+    JobKind,
     JobState,
     Model,
     ModelFamily,
@@ -375,7 +376,7 @@ class MakeJob(Protocol):
     def __call__(
         self,
         *,
-        kind: str = "work.housekeeping",
+        kind: str = JobKind.WORK_HOUSEKEEPING,
         state: JobState = ...,
         owner: User | None = None,
         subject: str | None = None,
@@ -711,8 +712,6 @@ class MakeSearchLexicalPosting(Protocol):
 
 class MakeUserSearchPreferences(Protocol):
     def __call__(self, user: User, **overrides: Any) -> UserSearchPreferences: ...
-
-
 
 
 class MakeSearchProjectionRequest(Protocol):

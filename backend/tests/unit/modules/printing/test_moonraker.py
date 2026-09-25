@@ -152,7 +152,9 @@ class TestMoonrakerClientHTTP:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {"result": "ok"}
 
-            with patch("app.modules.printing.moonraker.get_http_client") as mock_get_client:
+            with patch(
+                "app.modules.printing.moonraker.get_http_client"
+            ) as mock_get_client:
                 mock_get_client.return_value.request = AsyncMock(return_value=mock_resp)
                 result = asyncio.run(getattr(client, method)())
                 assert result == {"result": "ok"}

@@ -30,7 +30,7 @@ import { UploadModal } from "@/components/upload-modal";
 import type { ArtifactUploadCreate, ArtifactUploadStatus } from "@/lib/api/artifact-uploads";
 import { queryKeys } from "@/lib/query-client";
 import { listTasks, setJobSource } from "@/lib/task-center";
-import { aCollection, aTag } from "@/test-support/factories";
+import { aCollection, aJob as aSharedJob, aTag } from "@/test-support/factories";
 import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
 import type { ExternalLibrary, JobStatus, ModelRead } from "@/types";
 
@@ -46,16 +46,7 @@ const jobId = () => `job-${jobSeq}`;
 const queued = () => ({ job_id: jobId(), state: "queued", message: "queued" });
 
 function aJob(over: Partial<JobStatus> = {}): JobStatus {
-  return {
-    job_id: jobId(),
-    state: "completed",
-    model_id: 1,
-    file_id: 20,
-    error: null,
-    started_at: FROZEN_NOW,
-    finished_at: FROZEN_NOW,
-    ...over,
-  };
+  return aSharedJob({ job_id: jobId(), file_id: 20, ...over });
 }
 
 function aModel(over: Partial<ModelRead> = {}): ModelRead {

@@ -42,6 +42,7 @@ from app.db.models import (
     ExternalLibraryTombstone,
     ExternalLibraryWatchMode,
     File,
+    JobKind,
     LibrarySourceKind,
     Model,
 )
@@ -67,6 +68,7 @@ from app.modules.storage.hashing import sha256_file
 from app.modules.storage.root_markers import (
     read_root_marker_fd,
 )
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs as registry
 
 from .root_binding import (
@@ -858,7 +860,7 @@ def scan_remote_library(
                     except SQLAlchemyError:
                         logger.warning("remote discovery inventory cleanup deferred")
                 if job_id:
-                    registry.update(job_id, state="completed", result=result)
+                    registry.finish(job_id, JobOutcome.COMPLETED, result=result)
                 return result
             except asyncio.CancelledError as exc:
                 session.rollback()
@@ -898,7 +900,7 @@ def scan_remote_library(
                 session.add(library)
                 session.commit()
                 if job_id:
-                    registry.update(job_id, state="failed", error=summary.error)
+                    registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
                 return summary.as_dict()
     finally:
         budget.__exit__(None, None, None)
@@ -946,7 +948,7 @@ def scan_library(
             session.add(preflight)
             session.commit()
             if job_id:
-                registry.update(job_id, state="failed", error=summary.error)
+                registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
             return summary.as_dict()
         claim_token = uuid.uuid4().hex
         now = utcnow()
@@ -975,7 +977,7 @@ def scan_library(
                 "job_id": current.scan_job_id if current is not None else None,
             }
             if job_id:
-                registry.update(job_id, state="completed", result=result)
+                registry.finish(job_id, JobOutcome.COMPLETED, result=result)
             return result
         library = session.get(ExternalLibrary, library_id)
         if library is None:
@@ -994,7 +996,7 @@ def scan_library(
                 claim_token=claim_token,
             )
             if job_id:
-                registry.update(job_id, state="failed", error=summary.error)
+                registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
             return summary.as_dict()
 
         library.last_scan_status = ExternalLibraryScanStatus.RUNNING
@@ -1033,7 +1035,7 @@ def scan_library(
                     root,
                 )
                 if job_id:
-                    registry.update(job_id, state="failed", error=summary.error)
+                    registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
                 return summary.as_dict()
 
             # Refresh the detected filesystem class so the UI / watcher know
@@ -1112,13 +1114,12 @@ def scan_library(
                     len(db_by_path),
                 )
                 if job_id:
-                    registry.update(job_id, state="failed", error=summary.error)
+                    registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
                 return summary.as_dict()
 
             if job_id:
                 registry.update(
                     job_id,
-                    state="running",
                     stage="hashing",
                     total_steps=len(disk) or 1,
                     total=len(disk),
@@ -1210,9 +1211,9 @@ def scan_library(
             if job_id:
                 # The job itself completed even with per-file errors; the PARTIAL
                 # signal lives on the library status and in result.errors.
-                registry.update(
+                registry.finish(
                     job_id,
-                    state="completed",
+                    JobOutcome.COMPLETED,
                     result=summary.as_dict(),
                     processed=len(disk),
                     total=len(disk),
@@ -1246,7 +1247,7 @@ def scan_library(
                 claim_token=claim_token,
             )
             if job_id:
-                registry.update(job_id, state="failed", error=summary.error)
+                registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
 
     return summary.as_dict()
 
@@ -1474,14 +1475,14 @@ def _retry_scan(session: Session, subject: str) -> bool:
 
 
 def definitions():
-    from app.modules.work.catalog import MAINTENANCE
+    from app.db.models import LaneName
     from app.modules.work.contracts import JobDefinition, Step
 
     return [
         JobDefinition(
-            name=SCAN_DEFINITION,
-            lane=MAINTENANCE,
-            steps=(Step(f"{SCAN_DEFINITION}.run", _scan_step),),
+            name=JobKind.SOURCES_SCAN,
+            lane=LaneName.MAINTENANCE,
+            steps=(Step(f"{JobKind.SOURCES_SCAN.value}.run", _scan_step),),
             source=ScanSource(),
             cancel=_cancel_scan,
             on_failure=_failed_scan,

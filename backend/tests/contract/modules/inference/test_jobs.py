@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from app.core.errors import OperationError
-from app.db.models import Job
+from app.db.models import Job, JobKind
 from app.db.session import get_session_factory
 from app.modules.inference import jobs as inference_jobs
 from app.modules.search.configuration import update
@@ -45,7 +45,7 @@ def _request(session, actor, key: str) -> str:
 
     job_id = inference_jobs.request(session, actor, key)
     session.commit()
-    nudge(inference_jobs.DOWNLOAD_DEFINITION)
+    nudge(JobKind.INFERENCE_MODEL_DOWNLOAD)
     return job_id
 
 

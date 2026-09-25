@@ -12,6 +12,11 @@ staging cleanup reclaim their files the way it reclaims any expired lease. Old
 status payloads are replaced by ones the new status shape understands; the old
 payloads' progress and error details are not carried over.
 
+Every legacy kind is renamed to the Job Definition that now does its work, so
+the upgraded history reads as the closed set of kinds the database allows. A
+``thumbnail_rebuild`` Job has no successor (a derivative retry is not a Job of
+its own) and nothing points at one, so those rows are dropped.
+
 The data work is plain SQL so the revision also renders offline.
 
 Renames are written by hand, outside a batch block: a schema differ sees a
@@ -40,6 +45,8 @@ _REFERENCES = ("staging_leases", "inbox_items", "artifact_upload_sessions")
 
 _JOBS = sa.table(
     "background_jobs",
+    sa.column("id", sa.String),
+    sa.column("kind", sa.String),
     sa.column("state", sa.String),
     sa.column("status_json", sa.Text),
     sa.column("finished_at", sa.DateTime),
@@ -50,6 +57,32 @@ _LEASES = sa.table(
     sa.column("background_job_id", sa.String),
     sa.column("expires_at", sa.DateTime),
 )
+
+
+# Every kind the retired registry wrote, and the definition that does its work.
+_KINDS = {
+    "ingest": "ingestion.upload",
+    "gcode": "ingestion.upload",
+    "model": "ingestion.upload",
+    "artifact": "ingestion.upload",
+    "url": "ingestion.url",
+    "archive_manifest": "ingestion.archive_inspect",
+    "archive": "ingestion.archive_selection",
+    "url_selection": "ingestion.url_selection",
+    "collection": "ingestion.collection",
+    "library_import": "ingestion.library_import",
+    "pending_import": "ingestion.inbox_import",
+    "external_scan": "sources.scan",
+    "ai_search": "search.generation",
+    "ai_caption": "search.caption",
+    "model_download": "inference.model_download",
+}
+
+
+def _rename_kinds() -> None:
+    op.execute(_JOBS.delete().where(_JOBS.c.kind == "thumbnail_rebuild"))
+    for legacy, current in _KINDS.items():
+        op.execute(_JOBS.update().where(_JOBS.c.kind == legacy).values(kind=current))
 
 
 def _settle_jobs() -> None:
@@ -83,6 +116,7 @@ def _settle_jobs() -> None:
 
 def upgrade() -> None:
     _settle_jobs()
+    _rename_kinds()
     op.rename_table("background_jobs", "jobs")
     for table in _REFERENCES:
         op.alter_column(table, "background_job_id", new_column_name="job_id")

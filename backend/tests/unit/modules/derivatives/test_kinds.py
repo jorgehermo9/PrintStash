@@ -10,17 +10,15 @@ from __future__ import annotations
 
 import pytest
 
-from app.db.models import SENTINEL_FILE_HASH, File, FileType
+from app.db.models import SENTINEL_FILE_HASH, DerivativeKind, File, FileType, JobKind
 from app.modules.derivatives import kinds
-from app.modules.derivatives.kinds import (
-    GCODE_DEFINITION,
-    MESH_DEFINITION,
-    METADATA,
-    THUMBNAIL,
-    TOOLPATH,
-    TOOLPATH_DEFINITION,
-)
 from tests.factories.library import detached_file
+
+METADATA, THUMBNAIL, TOOLPATH = (
+    DerivativeKind.METADATA,
+    DerivativeKind.THUMBNAIL,
+    DerivativeKind.TOOLPATH,
+)
 
 
 def _file(file_type: FileType, name: str = "part", sha: str = "a" * 64) -> File:
@@ -58,28 +56,33 @@ class TestRecipesFor:
 
 
 class TestGroups:
-    def test_names_the_producer_of_each_kind(self) -> None:
-        assert kinds.definition_for_kind(TOOLPATH) == TOOLPATH_DEFINITION
+    def test_names_the_producers_of_each_kind(self) -> None:
+        assert kinds.definitions_for_kind(TOOLPATH) == [JobKind.DERIVATIVES_TOOLPATH]
         assert set(kinds.definitions_for_kind(THUMBNAIL)) == {
-            MESH_DEFINITION,
-            GCODE_DEFINITION,
+            JobKind.DERIVATIVES_MESH,
+            JobKind.DERIVATIVES_GCODE,
         }
 
-    def test_an_unknown_kind_is_refused(self) -> None:
-        with pytest.raises(LookupError):
-            kinds.definition_for_kind("hologram")
+    @pytest.mark.parametrize("kind", list(DerivativeKind))
+    def test_every_kind_has_a_producer(self, kind: DerivativeKind) -> None:
+        assert kinds.definitions_for_kind(kind)
 
-    def test_lists_a_definitions_kinds(self) -> None:
-        assert kinds.kinds_for_definition(MESH_DEFINITION) == [METADATA, THUMBNAIL]
-        assert kinds.kinds_for_definition("not.a.group") == []
+    def test_lists_a_groups_kinds(self) -> None:
+        assert list(kinds.group(JobKind.DERIVATIVES_MESH).kinds) == [
+            METADATA,
+            THUMBNAIL,
+        ]
 
-    def test_an_unknown_group_is_refused(self) -> None:
-        with pytest.raises(LookupError):
-            kinds.group("not.a.group")
+    def test_a_definition_without_a_group_is_refused(self) -> None:
+        # Only derivative definitions have a group; asking for any other is a
+        # caller's bug, not an empty answer.
+        assert not kinds.is_derivative(JobKind.SOURCES_SCAN)
+        with pytest.raises(LookupError, match="not_a_derivative_definition"):
+            kinds.group(JobKind.SOURCES_SCAN)
 
     def test_every_group_is_a_definition(self) -> None:
         assert set(kinds.all_definitions()) == {
-            MESH_DEFINITION,
-            GCODE_DEFINITION,
-            TOOLPATH_DEFINITION,
+            JobKind.DERIVATIVES_MESH,
+            JobKind.DERIVATIVES_GCODE,
+            JobKind.DERIVATIVES_TOOLPATH,
         }

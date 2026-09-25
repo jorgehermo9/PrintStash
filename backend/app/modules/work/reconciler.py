@@ -26,7 +26,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 
 from sqlalchemy import func, or_, update
 from sqlmodel import Session, col, select
@@ -35,13 +35,22 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import ensure_utc, utcnow
 from app.db.affected import affected
-from app.db.models import ACTIVE_JOB_STATES, Job, JobState, ReconcileCursor
+from app.db.models import ACTIVE_JOB_STATES, Job, JobKind, JobState, ReconcileCursor
 from app.db.session import get_session_factory
 
 from . import catalog as catalog_module
 from . import executors
-from .catalog import RECONCILE_DEFINITION
-from .contracts import EngineEvidence, EngineStatus, JobDefinition, WorkItem
+from .contracts import (
+    EngineEvidence,
+    EngineStatus,
+    ExecutionKind,
+    JobDefinition,
+    JobOutcome,
+    SkipReason,
+    StepRunner,
+    SubmitOutcome,
+    WorkItem,
+)
 from .jobs import TERMINAL_STATES, ActiveJobExists, jobs
 from .submission import execution_id, nudge, submit
 
@@ -50,7 +59,7 @@ logger = get_logger(__name__)
 _MAX_LOOPS = 20
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     NONE = "none"
     SUBMIT = "submit"
     INTERRUPT = "interrupt"
@@ -58,10 +67,35 @@ class Verdict(str, Enum):
     COMPLETE = "complete"
 
 
+class Reason(StrEnum):
+    """Why ``decide`` reached its verdict; it lands on an interrupted or failed Job."""
+
+    INTERRUPTED_REPEATEDLY = "interrupted_repeatedly"
+    RESUBMIT = "resubmit"
+    FIRST_ATTEMPT = "first_attempt"
+    SUBMISSION_IN_FLIGHT = "submission_in_flight"
+    EXECUTION_LOST = "execution_lost"
+    TERMINAL_WRITE_LOST = "terminal_write_lost"
+    ENGINE_FAILED = "engine_failed"
+    EXECUTION_CANCELLED = "execution_cancelled"
+    APPLICATION_UPGRADED = "application_upgraded"
+    EXECUTOR_LOST = "executor_lost"
+    IN_PROGRESS = "in_progress"
+
+
+class PassNote(StrEnum):
+    """What a pass observed besides a verdict, counted for its log line."""
+
+    LANE_FULL = "lane_full"
+    COOLING_DOWN = "cooling_down"
+    ALREADY_ACTIVE = "already_active"
+    CLAIMED_ELSEWHERE = "claimed_elsewhere"
+
+
 @dataclass(frozen=True)
 class Decision:
     verdict: Verdict
-    reason: str = ""
+    reason: Reason
     cancel_engine: bool = False
 
 
@@ -77,36 +111,37 @@ def decide(
 ) -> Decision:
     """The pure decision table for one non-terminal Job.
 
-    ``evidence`` is ``None`` when no attempt was ever submitted. Every branch
-    names why, and the reason lands on the Job when it is interrupted or failed.
+    ``evidence`` is what the engine recorded about the Job's current attempt,
+    ``None`` when it has no record of it. Every branch names why.
     """
-    state = JobState(job.state)
-    if state is JobState.INTERRUPTED:
+    if job.state is JobState.INTERRUPTED:
         if job.resubmits > max_resubmits:
-            return Decision(Verdict.FAIL, "interrupted_repeatedly")
-        return Decision(Verdict.SUBMIT, "resubmit")
-    if evidence is None or job.attempts == 0:
-        return Decision(Verdict.SUBMIT, "first_attempt")
-    if evidence.absent:
+            return Decision(Verdict.FAIL, Reason.INTERRUPTED_REPEATEDLY)
+        return Decision(Verdict.SUBMIT, Reason.RESUBMIT)
+    if job.attempts == 0:
+        return Decision(Verdict.SUBMIT, Reason.FIRST_ATTEMPT)
+    if evidence is None:
         if now - ensure_utc(job.updated_at) < grace:
-            return Decision(Verdict.NONE, "submission_in_flight")
-        return Decision(Verdict.INTERRUPT, "execution_lost")
+            return Decision(Verdict.NONE, Reason.SUBMISSION_IN_FLIGHT)
+        return Decision(Verdict.INTERRUPT, Reason.EXECUTION_LOST)
     status = evidence.status
     if status is EngineStatus.SUCCEEDED:
-        return Decision(Verdict.COMPLETE, "terminal_write_lost")
+        return Decision(Verdict.COMPLETE, Reason.TERMINAL_WRITE_LOST)
     if status is EngineStatus.FAILED:
-        return Decision(Verdict.FAIL, "engine_failed")
+        return Decision(Verdict.FAIL, Reason.ENGINE_FAILED)
     if status is EngineStatus.CANCELLED:
-        return Decision(Verdict.INTERRUPT, "execution_cancelled")
-    if evidence.app_version and evidence.app_version != app_version:
-        return Decision(Verdict.INTERRUPT, "application_upgraded", cancel_engine=True)
+        return Decision(Verdict.INTERRUPT, Reason.EXECUTION_CANCELLED)
+    if evidence.app_version is not None and evidence.app_version != app_version:
+        return Decision(
+            Verdict.INTERRUPT, Reason.APPLICATION_UPGRADED, cancel_engine=True
+        )
     if (
         status is EngineStatus.RUNNING
         and evidence.executor_id is not None
         and evidence.executor_id in stale_executors
     ):
-        return Decision(Verdict.INTERRUPT, "executor_lost", cancel_engine=True)
-    return Decision(Verdict.NONE, "in_progress")
+        return Decision(Verdict.INTERRUPT, Reason.EXECUTOR_LOST, cancel_engine=True)
+    return Decision(Verdict.NONE, Reason.IN_PROGRESS)
 
 
 @dataclass
@@ -122,11 +157,11 @@ class PassResult:
     cooling_until: datetime | None = None
     outcomes: dict[str, int] = field(default_factory=dict)
 
-    def count(self, outcome: str) -> None:
+    def count(self, outcome: Reason | PassNote | SkipReason) -> None:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
 
 
-def _interrupt(job: Job, reason: str, *, now: datetime) -> None:
+def _interrupt(job: Job, reason: Reason, *, now: datetime) -> None:
     from app.core.metrics import record_resubmit
 
     with get_session_factory().scoped_session() as session:
@@ -187,11 +222,11 @@ def _repair(definition: JobDefinition, *, now: datetime, result: PassResult) -> 
                 result.deferred += 1
                 continue
         if decision.verdict is Verdict.COMPLETE:
-            jobs.finish(row.id, state=JobState.COMPLETED)
+            jobs.finish(row.id, JobOutcome.COMPLETED)
             result.completed += 1
             continue
         if decision.verdict is Verdict.FAIL:
-            jobs.finish(row.id, state=JobState.FAILED, error=decision.reason)
+            jobs.finish(row.id, JobOutcome.FAILED, error=decision.reason)
             _call_failure_hook(definition, row.subject_key, decision.reason)
             result.failed += 1
             continue
@@ -205,10 +240,10 @@ def _repair(definition: JobDefinition, *, now: datetime, result: PassResult) -> 
                 )
             if exhausted:
                 jobs.finish(
-                    row.id, state=JobState.FAILED, error="interrupted_repeatedly"
+                    row.id, JobOutcome.FAILED, error=Reason.INTERRUPTED_REPEATEDLY
                 )
                 _call_failure_hook(
-                    definition, row.subject_key, "interrupted_repeatedly"
+                    definition, row.subject_key, Reason.INTERRUPTED_REPEATEDLY
                 )
                 result.failed += 1
                 continue
@@ -224,7 +259,9 @@ def _call_failure_hook(
             session.commit()
         except Exception:  # noqa: BLE001 - the Job already records the failure
             session.rollback()
-            logger.exception("job failure hook failed", extra={"kind": definition.name})
+            logger.exception(
+                "job failure hook failed", extra={"kind": definition.name.value}
+            )
 
 
 def _submit(job_id: str, result: PassResult) -> None:
@@ -236,7 +273,7 @@ def _submit(job_id: str, result: PassResult) -> None:
         return
     if outcome is None:
         return
-    if outcome.value == "deduplicated":
+    if outcome is SubmitOutcome.DEDUPLICATED:
         result.deferred += 1
     else:
         result.submitted += 1
@@ -255,7 +292,7 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
         return
     limit = min(settings.jobs_reconcile_batch, _headroom(definition))
     if limit <= 0:
-        result.count("lane_full")
+        result.count(PassNote.LANE_FULL)
         return
     with get_session_factory().scoped_session() as session:
         items: Sequence[WorkItem] = source.pending(session, now=now, limit=limit)
@@ -269,7 +306,7 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
         if last is not None:
             due = last + cooldown
             result.deferred += 1
-            result.count("cooling_down")
+            result.count(PassNote.COOLING_DOWN)
             if result.cooling_until is None or due < result.cooling_until:
                 result.cooling_until = due
             continue
@@ -282,7 +319,7 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
 
 
 def _recently_finished(
-    session: Session, definition: str, subject_keys: list[str], *, now: datetime
+    session: Session, definition: JobKind, subject_keys: list[str], *, now: datetime
 ) -> dict[str, datetime]:
     """Subjects of ``subject_keys`` whose Jobs of ``definition`` already
     finished ``jobs_resubmit_burst`` times within the cooldown window, with
@@ -296,7 +333,7 @@ def _recently_finished(
         .where(
             col(Job.kind) == definition,
             col(Job.subject_key).in_(subject_keys),
-            col(Job.state).in_([state.value for state in TERMINAL_STATES]),
+            col(Job.state).in_(TERMINAL_STATES),
             col(Job.finished_at) > since,
         )
         .group_by(col(Job.subject_key))
@@ -321,20 +358,20 @@ def _create_and_submit(
             priority=item.priority,
         )
     except ActiveJobExists:
-        result.count("already_active")
+        result.count(PassNote.ALREADY_ACTIVE)
         return 0
     if item.occurrence_at is not None:
         _record_occurrence(definition.name, item.occurrence_at)
-    if item.skip_reason is not None:
-        jobs.finish(job_id, state=JobState.CANCELLED, error=item.skip_reason)
+    if item.skip is not None:
+        jobs.finish(job_id, JobOutcome.CANCELLED, error=item.skip)
         result.skipped += 1
-        result.count(item.skip_reason)
+        result.count(item.skip)
         return 1
     _submit(job_id, result)
     return 1
 
 
-def _record_occurrence(source: str, occurrence: datetime) -> None:
+def _record_occurrence(source: JobKind, occurrence: datetime) -> None:
     with get_session_factory().scoped_session() as session:
         cursor = session.get(ReconcileCursor, source) or ReconcileCursor(source=source)
         if cursor.last_occurrence_at is None or ensure_utc(
@@ -345,7 +382,7 @@ def _record_occurrence(source: str, occurrence: datetime) -> None:
         session.commit()
 
 
-def _claim(source: str, holder: str, *, now: datetime) -> bool:
+def _claim(source: JobKind, holder: str, *, now: datetime) -> bool:
     ttl = timedelta(seconds=max(settings.fence_ttl_seconds, 60))
     with get_session_factory().scoped_session() as session:
         if session.get(ReconcileCursor, source) is None:
@@ -365,6 +402,7 @@ def _claim(source: str, holder: str, *, now: datetime) -> bool:
                 holder=holder,
                 holder_expires_at=now + ttl,
                 pass_queued_at=None,
+                pass_priority=None,
                 last_pass_started_at=now,
             ),
         )
@@ -373,7 +411,7 @@ def _claim(source: str, holder: str, *, now: datetime) -> bool:
 
 
 def _release(
-    source: str, holder: str, *, started: datetime, result: PassResult
+    source: JobKind, holder: str, *, started: datetime, result: PassResult
 ) -> bool:
     """Release the claim unless a nudge arrived after ``started``."""
     now = utcnow()
@@ -411,7 +449,7 @@ def _release(
     return bool(released)
 
 
-def _force_release(source: str, holder: str) -> None:
+def _force_release(source: JobKind, holder: str) -> None:
     with get_session_factory().scoped_session() as session:
         session.execute(
             update(ReconcileCursor)
@@ -424,7 +462,7 @@ def _force_release(source: str, holder: str) -> None:
         session.commit()
 
 
-def run_pass(source: str, *, holder: str | None = None) -> PassResult:
+def run_pass(source: JobKind, *, holder: str | None = None) -> PassResult:
     """One claimed, bounded, self-continuing pass over one definition."""
     from app.core.metrics import record_reconcile_pass
 
@@ -434,7 +472,7 @@ def run_pass(source: str, *, holder: str | None = None) -> PassResult:
     started_clock = time.monotonic()
     now = utcnow()
     if not _claim(source, holder, now=now):
-        total.count("claimed_elsewhere")
+        total.count(PassNote.CLAIMED_ELSEWHERE)
         return total
     try:
         for _ in range(_MAX_LOOPS):
@@ -507,14 +545,14 @@ def _schedule_next(definition: JobDefinition, *, also: datetime | None = None) -
         nudge(definition.name, delay=delay)
 
 
-def execute_pass(source: str, runner) -> None:
+def execute_pass(source: JobKind, runner: StepRunner) -> None:
     """Engine entry point for one reconcile execution."""
     from .contracts import NO_RETRY
 
     runner.run("work.reconcile", lambda: _pass_summary(source), NO_RETRY)
 
 
-def _pass_summary(source: str) -> int:
+def _pass_summary(source: JobKind) -> int:
     return run_pass(source).submitted
 
 
@@ -533,7 +571,7 @@ def sweep_lost_passes(*, now: datetime | None = None) -> int:
     cancelled = 0
     for execution in engine.active():
         if (
-            execution.definition != RECONCILE_DEFINITION
+            execution.kind is not ExecutionKind.PASS
             or execution.status is not EngineStatus.RUNNING
             or execution.executor_id not in stale
         ):

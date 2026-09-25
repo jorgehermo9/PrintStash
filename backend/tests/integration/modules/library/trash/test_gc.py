@@ -634,7 +634,9 @@ class TestHardDelete:
                 raise PermissionError("read-only mount")
             return original_mkstemp(*args, **kwargs)
 
-        monkeypatch.setattr("app.modules.storage.storage_backend.local.tempfile.mkstemp", denied)
+        monkeypatch.setattr(
+            "app.modules.storage.storage_backend.local.tempfile.mkstemp", denied
+        )
         result = gc_soft_deleted(retention_days=0)
 
         assert result["resources_blocked"] == 1

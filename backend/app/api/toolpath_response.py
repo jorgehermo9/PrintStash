@@ -7,9 +7,8 @@ from fastapi.responses import JSONResponse
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.db.models import File, FileType
+from app.db.models import DerivativeKind, DerivativeState, File, FileType
 from app.modules.derivatives import records
-from app.modules.derivatives.kinds import TOOLPATH
 from app.modules.media import toolpath
 from app.modules.storage.storage_backend.runtime import get_backend
 
@@ -29,12 +28,11 @@ def toolpath_response(session: Session, file: File) -> Response:
         return Response(
             content=toolpath.read_ascii(file), media_type="text/plain", headers=_HEADERS
         )
-    row = records.rows_for(session, file).get(TOOLPATH)
-    if row is not None and row.state == "failed":
-        raise HTTPException(
-            status_code=422, detail=row.failure_reason or "toolpath_failed"
-        )
-    if row is None or row.state != "ready" or not row.storage_key:
+    row = records.rows_for(session, file).get(DerivativeKind.TOOLPATH)
+    if row is not None and row.state is DerivativeState.FAILED:
+        # A failed derivative always records why (a database constraint).
+        raise HTTPException(status_code=422, detail=row.failure_reason)
+    if row is None or row.state is not DerivativeState.READY or not row.storage_key:
         state = "pending" if row is None else str(row.state)
         return JSONResponse(status_code=202, content={"state": state}, headers=_HEADERS)
     content = get_backend().read_bytes(row.storage_key)

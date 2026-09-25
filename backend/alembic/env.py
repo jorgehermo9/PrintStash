@@ -10,6 +10,7 @@ from alembic import context
 from app.core.config import settings
 from app.db import models  # noqa: F401
 from app.db.derived_objects import managed_names
+from app.db.enum_columns import EnumText  # also registers the enum CHECK comparator
 from app.db.migration_guards import (
     acknowledged_drops,
     dropped_and_added_columns,
@@ -81,7 +82,11 @@ def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool
     free to move.
 
     `AutoString` is `sa.String` with a length, so rendering it as one loses nothing.
+    An enum column (`EnumText`) is TEXT in the database, so it renders as
+    `sa.Text()`; its values live in the CHECK constraint beside it.
     """
+    if type_ == "type" and isinstance(obj, EnumText):
+        return "sa.Text()"
     if type_ == "type" and type(obj).__module__.startswith("sqlmodel"):
         length = getattr(obj, "length", None)
         return f"sa.String(length={length})" if length else "sa.String()"

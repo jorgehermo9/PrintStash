@@ -25,7 +25,7 @@ from app.core.config import settings
 from app.core.http import get_or_404
 from app.core.logging import get_logger
 from app.core.security import get_current_user, require_auth, require_user
-from app.db.models import CollectionRole, File, FileType, Model, User
+from app.db.models import CollectionRole, DerivativeKind, File, FileType, Model, User
 from app.db.session import get_session, get_session_factory
 from app.modules.identity import auth, rbac
 from app.modules.media.three_mf_preview import (
@@ -424,7 +424,7 @@ def list_file_derivatives(
 )
 def retry_file_derivative(
     file_id: int,
-    kind: str,
+    kind: DerivativeKind,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[DerivativeRead]:

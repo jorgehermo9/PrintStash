@@ -17,7 +17,12 @@ from printstash_core.search.passages import SearchSubject, SubjectType
 from sqlmodel import Session, select
 
 from app.core.time import utcnow
-from app.db.models import IndexGeneration, SearchProjectionRequest, SubjectCaption
+from app.db.models import (
+    IndexGeneration,
+    JobKind,
+    SearchProjectionRequest,
+    SubjectCaption,
+)
 from app.db.projections import ContentSource
 from app.modules.search import generations, jobs
 from app.modules.work.jobs import jobs as job_rows
@@ -70,7 +75,7 @@ class TestProjectJob:
     ) -> None:
         make_search_projection_request(ContentSource("model", make_model().id))
 
-        nudge(jobs.PROJECT_DEFINITION)
+        nudge(JobKind.SEARCH_PROJECT)
         work_engine.drain()
 
         db_session.expire_all()
@@ -93,7 +98,7 @@ class TestProjectJob:
         passes = [
             execution
             for execution in work_engine.executions.values()
-            if execution.submission.subject_key == jobs.PROJECT_DEFINITION
+            if execution.submission.subject_key == JobKind.SEARCH_PROJECT
         ]
         assert len(passes) == 1
 
@@ -138,11 +143,11 @@ class TestIndexSource:
             ),
         )
         db_session.commit()
-        nudge(jobs.GENERATION_DEFINITION)
+        nudge(JobKind.SEARCH_GENERATION)
         work_engine.drain()
         make_search_projection_request(ContentSource("model", make_model().id))
 
-        nudge(jobs.PROJECT_DEFINITION)
+        nudge(JobKind.SEARCH_PROJECT)
         work_engine.drain()
 
         db_session.expire_all()
@@ -189,7 +194,7 @@ class TestGenerationJob:
         status = job_rows.get(proposal.job_id)
         assert status is not None
         assert (status.kind, status.state, status.owner_user_id) == (
-            jobs.GENERATION_DEFINITION,
+            JobKind.SEARCH_GENERATION,
             "queued",
             actor.id,
         )
@@ -207,7 +212,7 @@ class TestGenerationJob:
         )
         db_session.commit()
 
-        nudge(jobs.GENERATION_DEFINITION)
+        nudge(JobKind.SEARCH_GENERATION)
         work_engine.drain()
 
         db_session.expire_all()
@@ -238,7 +243,7 @@ class TestGenerationJob:
         db_session.commit()
         make_search_projection_request(ContentSource("model", make_model().id))
 
-        nudge(jobs.GENERATION_DEFINITION)
+        nudge(JobKind.SEARCH_GENERATION)
         work_engine.drain()
 
         db_session.expire_all()
@@ -256,7 +261,7 @@ class TestGenerationJob:
         generations.cancel(db_session, proposal.id, proposal.version_token)
         db_session.commit()
 
-        nudge(jobs.GENERATION_DEFINITION)
+        nudge(JobKind.SEARCH_GENERATION)
         work_engine.drain()
 
         status = job_rows.get(proposal.job_id)
@@ -496,12 +501,16 @@ class TestDrain:
 
 class TestRegistration:
     def test_every_search_definition_runs_on_a_search_lane(self) -> None:
-        from app.modules.work.catalog import CAPTIONS, EXPANSION, SEARCH
+        from app.db.models import LaneName
 
         lanes = {definition.name: definition.lane for definition in jobs.definitions()}
 
-        assert set(lanes.values()) == {SEARCH, CAPTIONS, EXPANSION}
-        assert lanes[jobs.CAPTION_DEFINITION] == CAPTIONS
+        assert set(lanes.values()) == {
+            LaneName.SEARCH,
+            LaneName.CAPTIONS,
+            LaneName.EXPANSION,
+        }
+        assert lanes[JobKind.SEARCH_CAPTION] == LaneName.CAPTIONS
 
     def test_the_process_catalog_runs_every_ai_search_definition(self) -> None:
         # Model downloads belong to AI Search too: the consent flow requests them.
@@ -582,14 +591,14 @@ class TestCaptionJobs:
     def test_queueing_makes_one_caption_job_due(
         self, db_session: Session, owed_caption, work_engine
     ) -> None:
-        nudge(jobs.CAPTION_QUEUE_DEFINITION)
+        nudge(JobKind.SEARCH_CAPTION_QUEUE)
         work_engine.drain()
 
         db_session.expire_all()
         caption = db_session.exec(select(SubjectCaption)).one()
         assert caption.job_id is not None
         status = job_rows.get(caption.job_id)
-        assert status is not None and status.kind == jobs.CAPTION_DEFINITION
+        assert status is not None and status.kind == JobKind.SEARCH_CAPTION
 
     def test_a_failed_attempt_fails_its_job_retryably(
         self, db_session: Session, owed_caption, work_engine, monkeypatch
@@ -604,7 +613,7 @@ class TestCaptionJobs:
             "CaptionProcessor",
             functools.partial(caption_worker.CaptionProcessor, image_renderer=broken),
         )
-        nudge(jobs.CAPTION_QUEUE_DEFINITION)
+        nudge(JobKind.SEARCH_CAPTION_QUEUE)
         work_engine.drain()
 
         db_session.expire_all()

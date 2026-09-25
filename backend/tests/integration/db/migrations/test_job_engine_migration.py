@@ -34,6 +34,24 @@ BEFORE = "0118bda3e719"
 SENTINEL = "ext-file-sentinel-0000000000000000000000000000000000000000000"
 EARLIER = datetime(2026, 1, 1)
 LATER = datetime(2999, 1, 1)
+# Every kind the retired registry wrote, and the definition it became.
+LEGACY_KINDS = {
+    "ingest": "ingestion.upload",
+    "gcode": "ingestion.upload",
+    "model": "ingestion.upload",
+    "artifact": "ingestion.upload",
+    "url": "ingestion.url",
+    "archive_manifest": "ingestion.archive_inspect",
+    "archive": "ingestion.archive_selection",
+    "url_selection": "ingestion.url_selection",
+    "collection": "ingestion.collection",
+    "library_import": "ingestion.library_import",
+    "pending_import": "ingestion.inbox_import",
+    "external_scan": "sources.scan",
+    "ai_search": "search.generation",
+    "ai_caption": "search.caption",
+    "model_download": "inference.model_download",
+}
 
 
 @dataclass
@@ -111,6 +129,21 @@ def _seed(engine: Engine) -> None:
                 created_at=EARLIER,
                 updated_at=EARLIER,
             )
+        for legacy in (*LEGACY_KINDS, "thumbnail_rebuild"):
+            seed_schema_row(
+                connection,
+                "background_jobs",
+                id=f"legacy-{legacy}",
+                owner_user_id=1,
+                visible=True,
+                kind=legacy,
+                state="completed",
+                status_json="{}",
+                replay_safe=False,
+                attempts=1,
+                created_at=EARLIER,
+                updated_at=EARLIER,
+            )
         seed_schema_row(
             connection,
             "staging_leases",
@@ -169,7 +202,9 @@ def upgraded(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Upgrade
 
 class TestRenameBackgroundJobs:
     def test_keeps_every_job_row(self, upgraded: Upgraded) -> None:
-        ids = upgraded.rows("SELECT id FROM jobs ORDER BY id")
+        ids = upgraded.rows(
+            "SELECT id FROM jobs WHERE id NOT LIKE 'legacy-%' ORDER BY id"
+        )
 
         assert ids == [
             ("completed-job",),
@@ -177,6 +212,27 @@ class TestRenameBackgroundJobs:
             ("pending-job",),
             ("running-job",),
         ]
+
+    @pytest.mark.parametrize(("legacy", "current"), sorted(LEGACY_KINDS.items()))
+    def test_renames_each_legacy_kind_to_its_definition(
+        self, upgraded: Upgraded, legacy: str, current: str
+    ) -> None:
+        # The kind column only admits current definitions; a legacy name
+        # would make the whole upgrade fail on its CHECK constraint.
+        rows = upgraded.rows(
+            "SELECT kind FROM jobs WHERE id = :id", id=f"legacy-{legacy}"
+        )
+
+        assert rows == [(current,)]
+
+    def test_drops_a_thumbnail_rebuild_that_has_no_successor(
+        self, upgraded: Upgraded
+    ) -> None:
+        rows = upgraded.rows(
+            "SELECT id FROM jobs WHERE id = 'legacy-thumbnail_rebuild'"
+        )
+
+        assert rows == []
 
     def test_keeps_a_pending_import_pointing_at_its_job(
         self, upgraded: Upgraded

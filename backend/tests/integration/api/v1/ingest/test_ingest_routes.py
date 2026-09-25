@@ -28,7 +28,7 @@ from sqlmodel import Session
 import app.modules.ingestion.background as ingest_background
 from app.api.v1 import ingest as ingest_module
 from app.core.config import _overlay, settings
-from app.db.models import ExternalLibrary, IngestRequestKind, JobState, User
+from app.db.models import ExternalLibrary, IngestRequestKind, JobKind, JobState, User
 from app.modules.administration import runtime_config
 from app.modules.identity.auth import create_access_token
 from app.modules.ingestion import import_resolvers, importer
@@ -456,7 +456,7 @@ class TestSelectArchiveEntries:
             auth_headers,
         )
         assert payload["state"] == "completed", payload
-        assert payload["kind"] == "ingestion.archive_selection"
+        assert payload["kind"] == JobKind.INGESTION_ARCHIVE_SELECTION
 
     def test_an_unsafe_entry_fails_the_selection_job(
         self, tmp_path: Path, client: TestClient, auth_headers: dict[str, str]

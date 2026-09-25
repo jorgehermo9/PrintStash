@@ -34,6 +34,7 @@ from app.db.models import (
     ExternalLibraryCollectionMode,
     File,
     FileType,
+    JobKind,
     Model,
     OwnedStorageObject,
     StorageDeleteIntent,
@@ -67,7 +68,7 @@ def _upload(
     library: ExternalLibrary | None = None,
 ) -> str:
     """Commit one staged G-code upload the way its ``ingestion.upload`` Job does."""
-    job = build_job(session, kind="ingestion.upload")
+    job = build_job(session, kind=JobKind.INGESTION_UPLOAD)
     ingest_staged_file(
         job_id=job.id,
         artifact=StagedArtifact(

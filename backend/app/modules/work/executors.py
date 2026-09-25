@@ -11,15 +11,16 @@ from __future__ import annotations
 import os
 import socket
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, update
 from sqlmodel import col, select
 
-from app.core.config import settings
+from app.core.config import ProcessRole, settings
 from app.core.time import ensure_utc, utcnow
 from app.db.affected import affected
-from app.db.models import WorkExecutor
+from app.db.models import LaneName, WorkExecutor
 from app.db.session import get_session_factory
 
 _executor_id: str | None = None
@@ -50,7 +51,9 @@ def reset_executor_id() -> None:
     _executor_id = None
 
 
-def register(*, role: str, lanes: list[str], now: datetime | None = None) -> None:
+def register(
+    *, role: ProcessRole, lanes: Sequence[LaneName], now: datetime | None = None
+) -> None:
     now = now or utcnow()
     with get_session_factory().scoped_session() as session:
         row = session.get(WorkExecutor, executor_id())
@@ -66,11 +69,16 @@ def register(*, role: str, lanes: list[str], now: datetime | None = None) -> Non
         row.role = role
         row.pid = os.getpid()
         row.app_version = settings.app_version
-        row.lanes = ",".join(lanes)
+        row.lanes = ",".join(sorted(lanes))
         row.heartbeat_at = now
         row.active_mutations = 0
         session.add(row)
         session.commit()
+
+
+def lanes_of(row: WorkExecutor) -> list[LaneName]:
+    """The lanes an executor registered; a value outside ``LaneName`` raises."""
+    return [LaneName(lane) for lane in row.lanes.split(",")] if row.lanes else []
 
 
 def heartbeat(*, active_mutations: int, now: datetime | None = None) -> None:
@@ -125,7 +133,7 @@ def stale_ids(*, now: datetime | None = None) -> set[str]:
     return {row.executor_id for row in all_executors() if is_stale(row, now=now)}
 
 
-API_ROLES = ("all", "api")
+API_ROLES = (ProcessRole.ALL, ProcessRole.API)
 
 
 def retire_predecessors(*, now: datetime | None = None) -> int:

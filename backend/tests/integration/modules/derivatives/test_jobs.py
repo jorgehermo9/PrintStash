@@ -16,19 +16,18 @@ from sqlmodel import Session, select
 
 import app.modules.work as work
 from app.core.time import utcnow
-from app.db.models import ArtifactDerivative, DerivativeState, Job, JobState
+from app.db.models import (
+    ArtifactDerivative,
+    DerivativeKind,
+    DerivativeState,
+    Job,
+    JobKind,
+    JobState,
+    LaneName,
+)
 from app.modules.derivatives import jobs as derivative_jobs
 from app.modules.derivatives import producers
-from app.modules.derivatives.kinds import (
-    GCODE_DEFINITION,
-    MESH_DEFINITION,
-    METADATA,
-    THUMBNAIL,
-    TOOLPATH,
-    TOOLPATH_DEFINITION,
-)
 from app.modules.derivatives.source import DerivativeSource, subject_key
-from app.modules.work.catalog import DERIVE_LIGHT, DERIVE_NATIVE
 from tests.factories import content
 from tests.integration.api.v1._ingest_assertions import drain_work
 
@@ -58,9 +57,9 @@ class TestDefinitions:
     @pytest.mark.parametrize(
         ("name", "lane"),
         [
-            (MESH_DEFINITION, DERIVE_NATIVE),
-            (GCODE_DEFINITION, DERIVE_LIGHT),
-            (TOOLPATH_DEFINITION, DERIVE_NATIVE),
+            (JobKind.DERIVATIVES_MESH, LaneName.DERIVE_NATIVE),
+            (JobKind.DERIVATIVES_GCODE, LaneName.DERIVE_LIGHT),
+            (JobKind.DERIVATIVES_TOOLPATH, LaneName.DERIVE_NATIVE),
         ],
     )
     def test_each_group_runs_in_the_lane_its_cost_needs(
@@ -86,13 +85,16 @@ class TestDerivation:
         drain_work()
 
         assert _states(db_session, artifact.id) == {
-            METADATA: DerivativeState.READY,
-            THUMBNAIL: DerivativeState.READY,
+            DerivativeKind.METADATA: DerivativeState.READY,
+            DerivativeKind.THUMBNAIL: DerivativeState.READY,
         }
-        job = _job(db_session, MESH_DEFINITION)
+        job = _job(db_session, JobKind.DERIVATIVES_MESH)
         assert job.state == JobState.COMPLETED
         assert json.loads(job.status_json)["result"] == {
-            "derivatives": {METADATA: "ready", THUMBNAIL: "ready"}
+            "derivatives": {
+                DerivativeKind.METADATA: "ready",
+                DerivativeKind.THUMBNAIL: "ready",
+            }
         }
 
     def test_a_committed_gcode_converges_to_its_derivatives(
@@ -104,8 +106,8 @@ class TestDerivation:
         drain_work()
 
         assert _states(db_session, artifact.id) == {
-            METADATA: DerivativeState.READY,
-            THUMBNAIL: DerivativeState.SKIPPED,
+            DerivativeKind.METADATA: DerivativeState.READY,
+            DerivativeKind.THUMBNAIL: DerivativeState.SKIPPED,
         }
 
     def test_a_converged_library_starts_no_more_jobs(
@@ -115,11 +117,15 @@ class TestDerivation:
         derivative_jobs.nudge_for(artifact)
         drain_work()
 
-        work.nudge(MESH_DEFINITION)
+        work.nudge(JobKind.DERIVATIVES_MESH)
         drain_work()
 
         assert (
-            len(db_session.exec(select(Job).where(Job.kind == MESH_DEFINITION)).all())
+            len(
+                db_session.exec(
+                    select(Job).where(Job.kind == JobKind.DERIVATIVES_MESH)
+                ).all()
+            )
             == 1
         )
 
@@ -135,10 +141,10 @@ class TestDerivation:
 
         monkeypatch.setattr(producers.ThumbnailEngine, "generate", crash)
 
-        work.nudge(MESH_DEFINITION)
+        work.nudge(JobKind.DERIVATIVES_MESH)
         drain_work()
 
-        assert _job(db_session, MESH_DEFINITION).state == JobState.FAILED
+        assert _job(db_session, JobKind.DERIVATIVES_MESH).state == JobState.FAILED
         assert set(_states(db_session, artifact.id).values()) == {
             DerivativeState.FAILED
         }
@@ -148,9 +154,9 @@ class TestNudgeFor:
     @pytest.mark.parametrize(
         ("filename", "definitions"),
         [
-            ("part.stl", [MESH_DEFINITION]),
-            ("plate.gcode", [GCODE_DEFINITION]),
-            ("plate.bgcode", [GCODE_DEFINITION, TOOLPATH_DEFINITION]),
+            ("part.stl", [JobKind.DERIVATIVES_MESH]),
+            ("plate.gcode", [JobKind.DERIVATIVES_GCODE]),
+            ("plate.bgcode", [JobKind.DERIVATIVES_GCODE, JobKind.DERIVATIVES_TOOLPATH]),
         ],
     )
     def test_nudges_every_group_that_applies(
@@ -169,14 +175,16 @@ class TestCancel:
         self, db_session: Session, make_model, make_file, make_derivative
     ) -> None:
         artifact = make_file(make_model(), filename="part.stl")
-        make_derivative(artifact, METADATA)
+        make_derivative(artifact, DerivativeKind.METADATA)
 
-        DEFINITIONS[MESH_DEFINITION].cancel(db_session, subject_key(artifact.id))
+        DEFINITIONS[JobKind.DERIVATIVES_MESH].cancel(
+            db_session, subject_key(artifact.id)
+        )
         db_session.commit()
 
         assert _states(db_session, artifact.id) == {
-            METADATA: DerivativeState.READY,
-            THUMBNAIL: DerivativeState.CANCELLED,
+            DerivativeKind.METADATA: DerivativeState.READY,
+            DerivativeKind.THUMBNAIL: DerivativeState.CANCELLED,
         }
 
     def test_a_cancelled_artifact_is_not_offered_again(
@@ -184,10 +192,12 @@ class TestCancel:
     ) -> None:
         artifact = make_file(make_model(), filename="part.stl")
 
-        DEFINITIONS[MESH_DEFINITION].cancel(db_session, subject_key(artifact.id))
+        DEFINITIONS[JobKind.DERIVATIVES_MESH].cancel(
+            db_session, subject_key(artifact.id)
+        )
         db_session.commit()
 
-        source = DEFINITIONS[MESH_DEFINITION].source
+        source = DEFINITIONS[JobKind.DERIVATIVES_MESH].source
         assert source is not None
         assert source.pending(db_session, now=utcnow(), limit=10) == []
 
@@ -196,7 +206,9 @@ class TestCancel:
     ) -> None:
         artifact = make_file(make_model(), filename="part.stl", trashed=True)
 
-        DEFINITIONS[MESH_DEFINITION].cancel(db_session, subject_key(artifact.id))
+        DEFINITIONS[JobKind.DERIVATIVES_MESH].cancel(
+            db_session, subject_key(artifact.id)
+        )
         db_session.commit()
 
         assert _states(db_session, artifact.id) == {}
@@ -207,17 +219,19 @@ class TestOnFailure:
         self, db_session: Session, make_model, make_file, make_derivative
     ) -> None:
         artifact = make_file(make_model(), filename="part.stl")
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL, state=DerivativeState.RUNNING)
+        make_derivative(artifact, DerivativeKind.METADATA)
+        make_derivative(
+            artifact, DerivativeKind.THUMBNAIL, state=DerivativeState.RUNNING
+        )
 
-        DEFINITIONS[MESH_DEFINITION].on_failure(
+        DEFINITIONS[JobKind.DERIVATIVES_MESH].on_failure(
             db_session, subject_key(artifact.id), "lost"
         )
         db_session.commit()
 
         assert _states(db_session, artifact.id) == {
-            METADATA: DerivativeState.READY,
-            THUMBNAIL: DerivativeState.FAILED,
+            DerivativeKind.METADATA: DerivativeState.READY,
+            DerivativeKind.THUMBNAIL: DerivativeState.FAILED,
         }
 
 
@@ -226,19 +240,26 @@ class TestRetry:
         self, db_session: Session, make_model, make_file, make_derivative
     ) -> None:
         artifact = make_file(make_model(), filename="plate.bgcode")
-        make_derivative(artifact, METADATA)
-        make_derivative(artifact, THUMBNAIL, state=DerivativeState.CANCELLED)
+        make_derivative(artifact, DerivativeKind.METADATA)
         make_derivative(
-            artifact, TOOLPATH, state=DerivativeState.FAILED, exhausted=True
+            artifact, DerivativeKind.THUMBNAIL, state=DerivativeState.CANCELLED
+        )
+        make_derivative(
+            artifact,
+            DerivativeKind.TOOLPATH,
+            state=DerivativeState.FAILED,
+            exhausted=True,
         )
 
-        assert DEFINITIONS[GCODE_DEFINITION].retry(db_session, subject_key(artifact.id))
+        assert DEFINITIONS[JobKind.DERIVATIVES_GCODE].retry(
+            db_session, subject_key(artifact.id)
+        )
         db_session.commit()
 
         # The toolpath belongs to another group; its retry is its own.
         assert _states(db_session, artifact.id) == {
-            METADATA: DerivativeState.READY,
-            TOOLPATH: DerivativeState.FAILED,
+            DerivativeKind.METADATA: DerivativeState.READY,
+            DerivativeKind.TOOLPATH: DerivativeState.FAILED,
         }
 
     def test_a_trashed_artifact_cannot_be_retried(
@@ -246,6 +267,6 @@ class TestRetry:
     ) -> None:
         artifact = make_file(make_model(), filename="part.stl", trashed=True)
 
-        assert not DEFINITIONS[MESH_DEFINITION].retry(
+        assert not DEFINITIONS[JobKind.DERIVATIVES_MESH].retry(
             db_session, subject_key(artifact.id)
         )

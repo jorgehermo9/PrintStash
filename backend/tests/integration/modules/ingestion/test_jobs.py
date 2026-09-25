@@ -25,16 +25,17 @@ from app.db.models import (
     IngestRequest,
     IngestRequestKind,
     Job,
+    JobKind,
     JobState,
+    LaneName,
     StagingLease,
 )
 from app.modules.ingestion import jobs as ingest_jobs
 from app.modules.ingestion.requests import subject_key
-from app.modules.work.catalog import INGEST, NETWORK
 from app.modules.work.submission import submit
 
 DEFINITIONS = {definition.name: definition for definition in ingest_jobs.definitions()}
-UPLOAD = DEFINITIONS["ingestion.upload"]
+UPLOAD = DEFINITIONS[JobKind.INGESTION_UPLOAD]
 
 
 @pytest.fixture
@@ -72,12 +73,12 @@ class TestDefinitions:
     @pytest.mark.parametrize(
         ("name", "lane"),
         [
-            ("ingestion.upload", INGEST),
-            ("ingestion.archive_inspect", INGEST),
-            ("ingestion.archive_selection", INGEST),
-            ("ingestion.url", NETWORK),
-            ("ingestion.url_selection", NETWORK),
-            ("ingestion.collection", NETWORK),
+            (JobKind.INGESTION_UPLOAD, LaneName.INGEST),
+            (JobKind.INGESTION_ARCHIVE_INSPECT, LaneName.INGEST),
+            (JobKind.INGESTION_ARCHIVE_SELECTION, LaneName.INGEST),
+            (JobKind.INGESTION_URL, LaneName.NETWORK),
+            (JobKind.INGESTION_URL_SELECTION, LaneName.NETWORK),
+            (JobKind.INGESTION_COLLECTION, LaneName.NETWORK),
         ],
     )
     def test_each_import_runs_in_the_lane_its_io_needs(
@@ -108,7 +109,9 @@ class TestCancel:
     ) -> None:
         request = make_ingest_request(owner, source_credential="thingiverse-cookie")
 
-        DEFINITIONS["ingestion.url"].cancel(db_session, subject_key(request.job_id))
+        DEFINITIONS[JobKind.INGESTION_URL].cancel(
+            db_session, subject_key(request.job_id)
+        )
         db_session.commit()
 
         db_session.refresh(request)
@@ -171,7 +174,9 @@ class TestRetry:
         request = make_ingest_request(owner, kind=IngestRequestKind.URL)
 
         assert (
-            DEFINITIONS["ingestion.url"].retry(db_session, subject_key(request.job_id))
+            DEFINITIONS[JobKind.INGESTION_URL].retry(
+                db_session, subject_key(request.job_id)
+            )
             is True
         )
 
@@ -183,7 +188,9 @@ class TestRetry:
         )
 
         assert (
-            DEFINITIONS["ingestion.url"].retry(db_session, subject_key(request.job_id))
+            DEFINITIONS[JobKind.INGESTION_URL].retry(
+                db_session, subject_key(request.job_id)
+            )
             is False
         )
 

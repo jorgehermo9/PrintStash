@@ -10,7 +10,7 @@ a port. Why it is shaped this way is in
  request / watcher / printer event          tick (every JOBS_RECONCILE_INTERVAL)
             │ commit intent, then nudge(definition)      │
             ▼                                            ▼
-   ┌────────────────────── reconciler pass (work.reconcile) ──────────────────┐
+   ┌────────────────────── reconciler pass (one per source) ─────────────────┐
    │ repair: Job rows ⨯ engine evidence → decide() → resubmit/interrupt/fail  │
    │ discover: source.pending(now, headroom) → create Job → submit            │
    └─────────────────────────────┬────────────────────────────────────────────┘
@@ -26,14 +26,21 @@ a port. Why it is shaped this way is in
 | Term | Code | Meaning |
 | --- | --- | --- |
 | Job | `db.models.Job`, `work.jobs` | The user-visible record of work on one subject, with its status, owner and attempts. The row is also the pending marker the reconciler finds. |
-| Job Definition | `work.contracts.JobDefinition` | Name, lane, ordered steps, an optional source, and what cancel/retry/failure do to the subject. Declared by the owning module in `<module>/jobs.py`. |
+| Job Definition | `work.contracts.JobDefinition` | Its name is a `JobKind` member (`<owner>.<verb>`), plus a lane, ordered steps, a label, an optional source, and what cancel/retry/failure do to the subject. Declared by the owning module in `<module>/jobs.py`. |
 | Step | `work.contracts.Step` | An idempotent unit with its own `RetryPolicy`. |
 | Subject | `Job.subject_key` | The domain key the Job's intent belongs to (`file/42`, `library/3`). One active Job per definition and subject (`uq_jobs_active_subject`). |
 | Work Source | `work.sources` | Computes pending subjects from domain state, bounded by the room it is given. `StateSource` for domain rows, `ScheduleSource` for a cadence. |
-| Lane | `work.catalog` | A concurrency class and an engine queue: `ingest`, `derive.native`, `derive.light`, `similarity`, `network`, `notify` (partitioned per channel), `printing` (per printer), `maintenance`, `search`, `captions`, `expansion`, `reconcile`. |
+| Lane | `LaneName`, `work.catalog` | A concurrency class and an engine queue: `ingest`, `derive.native`, `derive.light`, `similarity`, `network`, `notify` (partitioned per channel), `printing` (per printer), `maintenance`, `search`, `captions`, `expansion`, `reconcile`. |
 | Priority | `WorkPriority` | `interactive` (a user is waiting) or `backfill`. A child Job never raises it. |
 | Fence | `work.fences` | A database lease (holder, heartbeat, TTL) checked before every step; restore and migrations hold them. |
 | Executor | `work.executors` | A process that runs Jobs, heartbeating its role, lanes and in-flight writes. |
+
+Kinds, lanes, states and priorities are closed sets: enums in
+`db.models.types`, stored as TEXT with a CHECK constraint listing their values
+(no database-native enum types, see the database skill reference). A kind
+with no member cannot be declared, recorded or requested, and
+`tests/integration/bootstrap/test_work.py` fails when a member has no
+definition.
 
 Definitions without a source (uploads, backups on request, archive imports) are
 requested: a route records the Job with its intent in one transaction and
@@ -41,12 +48,17 @@ nudges. Definitions with a source are discovered: the source finds the work.
 
 ## Engine guarantees
 
-The port (`work.contracts.JobEngine`) names exactly two, both provided by DBOS:
+The port (`work.contracts.JobEngine`) executes two kinds of submission, a
+`JobSubmission` (one attempt of one Job) and a `PassSubmission` (one reconcile
+pass over one source), and names exactly two guarantees, both provided by DBOS:
 
 - `execution_id = <job id>:<attempt>`: one execution per attempt, ever.
 - `dedupe_key = <definition>|<subject>`: at most one active execution per
-  subject. Partitioned lanes cannot deduplicate in DBOS; there the
-  active-subject index is the claim.
+  subject. A Job is routed either `Deduplicated` by that key or, on a
+  partitioned lane, `Partitioned` by its definition's partition key (DBOS
+  cannot deduplicate a partitioned queue, so there the active-subject index
+  is the claim). The catalog refuses a definition whose partition rule does
+  not match its lane.
 
 Nothing else is assumed of the engine. Its state is disposable: SQLite keeps it
 in `printstash-dbos.sqlite` beside the vault database; PostgreSQL keeps it in

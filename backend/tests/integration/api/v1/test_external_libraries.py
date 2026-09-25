@@ -30,6 +30,7 @@ from app.db.models import (
     Collection,
     ExternalLibrary,
     File,
+    JobKind,
     JobState,
     Model,
 )
@@ -515,13 +516,17 @@ class TestScanNow:
         for folder, size in (("Christine", 10), ("Pegboard", 12)):
             path = nas / folder / "part.stl"
             path.parent.mkdir(parents=True)
-            path.write_bytes(trimesh.creation.box(extents=(size, 10, 10)).export(file_type="stl"))
+            path.write_bytes(
+                trimesh.creation.box(extents=(size, 10, 10)).export(file_type="stl")
+            )
         library = build_external_library(db_session, nas, name="nas")
         external_library.scan_library(library.id)
         db_session.expire_all()
         original_roots = {
             row.name: row.id
-            for row in db_session.exec(select(Collection).where(Collection.parent_id == None)).all()  # noqa: E711
+            for row in db_session.exec(
+                select(Collection).where(Collection.parent_id == None)  # noqa: E711
+            ).all()
         }
         assert {"Christine", "Pegboard"} <= original_roots.keys()
         existing = db_session.exec(select(Model).where(Model.name == "part")).all()
@@ -531,20 +536,30 @@ class TestScanNow:
         uploaded = client.post(
             "/api/v1/ingest/model",
             headers=auth_headers,
-            files={"file": ("new.stl", trimesh.creation.box(extents=(14, 10, 10)).export(file_type="stl"), "model/stl")},
+            files={
+                "file": (
+                    "new.stl",
+                    trimesh.creation.box(extents=(14, 10, 10)).export(file_type="stl"),
+                    "model/stl",
+                )
+            },
             data={"model_name": "new", "collection": "Models/Christine"},
         )
         assert uploaded.status_code == 202, uploaded.text
         from tests.integration.api.v1._ingest_assertions import drain_work
 
         drain_work()
-        job = client.get(f"/api/v1/jobs/{uploaded.json()['job_id']}", headers=auth_headers)
+        job = client.get(
+            f"/api/v1/jobs/{uploaded.json()['job_id']}", headers=auth_headers
+        )
         assert job.json()["state"] == "completed", job.text
 
         db_session.expire_all()
         after_roots = {
             row.name: row.id
-            for row in db_session.exec(select(Collection).where(Collection.parent_id == None)).all()  # noqa: E711
+            for row in db_session.exec(
+                select(Collection).where(Collection.parent_id == None)  # noqa: E711
+            ).all()
         }
         api_roots = {
             row["name"]: row["id"]
@@ -592,7 +607,7 @@ class TestScanNow:
         _drop_gcode(nas, "a.gcode")
         lib = build_external_library(db_session, nas, name="nas")
         running = make_job(
-            kind=external_library.SCAN_DEFINITION,
+            kind=JobKind.SOURCES_SCAN,
             state=JobState.RUNNING,
             subject=f"library/{lib.id}",
         )
@@ -619,7 +634,7 @@ class TestScanNow:
         _drop_gcode(nas, "a.gcode")
         lib = build_external_library(db_session, nas, name="nas")
         make_job(
-            kind=external_library.SCAN_DEFINITION,
+            kind=JobKind.SOURCES_SCAN,
             state=JobState.RUNNING,
             subject=f"library/{lib.id}",
         )

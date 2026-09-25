@@ -45,6 +45,7 @@ from app.core.metrics import (
     set_lane_depth,
     set_stuck_jobs,
 )
+from app.db.models import JobKind
 from app.db.session import SessionFactory
 from app.modules.ingestion import import_resolvers
 from app.modules.ingestion.capture_provider_connections import (
@@ -255,21 +256,23 @@ class _BrokenMetric:
 class TestRecordJobTerminal:
     def test_counts_a_terminal_job_by_definition(self) -> None:
         before = _sample(
-            "printstash_jobs_total", {"kind": "derivatives.mesh", "result": "completed"}
+            "printstash_jobs_total",
+            {"kind": JobKind.DERIVATIVES_MESH, "result": "completed"},
         )
 
-        record_job_terminal("derivatives.mesh", "completed", 1.5)
+        record_job_terminal(JobKind.DERIVATIVES_MESH, "completed", 1.5)
 
         after = _sample(
-            "printstash_jobs_total", {"kind": "derivatives.mesh", "result": "completed"}
+            "printstash_jobs_total",
+            {"kind": JobKind.DERIVATIVES_MESH, "result": "completed"},
         )
         assert after == before + 1
 
     def test_observes_a_negative_duration_as_zero(self) -> None:
-        labels = {"kind": "ingestion.upload", "result": "failed"}
+        labels = {"kind": JobKind.INGESTION_UPLOAD, "result": "failed"}
         before = _sample("printstash_job_duration_seconds_sum", labels)
 
-        record_job_terminal("ingestion.upload", "failed", -1.0)
+        record_job_terminal(JobKind.INGESTION_UPLOAD, "failed", -1.0)
 
         assert _sample("printstash_job_duration_seconds_sum", labels) == before
 
@@ -278,7 +281,7 @@ class TestRecordJobTerminal:
     ) -> None:
         monkeypatch.setattr(metrics, "jobs_terminal", _BrokenMetric())
 
-        assert record_job_terminal("ingestion.upload", "completed", 1.5) is None
+        assert record_job_terminal(JobKind.INGESTION_UPLOAD, "completed", 1.5) is None
 
 
 class TestSetStuckJobs:
@@ -337,10 +340,10 @@ class TestSetLaneDepth:
 
 class TestRecordStep:
     def test_observes_a_step_attempt(self) -> None:
-        labels = {"kind": "derivatives.mesh", "step": "derive", "result": "ok"}
+        labels = {"kind": JobKind.DERIVATIVES_MESH, "step": "derive", "result": "ok"}
         before = _sample("printstash_job_step_duration_seconds_count", labels)
 
-        record_step("derivatives.mesh", "derive", "ok", 0.5)
+        record_step(JobKind.DERIVATIVES_MESH, "derive", "ok", 0.5)
 
         assert (
             _sample("printstash_job_step_duration_seconds_count", labels) == before + 1
@@ -349,42 +352,44 @@ class TestRecordStep:
     def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(metrics, "step_duration", _BrokenMetric())
 
-        assert record_step("derivatives.mesh", "derive", "ok", 0.5) is None
+        assert record_step(JobKind.DERIVATIVES_MESH, "derive", "ok", 0.5) is None
 
 
 class TestRecordResubmit:
     def test_counts_a_resubmitted_execution(self) -> None:
-        before = _sample("printstash_job_resubmits_total", {"kind": "backups.create"})
+        before = _sample(
+            "printstash_job_resubmits_total", {"kind": JobKind.BACKUPS_CREATE}
+        )
 
-        record_resubmit("backups.create")
+        record_resubmit(JobKind.BACKUPS_CREATE)
 
         assert (
-            _sample("printstash_job_resubmits_total", {"kind": "backups.create"})
+            _sample("printstash_job_resubmits_total", {"kind": JobKind.BACKUPS_CREATE})
             == before + 1
         )
 
     def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(metrics, "job_resubmits", _BrokenMetric())
 
-        assert record_resubmit("backups.create") is None
+        assert record_resubmit(JobKind.BACKUPS_CREATE) is None
 
 
 class TestRecordReconcilePass:
     def test_counts_each_outcome_of_a_pass(self) -> None:
-        labels = {"source": "derivatives.gcode", "outcome": "submitted"}
+        labels = {"source": JobKind.DERIVATIVES_GCODE, "outcome": "submitted"}
         before = _sample("printstash_reconcile_outcomes_total", labels)
 
-        record_reconcile_pass("derivatives.gcode", 0.1, {"submitted": 3})
+        record_reconcile_pass(JobKind.DERIVATIVES_GCODE, 0.1, {"submitted": 3})
 
         assert _sample("printstash_reconcile_outcomes_total", labels) == before + 3
 
     def test_publishes_no_series_for_an_outcome_that_never_happened(self) -> None:
-        record_reconcile_pass("notify.retention", 0.1, {"deferred": 0})
+        record_reconcile_pass(JobKind.NOTIFICATIONS_RETENTION, 0.1, {"deferred": 0})
 
         assert (
             registry.get_sample_value(
                 "printstash_reconcile_outcomes_total",
-                {"source": "notify.retention", "outcome": "deferred"},
+                {"source": JobKind.NOTIFICATIONS_RETENTION, "outcome": "deferred"},
             )
             is None
         )
@@ -392,7 +397,10 @@ class TestRecordReconcilePass:
     def test_swallows_its_own_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(metrics, "reconcile_pass_duration", _BrokenMetric())
 
-        assert record_reconcile_pass("derivatives.gcode", 0.1, {"submitted": 1}) is None
+        assert (
+            record_reconcile_pass(JobKind.DERIVATIVES_GCODE, 0.1, {"submitted": 1})
+            is None
+        )
 
 
 class TestRecordFleetDispatch:

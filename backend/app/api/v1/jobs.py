@@ -23,7 +23,7 @@ from sqlmodel import Session
 from starlette.websockets import WebSocketState
 
 from app.core.security import require_auth, require_user
-from app.db.models import CollectionRole, Model, User
+from app.db.models import CollectionRole, JobKind, Model, User
 from app.db.session import get_session_factory
 from app.modules.identity import rbac, ws_tickets
 from app.modules.identity.auth import get_user_by_id
@@ -51,7 +51,7 @@ def list_jobs(
     response: Response,
     terminal_limit: int = Query(20, ge=0, le=100),
     tracked_job_id: list[str] = Query(default=[]),
-    kind: list[str] = Query(default=[]),
+    kind: list[JobKind] = Query(default=[]),
     include_system: bool = False,
     current_user: User = Depends(require_user),
 ) -> list[JobStatus]:
