@@ -110,15 +110,18 @@ class TestLocalProvider:
                 while local._waiting_queries == 0:
                     assert time.monotonic() < deadline, "the query never waited"
                     time.sleep(0.01)
-                # A waiting query goes first, even once a slot frees.
-                _release(1)
-                held -= 1
-                with pytest.raises(EmbeddingError, match="embedding_compute_busy"):
-                    provider.embed(
-                        (EmbeddingInput("text", text="red"),),
-                        provider.space,
-                        context=InferenceContext.bounded(1, priority="background"),
-                    )
+                # A waiting query goes first, even once a slot frees. Freeing
+                # it and asking for background admission under the admission
+                # lock (re-entrant) keeps the query from taking the slot and
+                # finishing in between, which would make this a race.
+                with local._admission:
+                    _release(1)
+                    held -= 1
+                    assert local._waiting_queries == 1
+                    with pytest.raises(EmbeddingError, match="embedding_compute_busy"):
+                        local.acquire_slot(
+                            InferenceContext.bounded(1, priority="background")
+                        )
             finally:
                 _release(held)
             assert result.result(3) == ((1, 0, 0),)
