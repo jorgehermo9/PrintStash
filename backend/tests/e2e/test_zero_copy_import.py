@@ -20,6 +20,7 @@ from sqlmodel import Session, select
 
 from app.db.models import ArtifactUploadSession, File
 from app.modules.storage.storage_backend.runtime import init_backend
+from tests.e2e._jobs import settle
 
 PAYLOAD = b"999\nzero-copy e2e\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n"
 
@@ -58,6 +59,8 @@ async def _upload(api, headers: dict[str, str]) -> str:
 
 
 async def _await_upload(api, headers: dict[str, str], upload_id: str) -> None:
+    # Finalizing hands the upload to its ingestion Job; run it.
+    await asyncio.to_thread(settle)
     for _ in range(100):
         r = await api.get(f"/api/v1/artifact-uploads/{upload_id}", headers=headers)
         assert r.status_code == 200, r.text
