@@ -1279,6 +1279,25 @@ class TestS3CompatibilityCoverage:
         assert aborted == ["upload-2"]
 
 
+class _StalledCopyClient(_CoverageMemoryS3Client):
+    """A store whose part copies never answer within the read timeout."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.aborted: list[str] = []
+
+    def create_multipart_upload(self, **_kwargs: object) -> dict[str, str]:
+        return {"UploadId": "copy-1"}
+
+    def upload_part_copy(self, **_kwargs: object) -> dict[str, object]:
+        import botocore.exceptions
+
+        raise botocore.exceptions.ReadTimeoutError(endpoint_url="https://s3.test")
+
+    def abort_multipart_upload(self, **kwargs: object) -> None:
+        self.aborted.append(str(kwargs["UploadId"]))
+
+
 def _copyable(backend: S3StorageBackend) -> StagedRemoteObject:
     """A staged upload in *backend*'s own store, pinned by ETag."""
     return StagedRemoteObject(
@@ -1327,6 +1346,26 @@ class TestS3CopyIn:
         unpinned = replace(_copyable(backend), etag=None)
 
         assert backend.copy_in(unpinned, "vault-data/files/a.stl") is None
+
+    def test_falls_back_when_a_part_copy_times_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A slow store must cost an upload, never the publication.
+        backend, _client = _memory_s3_backend(monkeypatch, _StalledCopyClient())
+        backend._capabilities = replace(backend.capabilities, server_side_copy=True)
+
+        assert backend.copy_in(_copyable(backend), "vault-data/files/a.stl") is None
+
+    def test_aborts_the_copy_that_timed_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _StalledCopyClient()
+        backend, _client = _memory_s3_backend(monkeypatch, client)
+        backend._capabilities = replace(backend.capabilities, server_side_copy=True)
+
+        backend.copy_in(_copyable(backend), "vault-data/files/a.stl")
+
+        assert client.aborted == ["copy-1"]
 
     def test_declines_an_empty_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A copy range cannot address zero bytes; an upload publishes them.

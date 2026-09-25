@@ -57,14 +57,20 @@ _S3_PRECONDITION_CODES = {"412", "PreconditionFailed", "ConditionalRequestConfli
 # S3 bounds a multipart object to 10,000 parts of 5 MiB..5 GiB (the last part
 # may be smaller). Uploads keep parts small because each one is held in
 # memory; server-side copies move no bytes through PrintStash, so their parts
-# are large to keep the request count down.
+# are larger to keep the request count down.
 _MIN_PART_SIZE = 5 * 1024 * 1024
 _MAX_PART_SIZE = 5 * 1024 * 1024 * 1024
 _MAX_PARTS = 10_000
 _UPLOAD_PART_SIZE = 8 * 1024 * 1024
 _UPLOAD_CONCURRENCY = 4
-_COPY_PART_SIZE = 256 * 1024 * 1024
-_COPY_CONCURRENCY = 8
+# A part copy answers only once the store has copied the whole range, so the
+# range must stay well inside the client's read timeout even on slow stores.
+_COPY_PART_SIZE = 64 * 1024 * 1024
+_COPY_CONCURRENCY = 4
+
+
+class _SourceChanged(Exception):
+    """The store refused a copy because its source is not the verified object."""
 
 
 def _part_ranges(size: int, preferred: int) -> list[tuple[int, int]]:
@@ -533,16 +539,21 @@ class S3StorageBackend(StorageBackend):
             copied = self._client.get_object(Bucket=self._bucket, Key=copy_key)[
                 "Body"
             ].read()
-            stale = self._copy_in(replace(source, etag=f'"{"0" * 32}"'), stale_key)
-            if stale is not None:
-                created_versions.append((stale_key, stale.version_id))
+            try:
+                stale = self._copy_in(replace(source, etag=f'"{"0" * 32}"'), stale_key)
+            except _SourceChanged:
+                refuses_changed_source = True
+            else:
+                refuses_changed_source = False
+                if stale is not None:
+                    created_versions.append((stale_key, stale.version_id))
             try:
                 self._copy_in(source, copy_key)
             except StorageCollisionError:
                 refuses_overwrite = True
             else:
                 refuses_overwrite = False
-            return copied == payload and stale is None and refuses_overwrite
+            return copied == payload and refuses_changed_source and refuses_overwrite
         except Exception:
             logger.warning("S3 server-side copy probe failed", exc_info=True)
             return False
@@ -973,15 +984,16 @@ class S3StorageBackend(StorageBackend):
             or source.size <= 0
         ):
             return None
-        receipt = self._copy_in(source, dest_key)
-        if receipt is None:
+        try:
+            return self._copy_in(source, dest_key)
+        except _SourceChanged:
             # The staged object is no longer the one that was hashed. The
             # verified local copy is still correct; the caller uploads it.
             logger.warning(
                 "S3 server-side copy refused a changed source",
                 extra={"source": source.key, "destination": dest_key},
             )
-        return receipt
+            return None
 
     def _copy_in(
         self, source: StagedRemoteObject, dest_key: str
@@ -991,8 +1003,9 @@ class S3StorageBackend(StorageBackend):
         Every part is copied with ``CopySourceIfMatch`` (and the version id
         when the bucket keeps one), so only the exact object that was hashed
         can reach the destination. The completion is ``If-None-Match: *``,
-        the same create-only guarantee an upload has. Returns ``None`` when
-        the store refuses *source* as changed.
+        the same create-only guarantee an upload has. Raises
+        ``_SourceChanged`` when the store refuses *source* as changed, and
+        returns ``None`` when the copy fails before anything is published.
         """
         import botocore.exceptions
 
@@ -1029,11 +1042,21 @@ class S3StorageBackend(StorageBackend):
                 max_workers=min(_COPY_CONCURRENCY, len(ranges))
             ) as pool:
                 parts = list(pool.map(copy_part, enumerate(ranges, start=1)))
-        except botocore.exceptions.ClientError as exc:
+        except (
+            botocore.exceptions.ClientError,
+            botocore.exceptions.BotoCoreError,
+        ) as exc:
+            # Nothing is published before completion, so any store or transport
+            # failure here leaves the verified local copy to be uploaded.
             self._abort_multipart(dest_key, upload_id)
             if _is_precondition_failure(exc):
-                return None
-            raise
+                raise _SourceChanged(source.key) from exc
+            logger.warning(
+                "S3 server-side copy did not finish; uploading the verified copy",
+                exc_info=True,
+                extra={"source": source.key, "destination": dest_key},
+            )
+            return None
         except Exception:
             self._abort_multipart(dest_key, upload_id)
             raise
