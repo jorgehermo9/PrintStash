@@ -397,6 +397,11 @@ test.describe("AI Search", () => {
           fullPage: true,
         });
       }
+      // TEMPORARY diagnostic for CI (remove once this passes there).
+      for (const mode of ["hybrid", "lexical"]) {
+        const probe = await page.request.get(`${API}/api/v1/search?q=${phrase}&mode=${mode}`);
+        console.log(`DIAG search ${mode} ${probe.status()} ${(await probe.text()).slice(0, 1500)}`);
+      }
       await page.goto(`/search?q=${phrase}`);
       await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
       await page.goto(`/models/${id}`);

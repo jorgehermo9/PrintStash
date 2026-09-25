@@ -27,6 +27,7 @@ from app.db.models import (
     File,
     FileType,
     Job,
+    JobKind,
     JobState,
     StagingLease,
     User,
@@ -67,7 +68,7 @@ def _verified(
         session, owner, state=ArtifactUploadState.INGESTING, **upload
     )
     job = make_job(
-        kind=handoff.DEFINITION,
+        kind=JobKind.INGESTION_ARTIFACT_UPLOAD,
         owner=owner,
         subject=handoff.subject_key(row.id),
     )
@@ -103,7 +104,7 @@ def _settled(session: Session, make_job: MakeJob, owner: User) -> ArtifactUpload
 
 
 def _run(engine: InlineJobEngine, session: Session) -> None:
-    nudge(handoff.DEFINITION)
+    nudge(JobKind.INGESTION_ARTIFACT_UPLOAD)
     engine.drain()
     session.expire_all()
 
