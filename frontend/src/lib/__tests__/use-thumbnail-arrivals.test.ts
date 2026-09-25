@@ -108,6 +108,28 @@ describe("useThumbnailArrivals", () => {
     expect(onArrival).toHaveBeenCalled();
   });
 
+  it("refreshes once the server confirms it follows the Model", async () => {
+    // A thumbnail that landed between the list read and the subscription was
+    // announced to nobody; the confirmation is the cue to look again.
+    const onArrival = vi.fn<() => void>();
+    renderHook(() => useThumbnailArrivals([card(1)], onArrival));
+    await opened();
+
+    socket.onmessage?.({ data: JSON.stringify({ type: "subscribed", channel: "model:1" }) });
+
+    expect(onArrival).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores the confirmation for a Model it does not show", async () => {
+    const onArrival = vi.fn<() => void>();
+    renderHook(() => useThumbnailArrivals([card(1)], onArrival));
+    await opened();
+
+    socket.onmessage?.({ data: JSON.stringify({ type: "subscribed", channel: "model:2" }) });
+
+    expect(onArrival).not.toHaveBeenCalled();
+  });
+
   it("does not resubscribe when the same page re-renders", async () => {
     const { rerender } = renderHook(({ models }) => useThumbnailArrivals(models, vi.fn()), {
       initialProps: { models: [card(1)] },

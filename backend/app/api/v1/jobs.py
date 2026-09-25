@@ -154,7 +154,9 @@ async def events_ws(websocket: WebSocket) -> None:
 
     The client is subscribed to its own Jobs (and, for an administrator, to
     every Job) on connect, and may send ``{"subscribe": "model:<id>"}`` or
-    ``{"unsubscribe": ...}`` for the Models it is viewing. Messages are
+    ``{"unsubscribe": ...}`` for the Models it is viewing; each accepted
+    subscription is acknowledged with ``{"type": "subscribed", "channel": ...}``
+    so the client can refetch what changed before it took effect. Messages are
     notices (``{"type": "job", "job_id": ...}``); ``{"type": "resync"}`` asks
     the client to refetch everything it shows.
     """
@@ -196,6 +198,9 @@ async def events_ws(websocket: WebSocket) -> None:
                 if allowed:
                     channels.add(wanted)
                     await bus.subscribe(wanted, sink)
+                    # Anything that changed before this point was announced to
+                    # nobody on this socket; the client refetches on the ack.
+                    await sink({"type": "subscribed", "channel": wanted})
             if isinstance(unwanted, str) and unwanted in channels:
                 channels.discard(unwanted)
                 await bus.unsubscribe(unwanted, sink)

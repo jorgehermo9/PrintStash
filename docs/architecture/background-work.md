@@ -106,7 +106,9 @@ skipped, failed (with backoff) or cancelled.
 
 `GET /api/v1/events/ws` (one-use ticket from `POST /api/v1/events/ticket`)
 delivers them. The client follows a Model with `{"subscribe": "model:<id>"}`;
-the server checks the viewer may see it. Delivery is best effort: in one
+the server checks the viewer may see it and answers
+`{"type": "subscribed", "channel": "model:<id>"}`, the cue to refetch what
+changed before the subscription took effect. Delivery is best effort: in one
 process it is in memory, across processes it is PostgreSQL `NOTIFY`, and a
 reconnect delivers `{"type": "resync"}` so clients refetch.
 

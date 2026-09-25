@@ -17,8 +17,10 @@ export const MAX_FOLLOWED = 24;
  * A fresh upload's Model appears before its thumbnail is derived; the card
  * shows a placeholder. This follows the Models on screen that still have no
  * thumbnail (up to `MAX_FOLLOWED`) and calls `onArrival` when one of their
- * thumbnails settles or after a reconnect, so the list refetches through its
- * authorized query instead of the user reloading.
+ * thumbnails settles, when the server confirms it is following one (a
+ * thumbnail that settled before then was announced to nobody), or after a
+ * reconnect, so the list refetches through its authorized query instead of
+ * the user reloading.
  */
 export function useThumbnailArrivals(
   models: ReadonlyArray<{ id: number; thumbnail_url: string | null }>,
@@ -46,7 +48,7 @@ export function useThumbnailArrivals(
     if (!waiting) return;
     const stops = waiting.split(",").map((id) =>
       followModel(Number(id), (notice) => {
-        if (notice.type === "resync") return latest.current();
+        if (notice.type === "resync" || notice.type === "subscribed") return latest.current();
         if (notice.type === "derivative" && notice.kind === "thumbnail") {
           if (notice.state === "ready" || notice.state === "skipped") latest.current();
         }

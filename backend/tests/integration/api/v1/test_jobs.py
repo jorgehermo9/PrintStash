@@ -558,6 +558,12 @@ class TestEventsSocket:
         ) as ws:
             ws.receive_json()
             ws.send_json({"subscribe": f"model:{model.id}"})
+            # The acknowledgement tells the client to refetch what changed
+            # before the subscription took effect.
+            assert ws.receive_json() == {
+                "type": "subscribed",
+                "channel": f"model:{model.id}",
+            }
             _wait_subscribed(bus, f"model:{model.id}")
             notice = {"type": "derivative", "model_id": model.id, "state": "ready"}
             ws.portal.call(bus.publish, f"model:{model.id}", notice)
@@ -569,6 +575,28 @@ class TestEventsSocket:
             while bus._subscribers.get(f"model:{model.id}"):
                 assert time.monotonic() < deadline
                 time.sleep(0.01)
+
+    def test_a_refused_subscription_is_not_acknowledged(
+        self, client: TestClient, app, db_session: Session, owner: User, make_model
+    ) -> None:
+        hidden = make_model()
+        shelf = build_collection(db_session, "Shared shelf")
+        grant_collection_role(db_session, owner, shelf)
+        visible = make_model(collection=shelf)
+        bus = app.state.event_bus
+        with client.websocket_connect(
+            f"/api/v1/events/ws?ticket={_ticket(client, owner)}"
+        ) as ws:
+            ws.receive_json()
+            ws.send_json({"subscribe": f"model:{hidden.id}"})
+            ws.send_json({"subscribe": f"model:{visible.id}"})
+
+            # Requests are handled in order, so the refused one answered nothing.
+            assert ws.receive_json() == {
+                "type": "subscribed",
+                "channel": f"model:{visible.id}",
+            }
+            assert not bus._subscribers.get(f"model:{hidden.id}")
 
     def test_leaves_every_channel_on_disconnect(
         self, client: TestClient, app, owner: User

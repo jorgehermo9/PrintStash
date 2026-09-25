@@ -11,7 +11,8 @@
  *
  * Channels are implicit for the user's own Jobs (and, for administrators, every
  * Job); a view that shows a Model follows `model:<id>` to hear about its
- * derivatives.
+ * derivatives, and the server acknowledges each channel it accepts with
+ * `subscribed`.
  */
 
 import { createEventsTicket } from "@/lib/api/work";
@@ -20,6 +21,7 @@ import type { DerivativeState, JobState } from "@/types";
 
 export type EventNotice =
   | { type: "resync" }
+  | { type: "subscribed"; channel: string }
   | { type: "job"; job_id: string; kind: string; state: JobState; progress: number | null }
   | {
       type: "derivative";
@@ -91,7 +93,10 @@ function parse(data: string): EventNotice | null {
     // The server writes every frame from `app/modules/work/events.py`; a frame
     // with an unknown type (a newer server) is ignored rather than guessed at.
     const notice: EventNotice = JSON.parse(data);
-    return notice.type === "resync" || notice.type === "job" || notice.type === "derivative"
+    return notice.type === "resync" ||
+      notice.type === "subscribed" ||
+      notice.type === "job" ||
+      notice.type === "derivative"
       ? notice
       : null;
   } catch {
@@ -170,13 +175,20 @@ export function subscribeEvents(listener: EventListener): () => void {
 }
 
 /**
- * Hear about one Model's derivatives (a placeholder becoming a thumbnail) and
- * every `resync`. The server checks the viewer may see the Model.
+ * Hear about one Model's derivatives (a placeholder becoming a thumbnail),
+ * every `resync`, and the server's `subscribed` acknowledgement of this
+ * Model's channel: a derivative that settled before the subscription took
+ * effect was announced to nobody, so a follower refetches on that
+ * acknowledgement. The server checks the viewer may see the Model.
  */
 export function followModel(modelId: number, listener: EventListener): () => void {
   const channel = `model:${modelId}`;
   const filtered: EventListener = (notice) => {
-    if (notice.type === "resync" || (notice.type === "derivative" && notice.model_id === modelId))
+    if (
+      notice.type === "resync" ||
+      (notice.type === "subscribed" && notice.channel === channel) ||
+      (notice.type === "derivative" && notice.model_id === modelId)
+    )
       listener(notice);
   };
   const unsubscribe = subscribeEvents(filtered);
