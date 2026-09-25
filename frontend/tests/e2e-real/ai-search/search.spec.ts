@@ -398,9 +398,18 @@ test.describe("AI Search", () => {
         });
       }
       // TEMPORARY diagnostic for CI (remove once this passes there).
-      for (const mode of ["hybrid", "lexical"]) {
-        const probe = await page.request.get(`${API}/api/v1/search?q=${phrase}&mode=${mode}`);
-        console.log(`DIAG search ${mode} ${probe.status()} ${(await probe.text()).slice(0, 1500)}`);
+      for (const q of [phrase, "Caption", "mounting"]) {
+        const probe = await page.request.get(`${API}/api/v1/search?q=${q}&mode=lexical`);
+        console.log(`DIAG search ${q} ${probe.status()} ${(await probe.text()).slice(0, 600)}`);
+      }
+      for (const path of [
+        "/api/v1/search/status",
+        "/api/v1/config/ai-search",
+        `/api/v1/subjects/model/${id}/caption`,
+        "/api/v1/jobs?include_system=true&terminal_limit=40",
+      ]) {
+        const probe = await page.request.get(`${API}${path}`);
+        console.log(`DIAG ${path} ${probe.status()} ${(await probe.text()).slice(0, 4000)}`);
       }
       await page.goto(`/search?q=${phrase}`);
       await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
