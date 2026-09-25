@@ -233,9 +233,9 @@ def build_event_bus(*, listen: bool = True):
     """
     from sqlalchemy.engine import make_url
 
-    from app.core.config import settings
+    from app.core.config import ProcessRole, settings
 
-    split = settings.process_role == "worker" or not settings.api_runs_jobs
+    split = settings.process_role is ProcessRole.WORKER or not settings.api_runs_jobs
     if make_url(settings.db_url).get_backend_name() == "postgresql" and split:
         return PostgresNotifyBus(settings.db_url, listen=listen)
     return InProcessBus()

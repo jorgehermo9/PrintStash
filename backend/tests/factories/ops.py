@@ -27,6 +27,7 @@ from app.db.models import (
     BackupDestinationResult,
     BackupRetryAttempt,
     BackupRun,
+    DerivativeKind,
     DerivativeState,
     Document,
     DocumentKind,
@@ -310,7 +311,7 @@ def build_ingest_request(
 def build_derivative(
     session: Session,
     file: File,
-    kind: str,
+    kind: DerivativeKind,
     *,
     state: DerivativeState = DerivativeState.READY,
     recipe_version: int | None = None,
@@ -334,6 +335,9 @@ def build_derivative(
     if exhausted:
         overrides.setdefault("attempts", settings.derivative_max_attempts)
     overrides.setdefault("attempts", 1)
+    if state in (DerivativeState.FAILED, DerivativeState.SKIPPED):
+        # The database refuses a failure or skip that does not say why.
+        overrides.setdefault("failure_reason", f"test_{state.value}")
     return save(
         session,
         ArtifactDerivative(

@@ -26,6 +26,7 @@ def _union(name: str) -> set[str]:
     return set(re.findall(r'"([^"]+)"', match.group(1)))
 
 
-@pytest.mark.parametrize("enum", [JobKind, LaneName, DerivativeKind], ids=str)
-def test_the_union_lists_exactly_the_enums_values(enum: type[Enum]) -> None:
-    assert _union(enum.__name__) == {member.value for member in enum}
+class TestUnions:
+    @pytest.mark.parametrize("enum", [JobKind, LaneName, DerivativeKind], ids=str)
+    def test_lists_exactly_the_enums_values(self, enum: type[Enum]) -> None:
+        assert _union(enum.__name__) == {member.value for member in enum}

@@ -21,6 +21,7 @@ from app.db.models import Job, JobKind, JobState, WorkPriority
 from app.modules.work.jobs import (
     _merge,
     _safe_result,
+    failure_of,
     safe_error,
     safe_item,
     status_of,
@@ -43,6 +44,17 @@ class TestSafeItem:
     @pytest.mark.parametrize("value", [None, "", "/srv/dir/", "\n\t"])
     def test_an_empty_name_is_absent(self, value: str | None) -> None:
         assert safe_item(value) is None
+
+
+class TestFailureOf:
+    def test_records_the_sanitized_message(self) -> None:
+        assert failure_of(RuntimeError("read /srv/vault/a.stl failed")) == (
+            "read [path] failed"
+        )
+
+    def test_names_an_exception_raised_without_a_message(self) -> None:
+        # A failed Job must say why; an empty message still names the type.
+        assert failure_of(TimeoutError()) == "TimeoutError"
 
 
 class TestSafeError:

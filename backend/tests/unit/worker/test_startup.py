@@ -14,7 +14,7 @@ import signal
 import pytest
 
 from app import worker
-from app.core.config import _overlay
+from app.core.config import ProcessRole, _overlay
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ class TestMain:
     def test_refuses_a_topology_before_waiting_for_anything(self, monkeypatch) -> None:
         # SQLite cannot be shared by processes; the refusal must come first,
         # not after ten minutes of waiting for a schema.
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         waited: list[bool] = []
         monkeypatch.setattr(worker, "wait_for_schema", lambda: waited.append(True))
 
@@ -88,7 +88,7 @@ class TestMain:
         from app.bootstrap import lifecycle, work
         from app.runtime import realtime
 
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         steps: list[str] = []
         handlers: dict[int, object] = {}
         monkeypatch.setattr(work, "validate_topology", lambda: steps.append("check"))
@@ -129,7 +129,7 @@ class TestMain:
         from app.db import content_search, projections
         from app.runtime import realtime
 
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         before = (content_search._search, projections._projection)
 
         class Stopped:

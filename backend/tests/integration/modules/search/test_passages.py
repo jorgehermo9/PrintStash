@@ -26,13 +26,13 @@ def _index_passes(engine) -> int:
     )
 
 
-
 def _forget_queued(engine) -> None:
     """Start from no queued pass, so a nudge here submits a fresh one."""
     from app.modules.work.submission import forget_queued_passes
 
     forget_queued_passes()
     engine.executions.clear()
+
 
 @pytest.fixture
 def indexed_model(

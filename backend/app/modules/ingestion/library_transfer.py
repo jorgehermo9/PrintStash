@@ -66,6 +66,7 @@ from app.modules.storage.artifact_content import ArtifactContentError, resolve
 from app.modules.storage.capacity import CapacityManager
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import failure_of
 from app.modules.work.jobs import jobs as registry
 from app.schemas.family_transfer import PortableFamily
 from app.schemas.models import PartGroupWrite, PartOptionWrite
@@ -2353,7 +2354,9 @@ def run_import_job(
         )
         archive_path.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001 - durable job boundary
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
+        registry.finish(
+            job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=True
+        )
 
 
 def _import_step(ctx) -> None:

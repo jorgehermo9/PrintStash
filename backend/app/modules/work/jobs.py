@@ -87,6 +87,15 @@ def safe_error(value: str | None) -> str | None:
     return clean[:500]
 
 
+def failure_of(exc: BaseException) -> str:
+    """The display-safe error a failed Job records for ``exc``.
+
+    Its message, sanitized; an exception raised without one is still named,
+    by its type, so a failure always says what failed.
+    """
+    return safe_error(str(exc)) or type(exc).__name__
+
+
 def _safe_result(value: Any, key: str | None = None) -> Any:
     """Sanitize user-facing error/name fields without breaking manifest paths.
 

@@ -52,6 +52,7 @@ from app.modules.storage.storage_backend.local import LocalStorageBackend
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_ownership import provider_ref_for_backend, publish_file
 from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import failure_of
 
 if TYPE_CHECKING:
     from app.modules.library.provenance import ProvenanceContext
@@ -987,7 +988,9 @@ def ingest_staged_file(
         logger.exception("ingestion commit failed", extra={"job_id": job_id})
         committed = _committed_by_key(key, session_factory)
         if committed is None:
-            jobs.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
+            jobs.finish(
+                job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=True
+            )
             return None
         # The Artifact is durable even though a later step failed: report what
         # exists rather than a failure the user would retry into a duplicate.
@@ -998,7 +1001,7 @@ def ingest_staged_file(
             completion="partial",
             model_id=model_id,
             file_id=file_id,
-            error=str(exc),
+            error=failure_of(exc),
             processed=1,
             total=1,
             succeeded=1,

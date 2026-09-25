@@ -20,7 +20,7 @@ import pytest
 from sqlmodel import Session
 
 import app.bootstrap.work as work_bootstrap
-from app.core.config import _overlay, settings
+from app.core.config import ProcessRole, _overlay, settings
 from app.core.time import utcnow
 from app.db.models import (
     Job,
@@ -35,7 +35,12 @@ from app.db.models import (
 from app.modules.work import catalog as catalog_module
 from app.modules.work import executors, fences
 from app.modules.work.catalog import WorkCatalog
-from app.modules.work.contracts import EngineStatus, PassSubmission, Submission
+from app.modules.work.contracts import (
+    Deduplicated,
+    EngineStatus,
+    JobSubmission,
+    PassSubmission,
+)
 from app.modules.work.jobs import jobs
 
 POSTGRES = "postgresql://printstash:secret@db/printstash"
@@ -100,47 +105,45 @@ class TestBuildCatalog:
 
         assert catalog.lanes[LaneName.INGEST].concurrency == 7
 
-    def test_unreadable_overrides_fall_back_to_configured_concurrency(
-        self, monkeypatch
-    ) -> None:
+    def test_an_unreadable_override_table_stops_startup(self, monkeypatch) -> None:
+        # Silently running at configured concurrency would ignore what an
+        # administrator set; startup reports the broken database instead.
         def unreadable(self, _session):
             raise RuntimeError("override table missing")
 
         monkeypatch.setattr(WorkCatalog, "apply_overrides", unreadable)
 
-        catalog = work_bootstrap.build_catalog()
-
-        assert (
-            catalog.lanes[LaneName.INGEST].concurrency
-            == settings.jobs_ingest_concurrency
-        )
+        with pytest.raises(RuntimeError, match="override table missing"):
+            work_bootstrap.build_catalog()
 
 
 class TestListenLanes:
     @pytest.mark.parametrize(
         ("role", "runs_jobs", "expected"),
         [
-            ("all", True, None),
-            ("api", True, None),
-            ("api", False, []),
-            ("worker", True, None),
+            (ProcessRole.ALL, True, None),
+            (ProcessRole.API, True, None),
+            (ProcessRole.API, False, []),
+            (ProcessRole.WORKER, True, None),
         ],
     )
     def test_listens_by_role(
-        self, work_catalog, role: str, runs_jobs: bool, expected
+        self, role: ProcessRole, runs_jobs: bool, expected
     ) -> None:
         _overlay["process_role"] = role
         _overlay["api_runs_jobs"] = runs_jobs
 
-        assert work_bootstrap.listen_lanes(work_catalog) == expected
+        assert work_bootstrap.listen_lanes() == expected
 
 
 class TestValidateTopology:
     @pytest.mark.parametrize(
-        ("role", "runs_jobs"), [("all", True), ("api", True)], ids=["all", "api"]
+        ("role", "runs_jobs"),
+        [(ProcessRole.ALL, True), (ProcessRole.API, True)],
+        ids=["all", "api"],
     )
     def test_a_single_process_role_runs_on_sqlite(
-        self, role: str, runs_jobs: bool
+        self, role: ProcessRole, runs_jobs: bool
     ) -> None:
         _overlay["process_role"] = role
         _overlay["api_runs_jobs"] = runs_jobs
@@ -150,10 +153,12 @@ class TestValidateTopology:
 
     @pytest.mark.parametrize(
         ("role", "runs_jobs"),
-        [("worker", True), ("api", False)],
+        [(ProcessRole.WORKER, True), (ProcessRole.API, False)],
         ids=["worker", "api-without-jobs"],
     )
-    def test_a_split_topology_refuses_sqlite(self, role: str, runs_jobs: bool) -> None:
+    def test_a_split_topology_refuses_sqlite(
+        self, role: ProcessRole, runs_jobs: bool
+    ) -> None:
         _overlay["process_role"] = role
         _overlay["api_runs_jobs"] = runs_jobs
         _overlay["db_url"] = "sqlite:////data/db/printstash.sqlite"
@@ -162,7 +167,7 @@ class TestValidateTopology:
             work_bootstrap.validate_topology()
 
     def test_a_split_topology_refuses_an_undeclared_local_volume(self) -> None:
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         _overlay["db_url"] = POSTGRES
         _overlay["storage_backend"] = "local"
         _overlay["shared_storage"] = False
@@ -171,7 +176,7 @@ class TestValidateTopology:
             work_bootstrap.validate_topology()
 
     def test_a_split_topology_accepts_a_declared_shared_volume(self) -> None:
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         _overlay["db_url"] = POSTGRES
         _overlay["storage_backend"] = "local"
         _overlay["shared_storage"] = True
@@ -181,7 +186,7 @@ class TestValidateTopology:
     def test_object_storage_still_needs_a_shared_staging_volume(self) -> None:
         # Uploads are staged on local disk whatever the storage backend; the
         # worker that commits one reads the bytes the API staged.
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         _overlay["db_url"] = POSTGRES
         _overlay["storage_backend"] = "s3"
         _overlay["shared_storage"] = False
@@ -192,7 +197,7 @@ class TestValidateTopology:
     def test_a_split_topology_accepts_object_storage_with_shared_staging(
         self,
     ) -> None:
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         _overlay["db_url"] = POSTGRES
         _overlay["storage_backend"] = "s3"
         _overlay["shared_storage"] = True
@@ -261,7 +266,11 @@ class TestStart:
         # The mark says "a pass is already waiting", but the process that
         # queued it died, so that pass never runs.
         db_session.add(
-            ReconcileCursor(source=JobKind.SOURCES_SCAN, pass_queued_at=utcnow())
+            ReconcileCursor(
+                source=JobKind.SOURCES_SCAN,
+                pass_queued_at=utcnow(),
+                pass_priority=WorkPriority.INTERACTIVE,
+            )
         )
         db_session.commit()
 
@@ -322,13 +331,15 @@ class TestStart:
     ) -> None:
         work_engine.app_version = "0.0.1-previous"
         work_engine.submit(
-            Submission(
+            JobSubmission(
                 execution_id="old-job:1",
                 job_id="old-job",
                 definition=JobKind.INGESTION_UPLOAD,
                 subject_key="ingest_request/old-job",
                 lane=LaneName.INGEST,
                 priority=WorkPriority.INTERACTIVE,
+                attempt=1,
+                routing=Deduplicated("ingestion.upload|ingest_request/old-job"),
             )
         )
         work_engine.app_version = settings.app_version
@@ -371,7 +382,7 @@ class TestStart:
         self, work_engine, work_catalog
     ) -> None:
         catalog_module.bind(None, None)
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
         _overlay["db_url"] = "sqlite:////data/db/printstash.sqlite"
 
         with pytest.raises(RuntimeError, match="requires PostgreSQL"):
@@ -473,6 +484,7 @@ class TestAfterRestore:
             ReconcileCursor, JobKind.SOURCES_SCAN
         ) or ReconcileCursor(source=JobKind.SOURCES_SCAN)
         cursor.pass_queued_at = utcnow()
+        cursor.pass_priority = WorkPriority.INTERACTIVE
         db_session.add(cursor)
         db_session.commit()
 

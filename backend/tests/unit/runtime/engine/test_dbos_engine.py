@@ -15,7 +15,8 @@ import pytest
 from dbos import DBOS
 from dbos import error as dbos_error
 
-from app.modules.work.catalog import WorkCatalog
+from app.db.models import LaneName
+from app.modules.work.catalog import WorkCatalog, default_lanes
 from app.modules.work.contracts import Lane, RetryPolicy
 from app.runtime.engine import dbos_engine
 from app.runtime.engine.dbos_engine import DbosJobEngine, system_database_url
@@ -23,7 +24,7 @@ from app.runtime.engine.dbos_engine import DbosJobEngine, system_database_url
 
 def _engine(*lanes: Lane, schema: str | None = None) -> DbosJobEngine:
     return DbosJobEngine(
-        WorkCatalog(lanes={lane.name: lane for lane in lanes}),
+        WorkCatalog(lanes={**default_lanes(), **{lane.name: lane for lane in lanes}}),
         system_database_url="sqlite:////data/db/printstash-dbos.sqlite",
         schema=schema,
         executor_id="api-test",
@@ -94,19 +95,19 @@ def registered(monkeypatch) -> dict[str, dict]:
 
 class TestQueues:
     def test_a_worker_lane_bounds_each_process(self, registered) -> None:
-        _engine()._register_queue(Lane("ingest", 2))
+        _engine()._register_queue(Lane(LaneName.INGEST, 2))
 
         assert registered["ingest"]["worker_concurrency"] == 2
         assert registered["ingest"]["priority_enabled"] is True
 
     def test_a_global_lane_bounds_the_deployment(self, registered) -> None:
-        _engine()._register_queue(Lane("similarity", 1, scope="global"))
+        _engine()._register_queue(Lane(LaneName.SIMILARITY, 1, scope="global"))
 
         assert registered["similarity"]["global_concurrency"] == 1
 
     def test_a_partitioned_lane_limits_each_partition(self, registered) -> None:
         _engine()._register_queue(
-            Lane("notify", 1, partitioned=True, rate_limit=(30, 60.0))
+            Lane(LaneName.NOTIFY, 1, partitioned=True, rate_limit=(30, 60.0))
         )
 
         options = registered["notify"]
@@ -117,7 +118,7 @@ class TestQueues:
         assert "limiter" not in options
 
     def test_a_rate_limited_lane_is_limited_as_a_whole(self, registered) -> None:
-        _engine()._register_queue(Lane("network", 4, rate_limit=(10, 1.0)))
+        _engine()._register_queue(Lane(LaneName.NETWORK, 4, rate_limit=(10, 1.0)))
 
         assert registered["network"]["limiter"] == {"limit": 10, "period": 1.0}
 
@@ -140,9 +141,9 @@ class TestLaneConcurrency:
     @pytest.mark.parametrize(
         ("lane", "bound"),
         [
-            (Lane("ingest", 2), "worker"),
-            (Lane("similarity", 1, scope="global"), "global"),
-            (Lane("printing", 1, partitioned=True), "partition"),
+            (Lane(LaneName.INGEST, 2), "worker"),
+            (Lane(LaneName.SIMILARITY, 1, scope="global"), "global"),
+            (Lane(LaneName.PRINTING, 1, partitioned=True), "partition"),
         ],
     )
     def test_an_override_moves_the_lanes_own_bound(
@@ -156,8 +157,10 @@ class TestLaneConcurrency:
 
         assert queue.set == [(bound, 5)]
 
-    def test_an_unknown_lane_is_ignored(self) -> None:
-        _engine().set_lane_concurrency("nope", 5)
+    def test_a_lane_without_a_queue_is_a_bug(self) -> None:
+        # Every lane is registered at launch; an unlaunched engine has none.
+        with pytest.raises(KeyError):
+            _engine().set_lane_concurrency(LaneName.INGEST, 5)
 
 
 class TestTickCron:

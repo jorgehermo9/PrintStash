@@ -69,6 +69,7 @@ from app.modules.storage.root_markers import (
     read_root_marker_fd,
 )
 from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import failure_of
 from app.modules.work.jobs import jobs as registry
 
 from .root_binding import (
@@ -893,7 +894,7 @@ def scan_remote_library(
                     if deadline_reached
                     else ExternalLibraryScanStatus.ERROR
                 )
-                summary.error = str(exc)
+                summary.error = failure_of(exc)
                 summary.aborted = True
                 library.last_scan_summary = json.dumps(summary.as_dict())
                 session.add(checkpoint)
@@ -939,7 +940,7 @@ def scan_library(
         try:
             assert_root_binding(preflight)
         except ExternalRootBindingError as exc:
-            summary.error = str(exc)
+            summary.error = failure_of(exc)
             summary.aborted = True
             preflight.last_scanned_at = utcnow()
             preflight.last_scan_status = ExternalLibraryScanStatus.ERROR
@@ -986,7 +987,7 @@ def scan_library(
         try:
             assert_root_binding(library)
         except ExternalRootBindingError as exc:
-            summary.error = str(exc)
+            summary.error = failure_of(exc)
             summary.aborted = True
             _finish(
                 session,

@@ -26,6 +26,7 @@ from app.modules.similarity import jobs as similarity_jobs
 from app.modules.similarity.configuration import update_settings
 from app.modules.similarity.jobs import AnalysisSource, subject_key
 from app.modules.similarity.processing import SimilarityProcessor
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.sources import idle_window, mark_idle
 from app.modules.work.submission import execution_id, submit
 
@@ -266,7 +267,7 @@ class TestAdvance:
 
         def work_one(_self, _run_id: int, _writer: str) -> bool:
             done.append(1)
-            jobs.finish(job.id, state=JobState.CANCELLED)
+            jobs.finish(job.id, JobOutcome.CANCELLED, error="cancelled_by_user")
             return True
 
         monkeypatch.setattr(SimilarityProcessor, "work_one", work_one)

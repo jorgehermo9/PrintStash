@@ -20,7 +20,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from sqlalchemy.engine.url import make_url
 
-from app.core.config import settings
+from app.core.config import ProcessRole, settings
 from app.core.logging import get_logger
 from app.core.metrics import app_info as _app_info
 from app.core.topology import acquire_process_lock, release_process_lock
@@ -397,7 +397,7 @@ def _start_work(prepared: PreparedProcess, *, publisher) -> None:
 async def lifespan(app: FastAPI):
     from app.modules.storage.storage_paths import validate_runtime_storage_paths
 
-    if settings.process_role == "worker":
+    if settings.process_role is ProcessRole.WORKER:
         raise RuntimeError(
             "VAULT_PROCESS_ROLE=worker runs `python -m app.worker`, not the HTTP app"
         )

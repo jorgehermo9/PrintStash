@@ -69,8 +69,8 @@ from app.modules.storage.storage_ownership import publish_file
 from app.modules.storage.storage_paths import unlink_managed_file
 from app.modules.work import service as work_service
 from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import failure_of, safe_error, safe_item
 from app.modules.work.jobs import jobs as registry
-from app.modules.work.jobs import safe_error, safe_item
 from app.schemas.inbox import (
     CaptureSourceDraft,
     CaptureUploadSlotRead,
@@ -1684,7 +1684,9 @@ async def _run_import(
         )
         await asyncio.to_thread(_finish_import, item_id, job_id, session_factory)
     except Exception as exc:
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
+        registry.finish(
+            job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=True
+        )
         await asyncio.to_thread(_fail_import, item_id, exc, session_factory)
 
 

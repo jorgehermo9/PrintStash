@@ -21,7 +21,7 @@ from app.db.session import get_session_factory
 
 from . import catalog as catalog_module
 from .contracts import NO_RETRY, JobDefinition, JobOutcome, Step, StepRunner
-from .jobs import jobs, safe_error
+from .jobs import failure_of, jobs
 
 logger = get_logger(__name__)
 
@@ -203,7 +203,7 @@ def execute_job(job_id: str, attempt: int, runner: StepRunner) -> None:
             "job step failed", extra={"job_id": job_id, "kind": definition.name.value}
         )
         # An exception with no message still names what failed.
-        error = safe_error(str(exc)) or type(exc).__name__
+        error = failure_of(exc)
     runner.run(
         "work.settle",
         lambda: _settle(job_id, definition, subject_key, error),

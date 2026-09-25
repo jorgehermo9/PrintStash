@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from app.core.config import _overlay
+from app.core.config import ProcessRole, _overlay
 from app.runtime.realtime import (
     InProcessBus,
     PostgresNotifyBus,
@@ -135,7 +135,7 @@ class TestBuildEventBus:
         assert type(build_event_bus()) is InProcessBus
 
     def test_a_worker_on_postgres_publishes_over_notify(self, postgres):
-        _overlay["process_role"] = "worker"
+        _overlay["process_role"] = ProcessRole.WORKER
 
         bus = build_event_bus(listen=False)
 
@@ -143,7 +143,7 @@ class TestBuildEventBus:
         assert bus._listen is False
 
     def test_an_api_without_jobs_listens_for_workers(self, postgres):
-        _overlay["process_role"] = "api"
+        _overlay["process_role"] = ProcessRole.API
         _overlay["api_runs_jobs"] = False
 
         bus = build_event_bus()

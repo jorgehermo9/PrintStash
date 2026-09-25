@@ -21,6 +21,7 @@ from app.core.logging import get_logger
 from app.db.session import SessionFactory
 from app.modules.ingestion import import_resolvers, importer, requests
 from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import failure_of
 from app.modules.work.jobs import jobs as registry
 from app.schemas.ingest import (
     ArchiveEntryRead,
@@ -286,11 +287,13 @@ async def import_from_url(
         registry.update(job_id, stage="downloading")
         staged, original_filename = await importer.download_to_staging(download_url)
     except importer.ImportError_ as exc:
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
+        registry.finish(job_id, JobOutcome.FAILED, error=failure_of(exc))
         return
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("url import download failed: %s", req.url)
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
+        registry.finish(
+            job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=True
+        )
         return
 
     suffix = Path(original_filename).suffix.lower()
@@ -308,7 +311,7 @@ async def import_from_url(
             entries = await run_in_threadpool(importer.inspect_archive, staged)
         except importer.ImportError_ as exc:
             staged.unlink(missing_ok=True)
-            registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
+            registry.finish(job_id, JobOutcome.FAILED, error=failure_of(exc))
             return
         await run_in_threadpool(_lease_archive, job_id, staged, actor_user_id)
         manifest = _record_archive(
@@ -364,7 +367,9 @@ def inspect_uploaded_archive(
     except importer.ImportError_ as exc:
         # The archive is refused on its content; no retry can accept it, so the
         # staged bytes are released now rather than at lease expiry.
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=False)
+        registry.finish(
+            job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=False
+        )
         from .ingestion import release_job_staging
 
         release_job_staging(job_id)
@@ -387,7 +392,7 @@ def run_archive_selection(
     try:
         staged_files = importer.extract_selected(archive, names)
     except importer.ImportError_ as exc:
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
+        registry.finish(job_id, JobOutcome.FAILED, error=failure_of(exc))
         return
     if not staged_files:
         registry.finish(job_id, JobOutcome.FAILED, error="no_importable_files")
@@ -423,11 +428,13 @@ async def run_file_selection_import(
         for link in links:
             staged_files.extend(await _download_and_collect(link))
     except importer.ImportError_ as exc:
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc))
+        registry.finish(job_id, JobOutcome.FAILED, error=failure_of(exc))
         return
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("file selection import failed: %s", page_url)
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
+        registry.finish(
+            job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=True
+        )
         return
     if not staged_files:
         registry.finish(job_id, JobOutcome.FAILED, error="no_importable_files")
@@ -459,7 +466,9 @@ async def run_collection_member_import(
         groups = await _stage_members(members)
     except Exception as exc:  # noqa: BLE001 — network/IO boundary
         logger.exception("collection member import failed")
-        registry.finish(job_id, JobOutcome.FAILED, error=str(exc), retryable=True)
+        registry.finish(
+            job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=True
+        )
         return
     await run_in_threadpool(
         importer.import_resolved_groups,

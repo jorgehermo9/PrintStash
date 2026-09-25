@@ -25,6 +25,7 @@ from app.db.models import (
 )
 from app.db.projections import ContentSource
 from app.modules.search import generations, jobs
+from app.modules.work.contracts import JobOutcome, PassSubmission
 from app.modules.work.jobs import jobs as job_rows
 from app.modules.work.submission import nudge
 from app.schemas.inference import SearchSettings
@@ -98,7 +99,8 @@ class TestProjectJob:
         passes = [
             execution
             for execution in work_engine.executions.values()
-            if execution.submission.subject_key == JobKind.SEARCH_PROJECT
+            if isinstance(execution.submission, PassSubmission)
+            and execution.submission.source is JobKind.SEARCH_PROJECT
         ]
         assert len(passes) == 1
 
@@ -515,12 +517,11 @@ class TestRegistration:
     def test_the_process_catalog_runs_every_ai_search_definition(self) -> None:
         # Model downloads belong to AI Search too: the consent flow requests them.
         from app.bootstrap.work import definitions
-        from app.modules.inference.jobs import DOWNLOAD_DEFINITION
 
         names = {definition.name for definition in definitions()}
 
         assert {definition.name for definition in jobs.definitions()} | {
-            DOWNLOAD_DEFINITION
+            JobKind.INFERENCE_MODEL_DOWNLOAD
         } <= names
 
 
@@ -643,8 +644,8 @@ class TestCaptionJobs:
             def cancelled(self) -> bool:
                 return False
 
-            def finish(self, state, **fields) -> None:
-                finished.update(state=state, **fields)
+            def finish(self, outcome, **fields) -> None:
+                finished.update(outcome=outcome, **fields)
 
         hold_restore_maintenance()
         try:
@@ -654,7 +655,7 @@ class TestCaptionJobs:
 
         # Retryable, and named for what happened: nothing was attempted.
         assert finished == {
-            "state": "failed",
+            "outcome": JobOutcome.FAILED,
             "error": "caption_deferred",
             "retryable": True,
         }

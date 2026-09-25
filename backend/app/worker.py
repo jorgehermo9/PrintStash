@@ -16,7 +16,7 @@ import signal
 import threading
 import time
 
-from app.core.config import settings
+from app.core.config import ProcessRole, settings
 from app.core.logging import get_logger
 
 logger = get_logger("app.worker")
@@ -45,7 +45,7 @@ def wait_for_schema(*, timeout: float = _SCHEMA_WAIT_MAX_S) -> None:
 
 
 def main() -> int:
-    if settings.process_role != "worker":
+    if settings.process_role is not ProcessRole.WORKER:
         raise SystemExit("python -m app.worker requires VAULT_PROCESS_ROLE=worker")
     from app.bootstrap import work
     from app.bootstrap.lifecycle import (

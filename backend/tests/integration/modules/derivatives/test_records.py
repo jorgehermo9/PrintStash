@@ -11,9 +11,10 @@ there too long.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -195,13 +196,14 @@ class TestOutcomes:
     def test_skipped_records_why_nothing_was_produced(
         self, db_session: Session, mesh
     ) -> None:
+        # The whole reason is kept: a truncated one could read as another code.
         row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
 
         records.mark_skipped(db_session, row, "x" * 100, now=utcnow())
 
-        assert (row.state, len(row.failure_reason or "")) == (
+        assert (row.state, row.failure_reason) == (
             DerivativeState.SKIPPED,
-            64,
+            "x" * 100,
         )
 
     def test_a_transient_failure_backs_off_exponentially(
@@ -311,15 +313,64 @@ class TestWithdrawAndRetry:
         make_derivative(mesh, DerivativeKind.THUMBNAIL)
         make_derivative(mesh, DerivativeKind.THUMBNAIL, recipe_version=0)
 
-        assert (
-            records.invalidate(db_session, mesh, [DerivativeKind.THUMBNAIL, "toolpath"])
-            == 1
-        )
+        assert records.invalidate(db_session, mesh, [DerivativeKind.THUMBNAIL]) == 1
 
         remaining = db_session.exec(select(ArtifactDerivative)).all()
         assert [(row.kind, row.recipe_version) for row in remaining] == [
             (DerivativeKind.THUMBNAIL, 0)
         ]
+
+    def test_invalidating_a_kind_that_does_not_apply_is_refused(
+        self, db_session: Session, mesh
+    ) -> None:
+        # A mesh has no toolpath; asking to re-derive one is a caller's bug.
+        with pytest.raises(ValueError, match="derivative_not_applicable:toolpath"):
+            records.invalidate(db_session, mesh, [DerivativeKind.TOOLPATH])
+
+
+class TestRowInvariants:
+    @pytest.mark.parametrize(
+        ("state", "fields"),
+        [
+            (DerivativeState.FAILED, {}),
+            (DerivativeState.SKIPPED, {}),
+            (DerivativeState.READY, {"failure_reason": "stale"}),
+            (DerivativeState.READY, {"next_attempt_at": datetime(2030, 1, 1)}),
+        ],
+        ids=[
+            "failed-without-reason",
+            "skipped-without-reason",
+            "ready-with-reason",
+            "ready-with-retry",
+        ],
+    )
+    def test_the_database_refuses_a_row_its_state_contradicts(
+        self, db_session: Session, mesh, state: DerivativeState, fields: dict
+    ) -> None:
+        assert mesh.id is not None
+        db_session.add(
+            ArtifactDerivative(
+                file_id=mesh.id,
+                kind=DerivativeKind.THUMBNAIL,
+                recipe_version=1,
+                state=state,
+                **fields,
+            )
+        )
+
+        with pytest.raises(IntegrityError, match="ck_artifact_derivatives"):
+            db_session.commit()
+
+    def test_cancelling_a_failure_clears_its_reason(
+        self, db_session: Session, mesh, make_derivative
+    ) -> None:
+        make_derivative(mesh, DerivativeKind.THUMBNAIL, state=DerivativeState.FAILED)
+
+        records.cancel(db_session, mesh, {DerivativeKind.THUMBNAIL: 1}, now=utcnow())
+        db_session.commit()
+
+        (row,) = db_session.exec(select(ArtifactDerivative)).all()
+        assert (row.state, row.failure_reason) == (DerivativeState.CANCELLED, None)
 
 
 class TestRead:

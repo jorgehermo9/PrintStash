@@ -21,6 +21,7 @@ from app.db.models import Job, JobKind, JobState, VaultMigrationRun, WorkPriorit
 from app.modules.storage import jobs as storage_jobs
 from app.modules.storage.jobs import MigrationSource
 from app.modules.storage.vault_migration import VaultMigrations
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.sources import idle_window, mark_idle
 from app.modules.work.submission import submit
 
@@ -176,7 +177,7 @@ class TestCopy:
 
         def advance(_self, requested: str, *, batch_size: int) -> dict:
             calls.append(requested)
-            jobs.finish(job.id, state=JobState.CANCELLED)
+            jobs.finish(job.id, JobOutcome.CANCELLED, error="cancelled_by_user")
             return {}
 
         monkeypatch.setattr(VaultMigrations, "advance", advance)

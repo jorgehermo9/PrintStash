@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.core.config import _overlay
-from app.db.models import FileType, JobKind, JobState
+from app.db.models import FileType, JobKind
+from app.modules.work.contracts import JobOutcome
 from app.modules.work.jobs import jobs
 from tests.factories import build_file, build_model, build_print_job
 
@@ -33,7 +34,7 @@ class TestMetricsEndpoint:
             subject_key="metrics/1",
             owner_user_id=None,
         )
-        jobs.finish(job_id, state=JobState.COMPLETED)
+        jobs.finish(job_id, JobOutcome.COMPLETED)
 
         body = client.get("/metrics").text
 
