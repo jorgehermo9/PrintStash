@@ -296,8 +296,15 @@ def _discover(definition: JobDefinition, *, now: datetime, result: PassResult) -
         return
     with get_session_factory().scoped_session() as session:
         items: Sequence[WorkItem] = source.pending(session, now=now, limit=limit)
-        finished = _recently_finished(
-            session, definition.name, [item.subject_key for item in items], now=now
+        finished = (
+            {}
+            if definition.drain
+            else _recently_finished(
+                session,
+                definition.name,
+                [item.subject_key for item in items],
+                now=now,
+            )
         )
     cooldown = timedelta(seconds=settings.jobs_resubmit_cooldown_seconds)
     created = 0

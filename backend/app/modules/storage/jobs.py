@@ -104,6 +104,7 @@ def definitions() -> list[JobDefinition]:
             mutating=False,
             retry=lambda _session, _subject: True,
             label="Vault migrations",
+            drain=True,
         ),
         scheduled(
             JobKind.STORAGE_INVENTORY,

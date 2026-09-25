@@ -590,6 +590,7 @@ def definitions() -> list[JobDefinition]:
             source=ProjectionSource(),
             completion_nudges=(JobKind.SEARCH_PROJECT, JobKind.SEARCH_INDEX),
             mutating=False,
+            drain=True,
             label="Search projection",
         ),
         JobDefinition(
@@ -609,6 +610,7 @@ def definitions() -> list[JobDefinition]:
             source=IndexSource(),
             completion_nudges=(JobKind.SEARCH_INDEX,),
             mutating=False,
+            drain=True,
             label="Search indexing",
         ),
         JobDefinition(
@@ -628,6 +630,7 @@ def definitions() -> list[JobDefinition]:
             ),
             source=CaptionQueueSource(),
             mutating=False,
+            drain=True,
             label="Caption queue",
         ),
         JobDefinition(
@@ -649,6 +652,7 @@ def definitions() -> list[JobDefinition]:
             source=ExpansionSource(),
             completion_nudges=(JobKind.SEARCH_EXPAND,),
             mutating=False,
+            drain=True,
             label="Search expansion",
         ),
     ]

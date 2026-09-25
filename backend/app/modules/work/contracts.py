@@ -253,6 +253,13 @@ class JobDefinition:
     # restore, deferred while one holds the fence). Only work that itself takes
     # the restore fence (a vault migration's cutover) opts out and gates itself.
     mutating: bool = True
+    # Whether the source's one subject stands for all its work (a drain: fleet
+    # dispatch, similarity, projection, indexing). A drain's Job finishes and
+    # its subject comes straight back whenever new work arrives, so the
+    # resubmit cooldown, which holds back a subject that keeps returning, would
+    # stall real work; a drain that makes no progress parks itself instead
+    # (``work.sources.mark_idle``).
+    drain: bool = False
     # Whether a Job still in flight in a restored database is owed afterwards.
     # Most work is (an import, a derivative), so the reconciler reruns it. A
     # backup request is not: the restored database is its own snapshot, taken

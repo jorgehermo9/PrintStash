@@ -502,6 +502,20 @@ class TestDrain:
 
 
 class TestRegistration:
+    def test_the_single_subject_sources_are_drains(self) -> None:
+        # Their one subject returns whenever new work arrives; the resubmit
+        # cooldown must not hold it back (it stalled a new upload's projection).
+        drains = {
+            definition.name for definition in jobs.definitions() if definition.drain
+        }
+
+        assert drains == {
+            JobKind.SEARCH_PROJECT,
+            JobKind.SEARCH_INDEX,
+            JobKind.SEARCH_CAPTION_QUEUE,
+            JobKind.SEARCH_EXPAND,
+        }
+
     def test_every_search_definition_runs_on_a_search_lane(self) -> None:
         from app.db.models import LaneName
 

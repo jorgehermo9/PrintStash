@@ -157,5 +157,6 @@ def definitions() -> list[JobDefinition]:
             source=DispatchSource(),
             retry=lambda _session, _subject: True,
             label="Fleet dispatch",
+            drain=True,
         )
     ]

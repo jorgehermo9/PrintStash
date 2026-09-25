@@ -135,5 +135,6 @@ def definitions() -> list[JobDefinition]:
             on_failure=_on_failure,
             retry=lambda _session, _subject: True,
             label="Similarity analysis",
+            drain=True,
         )
     ]

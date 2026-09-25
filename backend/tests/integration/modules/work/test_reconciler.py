@@ -418,6 +418,24 @@ class TestDiscover:
         assert len(_jobs(db_session)) == settings.jobs_resubmit_burst
         assert any(ex.status is EngineStatus.DELAYED for ex in _passes(engine, SOURCED))
 
+    def test_a_drain_is_never_held_back_for_finishing_often(
+        self, engine: InlineJobEngine, db_session: Session, make_job
+    ) -> None:
+        # A drain's one subject comes back whenever new work arrives (every
+        # upload projects the library again); holding it back stalled search.
+        from dataclasses import replace
+
+        drained = replace(engine.catalog.definitions[SOURCED], drain=True)
+        engine.catalog.definitions[SOURCED] = drained
+        for _ in range(settings.jobs_resubmit_burst):
+            make_job(kind=SOURCED, subject="drain", state=JobState.COMPLETED)
+        PROBE.items = _items("drain")
+
+        result = run_pass(SOURCED)
+
+        assert result.submitted == 1
+        assert "cooling_down" not in result.outcomes
+
     def test_a_subject_finished_fewer_times_than_the_burst_runs_again(
         self, engine: InlineJobEngine, db_session: Session, make_job
     ) -> None:
