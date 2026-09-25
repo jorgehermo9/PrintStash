@@ -46,6 +46,7 @@ and changelog instead of reconstructing their contents.
 | --- | --- |
 | Branch, commit, PR, changelog | [references/conventions.md](references/conventions.md) |
 | Cut / publish a release, version bump | [references/release.md](references/release.md) |
+| Any code change (types, errors, fallbacks) | [references/code-principles.md](references/code-principles.md) — invalid states unrepresentable, no free strings, no magic fallbacks |
 | Backend, config | [references/backend.md](references/backend.md) |
 | Background work: Job definitions, sources, lanes, derivative kinds, recipe bumps | [references/background-work.md](references/background-work.md) |
 | Schema change, migration, soft-delete query | [references/database.md](references/database.md) — autogenerate only; SQLite constraint work needs `op.batch_alter_table` |
@@ -94,6 +95,11 @@ and changelog instead of reconstructing their contents.
 
 ## Common mistakes to avoid
 
+- Free strings for closed sets (kinds, states, lanes, roles), `Optional`/`?:`
+  on always-present fields, sentinels (`""`, `0`, `"{}"`) and fallbacks
+  (`or ""`, `?? "unknown"`, `str(exc) or …`, `[:N]`) that hide an invalid
+  state. Model it in the type and raise on the impossible; see
+  [references/code-principles.md](references/code-principles.md).
 - Claiming beta/roadmap features are supported (provider support levels are
   explicit in `docs/provider-support.md`).
 - Hand-rolling UI: raw durations, `[var(--…)]` colors, custom overlays — the
