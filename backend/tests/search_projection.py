@@ -2,6 +2,8 @@
 
 import asyncio
 
+from sqlalchemy.exc import OperationalError
+
 from app.modules.search.projection import process_pending
 
 
@@ -32,8 +34,13 @@ async def run_search_units() -> None:
 
     For tests about search behaviour under concurrent reads, not about
     scheduling: it runs the Jobs' units back to back, the way a busy search
-    lane would, until cancelled.
+    lane would, until cancelled. A unit that loses the SQLite write lock to
+    a concurrent request is run again, as the reconciler resubmits a failed
+    search Job.
     """
     while True:
-        worked = await asyncio.to_thread(_search_round)
+        try:
+            worked = await asyncio.to_thread(_search_round)
+        except OperationalError:
+            worked = False
         await asyncio.sleep(0 if worked else 0.05)
