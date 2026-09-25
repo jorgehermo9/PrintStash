@@ -45,9 +45,11 @@ class Migrated:
 def migrated(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Migrated]:
     """A database with a permit in use, then upgraded to head."""
     if request.param == "postgres":
-        from tests.containers import postgres_url
+        from tests.containers import fresh_postgres_database
 
-        url = postgres_url()
+        # A database of its own: a downgrade below a merge revision leaves two
+        # heads recorded, which would break every later user of a shared one.
+        url = fresh_postgres_database("migration")
     else:
         url = f"sqlite:///{tmp_path / 'compute-slots.sqlite'}"
     engine = create_engine(normalize_database_url(url))
@@ -55,8 +57,6 @@ def migrated(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Migrate
     try:
         if request.param == "postgres":
             with engine.begin() as connection:
-                connection.exec_driver_sql("DROP SCHEMA public CASCADE")
-                connection.exec_driver_sql("CREATE SCHEMA public")
                 create_released_v0121_postgres_schema(connection)
             command.stamp(config, RELEASED_V0121_REVISION)
         command.upgrade(config, BEFORE)
