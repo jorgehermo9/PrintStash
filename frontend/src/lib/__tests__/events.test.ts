@@ -152,6 +152,16 @@ describe("subscribeEvents", () => {
     expect(opened).toHaveBeenCalledTimes(3);
   });
 
+  it("closes a connection that opens after the last listener left", async () => {
+    const stop = events.subscribeEvents(vi.fn<(notice: EventNotice) => void>());
+    stop();
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].close).toHaveBeenCalledTimes(1);
+  });
+
   it("stops reconnecting once nobody listens", async () => {
     const stop = events.subscribeEvents(vi.fn<(notice: EventNotice) => void>());
     const socket = await connected();
@@ -233,5 +243,78 @@ describe("followModel", () => {
     second();
 
     expect(socket.sent()).toContain(JSON.stringify({ unsubscribe: "model:3" }));
+  });
+});
+
+describe("the default connection", () => {
+  class FakeWebSocket {
+    static last: FakeWebSocket | null = null;
+    onopen: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    send = vi.fn<(data: string) => void>();
+    close = vi.fn<() => void>();
+
+    constructor(readonly url: string) {
+      FakeWebSocket.last = this;
+    }
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    // The ticket comes from the real API client over a stubbed network.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ticket: "t/1", expires_in: 30 }), {
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    events = await import("@/lib/events");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens the events socket with a ticket and relays its frames", async () => {
+    const heard = vi.fn<(notice: EventNotice) => void>();
+    events.subscribeEvents(heard);
+    events.followModel(3, vi.fn<(notice: EventNotice) => void>());
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeWebSocket.last!;
+
+    ws.onopen?.();
+    ws.onmessage?.({ data: JSON.stringify({ type: "resync" }) });
+
+    expect(ws.url).toMatch(/\/api\/v1\/events\/ws\?ticket=t%2F1$/);
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ subscribe: "model:3" }));
+    expect(heard).toHaveBeenCalledWith({ type: "resync" });
+  });
+
+  it("closes the underlying socket when nobody listens", async () => {
+    const stop = events.subscribeEvents(vi.fn<(notice: EventNotice) => void>());
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeWebSocket.last!;
+    ws.onopen?.();
+
+    stop();
+
+    expect(ws.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconnects when the underlying socket closes", async () => {
+    events.subscribeEvents(vi.fn<(notice: EventNotice) => void>());
+    await vi.advanceTimersByTimeAsync(0);
+    const first = FakeWebSocket.last!;
+    first.onopen?.();
+
+    first.onclose?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(FakeWebSocket.last).not.toBe(first);
   });
 });

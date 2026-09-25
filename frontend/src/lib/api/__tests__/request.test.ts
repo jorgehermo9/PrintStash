@@ -338,6 +338,22 @@ describe("getDerivedText", () => {
     });
   });
 
+  it.each([
+    { label: "no state", body: {} },
+    { label: "a state this build does not know", body: { state: "hologram" } },
+  ])("rejects a pending answer with $label", async ({ body }) => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).rejects.toThrow(
+      "derivative_state_invalid",
+    );
+  });
+
   it("rejects a failed derivative with its reason", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ detail: "toolpath_invalid_bgcode" }), {
