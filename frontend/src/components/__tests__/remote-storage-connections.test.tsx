@@ -5,7 +5,7 @@
  * narrow a shared profile or send a secret back in a later update.
  */
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -34,7 +34,7 @@ describe("RemoteStorageConnections", () => {
     expect(
       await screen.findByText("This API image does not include the required storage service."),
     ).toBeVisible();
-    expect(screen.getByRole("option", { name: "Amazon S3 or compatible" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Amazon S3 or compatible" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save connection" })).toBeDisabled();
     expect(view.requestsWithMethod("POST")).toHaveLength(0);
   });
@@ -66,6 +66,48 @@ describe("RemoteStorageConnections", () => {
     expect(screen.getByRole("combobox", { name: "Use Archive only for" })).toHaveValue("backup");
   });
 
+  it("holds the connection form in a skeleton until providers load", async () => {
+    let finish: (response: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+    renderApp(<RemoteStorageConnections />, {
+      routes: {
+        "GET /api/v1/storage/providers": () => pending,
+        "GET /api/v1/storage-connections": json([]),
+      },
+    });
+
+    expect(screen.getByRole("status", { name: "Add remote connection" })).toBeVisible();
+    expect(screen.queryByLabelText("Connection name")).toBeNull();
+    finish(json(storageProviderCatalogue));
+    expect(await screen.findByLabelText("Connection name")).toBeVisible();
+    expect(screen.queryByRole("status", { name: "Add remote connection" })).toBeNull();
+  });
+
+  it("selects remote providers by category", async () => {
+    const user = userEvent.setup();
+    renderApp(<RemoteStorageConnections />, {
+      routes: {
+        "GET /api/v1/storage/providers": json(storageProviderCatalogue),
+        "GET /api/v1/storage-connections": json([]),
+      },
+    });
+    const categories = await screen.findByRole("group", { name: "Storage category" });
+
+    await user.click(within(categories).getByRole("button", { name: "Nextcloud and WebDAV" }));
+
+    expect(
+      within(categories).getByRole("button", { name: "Nextcloud and WebDAV" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Nextcloud$/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByLabelText("Server URL")).toBeVisible();
+    expect(screen.queryByLabelText("Bucket")).toBeNull();
+  });
+
   it("creates a Google Drive profile for both workflows", async () => {
     const user = userEvent.setup();
     const created = aStorageConnection({
@@ -86,7 +128,11 @@ describe("RemoteStorageConnections", () => {
 
     await user.click(screen.getByLabelText("Connection name"));
     await user.paste("Shared Drive");
-    await user.selectOptions(screen.getByLabelText("Provider"), "gdrive");
+    await user.click(
+      within(screen.getByRole("group", { name: "Storage category" })).getByRole("button", {
+        name: "Google Drive",
+      }),
+    );
     await user.click(screen.getByLabelText("OAuth client ID"));
     await user.paste("google-client");
     await user.click(screen.getByLabelText("OAuth client secret"));
@@ -267,9 +313,13 @@ describe("RemoteStorageConnections preset selection", () => {
         "GET /api/v1/storage/providers": json(storageProviderCatalogue),
       },
     });
-    await screen.findByRole("option", { name: "Koofr — WebDAV" });
-    expect(screen.queryByRole("option", { name: "TrueNAS — mounted folder" })).toBeNull();
-    expect(screen.getByRole("option", { name: "Google Drive" })).toBeEnabled();
+    const categories = await screen.findByRole("group", { name: "Storage category" });
+    await userEvent
+      .setup()
+      .click(within(categories).getByRole("button", { name: "Nextcloud and WebDAV" }));
+    expect(screen.getByRole("button", { name: "Koofr — WebDAV" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "TrueNAS — mounted folder" })).toBeNull();
+    expect(within(categories).getByRole("button", { name: "Google Drive" })).toBeEnabled();
   });
   it("saves the Storage Box preset with its SFTP transport", async () => {
     const user = userEvent.setup();
@@ -283,8 +333,9 @@ describe("RemoteStorageConnections preset selection", () => {
         ),
       },
     });
-    await screen.findByRole("option", { name: "Hetzner Storage Box — SFTP" });
-    await user.selectOptions(screen.getByLabelText("Provider"), "hetzner_storage_box");
+    const categories = await screen.findByRole("group", { name: "Storage category" });
+    await user.click(within(categories).getByRole("button", { name: "NAS over SFTP" }));
+    await user.click(screen.getByRole("button", { name: "Hetzner Storage Box — SFTP" }));
     await user.type(screen.getByLabelText("Connection name"), "Offsite box");
     await user.type(screen.getByLabelText("Host"), "box.example.test");
     await user.type(screen.getByLabelText("Username"), "owner");

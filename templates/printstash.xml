@@ -9,7 +9,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/xiao-villamor/PrintStash/issues</Support>
   <Project>https://www.printstash.org</Project>
-  <Overview>PrintStash is a self-hosted 3D print library and G-code vault. This image runs the web UI and API together. Open the WebUI on a trusted network and create the first administrator account. The appdata path stores the database, uploaded files, thumbnails, staging files, and backups. Add existing model folders as separate Library sources after setup; do not use an existing library as the appdata path.</Overview>
+  <Overview>PrintStash is a self-hosted 3D print library and G-code vault. This image runs the web UI and API together. Open the WebUI on a trusted network and create the first administrator account. The one appdata path stores everything PrintStash keeps: the database, uploaded files, thumbnails, staging files, backups, and caches. Add existing model folders as separate Library sources after setup; do not use an existing library as the appdata path.</Overview>
   <Category>Productivity: Tools:</Category>
   <WebUI>http://[IP]:[PORT:3000]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/templates/printstash.xml</TemplateURL>
@@ -22,12 +22,12 @@
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Date>2026-09-24</Date>
+  <Date>2026-09-25</Date>
   <MinVer>6.10</MinVer>
   <License>AGPL-3.0</License>
   <Requires>Open first-run setup only on a trusted network; the first registrant becomes administrator. When moving from the old two-container install, record the old API data owner first, then stop both old containers. Set advanced PUID and PGID to that same owner (the old image usually used 10001:10001); otherwise existing Library sources can become unreadable. Follow the migration guide.</Requires>
   <Config Name="WebUI Port" Target="3000" Default="3000" Mode="tcp" Description="Port to open PrintStash in your browser." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
-  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/printstash" Mode="rw" Description="Dedicated persistent folder for the database, managed files, thumbnails, staging, and backups. Do not map an existing model library here." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/printstash</Config>
+  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/printstash" Mode="rw" Description="Dedicated persistent folder for everything PrintStash keeps: database, managed files, thumbnails, staging, backups, and caches. Keep it on one pool and add no second mapping for a subfolder of /data; imports then copy each file instead of using a hard-link. Do not map an existing model library here." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/printstash</Config>
   <Config Name="First-run setup" Target="VAULT_SETUP_MODE" Default="trusted_network" Mode="" Description="Allows the first administrator to register from a trusted local network. Registration closes after the first account is created." Type="Variable" Display="advanced" Required="false" Mask="false">trusted_network</Config>
   <Config Name="Settings restart" Target="VAULT_RESTART_ENABLED" Default="true" Mode="" Description="Allows Settings to restart the supervised application container." Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
   <Config Name="User ID" Target="PUID" Default="99" Mode="" Description="Numeric owner for appdata and mounted Library sources. Default is Unraid's nobody user. On upgrade, use the old API data owner's UID to keep existing Library sources readable." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>

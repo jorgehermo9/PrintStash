@@ -26,14 +26,20 @@ test.describe("remote-only backup recovery", () => {
 
     const destinationName = `WebDAV backup ${Date.now()}`;
     await page.goto("/settings?section=remote-storage");
+    const remote = page.getByRole("region", { name: "Remote storage" });
+    await remote
+      .getByRole("group", { name: "Storage category" })
+      .getByRole("button", { name: "Nextcloud and WebDAV" })
+      .click();
+    await remote
+      .getByRole("group", { name: "Provider" })
+      .getByRole("button", { name: "WebDAV", exact: true })
+      .click();
     await page.getByLabel("Connection name").fill(destinationName);
-    await page.getByLabel("Provider").selectOption("webdav");
-    await page
-      .locator("label")
-      .filter({ hasText: "Use for" })
-      .last()
-      .locator("select")
-      .selectOption("backup");
+    await remote
+      .getByRole("group", { name: "Use for" })
+      .getByRole("button", { name: "Backup replicas" })
+      .click();
     await page.getByLabel("Base folder").fill(`backup-data-${Date.now()}`);
     await page.getByLabel("Server URL").fill(`http://127.0.0.1:${webdavPort}`);
     await page.getByLabel("Username").fill("backup-user");
@@ -60,6 +66,17 @@ test.describe("remote-only backup recovery", () => {
     await page.getByRole("button", { name: "Backup now" }).click();
     const metadata = await backupFromAccepted(page, await created);
     expect(metadata.location).toBe("opendal:webdav");
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get("/api/v1/backups/runs");
+          const runs = await response.json();
+          return runs.find((run: { backup_id: string }) => run.backup_id === metadata.backup_id)
+            ?.outcome;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe("completed");
 
     await page.goto("/");
     await modelCard(page, modelName).click();
@@ -78,12 +95,11 @@ test.describe("remote-only backup recovery", () => {
         response.url().includes(`/api/v1/backups/${metadata.backup_id}/restore`) &&
         response.request().method() === "POST",
     );
-    await page
+    const backupRow = page
       .locator("div.grid")
-      .filter({ hasText: metadata.backup_id })
-      .last()
-      .getByRole("button", { name: "Restore", exact: true })
-      .click();
+      .filter({ has: page.getByText(metadata.backup_id, { exact: true }) })
+      .last();
+    await backupRow.getByRole("button", { name: "Restore", exact: true }).click();
     await page
       .getByRole("dialog", { name: "Restore backup?" })
       .getByRole("button", { name: "Restore", exact: true })
@@ -230,7 +246,15 @@ test.describe("shared provider connection forms", () => {
       const vaultEndpoint = await page.getByLabel("Server URL").inputValue();
       const vaultAccount = await page.getByLabel("Username", { exact: true }).inputValue();
       await page.goto("/settings?section=remote-storage");
-      await page.getByLabel("Provider").selectOption("nextcloud");
+      const remote = page.getByRole("region", { name: "Remote storage" });
+      await remote
+        .getByRole("group", { name: "Storage category" })
+        .getByRole("button", { name: "Nextcloud and WebDAV" })
+        .click();
+      await remote
+        .getByRole("group", { name: "Provider" })
+        .getByRole("button", { name: "Nextcloud" })
+        .click();
       await page.getByLabel("Connection name").fill(name);
       await page.getByLabel("Server URL").fill(vaultEndpoint);
       await page.getByLabel("Username", { exact: true }).fill(vaultAccount);

@@ -50,6 +50,14 @@ class TestPrintStashTemplate:
             )
         ]
 
+    def test_warns_that_a_second_data_mapping_stops_hard_links(self) -> None:
+        (appdata,) = _configs("Path")
+        description = appdata.get("Description", "")
+
+        assert "one pool" in description
+        assert "subfolder of /data" in description
+        assert "hard-link" in description
+
     def test_enables_first_run_without_a_blank_secret(self) -> None:
         variables = {item.get("Target"): item for item in _configs("Variable")}
 

@@ -169,7 +169,7 @@ test.describe("AI Search", () => {
       await page.getByRole("button", { name: "Estimate resources" }).click();
       await expect(page.getByRole("status").filter({ hasText: /passages · up to/ })).toBeVisible();
       for (const [label, width, height] of [
-        ["desktop", 1280, 900],
+        ["desktop", 1920, 1080],
         ["mobile", 390, 844],
       ] as const) {
         await page.setViewportSize({ width, height });
@@ -214,12 +214,35 @@ test.describe("AI Search", () => {
       await box.click();
       await page.getByRole("button", { name: "Search with AI" }).click();
       await expect(page).toHaveURL(/\/search\?q=bike\+lamp\+attachment/);
+      await expect
+        .poll(() =>
+          requests.some((url) => {
+            const params = new URL(url).searchParams;
+            return params.get("mode") === "hybrid" && params.get("instant") !== "true";
+          }),
+        )
+        .toBe(true);
+      const aiMode = page.getByRole("button", { name: "Turn off AI search" });
+      await expect(aiMode).toHaveAttribute("aria-pressed", "true");
+      const beforeKeywordSwitch = requests.length;
+      await aiMode.click();
+      await expect(page).toHaveURL(/\/search\?q=bike\+lamp\+attachment&mode=lexical/);
+      await expect
+        .poll(() =>
+          requests.slice(beforeKeywordSwitch).some((url) => {
+            const params = new URL(url).searchParams;
+            return params.get("mode") === "lexical" && params.get("instant") !== "true";
+          }),
+        )
+        .toBe(true);
+      await page.getByRole("button", { name: "Search with AI" }).click();
+      await expect(page).toHaveURL(/\/search\?q=bike\+lamp\+attachment/);
       const link = page.getByRole("link", { name, exact: true });
       await expect(link).toBeVisible();
       await expect(page.getByText("Why this result")).toHaveCount(0);
       for (const [label, width, height] of [
         ["mobile", 390, 844],
-        ["desktop", 1280, 900],
+        ["desktop", 1920, 1080],
       ] as const) {
         await page.setViewportSize({ width, height });
         expect(

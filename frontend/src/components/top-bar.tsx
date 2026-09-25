@@ -12,7 +12,6 @@ import {
   ChevronDown,
   BookOpen,
   Inbox,
-  ScanSearch,
   LogOut,
   Printer,
   Settings,
@@ -96,18 +95,6 @@ export function TopBar() {
 
       {/* Right Actions & Profile */}
       <div className="flex items-center space-x-4">
-        <Link
-          href="/library/similar"
-          aria-current={pathname.startsWith("/library/similar") ? "page" : undefined}
-          className={`hidden sm:flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-            pathname.startsWith("/library/similar")
-              ? "bg-accent text-accent-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground"
-          }`}
-        >
-          <ScanSearch className="h-4 w-4" />
-          {t("similarity.title")}
-        </Link>
         <a
           href={WIKI_URL}
           className="hidden sm:flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"

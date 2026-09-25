@@ -906,8 +906,8 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
               active={activeTab}
               onChange={setRequestedTab}
               showIndicator={false}
-              className="grid shrink-0 grid-cols-4 gap-1 border-b border-outline-variant bg-surface-container-lowest p-2"
-              tabClassName="min-w-0 rounded-md px-2 py-3 text-xs font-medium transition-colors duration-press text-on-surface-variant hover:bg-muted hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="shrink-0 overflow-x-auto border-b border-outline-variant bg-surface-container-lowest p-1"
+              tabClassName="min-w-max grow whitespace-nowrap rounded-md px-0.5 py-3 text-xs font-medium transition-colors duration-press text-on-surface-variant hover:bg-muted hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               activeTabClassName="bg-accent text-accent-foreground"
             />
             <div

@@ -55,6 +55,47 @@ test.describe("collections", () => {
     await expect(parentRow).toHaveCount(0);
   });
 
+  test("parent count includes Models stored in a child collection", async ({ page }, testInfo) => {
+    const stamp = Date.now();
+    const suffix = stamp.toString(36).slice(-5);
+    const parent = `p-${suffix}`;
+    const child = `c-${suffix}`;
+    const model = `e2e-count-model-${stamp}`;
+
+    await createCollectionViaVault(page, parent);
+    await createCollectionViaVault(page, child, parent);
+    await uploadModel(page, model, { collection: `${parent}/${child}` });
+
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/");
+    const sidebar = page.locator("aside");
+    const parentRow = sidebar.getByRole("button", { name: parent, exact: true });
+    const childRow = sidebar.getByRole("button", { name: child, exact: true });
+    for (const row of [parentRow, childRow]) {
+      const badge = row.locator("xpath=following-sibling::span[last()]");
+      await expect(badge).toHaveText("1");
+      const sidebarBounds = await sidebar.boundingBox();
+      const badgeBounds = await badge.boundingBox();
+      if (!sidebarBounds || !badgeBounds) throw new Error("Collection badge is not rendered");
+      expect(badgeBounds.x + badgeBounds.width).toBeLessThanOrEqual(
+        sidebarBounds.x + sidebarBounds.width,
+      );
+    }
+    await sidebar.screenshot({ path: testInfo.outputPath("nested-collection-counts.png") });
+
+    await parentRow.hover();
+    await parentRow.locator("xpath=following-sibling::button[@title='Delete collection']").click();
+    await sidebar.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(parentRow).toHaveCount(0);
+
+    await page.goto("/settings");
+    await page.getByRole("button", { name: "Trash" }).click();
+    await expect(page.getByText(model)).toBeVisible();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.getByRole("button", { name: "Delete forever" }).click();
+    await expect(page.getByText(model)).toHaveCount(0);
+  });
+
   test("recursive-delete a non-empty collection from the sidebar", async ({ page }) => {
     const stamp = Date.now();
     const col = `e2e-recur-${stamp}`;

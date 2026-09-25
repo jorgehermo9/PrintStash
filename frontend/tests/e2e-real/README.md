@@ -81,7 +81,7 @@ and navigation between Settings and the empty library.
 
 auth (UI login, wrong-password, username + API-key login then revoke) ·
 vault (search, tag filter, list/grid toggle, empty state, narrow responsive toolbar) · collections
-(create / nest / delete / recursive-delete non-empty from the sidebar) ·
+(create / nest / subtree count / delete / recursive-delete non-empty from the sidebar) ·
 documents (markdown editor, collection README, GFM tables) · tags (quick create/assign from a card,
 global delete) ·
 uploads (mesh-only source, BGCODE metadata, into a collection) · full backup recovery
@@ -97,6 +97,7 @@ collections, view vs edit role gates editing + deleting) · user management
 and vault stats) · supervised API restart · display currency · auto-mark-known-good toggle · metadata
 export (JSON/CSV) · manual and uploaded backups · reusable remote storage
 connection for backups and Library sources · notification channels (add webhook + delete) ·
+remote storage loading layout and provider choice at desktop and mobile widths ·
 About (running version + changelog) · design customization (metadata visibility,
 card-metric slots + reset) · printer add/remove · cross-cutting (theme
 persistence, health version, routes free of uncaught errors).

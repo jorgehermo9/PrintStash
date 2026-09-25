@@ -12,12 +12,23 @@ image. See UPGRADE.md before pulling.**
 
 ### Changed
 
+- Collection tree badges now count Models in child folders, use the complete
+  total when only part of a large library is loaded, and stay visible in the
+  default sidebar width.
+
+- Storage settings now show one clear current safety state and the location,
+  while remote file cache is visible without nested dropdowns. Cache limits
+  and activity have separate views; sizes use MB or GB. Storage cards reserve
+  their layout while loading, and remote connection setup uses the same visible
+  category and provider choices as Move Vault storage.
 - **One data volume.** Every path PrintStash writes (database, files,
   thumbnails, staging, backups, caches) lives under `VAULT_DATA_ROOT`, `/data`
   in the container, so a deployment mounts one volume. Each directory can still
   be moved on its own with its existing variable. The artifact cache and
   downloaded AI search models, previously left in the container's own layer,
-  now persist across updates.
+  now persist across updates. The Unraid template's Appdata field now says to
+  keep that folder on one pool with no second mapping inside it, so imports
+  keep hard-linking.
 
 - Model Families have been removed. Existing Models, files, G-code revisions and
   print history remain independent; existing Family relationships and covers
@@ -100,7 +111,12 @@ image. See UPGRADE.md before pulling.**
   background-work settings, and the advanced file forwards
   `VAULT_MAX_RENDER_JOBS` and `VAULT_JOBS_INGEST_CONCURRENCY`;
   `VAULT_INGEST_WORKER_COUNT`, which nothing read, is gone.
-- Similar models is now one click from the desktop header and one tap from the mobile navigation bar.
+- Similar candidates are available from the Model detail Similar tab. Mobile
+  navigation retains library-wide Similar Models discovery.
+- The search bar now uses an icon-only AI control to switch between AI and
+  keyword results. Search results use the full browsing surface with visible
+  filters and simpler result cards instead of a nested results panel. Print
+  duration filters show readable time in the results toolbar.
 - DXF files can be imported as source Artifacts, downloaded with their original
   bytes, and included in backups. Drawing previews are not yet available.
 - Managed source Artifacts can be moved to trash and restored individually from
@@ -181,8 +197,8 @@ image. See UPGRADE.md before pulling.**
 - Library search keeps typing and Enter in the current library view. A labeled
   “Search with AI” action opens AI results; result cards no longer show retrieval
   explanations.
-- Model detail tabs fit their panel without horizontal scrolling. Similar Models
-  keep readable names and reachable comparison actions in narrow panels.
+- Model detail tabs stay in one row, scrolling within the tab bar when needed.
+  Similar Models keep readable names and reachable comparison actions in narrow panels.
 - The library exposes multipart creation as a separate action on desktop and mobile.
 
 - AI search recovers bounded name misspellings, finds functional holder metadata,

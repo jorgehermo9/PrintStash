@@ -91,9 +91,25 @@ export function LibrarySearch() {
     setOpen(false);
     router.push(`/search?${new URLSearchParams({ q: value.trim(), parse: "1" })}`);
   }
+  function toggleAi() {
+    if (!value.trim()) return;
+    if (!aiActive) {
+      openResults();
+      return;
+    }
+    setOpen(false);
+    const updated = new URLSearchParams(params);
+    updated.delete("parse");
+    updated.set("mode", "lexical");
+    router.push(`/search?${updated}`, { scroll: false });
+  }
   function submit() {
     setOpen(false);
     if (pathname === "/search") {
+      if (searchParams.get("mode") === "lexical" && value.trim()) {
+        router.push(`/search?${new URLSearchParams({ q: value.trim(), mode: "lexical" })}`);
+        return;
+      }
       openResults();
       return;
     }
@@ -123,6 +139,38 @@ export function LibrarySearch() {
   const visualReady = status.data?.legs.some(
     (leg) => leg === "thumbnail" || leg === "multiview" || leg === "point_cloud",
   );
+  const aiEnabled = status.data?.enabled === true;
+  const aiReady = aiEnabled && status.data?.semantic_ready === true;
+  const aiActive =
+    aiReady &&
+    pathname === "/search" &&
+    !!q.trim() &&
+    value.trim() === q.trim() &&
+    searchParams.get("mode") !== "lexical" &&
+    searchParams.get("image") !== "1" &&
+    !searchParams.has("model");
+  const aiLabel = !aiReady
+    ? t("aiSearch.notReady")
+    : !value.trim()
+      ? t("aiSearch.enterQuery")
+      : aiActive
+        ? t("aiSearch.turnOffAi")
+        : t("aiSearch.submitAi");
+  const inputPadding = aiEnabled
+    ? visualReady
+      ? value
+        ? "pr-20 sm:pr-28"
+        : "pr-20"
+      : value
+        ? "pr-20"
+        : "pr-10"
+    : visualReady
+      ? value
+        ? "pr-12 sm:pr-20"
+        : "pr-12"
+      : value
+        ? "pr-10"
+        : "pr-3";
   return (
     <div ref={wrapper} className="mx-3 flex min-w-0 max-w-2xl flex-1 items-center gap-2 sm:mx-8">
       <DropdownMenu
@@ -155,7 +203,7 @@ export function LibrarySearch() {
               aria-label={t("aiSearch.searchLibrary")}
               aria-haspopup="dialog"
               aria-expanded={open && !!value.trim()}
-              className={`block w-full rounded-lg border border-border bg-muted py-2 pl-9 ${visualReady ? "pr-20" : "pr-10"} text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:bg-background focus:outline-none focus:ring-1 focus:ring-ring [&::-webkit-search-cancel-button]:hidden`}
+              className={`block w-full rounded-lg border border-border bg-muted py-2 pl-9 ${inputPadding} text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:bg-background focus:outline-none focus:ring-1 focus:ring-ring [&::-webkit-search-cancel-button]:hidden`}
               placeholder={t("nav.search")}
               value={value}
               onClick={() => setOpen(!!value.trim())}
@@ -172,11 +220,27 @@ export function LibrarySearch() {
               }}
             />
             <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center">
+              {aiEnabled && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  type="button"
+                  disabled={!aiReady || !value.trim()}
+                  aria-label={aiLabel}
+                  aria-pressed={aiActive}
+                  title={aiLabel}
+                  className={`h-8 w-8 ${aiActive ? "bg-accent text-accent-foreground" : "text-primary"}`}
+                  onClick={toggleAi}
+                >
+                  <Sparkles className="h-4 w-4" aria-hidden />
+                </Button>
+              )}
               {visualReady && (
                 <Button
                   variant="ghost"
                   size="icon"
                   type="button"
+                  className={value ? "hidden sm:inline-flex" : undefined}
                   aria-label={t("aiSearch.searchByImage")}
                   title={t("aiSearch.searchByImage")}
                   onClick={() => {
@@ -235,12 +299,6 @@ export function LibrarySearch() {
                 </li>
               ))}
             </ul>
-          )}
-          {status.data?.semantic_ready && (
-            <Button variant="ghost" className="mt-1 w-full justify-start" onClick={openResults}>
-              <Sparkles className="h-4 w-4 text-primary" aria-hidden />
-              {t("aiSearch.submitAi")}
-            </Button>
           )}
           <Button variant="ghost" className="mt-1 w-full justify-start" onClick={submit}>
             {t("aiSearch.allResults")}

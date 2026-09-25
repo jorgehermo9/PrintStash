@@ -11,6 +11,105 @@ import { anArtifactCache } from "@/test-support/factories";
 const INITIAL = anArtifactCache();
 
 describe("ArtifactCacheCard", () => {
+  it("reserves the cache controls while policy loads", async () => {
+    let finish: (value: ArtifactCacheRead) => void = () => {};
+    const pending = new Promise<ArtifactCacheRead>((resolve) => {
+      finish = resolve;
+    });
+    renderApp(
+      <ArtifactCacheCard
+        api={{
+          read: () => pending,
+          save: async () => INITIAL,
+          reset: async () => INITIAL,
+          clear: async () => INITIAL,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("status", { name: "Loading cache settings…" })).toBeVisible();
+    finish(INITIAL);
+    expect(
+      await screen.findByRole("checkbox", { name: "Enable remote Artifact cache" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("status", { name: "Loading cache settings…" })).toBeNull();
+  });
+
+  it("shows large cache limits in GB", async () => {
+    const observed = anArtifactCache({
+      policy: {
+        ...INITIAL.policy,
+        max_bytes: 10 * 1024 ** 3,
+        headroom_bytes: 1024 ** 3,
+      },
+    });
+    renderApp(
+      <ArtifactCacheCard
+        api={{
+          read: async () => observed,
+          save: async () => observed,
+          reset: async () => observed,
+          clear: async () => observed,
+        }}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("tab", { name: "Cache limits" }));
+
+    expect(screen.getByRole("spinbutton", { name: "Maximum cache size (GB)" })).toHaveValue(10);
+    expect(screen.getByRole("spinbutton", { name: "Minimum free space (GB)" })).toHaveValue(1);
+  });
+
+  it("converts an edited MB limit to bytes", async () => {
+    const observed = anArtifactCache({
+      policy: { ...INITIAL.policy, max_bytes: 256 * 1024 ** 2 },
+    });
+    let savedBytes = -1;
+    renderApp(
+      <ArtifactCacheCard
+        api={{
+          read: async () => observed,
+          save: async (policy) => {
+            savedBytes = policy.max_bytes;
+            return { ...observed, policy };
+          },
+          reset: async () => observed,
+          clear: async () => observed,
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("tab", { name: "Cache limits" }));
+    const limit = screen.getByRole("spinbutton", { name: "Maximum cache size (MB)" });
+
+    await user.clear(limit);
+    await user.type(limit, "0.5");
+    await user.click(screen.getByRole("button", { name: "Save cache settings" }));
+
+    expect(savedBytes).toBe(512 * 1024);
+  });
+
+  it("preserves byte values when a size field is untouched", async () => {
+    let savedMaxBytes = -1;
+    renderApp(
+      <ArtifactCacheCard
+        api={{
+          read: async () => INITIAL,
+          save: async (policy) => {
+            savedMaxBytes = policy.max_bytes;
+            return { ...INITIAL, policy };
+          },
+          reset: async () => INITIAL,
+          clear: async () => INITIAL,
+        }}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save cache settings" }));
+
+    expect(savedMaxBytes).toBe(1000);
+  });
+
   it("saves enabled policy without clearing files", async () => {
     let persisted = INITIAL;
     renderApp(
@@ -33,7 +132,7 @@ describe("ArtifactCacheCard", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Save cache settings" }));
     expect(persisted.policy.enabled).toBe(true);
-    expect(await screen.findByText(/100 B cached/)).toBeVisible();
+    expect(await screen.findByText(/<1 MB cached/)).toBeVisible();
   });
 
   it("shows remaining leased bytes after clear", async () => {
@@ -48,7 +147,7 @@ describe("ArtifactCacheCard", () => {
       />,
     );
     await userEvent.click(await screen.findByRole("button", { name: "Clear cached files" }));
-    expect(await screen.findByText(/25 B cached/)).toHaveTextContent("1 active reads");
+    expect(await screen.findByText(/<1 MB cached/)).toHaveTextContent("1 active reads");
   });
 
   it("shows restart requirement after changing root", async () => {
@@ -117,7 +216,7 @@ describe("ArtifactCacheCard observability", () => {
         bytes: 100,
         entries: 1,
         hit_ratio_percent: 75,
-        bytes_saved: 300,
+        bytes_saved: 2 * 1024 ** 3,
         completed_fills: 1,
         publication_failures: 5,
         corruptions: 2,
@@ -136,11 +235,13 @@ describe("ArtifactCacheCard observability", () => {
         }}
       />,
     );
-    await userEvent.click(await screen.findByText("Advanced cache settings"));
+    expect(await screen.findByRole("tabpanel", { name: "Overview" })).toBeVisible();
+    await userEvent.click(screen.getByRole("tab", { name: "Cache limits" }));
     expect(screen.getByText(/Policy source: Saved settings/)).toBeVisible();
-    await userEvent.click(screen.getByText("Cache activity and diagnostics"));
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(screen.getByRole("tabpanel", { name: "Activity" })).toBeVisible();
     expect(screen.getByText("75%")).toBeInTheDocument();
-    expect(screen.getByText("300")).toBeInTheDocument();
+    expect(screen.getByText("Provider data saved").parentElement).toHaveTextContent("2 GB");
     expect(screen.getByText("Publication failures")).toBeInTheDocument();
     expect(screen.getByText("5")).toBeInTheDocument();
     expect(screen.getByText(/Last verification:/)).not.toHaveTextContent("No cached files");
@@ -158,7 +259,7 @@ describe("ArtifactCacheCard observability", () => {
         }}
       />,
     );
-    expect(await screen.findByText(/100 bytes wait for active reads/)).toBeInTheDocument();
+    expect(await screen.findByText(/<1 MB wait for active reads/)).toBeInTheDocument();
   });
 
   it("clears a transient polling failure after polling recovers", async () => {

@@ -131,7 +131,11 @@ test.describe("Browser onboarding", () => {
           async (route) => {
             const response = await route.fetch();
             expect(response.status()).toBe(201);
-            await route.abort("connectionreset");
+            await route.fulfill({
+              status: 502,
+              contentType: "application/json",
+              body: JSON.stringify({ detail: "setup_response_lost" }),
+            });
           },
           { times: 1 },
         );
@@ -238,6 +242,7 @@ test.describe("Browser onboarding", () => {
         page.getByRole("heading", { name: "My first model", exact: true }),
       ).toBeVisible();
       await page.goto("/settings");
+      await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
       await expect(
         page.getByRole("button", { name: "Resume the getting-started guide" }),
       ).toHaveCount(0);

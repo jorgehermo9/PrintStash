@@ -5,7 +5,7 @@ import { useUiLocale } from "@/lib/i18n";
 
 import { providerFormError } from "@/lib/storage-provider-form";
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Save } from "lucide-react";
+import { AlertTriangle, Save, ShieldAlert, ShieldCheck } from "lucide-react";
 import {
   enrollStorageRoot,
   getStorageProviders,
@@ -13,6 +13,7 @@ import {
   updateVaultConfig,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StorageProviderFields } from "@/components/storage-provider-fields";
 import { providerFields } from "@/lib/storage-provider-form";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
@@ -125,8 +126,18 @@ export function StorageConfigCard({
               {t("settings.currentStorage")}
             </h3>
           </div>
-          <div className="p-3 sm:p-4 lg:p-6 text-sm text-muted-foreground">
-            {uiText("Loading...")}
+          <div
+            role="status"
+            aria-label={t("settings.currentStorage")}
+            className="space-y-4 p-4 sm:p-5 lg:p-6"
+          >
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-3/4" />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+            <span className="sr-only">{uiText("Loading...")}</span>
           </div>
         </div>
       </Localized>
@@ -149,12 +160,18 @@ export function StorageConfigCard({
 
   const currentProvider = providers.find((provider) => provider.id === providerId);
   const locationFields = currentProvider
-    ? providerFields(currentProvider).filter(
-        (field) =>
-          !field.secret &&
-          providerValues[field.name] !== undefined &&
-          providerValues[field.name] !== "",
-      )
+    ? providerFields(currentProvider).flatMap((field) => {
+        if (field.secret || (currentProvider.category === "this_machine" && field.name === "root"))
+          return [];
+        const value =
+          providerValues[field.name] ||
+          (currentProvider.category === "this_machine" && field.name === "data_dir"
+            ? cfg?.data_dir
+            : currentProvider.category === "this_machine" && field.name === "thumb_dir"
+              ? cfg?.thumb_dir
+              : undefined);
+        return value ? [{ name: field.name, label: field.label, value: String(value) }] : [];
+      })
     : [];
   const credentialFields = currentProvider
     ? providerFields(currentProvider).filter((field) => field.secret)
@@ -177,20 +194,8 @@ export function StorageConfigCard({
   return (
     <Localized>
       <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-        <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b border-border flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">
-              {t("settings.currentStorage")}
-            </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t("settings.storageConfigDescription")}
-            </p>
-          </div>
-          {cfg && (
-            <span className="font-mono text-3xs uppercase tracking-wider px-2 py-1 rounded border text-muted-foreground border-border flex-shrink-0">
-              {cfg.storage_provider}
-            </span>
-          )}
+        <div className="border-b border-border px-4 py-4 sm:px-5">
+          <h3 className="text-sm font-semibold text-foreground">{t("settings.currentStorage")}</h3>
         </div>
 
         <div className="space-y-5 p-4 sm:p-5 lg:p-6">
@@ -272,36 +277,53 @@ export function StorageConfigCard({
             <div className="space-y-4">
               {currentProvider && (
                 <>
-                  <p className="text-sm font-medium">
-                    {t("settings.storageCurrentLocation", {
-                      location: knownUiText(currentProvider.label),
-                    })}
-                  </p>
-                  <details className="text-sm">
-                    <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      {t("settings.storageConnectionDetails")}
-                    </summary>
-                    <div className="mt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-lg font-semibold text-foreground">
+                      {knownUiText(currentProvider.label)}
+                    </p>
+                    {cfg?.storage_tier && (
+                      <p className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                        {cfg.storage_tier === "verified" ? (
+                          <ShieldCheck className="h-4 w-4 text-success" aria-hidden />
+                        ) : (
+                          <ShieldAlert className="h-4 w-4 text-warning" aria-hidden />
+                        )}
+                        {t("settings.storageSafety", {
+                          tier: knownUiText(cfg.storage_tier),
+                        })}
+                      </p>
+                    )}
+                  </div>
+                  {(locationFields.length > 0 || currentProvider.expected_tier === "guarded") && (
+                    <section
+                      aria-label={t("settings.storageConnectionDetails")}
+                      className="border-t border-border pt-3"
+                    >
+                      {locationFields.length > 0 && (
+                        <dl className="flex flex-wrap gap-x-8 gap-y-2 text-xs">
+                          {locationFields.map((field) => (
+                            <div key={field.name} className="min-w-0">
+                              <dt className="text-muted-foreground">{field.label}</dt>
+                              <dd className="break-all font-medium text-foreground">
+                                {field.value}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
                       <StorageProviderSummary
                         provider={currentProvider}
                         activeTier={cfg?.storage_tier}
+                        context="current"
                       />
-                    </div>
-                  </details>
+                    </section>
+                  )}
                 </>
               )}
-              <p className="text-xs text-muted-foreground">{t("migration.changeHelp")}</p>
-              <dl className="grid gap-2 text-xs sm:grid-cols-2">
-                {locationFields.map((field) => (
-                  <div key={field.name}>
-                    <dt className="text-muted-foreground">{field.label}</dt>
-                    <dd className="break-all">{String(providerValues[field.name])}</dd>
-                  </div>
-                ))}
-              </dl>
               {user?.is_superuser && (
                 <Button
                   variant="outline"
+                  size="sm"
                   onClick={() =>
                     document.getElementById("vault-migration")?.scrollIntoView({ block: "start" })
                   }

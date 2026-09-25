@@ -56,7 +56,9 @@ secret, or command override is needed.
    SQLite database, managed files, thumbnails, staging files, backups, and
    caches. Keep it one mapping: a separate mapping for `/data/files` puts the
    library on another mount than staging, and every import then copies its
-   file instead of hard-linking it (Settings warns when that happens). See
+   file instead of hard-linking it (Settings warns when that happens). Keep
+   the share on one pool, as appdata is by default: a share spread across
+   array disks can split staging and files the same way. See
    [Hard-linked imports](../docs/deployment.md#hard-linked-imports).
 4. Open the WebUI on a trusted local network and create the administrator
    account. The first person to register becomes the administrator; registration

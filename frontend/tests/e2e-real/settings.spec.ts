@@ -185,9 +185,7 @@ test.describe("settings", () => {
     }
   });
 
-  test("renders the storage settings workflow at both viewport sizes", async ({
-    page,
-  }, testInfo) => {
+  test("renders the responsive storage settings workflow", async ({ page }, testInfo) => {
     await page.route("**/api/v1/storage/inventory/activity", (route) =>
       route.fulfill({
         json: {
@@ -232,20 +230,42 @@ test.describe("settings", () => {
         ],
       }),
     );
+    const cachePolicy = anArtifactCache().policy;
+    const cacheExample = anArtifactCache({
+      policy: {
+        ...cachePolicy,
+        enabled: true,
+        max_bytes: 10 * 1024 ** 3,
+        headroom_bytes: 1024 ** 3,
+      },
+      usage: {
+        bytes: 256 * 1024 ** 2,
+        entries: 12,
+        hit_ratio_percent: 72,
+        bytes_saved: 2 * 1024 ** 3,
+      },
+    });
     await page.route("**/api/v1/config/artifact-cache", (route) => {
       if (route.request().method() !== "GET") return route.continue();
-      return route.fulfill({ json: anArtifactCache() });
+      return route.fulfill({ json: cacheExample });
     });
     await page.goto("/settings?section=storage", { waitUntil: "domcontentloaded" });
     const move = page.getByRole("region", { name: "Move Vault storage" });
-    const cache = page.locator("summary").filter({ hasText: "Remote file cache" });
+    const cache = page.getByRole("heading", { name: "Remote file cache" });
+    const cacheTabs = page
+      .getByRole("tablist")
+      .filter({ has: page.getByRole("tab", { name: "Cache limits" }) });
     const insightsCard = page
       .getByRole("heading", { name: "Storage insights" })
       .locator('xpath=ancestor::*[contains(@class,"overflow-hidden")][1]');
+    await expect(page.getByRole("button", { name: "Move storage" })).toBeVisible({
+      timeout: 45_000,
+    });
     await expect(
-      page.getByRole("button", { name: "Move storage with a verified migration" }),
-    ).toBeVisible({ timeout: 45_000 });
+      page.getByRole("region", { name: "Storage connection details" }).locator("dd"),
+    ).toHaveCount(2);
     await expect(page.getByText("Files stored here")).toBeVisible({ timeout: 45_000 });
+    await expect(page.getByText("Temporary files").locator("xpath=..")).toContainText("0 MB");
     await expect(page.getByRole("region", { name: "What uses space" })).toContainText("635 MB");
     await expect(page.getByRole("img", { name: "Recorded owned storage over time" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Free up space" })).toContainText("69.3 MB");
@@ -253,17 +273,22 @@ test.describe("settings", () => {
       timeout: 45_000,
     });
     await expect(cache).toBeVisible();
-    for (const width of [1280, 390]) {
-      await page.setViewportSize({ width, height: 900 });
+    for (const viewport of [
+      { width: 1920, height: 1080 },
+      { width: 390, height: 900 },
+    ]) {
+      const { width } = viewport;
+      await page.setViewportSize(viewport);
       await page.evaluate(() => document.documentElement.classList.add("dark"));
       await page.getByRole("heading", { name: "Settings" }).scrollIntoViewIfNeeded();
       await page.screenshot({
         path: testInfo.outputPath(`storage-top-${width}.png`),
         fullPage: true,
       });
-      await page.getByText("Storage connection details").click();
+      await page
+        .getByRole("region", { name: "Storage connection details" })
+        .scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`storage-connection-${width}.png`) });
-      await page.getByText("Storage connection details").click();
 
       await page.getByRole("heading", { name: "Storage insights" }).scrollIntoViewIfNeeded();
       await insightsCard.screenshot({ path: testInfo.outputPath(`storage-summary-${width}.png`) });
@@ -294,18 +319,32 @@ test.describe("settings", () => {
       await move.screenshot({ path: testInfo.outputPath(`move-s3-${width}.png`) });
       await move.getByRole("button", { name: "This machine" }).click();
 
-      await cache.click();
       await expect(
         page.getByRole("checkbox", { name: "Enable remote Artifact cache" }),
       ).toBeVisible({ timeout: 30_000 });
-      await page.getByText("Advanced cache settings").click();
-      await page.getByText("Cache activity and diagnostics").click();
+      await cacheTabs.getByRole("tab", { name: "Overview" }).click();
+      await expect(page.getByRole("tabpanel", { name: "Overview" })).toBeVisible();
+      await cache.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`cache-overview-${width}.png`) });
+      await cacheTabs.getByRole("tab", { name: "Activity" }).click();
       await page.getByRole("heading", { name: "Remote file cache" }).scrollIntoViewIfNeeded();
       await page
         .getByRole("heading", { name: "Remote file cache" })
         .locator('xpath=ancestor::*[contains(@class,"rounded-lg")][1]')
         .screenshot({ path: testInfo.outputPath(`cache-advanced-${width}.png`) });
-      await cache.click();
+      await cacheTabs.getByRole("tab", { name: "Cache limits" }).click();
+      await expect(page.getByRole("spinbutton", { name: "Maximum cache size (GB)" })).toHaveValue(
+        "10",
+      );
+      await cache.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`cache-limits-${width}.png`) });
+      if (width === 390) {
+        const cacheSafetyNote = page.getByText(
+          "Files in use stay available until their active reads finish. Clearing does not remove your Artifacts.",
+        );
+        await cacheSafetyNote.scrollIntoViewIfNeeded();
+        await expect(cacheSafetyNote).toBeVisible();
+      }
     }
   });
 
@@ -1048,6 +1087,65 @@ test.describe("settings", () => {
       .getByRole("button", { name: "Remove connection" })
       .click();
     await expect(row).toHaveCount(0);
+  });
+
+  test("keeps remote storage stable while providers load", async ({ page }, testInfo) => {
+    await page.addInitScript(() => localStorage.setItem("printstash.theme", "dark"));
+    let releaseProviders: () => void = () => {};
+    const pending = new Promise<void>((resolve) => {
+      releaseProviders = resolve;
+    });
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.route("**/api/v1/storage/providers", async (route) => {
+      const response = await route.fetch();
+      await pending;
+      await route.fulfill({ response });
+    });
+    await page.goto("/settings?section=remote-storage", { waitUntil: "domcontentloaded" });
+    const remote = page.getByRole("region", { name: "Remote storage" });
+
+    await expect(remote.getByRole("status", { name: "Add remote connection" })).toBeVisible();
+    await expect(remote.getByLabel("Connection name")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("remote-loading-1920.png") });
+    releaseProviders();
+    await expect(remote.getByRole("group", { name: "Storage category" })).toBeVisible();
+    await page.unroute("**/api/v1/storage/providers");
+  });
+
+  test("guides remote provider selection responsively", async ({ page }, testInfo) => {
+    await page.addInitScript(() => localStorage.setItem("printstash.theme", "dark"));
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/settings?section=remote-storage");
+    const remote = page.getByRole("region", { name: "Remote storage" });
+    await expect(remote.getByRole("group", { name: "Storage category" })).toBeVisible();
+    await remote
+      .getByRole("group", { name: "Storage category" })
+      .getByRole("button", { name: "Nextcloud and WebDAV" })
+      .click();
+    await expect(remote.getByLabel("Server URL")).toBeVisible();
+    await remote
+      .getByRole("group", { name: "Use for" })
+      .getByRole("button", { name: "Backup replicas" })
+      .click();
+    await expect(
+      remote
+        .getByRole("group", { name: "Use for" })
+        .getByRole("button", { name: "Backup replicas" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await page.screenshot({
+      path: testInfo.outputPath("remote-provider-1920.png"),
+      fullPage: true,
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(remote.getByLabel("Server URL")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await remote.getByRole("group", { name: "Provider" }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("remote-provider-390.png") });
+    await remote.getByLabel("Server URL").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("remote-fields-390.png") });
   });
 
   test("remote connection controls align at intermediate widths", async ({ page }) => {

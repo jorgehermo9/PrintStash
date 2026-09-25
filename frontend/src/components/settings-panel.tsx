@@ -2718,16 +2718,7 @@ export function SettingsPanel() {
                 <StorageConfigCard storageHealth={storageHealth} migrationManaged />
                 {user?.is_superuser && <StorageInventoryPanel />}
                 {user?.is_superuser && <VaultMigrationPanel />}
-                {user?.is_superuser && (
-                  <details>
-                    <summary className="cursor-pointer rounded-md px-2 py-2 text-sm font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      {uiText("Remote file cache")}
-                    </summary>
-                    <div className="mt-3">
-                      <ArtifactCacheCard />
-                    </div>
-                  </details>
-                )}
+                {user?.is_superuser && <ArtifactCacheCard />}
               </div>
             )}
 
