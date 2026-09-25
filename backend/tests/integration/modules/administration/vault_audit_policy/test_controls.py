@@ -332,7 +332,7 @@ class TestVaultAuditPolicyControls:
         assert prune_details(db_session, now=NOW) == 0
         assert len(db_session.exec(select(VaultAuditFinding)).all()) == 1
 
-    def test_metrics_export_deferrals_notifications_and_repairs(
+    def test_metrics_export_only_bounded_labels(
         self,
         db_session,
         make_user,
