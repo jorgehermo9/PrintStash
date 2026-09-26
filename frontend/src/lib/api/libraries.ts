@@ -5,7 +5,7 @@ import {
   ExternalLibraryRootEnrollment,
   ExternalLibraryUpdate,
 } from "@/types";
-import { IngestResponse } from "@/types/models";
+import { JobAccepted } from "@/types/models";
 
 export function listExternalLibraries(): Promise<ExternalLibrary[]> {
   return getJson<ExternalLibrary[]>("/api/v1/libraries", { fresh: true });
@@ -33,12 +33,12 @@ export function deleteExternalLibrary(id: number): Promise<void> {
   return sendAction(`/api/v1/libraries/${id}`, "DELETE");
 }
 
-export function scanExternalLibrary(id: number): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(`/api/v1/libraries/${id}/scan`, "POST", {});
+export function scanExternalLibrary(id: number): Promise<JobAccepted> {
+  return sendJson<JobAccepted>(`/api/v1/libraries/${id}/scan`, "POST", {});
 }
 
-export function scanExternalLibraryPath(id: number, path: string): Promise<IngestResponse> {
-  return sendJson<IngestResponse>(`/api/v1/libraries/${id}/scan-path`, "POST", { path });
+export function scanExternalLibraryPath(id: number, path: string): Promise<JobAccepted> {
+  return sendJson<JobAccepted>(`/api/v1/libraries/${id}/scan-path`, "POST", { path });
 }
 
 export function discoverLibraryLocations(): Promise<string[]> {

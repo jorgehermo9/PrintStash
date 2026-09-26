@@ -71,9 +71,13 @@ def delivery_target():
 
     def send(client: TestClient, headers: dict[str, str], channel: int) -> str:
         with (
-            patch("app.modules.notifications.notifications._client_for", return_value=transport),
             patch(
-                "app.modules.notifications.notifications.resolve_public_target", return_value=pinned
+                "app.modules.notifications.notifications._client_for",
+                return_value=transport,
+            ),
+            patch(
+                "app.modules.notifications.notifications.resolve_public_target",
+                return_value=pinned,
             ),
         ):
             result = client.post(

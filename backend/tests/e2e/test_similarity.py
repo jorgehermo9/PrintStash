@@ -5,11 +5,26 @@ import hashlib
 import pytest
 from sqlmodel import select
 
-from app.db.models import File, Metadata, SimilarityReviewDecision
+from app.db.models import (
+    File,
+    GeometryFingerprint,
+    Metadata,
+    SimilarityReviewDecision,
+)
 from app.modules.storage.storage_backend.runtime import get_backend
-from app.runtime.similarity import process_one
+from tests.e2e._jobs import completed_job
 from tests.factories.geometry import tetrahedron
 from tests.paths import TESTDATA_DIR
+
+
+def _fingerprint_state(session, file_id: int) -> str:
+    session.expire_all()
+    return session.exec(
+        select(GeometryFingerprint.state).where(
+            GeometryFingerprint.file_id == file_id,
+            GeometryFingerprint.component_index == 0,
+        )
+    ).one()
 
 
 class TestSimilarity:
@@ -32,14 +47,11 @@ class TestSimilarity:
             data={"model_name": "Complete repository Benchy"},
         )
 
-        assert response.status_code == 202, response.text
-        job = await api.get(
-            f"/api/v1/ingest/jobs/{response.json()['job_id']}",
-            headers=superuser_headers,
-        )
-        assert job.json()["state"] == "completed", job.text
-        assert job.json()["fingerprint_status"] == "ready", job.text
-        file = e2e_db.get(File, job.json()["file_id"])
+        job = await completed_job(api, response, superuser_headers)
+        # Geometry, thumbnail and fingerprint all come from the one mesh load of
+        # the derivative that the commit nudged.
+        assert _fingerprint_state(e2e_db, job["file_id"]) == "ready"
+        file = e2e_db.get(File, job["file_id"])
         metadata = e2e_db.exec(
             select(Metadata).where(Metadata.file_id == file.id)
         ).one()
@@ -72,18 +84,10 @@ class TestSimilarity:
                 },
                 data={"model_name": f"Part {index}"},
             )
-            assert response.status_code == 202, response.text
-            job = await api.get(
-                f"/api/v1/ingest/jobs/{response.json()['job_id']}", headers=headers
-            )
-            assert job.json()["state"] == "completed", job.text
-            assert job.json()["fingerprint_status"] == "ready", job.text
-            uploaded.append(
-                (job.json()["file_id"], hashlib.sha256(content).hexdigest())
-            )
-        for _ in range(50):
-            if not process_one():
-                break
+            # Settling also runs the similarity pass each ready fingerprint nudged.
+            job = await completed_job(api, response, headers)
+            assert _fingerprint_state(e2e_db, job["file_id"]) == "ready"
+            uploaded.append((job["file_id"], hashlib.sha256(content).hexdigest()))
         response = await api.get("/api/v1/similarity/candidates", headers=headers)
         assert response.status_code == 200, response.text
         rows = response.json()["items"]

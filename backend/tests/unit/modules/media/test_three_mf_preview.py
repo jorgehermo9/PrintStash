@@ -549,7 +549,8 @@ class TestPreviewCapacity:
             return original(*args, **kwargs)
 
         monkeypatch.setattr(
-            "app.modules.media.three_mf_preview.extract_embedded_gcode", blocking_extract
+            "app.modules.media.three_mf_preview.extract_embedded_gcode",
+            blocking_extract,
         )
 
         class LocalBackend:

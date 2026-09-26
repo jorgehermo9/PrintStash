@@ -29,9 +29,8 @@ from typing import Optional
 from croniter import croniter
 from printstash_core.files import slugify
 from sqlalchemy import exists, func, or_, update
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
-import app.modules.media.mesh_operations as mesh_operations
 from app.core.logging import get_logger
 from app.core.time import ensure_utc, utcnow
 from app.db.models import (
@@ -45,9 +44,8 @@ from app.db.models import (
     ExternalLibraryTombstone,
     ExternalLibraryWatchMode,
     File,
-    FileType,
+    JobKind,
     LibrarySourceKind,
-    Metadata,
     Model,
 )
 from app.db.projections import content_changed
@@ -56,11 +54,8 @@ from app.db.session import SessionFactory, get_session_factory
 from app.modules.ingestion.ingestion import (
     persist_artifact,
     resolve_or_create_model,
-    strategy_for_artifact,
 )
 from app.modules.library import taxonomy
-from app.modules.media import thumbnail
-from app.modules.printing.profile_detection import upsert_detected_profiles
 from app.modules.sources.library_source import (
     LibrarySource,
     LibrarySourceError,
@@ -75,10 +70,9 @@ from app.modules.storage.hashing import sha256_file
 from app.modules.storage.root_markers import (
     read_root_marker_fd,
 )
-from app.modules.storage.storage_backend.contracts import StorageCollisionError
-from app.modules.storage.storage_backend.runtime import get_backend
-from app.modules.storage.storage_ownership import publish_bytes
-from app.runtime.jobs import registry
+from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import failure_of
+from app.modules.work.jobs import jobs as registry
 
 from .root_binding import (
     ExternalRootBindingError,
@@ -183,26 +177,22 @@ class ScanSummary:
         }
 
 
-def _strategy_for(file_type: FileType):
-    return strategy_for_artifact(file_type)
+def _content_changed(session: Session, file_row: File) -> None:
+    """Bytes behind an indexed Artifact changed: its derivatives are stale.
 
-
-def _process_external_file(
-    strategy, file_type: FileType, read_path: Path
-) -> tuple[dict, bytes | None]:
-    """Process a descriptor-pinned file with its canonical catalog type.
-
-    ``/proc/self/fd/N`` is intentionally suffixless.  Mesh processing therefore
-    receives the immutable catalog type explicitly, while all reads remain
-    anchored to the already-open descriptor and never reopen the configured
-    external root by path.
+    A derivative is a function of an Artifact's bytes, and an external
+    Artifact's row survives an in-place edit on the NAS. Forgetting every kind
+    at its current recipe makes the derivative sources re-derive it; the old
+    outputs stay visible until the new ones are ready.
     """
-    if file_type == FileType.GCODE:
-        return strategy.process(read_path)
+    from app.modules.derivatives import records
+    from app.modules.derivatives.jobs import nudge_for
+    from app.modules.derivatives.kinds import recipes_for
 
-    return mesh_operations.analyze_mesh(
-        read_path, file_type=file_type.value, output_format="WEBP"
-    )
+    records.invalidate(session, file_row, list(recipes_for(file_row)))
+    session.commit()
+    session.refresh(file_row)
+    nudge_for(file_row)
 
 
 def _walk(root: Path) -> dict[str, tuple[int, float]]:
@@ -312,6 +302,16 @@ def _walk_pinned(root: Path, expected: dict[str, object]) -> _PinnedSnapshot:
         raise
 
 
+def _descriptor_path(fd: int) -> Path:
+    """A path that reopens exactly the pinned descriptor ``fd``.
+
+    ``/proc/self/fd`` on Linux; ``/dev/fd`` elsewhere (macOS), where opening
+    it duplicates the same open file.
+    """
+    proc = Path(f"/proc/self/fd/{fd}")
+    return proc if proc.parent.is_dir() else Path(f"/dev/fd/{fd}")
+
+
 @contextmanager
 def _open_pinned_file(entry: _PinnedFile):
     fd = os.open(
@@ -330,7 +330,7 @@ def _open_pinned_file(entry: _PinnedFile):
         ):
             raise ExternalRootBindingError("mismatch", "external_file_changed")
         current = dict(_PINNED_READ_PATHS.get() or {})
-        current[entry.path] = Path(f"/proc/self/fd/{fd}")
+        current[entry.path] = _descriptor_path(fd)
         token = _PINNED_READ_PATHS.set(current)
         try:
             yield
@@ -452,8 +452,6 @@ def _index_external_file(
     file_type = SUFFIX_TO_FILE_TYPE[source_path.suffix.lower()]
     read_path = _read_path(source_path)
     blob_hash = sha256_file(read_path)
-    strategy = _strategy_for(file_type)
-    meta, thumb_bytes = _process_external_file(strategy, file_type, read_path)
 
     model, created = resolve_or_create_model(
         session,
@@ -483,9 +481,6 @@ def _index_external_file(
         original_filename=source_path.name,
         file_type=file_type,
         blob_hash=blob_hash,
-        meta=meta,
-        thumb_bytes=thumb_bytes,
-        overwrite_thumbnail=strategy.overwrite_thumbnail,
         move_blob=False,
         dest_key_override=str(source_path),
         is_external=True,
@@ -501,7 +496,6 @@ def _index_external_file(
     row.source_verified_at = utcnow()
     session.add(row)
     session.commit()
-    upsert_detected_profiles(session, meta)
 
 
 def _reindex_changed(
@@ -513,8 +507,9 @@ def _reindex_changed(
 ) -> bool:
     """Refresh an indexed file whose on-disk size/mtime changed.
 
-    Returns True if the content actually changed (re-parsed + thumbnail rebuilt),
-    False when only the mtime moved (we just record the new signature)."""
+    Returns True if the content actually changed (its derivatives are then
+    re-derived), False when only the mtime moved (we just record the new
+    signature)."""
     read_path = _read_path(source_path)
     new_hash = sha256_file(read_path)
     if new_hash == file_row.sha256:
@@ -525,52 +520,15 @@ def _reindex_changed(
         session.commit()
         return False
 
-    file_type = SUFFIX_TO_FILE_TYPE[source_path.suffix.lower()]
-    strategy = _strategy_for(file_type)
-    meta, thumb_bytes = _process_external_file(strategy, file_type, read_path)
-
     file_row.sha256 = new_hash
     file_row.size_bytes = size
     file_row.source_mtime = mtime
     file_row.source_verified_at = utcnow()
     file_row.uploaded_at = utcnow()
     session.add(file_row)
-
-    md = session.exec(select(Metadata).where(Metadata.file_id == file_row.id)).first()
-    md_fields = {k: v for k, v in meta.items() if k in Metadata.model_fields}
-    if md is None:
-        session.add(Metadata(file_id=file_row.id, **md_fields))
-    else:
-        for k, v in md_fields.items():
-            setattr(md, k, v)
-        session.add(md)
-    # Signature and parsed metadata are one logical observation of the NAS
-    # source. A failed commit leaves both old so the next scan retries parsing.
-    session.commit()
-    session.refresh(file_row)
-
-    backend = get_backend()
-    assert file_row.id is not None
-    if thumb_bytes:
-        try:
-            publish_bytes(
-                session,
-                backend,
-                backend.thumbnail_key(file_row.id),
-                thumbnail.to_webp(thumb_bytes),
-                object_kind="thumbnail",
-            )
-            session.commit()
-        except (StorageCollisionError, ValueError):
-            # Existing thumbnails are never replaced without a separate,
-            # receipt-validated replacement primitive. Metadata reindexing can
-            # still succeed; preserving a stale derived image is safe.
-            logger.warning(
-                "external reindex preserved existing thumbnail for file %s",
-                file_row.id,
-            )
-
-    upsert_detected_profiles(session, meta)
+    # One commit: a new signature is only ever confirmed together with the
+    # invalidation of what was derived from the old bytes.
+    _content_changed(session, file_row)
     return True
 
 
@@ -648,8 +606,6 @@ def _index_remote_file(
     with source.materialize(entry.key, expected=entry) as content:
         read_path = content.path
         blob_hash = sha256_file(read_path)
-        strategy = _strategy_for(file_type)
-        meta, thumb_bytes = _process_external_file(strategy, file_type, read_path)
         model, created = resolve_or_create_model(
             session,
             dedup_hash=blob_hash,
@@ -674,9 +630,6 @@ def _index_remote_file(
             original_filename=source_name.name,
             file_type=file_type,
             blob_hash=blob_hash,
-            meta=meta,
-            thumb_bytes=thumb_bytes,
-            overwrite_thumbnail=strategy.overwrite_thumbnail,
             move_blob=False,
             dest_key_override=_remote_uri(library, entry.key),
             is_external=True,
@@ -689,7 +642,6 @@ def _index_remote_file(
         row.source_verified_at = utcnow()
         session.add(row)
         session.commit()
-        upsert_detected_profiles(session, meta)
         return row
 
 
@@ -989,7 +941,7 @@ def scan_remote_library(
                     except SQLAlchemyError:
                         logger.warning("remote discovery inventory cleanup deferred")
                 if job_id:
-                    registry.update(job_id, state="completed", result=result)
+                    registry.finish(job_id, JobOutcome.COMPLETED, result=result)
                 return result
             except asyncio.CancelledError as exc:
                 session.rollback()
@@ -1022,14 +974,14 @@ def scan_remote_library(
                     if deadline_reached
                     else ExternalLibraryScanStatus.ERROR
                 )
-                summary.error = str(exc)
+                summary.error = failure_of(exc)
                 summary.aborted = True
                 library.last_scan_summary = json.dumps(summary.as_dict())
                 session.add(checkpoint)
                 session.add(library)
                 session.commit()
                 if job_id:
-                    registry.update(job_id, state="failed", error=summary.error)
+                    registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
                 return summary.as_dict()
     finally:
         budget.__exit__(None, None, None)
@@ -1068,7 +1020,7 @@ def scan_library(
         try:
             assert_root_binding(preflight)
         except ExternalRootBindingError as exc:
-            summary.error = str(exc)
+            summary.error = failure_of(exc)
             summary.aborted = True
             preflight.last_scanned_at = utcnow()
             preflight.last_scan_status = ExternalLibraryScanStatus.ERROR
@@ -1077,7 +1029,7 @@ def scan_library(
             session.add(preflight)
             session.commit()
             if job_id:
-                registry.update(job_id, state="failed", error=summary.error)
+                registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
             return summary.as_dict()
         claim_token = uuid.uuid4().hex
         now = utcnow()
@@ -1106,7 +1058,7 @@ def scan_library(
                 "job_id": current.scan_job_id if current is not None else None,
             }
             if job_id:
-                registry.update(job_id, state="completed", result=result)
+                registry.finish(job_id, JobOutcome.COMPLETED, result=result)
             return result
         library = session.get(ExternalLibrary, library_id)
         if library is None:
@@ -1115,7 +1067,7 @@ def scan_library(
         try:
             assert_root_binding(library)
         except ExternalRootBindingError as exc:
-            summary.error = str(exc)
+            summary.error = failure_of(exc)
             summary.aborted = True
             _finish(
                 session,
@@ -1125,7 +1077,7 @@ def scan_library(
                 claim_token=claim_token,
             )
             if job_id:
-                registry.update(job_id, state="failed", error=summary.error)
+                registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
             return summary.as_dict()
 
         library.last_scan_status = ExternalLibraryScanStatus.RUNNING
@@ -1164,7 +1116,7 @@ def scan_library(
                     root,
                 )
                 if job_id:
-                    registry.update(job_id, state="failed", error=summary.error)
+                    registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
                 return summary.as_dict()
 
             # Refresh the detected filesystem class so the UI / watcher know
@@ -1243,13 +1195,12 @@ def scan_library(
                     len(db_by_path),
                 )
                 if job_id:
-                    registry.update(job_id, state="failed", error=summary.error)
+                    registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
                 return summary.as_dict()
 
             if job_id:
                 registry.update(
                     job_id,
-                    state="running",
                     stage="hashing",
                     total_steps=len(disk) or 1,
                     total=len(disk),
@@ -1343,9 +1294,9 @@ def scan_library(
             if job_id:
                 # The job itself completed even with per-file errors; the PARTIAL
                 # signal lives on the library status and in result.errors.
-                registry.update(
+                registry.finish(
                     job_id,
-                    state="completed",
+                    JobOutcome.COMPLETED,
                     result=summary.as_dict(),
                     processed=len(disk),
                     total=len(disk),
@@ -1379,7 +1330,7 @@ def scan_library(
                 claim_token=claim_token,
             )
             if job_id:
-                registry.update(job_id, state="failed", error=summary.error)
+                registry.finish(job_id, JobOutcome.FAILED, error=summary.error)
 
     return summary.as_dict()
 
@@ -1431,61 +1382,201 @@ def purge_library_index(session: Session, library_id: int) -> int:
     return len(files)
 
 
-def reset_orphaned_scans(session: Session) -> int:
-    """Clear scans stranded in RUNNING by a process restart.
+def settle_failed_scan(session: Session, library_id: int, reason: str) -> None:
+    """Settle a scan whose Job gave up (its resubmits ran out, or it failed).
 
-    ``scan_library`` marks a library RUNNING for the duration of a scan
-    (see :func:`scan_library`). If the process dies mid-scan the row stays
-    RUNNING forever, and :func:`libraries_due_for_scan` permanently skips it.
-    Call this once at startup: mark any RUNNING library ERROR with an
-    interrupted note so the scheduler picks it up again. Returns the count
-    reset. Reuses the existing ERROR status — no new enum or migration.
-
-    We also stamp ``last_scanned_at`` so the next attempt waits for the library's
-    schedule instead of re-firing on the very next 60s tick. Without this, a scan
-    that crashes the process (e.g. a pathological file — issue #24) restarts, is
-    immediately due again, and crash-loops the container. The schedule gap turns
-    a tight loop into at most one attempt per interval, and a manual scan is
-    always still available.
+    Marks the library ERROR, releases its claim and stamps ``last_scanned_at``
+    so the next attempt waits for the library's schedule. Without the stamp, a
+    scan that crashes the process (a pathological file, issue #24) would be due
+    again immediately and crash-loop; with it, at most one attempt per
+    interval, and a manual scan is always still available.
     """
-    orphaned = session.exec(
-        select(ExternalLibrary).where(
-            ExternalLibrary.last_scan_status == ExternalLibraryScanStatus.RUNNING
-        )
-    ).all()
+    library = session.get(ExternalLibrary, library_id)
+    if library is None:
+        return
     now = utcnow()
-    for library in orphaned:
-        library.last_scan_status = ExternalLibraryScanStatus.ERROR
-        library.last_scan_summary = json.dumps({"error": "interrupted by restart"})
-        library.last_scanned_at = now
-        library.scan_claim_token = None
-        library.scan_claim_expires_at = None
-        library.scan_job_id = None
-        library.updated_at = now
+    library.last_scan_status = ExternalLibraryScanStatus.ERROR
+    library.last_scan_summary = json.dumps({"error": reason})
+    library.last_scanned_at = now
+    library.scan_claim_token = None
+    library.scan_claim_expires_at = None
+    library.scan_job_id = None
+    library.scan_requested_at = None
+    library.scan_requested_path = None
+    library.updated_at = now
+    session.add(library)
+
+
+def request_scan(
+    session: Session, library_id: int, *, relative_path: str | None = None
+) -> ExternalLibrary:
+    """Record that a scan was asked for; the scan source turns it into a Job.
+
+    Coalesces: a pending request for another folder (or for the whole
+    library) widens this one to a full scan.
+    """
+    library = session.get(ExternalLibrary, library_id)
+    if library is None:
+        raise ValueError(f"external library {library_id} not found")
+    if library.scan_requested_at is None:
+        library.scan_requested_path = relative_path
+    elif library.scan_requested_path != relative_path:
+        library.scan_requested_path = None
+    library.scan_requested_at = utcnow()
+    session.add(library)
+    session.commit()
+    session.refresh(library)
+    return library
+
+
+def _take_request(library_id: int) -> tuple[bool, str | None]:
+    """Clear and return a pending request as this scan starts."""
+    with get_session_factory().scoped_session() as session:
+        library = session.get(ExternalLibrary, library_id)
+        if library is None:
+            return False, None
+        requested = library.scan_requested_at is not None
+        path = library.scan_requested_path
+        library.scan_requested_at = None
+        library.scan_requested_path = None
         session.add(library)
-    if orphaned:
         session.commit()
-    return len(orphaned)
+        return requested, path
 
 
-def libraries_due_for_scan(session: Session) -> list[int]:
-    """IDs of enabled libraries whose cron schedule has fired (or never ran).
+def libraries_due_for_scan(
+    session: Session, *, now: datetime | None = None
+) -> list[int]:
+    """IDs of enabled libraries a scan is owed to right now.
 
-    Manual-only libraries (empty ``scan_schedule``) are never returned here; they
-    only scan via ``POST /libraries/{id}/scan``. Libraries already RUNNING are
-    skipped to avoid overlapping scans.
+    A library is owed a scan when someone requested one, when its cron
+    schedule has fired since its last scan (manual-only libraries never are),
+    or when a scan left it RUNNING and its claim has expired (the process
+    running it died). A library whose scan is running under a live claim is
+    skipped, so scans never overlap.
     """
-    now = utcnow()
+    now = now or utcnow()
     due: list[int] = []
     for lib in session.exec(
         select(ExternalLibrary).where(ExternalLibrary.enabled)
     ).all():
         if lib.id is None:
             continue
+        claim_live = (
+            lib.scan_claim_token is not None
+            and lib.scan_claim_expires_at is not None
+            and ensure_utc(lib.scan_claim_expires_at) > now
+        )
+        if claim_live:
+            continue
+        if lib.scan_requested_at is not None:
+            due.append(lib.id)
+            continue
         if lib.last_scan_status == ExternalLibraryScanStatus.RUNNING:
+            # Stranded: RUNNING with no live claim.
+            due.append(lib.id)
             continue
         # last_scanned_at is naive when read back from the DB; ``is_due``
         # normalises it before comparing against the aware ``now``.
         if is_due(lib.scan_schedule, lib.last_scanned_at, now):
             due.append(lib.id)
     return due
+
+
+def next_scheduled_scan(session: Session, *, now: datetime) -> datetime | None:
+    """When the earliest library schedule fires next."""
+    upcoming: list[datetime] = []
+    for lib in session.exec(
+        select(ExternalLibrary).where(ExternalLibrary.enabled)
+    ).all():
+        if not lib.scan_schedule or not croniter.is_valid(lib.scan_schedule):
+            continue
+        base = ensure_utc(lib.last_scanned_at) if lib.last_scanned_at else now
+        upcoming.append(
+            ensure_utc(croniter(lib.scan_schedule, base).get_next(datetime))
+        )
+    return min(upcoming) if upcoming else None
+
+
+SCAN_DEFINITION = "sources.scan"
+
+
+class ScanSource:
+    """Libraries owed a scan: requested, scheduled, or stranded."""
+
+    def pending(self, session: Session, *, now: datetime, limit: int):
+        from app.db.models import WorkPriority
+        from app.modules.administration.runtime_config import external_libraries_enabled
+        from app.modules.work.contracts import WorkItem
+
+        if not external_libraries_enabled(session):
+            return []
+        requested = {
+            lib.id
+            for lib in session.exec(
+                select(ExternalLibrary).where(
+                    col(ExternalLibrary.scan_requested_at).is_not(None)
+                )
+            ).all()
+        }
+        return [
+            WorkItem(
+                subject_key=f"library/{library_id}",
+                priority=WorkPriority.INTERACTIVE
+                if library_id in requested
+                else WorkPriority.BACKFILL,
+            )
+            for library_id in libraries_due_for_scan(session, now=now)[:limit]
+        ]
+
+    def next_due(self, session: Session, *, now: datetime) -> datetime | None:
+        return next_scheduled_scan(session, now=now)
+
+
+def _library_id(subject: str) -> int:
+    return int(subject.split("/", 1)[1])
+
+
+def _scan_step(ctx) -> None:
+    library_id = _library_id(ctx.subject_key)
+    _requested, relative_path = _take_request(library_id)
+    scan_library(library_id, relative_path=relative_path, job_id=ctx.job_id)
+
+
+def _cancel_scan(session: Session, subject: str) -> None:
+    library = session.get(ExternalLibrary, _library_id(subject))
+    if library is not None:
+        library.scan_requested_at = None
+        library.scan_requested_path = None
+        session.add(library)
+
+
+def _failed_scan(session: Session, subject: str, reason: str) -> None:
+    settle_failed_scan(session, _library_id(subject), reason)
+
+
+def _retry_scan(session: Session, subject: str) -> bool:
+    library = session.get(ExternalLibrary, _library_id(subject))
+    if library is None:
+        return False
+    library.scan_requested_at = utcnow()
+    session.add(library)
+    return True
+
+
+def definitions():
+    from app.db.models import LaneName
+    from app.modules.work.contracts import JobDefinition, Step
+
+    return [
+        JobDefinition(
+            name=JobKind.SOURCES_SCAN,
+            lane=LaneName.MAINTENANCE,
+            steps=(Step(f"{JobKind.SOURCES_SCAN.value}.run", _scan_step),),
+            source=ScanSource(),
+            cancel=_cancel_scan,
+            on_failure=_failed_scan,
+            retry=_retry_scan,
+            label="Library scans",
+        )
+    ]

@@ -37,7 +37,6 @@ class TestPartOptionsMigration:
         command.downgrade(config, PARENT)
 
         assert not (
-            {"part_groups", "part_options"}
-            & set(inspect(engine).get_table_names())
+            {"part_groups", "part_options"} & set(inspect(engine).get_table_names())
         )
         engine.dispose()

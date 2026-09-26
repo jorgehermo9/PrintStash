@@ -1,6 +1,12 @@
-"""One bounded caption lease at a time; no originals, prompts or partial text persist."""
+"""One bounded caption lease at a time; no originals, prompts or partial text persist.
+
+Each attempt at a caption is a ``search.caption`` Job (the caption's
+``job_id``): ``work_on`` does that attempt and returns its outcome, which the
+Job records. The row lease still fences publication by a superseded attempt.
+"""
 
 import secrets
+from dataclasses import dataclass, field
 from datetime import timedelta
 from io import BytesIO
 
@@ -14,13 +20,21 @@ from sqlmodel import select
 
 from app.core.errors import OperationError
 from app.core.time import utcnow
-from app.db.models import BackgroundJob, File, Model, SubjectCaption, SystemConfig, User
+from app.db.models import File, Model, SubjectCaption, SystemConfig, User
 from app.modules.inference.configuration import chat_provider
 from app.modules.search import caption_source, captions
 from app.modules.search.passages import sync_subject
 from app.modules.search.visual_index import render
 from app.modules.search.visual_sources import eligible
-from app.runtime.jobs import registry
+
+
+@dataclass(frozen=True)
+class CaptionOutcome:
+    """How one attempt ended: an ``error`` fails its Job, ``retry`` if it may."""
+
+    error: str | None = None
+    retry: bool = False
+    result: dict = field(default_factory=dict)
 
 
 def render_image(sessions, file, context):
@@ -41,11 +55,9 @@ def render_image(sessions, file, context):
     return encoded.getvalue()
 
 
-def sweep(session):
-    provider, _ = captions.endpoint(session)
-    if provider is None:
-        return 0
-    files = session.exec(
+def _owed_files(session, provider, limit):
+    """Sources whose Model has no generated caption, or a stale one."""
+    return session.exec(
         select(File)
         .outerjoin(SubjectCaption, SubjectCaption.model_id == File.model_id)
         .where(
@@ -62,8 +74,21 @@ def sweep(session):
             ),
         )
         .order_by(File.id)
-        .limit(8)
+        .limit(limit)
     ).all()
+
+
+def owed(session) -> bool:
+    """Whether ``sweep`` would queue anything (read-only)."""
+    provider, _ = captions.endpoint(session)
+    return provider is not None and bool(_owed_files(session, provider, 1))
+
+
+def sweep(session):
+    provider, _ = captions.endpoint(session)
+    if provider is None:
+        return 0
+    files = _owed_files(session, provider, 8)
     config = session.get(SystemConfig, 1)
     for file in files:
         subject = SearchSubject(SubjectType.MODEL, file.model_id)
@@ -85,6 +110,28 @@ def sweep(session):
     return len(files)
 
 
+def withdraw(session, caption_id: int) -> None:
+    """Cancel a caption's attempt: it stops being due until something re-queues it.
+
+    Runs in the caller's transaction (a Job's cancel hook), which commits it.
+    A caption a person wrote, or one already settled, is left alone.
+    """
+    session.exec(
+        update(SubjectCaption)
+        .where(
+            SubjectCaption.id == caption_id,
+            SubjectCaption.state == "generated",
+            SubjectCaption.phase.in_(("pending", "running")),
+        )
+        .values(
+            phase="failed",
+            error_code="caption_cancelled",
+            lease_token=None,
+            lease_expires_at=None,
+        )
+    )
+
+
 class CaptionProcessor:
     def __init__(
         self, sessions, *, provider_factory=chat_provider, image_renderer=render_image
@@ -95,59 +142,80 @@ class CaptionProcessor:
             image_renderer,
         )
 
-    def work_one(self):
+    @staticmethod
+    def _expire(session) -> None:
+        """Fail captions whose last allowed attempt died without an outcome."""
+        expired = session.exec(
+            select(SubjectCaption)
+            .where(
+                SubjectCaption.phase == "running",
+                SubjectCaption.attempts >= 3,
+                SubjectCaption.lease_expires_at < utcnow(),
+            )
+            .order_by(SubjectCaption.id)
+            .limit(8)
+            .with_for_update(skip_locked=True)
+        ).all()
+        for item in expired:
+            item.phase, item.error_code = "failed", "caption_attempts_exhausted"
+            item.lease_token, item.lease_expires_at = None, None
+            session.add(item)
+        if expired:
+            session.commit()
+
+    @staticmethod
+    def _due(now):
+        return (
+            SubjectCaption.state == "generated",
+            SubjectCaption.attempts < 3,
+            or_(
+                SubjectCaption.phase == "pending",
+                (SubjectCaption.phase == "running")
+                & (SubjectCaption.lease_expires_at < now),
+            ),
+            or_(
+                SubjectCaption.retry_after.is_(None),
+                SubjectCaption.retry_after <= now,
+            ),
+        )
+
+    def work_one(self) -> bool:
+        """Queue what is owed, then attempt the next due caption."""
         with self.sessions.scoped_session() as session:
-            expired = session.exec(
-                select(SubjectCaption)
-                .where(
-                    SubjectCaption.phase == "running",
-                    SubjectCaption.attempts >= 3,
-                    SubjectCaption.lease_expires_at < utcnow(),
-                )
-                .order_by(SubjectCaption.id)
-                .limit(8)
-                .with_for_update(skip_locked=True)
-            ).all()
-            exhausted_jobs = []
-            for item in expired:
-                item.phase, item.error_code = "failed", "caption_attempts_exhausted"
-                item.lease_token, item.lease_expires_at = None, None
-                if item.job_id:
-                    exhausted_jobs.append(item.job_id)
-                session.add(item)
-            if expired:
-                session.commit()
-                for job in exhausted_jobs:
-                    registry.update(
-                        job, state="failed", error="caption_attempts_exhausted"
-                    )
+            self._expire(session)
             provider, _ = captions.endpoint(session)
             if provider is None:
                 return False
             sweep(session)
+            session.commit()
+            caption_id = session.exec(
+                select(SubjectCaption.id)
+                .where(*self._due(utcnow()))
+                .order_by(SubjectCaption.id)
+                .limit(1)
+            ).first()
+        if caption_id is None:
+            return False
+        self.work_on(caption_id)
+        return True
+
+    def work_on(self, caption_id: int, *, job_id: str | None = None) -> CaptionOutcome:
+        """Attempt one caption; ``job_id`` is the Job this attempt reports to."""
+        with self.sessions.scoped_session() as session:
+            self._expire(session)
+            provider, _ = captions.endpoint(session)
+            if provider is None:
+                return CaptionOutcome(error="caption_endpoint_unavailable", retry=True)
             now = utcnow()
             row = session.exec(
                 select(SubjectCaption)
-                .where(
-                    SubjectCaption.state == "generated",
-                    SubjectCaption.attempts < 3,
-                    or_(
-                        SubjectCaption.phase == "pending",
-                        (SubjectCaption.phase == "running")
-                        & (SubjectCaption.lease_expires_at < now),
-                    ),
-                    or_(
-                        SubjectCaption.retry_after.is_(None),
-                        SubjectCaption.retry_after <= now,
-                    ),
-                )
-                .order_by(SubjectCaption.id)
-                .limit(1)
+                .where(SubjectCaption.id == caption_id, *self._due(now))
                 .with_for_update(skip_locked=True)
             ).first()
             if row is None:
+                # Settled, changed by a person, or not due yet: nothing to do.
                 session.commit()
-                return False
+                return CaptionOutcome(result={"skipped": True})
             token = secrets.token_hex(16)
             claimed = session.exec(
                 update(SubjectCaption)
@@ -169,22 +237,12 @@ class CaptionProcessor:
             )
             if claimed.rowcount != 1:
                 session.rollback()
-                return False
-            previous_job = (
-                session.get(BackgroundJob, row.job_id) if row.job_id else None
-            )
-            if previous_job is None or previous_job.state in ("completed", "failed"):
-                row.job_id = registry.create(
-                    row.actor_id, kind="ai_caption", session=session
-                )
+                return CaptionOutcome(result={"skipped": True})
+            if job_id is not None:
+                row.job_id = job_id
             session.add(row)
             session.flush()
-            id, version, input_hash, job_id = (
-                row.id,
-                row.version_token,
-                row.input_hash,
-                row.job_id,
-            )
+            id, version, input_hash = row.id, row.version_token, row.input_hash
             subject = SearchSubject(SubjectType(row.subject_type), row.subject_id)
             file = caption_source.source(session, subject)
             if (
@@ -196,12 +254,10 @@ class CaptionProcessor:
                 row.lease_token, row.lease_expires_at = None, None
                 session.add(row)
                 session.commit()
-                registry.update(job_id, state="failed", error="caption_source_changed")
-                return True
+                return CaptionOutcome(error="caption_source_changed")
             endpoint_id = row.endpoint_id
             session.expunge(file)
             session.commit()
-        registry.update(job_id, state="running")
         error = None
         text = None
         try:
@@ -214,10 +270,7 @@ class CaptionProcessor:
             with self.sessions.scoped_session() as session:
                 if not self._current(session, subject, id, version, input_hash, token):
                     self._cancel(session, id, version, token)
-                    registry.update(
-                        job_id, state="completed", result={"cancelled": True}
-                    )
-                    return True
+                    return CaptionOutcome(result={"cancelled": True})
             result = provider_instance.complete(
                 ChatInput(
                     caption_source.INSTRUCTION,
@@ -247,8 +300,7 @@ class CaptionProcessor:
             row = self._current(session, subject, id, version, input_hash, token)
             if row is None:
                 self._cancel(session, id, version, token)
-                registry.update(job_id, state="completed", result={"cancelled": True})
-                return True
+                return CaptionOutcome(result={"cancelled": True})
             # CAS covers SQLite and the last race after a visibility/source check.
             values = {
                 "phase": "ready"
@@ -285,16 +337,15 @@ class CaptionProcessor:
             )
             if changed.rowcount != 1:
                 session.rollback()
-                registry.update(job_id, state="completed", result={"cancelled": True})
-                return True
+                return CaptionOutcome(result={"cancelled": True})
             sync_subject(session, subject)
             exhausted = row.attempts >= 3
             session.commit()
-        if error is None or exhausted:
-            registry.update(
-                job_id, state="failed" if error else "completed", error=error
-            )
-        return True
+        if error is None:
+            return CaptionOutcome(result={"state": "ready"})
+        # Not exhausted: the caption is pending again, due after its backoff,
+        # and its next attempt is a new Job.
+        return CaptionOutcome(error=error, retry=not exhausted)
 
     def _cancel(self, session, id, version, token):
         session.exec(

@@ -27,10 +27,15 @@ from sqlmodel import Session, select
 
 from app.core.config import _overlay
 from app.core.time import utcnow
-from app.db.models import CaptureUploadSlot, CaptureUploadSlotState, StagingLease
+from app.db.models import (
+    CaptureUploadSlot,
+    CaptureUploadSlotState,
+    JobKind,
+    StagingLease,
+)
 from app.modules.ingestion import inbox, staging_leases
 from app.schemas.inbox import CaptureUploadSlotsCreate
-from tests.factories import build_background_job, build_user
+from tests.factories import build_job, build_user
 
 
 def _payload(data: bytes) -> CaptureUploadSlotsCreate:
@@ -320,7 +325,7 @@ class TestCaptureStagingLeaseEdges:
         row, slots = inbox.create_capture_upload_slots(
             db_session, owner, _payload(b"payload")
         )
-        job = build_background_job(db_session, owner=owner)
+        job = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=owner)
         staging_leases.transfer_capture_slots_to_job(
             db_session, inbox_item_id=row.id, job_id=job.id
         )
@@ -328,10 +333,10 @@ class TestCaptureStagingLeaseEdges:
 
         renewed = staging_leases.renew_job_lease(db_session, job_id=job.id, now=now)
 
-        assert renewed.background_job_id == job.id
+        assert renewed.job_id == job.id
         assert renewed.expires_at == now + timedelta(
             hours=inbox.settings.staging_import_lease_hours
         )
         assert db_session.exec(
-            select(StagingLease).where(StagingLease.background_job_id == job.id)
+            select(StagingLease).where(StagingLease.job_id == job.id)
         ).all()

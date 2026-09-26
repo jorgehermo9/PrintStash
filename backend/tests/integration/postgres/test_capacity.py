@@ -25,6 +25,7 @@ class TestPostgresCapacity:
         barrier = Barrier(2)
 
         try:
+
             def reserve(owner):
                 barrier.wait()
                 try:
@@ -77,9 +78,7 @@ class TestPostgresCapacity:
             command.stamp(config, RELEASED_V0121_REVISION)
             command.upgrade(config, "0a6b1f868ae0")
             with Session(engine) as session:
-                identity = build_model(
-                    session, name="Preserved PostgreSQL model"
-                ).id
+                identity = build_model(session, name="Preserved PostgreSQL model").id
             command.upgrade(config, "head")
             assert "capacity_reservations" in inspect(engine).get_table_names()
             with engine.connect() as connection:

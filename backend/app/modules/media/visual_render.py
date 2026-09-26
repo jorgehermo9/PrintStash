@@ -19,7 +19,7 @@ from printstash_core.search.visual_inputs import VisualRecipe
 from app import __file__ as application_file
 from app.core.config import settings
 from app.modules.inference.worker_pool import pool
-from app.modules.media import compute_slots, mesh_processing
+from app.modules.media import mesh_processing
 from app.modules.media.geometry_analysis import VisualViews
 from app.modules.media.stl_streaming import _terminate_process_group
 from app.modules.media.visual_worker import MAX_REPLY
@@ -71,8 +71,8 @@ def render(
                     context.remaining()
                     pool.enforce_memory_budget(
                         process,
-                        compute_slots.native_memory_budget_bytes(),
-                        compute_slots.native_process_rss_bytes,
+                        mesh_processing.native_memory_budget_bytes(),
+                        mesh_processing.process_rss_bytes,
                     )
                     for key, _ in selector.select(0.025):
                         chunk = os.read(key.fd, 65536)

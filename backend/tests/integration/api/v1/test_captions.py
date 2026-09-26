@@ -145,3 +145,49 @@ class TestCaptionAPI:
 
         assert response.status_code == 200, response.text
         assert response.json()["can_edit"] is False
+
+
+class TestEditedCaptionSearch:
+    def test_an_uploaded_models_edited_caption_is_searchable(
+        self, client, auth_headers, tmp_path
+    ):
+        # The real-backend flow: a Model committed by its ingest Job and then
+        # derived and projected by theirs, whose caption a user then edits.
+        from tests._env import use_local_storage
+        from tests.integration.api.v1._ingest_assertions import drain_work
+
+        use_local_storage(tmp_path)
+        accepted = client.post(
+            "/api/v1/ingest/model",
+            headers=auth_headers,
+            files={
+                "file": (
+                    "cube.stl",
+                    b"solid cube\nfacet normal 0 0 1\nouter loop\n"
+                    b"endloop\nendfacet\nendsolid cube\n",
+                    "application/sla",
+                )
+            },
+        )
+        assert accepted.status_code == 202, accepted.text
+        drain_work()
+        job = client.get(
+            f"/api/v1/jobs/{accepted.json()['job_id']}", headers=auth_headers
+        ).json()
+        model_id = job["model_id"]
+        caption = client.patch(
+            f"/api/v1/subjects/model/{model_id}/caption",
+            headers=auth_headers,
+            json={"action": "edit", "text": "zygomaticphrase mounting fixture"},
+        )
+        assert caption.status_code == 200, caption.text
+        drain_work()
+
+        found = client.get(
+            "/api/v1/search",
+            headers=auth_headers,
+            params={"q": "zygomaticphrase", "mode": "lexical"},
+        )
+
+        assert found.status_code == 200, found.text
+        assert [item["subject_id"] for item in found.json()["items"]] == [model_id]

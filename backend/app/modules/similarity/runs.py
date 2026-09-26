@@ -1,10 +1,14 @@
-"""Durable bounded scans: normalized scopes, expiring ownership and checkpoints."""
+"""Durable bounded scans: normalized scopes, a fenced writer and checkpoints.
+
+A run is the intent (scope, settings snapshot) and its resumable progress.
+Which process advances it, and when, is the job engine's business: each run
+is the subject of ``similarity.analyze`` Jobs, one execution at a time.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import secrets
 from datetime import timedelta
 from typing import Literal
 
@@ -31,7 +35,6 @@ from app.modules.similarity.retrieval import editable_models
 
 Scope = Literal["library", "collections", "models", "sources"]
 TERMINAL = ("completed", "cancelled", "failed")
-LEASE_SECONDS = 900
 
 
 def normalize_scope(
@@ -137,55 +140,32 @@ def cancel(session: Session, actor: User, run_id: int) -> SimilarityRun:
             .where(
                 SimilarityRun.id == run_id, col(SimilarityRun.state).not_in(TERMINAL)
             )
-            .values(
-                cancel_requested=True, state="cancelling", last_activity_at=utcnow()
-            )
+            .values(cancel_requested=True, state="cancelling")
         )
         session.commit()
         session.refresh(run)
     return run
 
 
-def claim(
-    session: Session, *, cancellations_only: bool = False
-) -> tuple[SimilarityRun, str] | None:
-    now = utcnow()
-    available = or_(
-        col(SimilarityRun.lease_token).is_(None),
-        col(SimilarityRun.lease_expires_at) <= now,
+def take(session: Session, run_id: int, writer: str) -> SimilarityRun | None:
+    """Make ``writer`` the execution that may publish for this run.
+
+    The engine already runs one execution per run at a time, so this never
+    competes: it only moves the write fence to the current attempt, which
+    retires any earlier attempt that is somehow still alive.
+    """
+    changed = session.connection().execute(
+        update(SimilarityRun)
+        .where(SimilarityRun.id == run_id, col(SimilarityRun.state).not_in(TERMINAL))
+        .values(writer=writer)
     )
-    conditions = [col(SimilarityRun.state).not_in(TERMINAL), available]
-    if cancellations_only:
-        conditions.append(SimilarityRun.cancel_requested == True)  # noqa: E712
-    ids = session.exec(
-        select(SimilarityRun.id)
-        .where(*conditions)
-        .order_by(SimilarityRun.last_activity_at, SimilarityRun.id)
-        .limit(8)
-        .with_for_update(skip_locked=True)
-    ).all()
-    for run_id in ids:
-        token = secrets.token_hex(32)
-        changed = session.connection().execute(
-            update(SimilarityRun)
-            .where(
-                SimilarityRun.id == run_id,
-                col(SimilarityRun.state).not_in(TERMINAL),
-                available,
-            )
-            .values(
-                lease_token=token,
-                lease_expires_at=now + timedelta(seconds=LEASE_SECONDS),
-            )
-        )
-        if changed.rowcount == 1:
-            session.commit()
-            run = session.get(SimilarityRun, run_id)
-            assert run is not None
-            session.refresh(run)
-            return run, token
-        session.rollback()
-    return None
+    session.commit()
+    if changed.rowcount != 1:
+        return None
+    run = session.get(SimilarityRun, run_id)
+    assert run is not None
+    session.refresh(run)
+    return run
 
 
 def checkpoint(
@@ -199,7 +179,7 @@ def checkpoint(
     state: str = "running",
     failure_code: str | None = None,
 ) -> bool:
-    """Commit a bounded unit only while its lease is current; cancellation wins."""
+    """Commit a bounded unit only while ``token`` is the run's writer; cancellation wins."""
     now = utcnow()
     cancelling = session.exec(
         select(SimilarityRun.cancel_requested).where(SimilarityRun.id == run.id)
@@ -216,19 +196,15 @@ def checkpoint(
             counters if counters is not None else json.loads(run.counters_json)
         ),
         failure_code=failure_code,
-        lease_token=None,
-        lease_expires_at=None,
-        last_activity_at=now,
         started_at=run.started_at or now,
     )
     if state in TERMINAL:
-        values.update(finished_at=now, active_scope_key=None)
+        values.update(finished_at=now, active_scope_key=None, writer=None)
     changed = session.connection().execute(
         update(SimilarityRun)
         .where(
             SimilarityRun.id == run.id,
-            SimilarityRun.lease_token == token,
-            col(SimilarityRun.lease_expires_at) > now,
+            SimilarityRun.writer == token,
             col(SimilarityRun.state).not_in(TERMINAL),
         )
         .values(**values)
@@ -275,6 +251,22 @@ def source_query(session: Session, run: SimilarityRun, actor: User):
     return query.order_by(File.id)
 
 
+def system_actor(session: Session) -> User | None:
+    """The account a run no user asked for runs as: the first active admin.
+
+    Scheduled and derivative-triggered runs have no requesting user. Running
+    them as an administrator lets them see the whole library; what each
+    viewer sees of the resulting candidates is still filtered by their own
+    permissions when they read them.
+    """
+    return session.exec(
+        select(User)
+        .where(col(User.is_superuser).is_(True), col(User.is_active).is_(True))
+        .order_by(User.id)
+        .limit(1)
+    ).first()
+
+
 def schedule_due(session: Session) -> SimilarityRun | None:
     """Opt-in local cadence; the durable active-scope constraint deduplicates it."""
     from app.core.time import ensure_utc
@@ -292,12 +284,7 @@ def schedule_due(session: Session) -> SimilarityRun | None:
         hours=config.schedule_hours
     ):
         return None
-    actor = session.exec(
-        select(User)
-        .where(col(User.is_superuser).is_(True), col(User.is_active).is_(True))
-        .order_by(User.id)
-        .limit(1)
-    ).first()
+    actor = system_actor(session)
     if actor is None:
         return None
     try:

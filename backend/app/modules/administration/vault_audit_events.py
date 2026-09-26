@@ -9,7 +9,6 @@ from sqlmodel import Session, select
 
 from app.core.time import ensure_utc
 from app.db.models import (
-    NotificationDelivery,
     NotificationEventType,
     VaultAuditEvent,
     VaultAuditPolicy,
@@ -40,7 +39,7 @@ def record_overdue(
         )
     )
     if policy.notification_threshold != "off":
-        enqueue_storage_event(
+        deliveries = enqueue_storage_event(
             session,
             event_type,
             run_id=None,
@@ -48,9 +47,6 @@ def record_overdue(
             summary={},
             channel_ids=json.loads(policy.notification_channels_json),
         )
-        deliveries = [
-            row for row in session.new if isinstance(row, NotificationDelivery)
-        ]
         if deliveries:
             due = (
                 max(

@@ -7,7 +7,6 @@ import pytest
 
 from app.core.config import _overlay
 from app.modules.inference import model_registry
-from app.runtime.model_acquisition import close
 from tests.factories.embeddings import sparse_embedding_assets, text_embedding_assets
 from tests.fakes.model_host import ModelHost
 from tests.fakes.server import start_server
@@ -37,9 +36,6 @@ def model_host(tmp_path, monkeypatch, request):
                     verify=tls.client_context(), **kwargs
                 ),
             ):
-                try:
-                    yield fake, cache
-                finally:
-                    close()
+                yield fake, cache
     finally:
         server.stop()

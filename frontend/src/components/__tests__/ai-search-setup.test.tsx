@@ -12,7 +12,7 @@ import {
   searchSettings,
   searchStatus,
 } from "@/test-support/search";
-import { anIngestJob } from "@/test-support/factories";
+import { aJob } from "@/test-support/factories";
 const enabled = searchSettings({ enabled: true, local_models_enabled: true });
 function setup(options: RenderAppOptions = {}) {
   return renderApp(<AiSearchSettings />, {
@@ -21,7 +21,7 @@ function setup(options: RenderAppOptions = {}) {
       "GET /api/v1/config/ai-search": json(searchConfiguration()),
       "GET /api/v1/inference/models": json([anInferenceModel()]),
       "GET /api/v1/config/ai-search/generations": json([]),
-      "GET /api/v1/ingest/jobs": json([]),
+      "GET /api/v1/jobs": json([]),
       "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: true })),
       ...options.routes,
     },
@@ -65,8 +65,8 @@ describe("AiSearchSetup", () => {
     const button = await screen.findByRole("button", { name: "Allow download and continue" });
     expect(app.requestsWithMethod("POST")).toHaveLength(0);
     app.route({
-      "GET /api/v1/ingest/jobs": json([
-        anIngestJob({ job_id: "download-1", kind: "model_download", state: "running" }),
+      "GET /api/v1/jobs": json([
+        aJob({ job_id: "download-1", kind: "inference.model_download", state: "running" }),
       ]),
     });
     await userEvent.click(button);
@@ -323,8 +323,8 @@ describe("AiSearchSetup", () => {
     const app = setup({
       routes: {
         "GET /api/v1/config/ai-search": json(searchConfiguration({ settings: enabled })),
-        "GET /api/v1/ingest/jobs": json([
-          anIngestJob({ job_id: "download-1", kind: "model_download", state: "running" }),
+        "GET /api/v1/jobs": json([
+          aJob({ job_id: "download-1", kind: "inference.model_download", state: "running" }),
         ]),
         "POST /api/v1/inference/models/downloads/download-1/cancel": json({}, 200),
       },

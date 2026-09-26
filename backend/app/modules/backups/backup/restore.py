@@ -35,7 +35,6 @@ from app.modules.administration import audit
 from app.modules.storage import capacity_estimates
 from app.modules.storage.capacity import CapacityManager
 from app.modules.storage.storage_backend.runtime import get_backend
-from app.runtime.jobs import registry
 from app.runtime.maintenance import (
     RestoreConflictError,
     begin_restore_maintenance,
@@ -121,7 +120,19 @@ def restore_backup(backup_id: str, *, source_ref: str | None = None) -> dict:
     restore_cache_path: Path | None = None
 
     capacity_claim = None
-    begin_restore_maintenance()
+    try:
+        begin_restore_maintenance()
+    except RestoreConflictError as exc:
+        # Refused before it began: write work (a job step, a request) did not
+        # drain in time. Nothing was touched, but the refusal is still audited.
+        with get_session_factory().session() as session:
+            audit.record(
+                session,
+                action="restore.failed",
+                resource_type="backup",
+                diff={"backup_id": backup_id, "reason": "writes_active"},
+            )
+        raise exc
     try:
         with get_session_factory().session() as session:
             audit.record(
@@ -132,15 +143,17 @@ def restore_backup(backup_id: str, *, source_ref: str | None = None) -> dict:
             )
 
         time.sleep(_RESTORE_GRACE_PERIOD_S)
-        counts = registry.snapshot_counts()
-        active_jobs = counts["pending"] + counts["running"]
+        # Job steps are admitted mutations, so the fence has already drained
+        # every running step in every process (a Job waiting on the fence is
+        # not doing anything). Only staged bytes still owned by an unfinished
+        # upload would be lost to a restore.
         with get_session_factory().scoped_session() as lease_session:
             active_leases = len(
                 lease_session.exec(
                     select(StagingLease).where(StagingLease.expires_at > utcnow())
                 ).all()
             )
-        if active_jobs or active_leases:
+        if active_leases:
             with get_session_factory().session() as session:
                 audit.record(
                     session,
@@ -148,15 +161,11 @@ def restore_backup(backup_id: str, *, source_ref: str | None = None) -> dict:
                     resource_type="backup",
                     diff={
                         "backup_id": backup_id,
-                        "reason": "jobs_running",
-                        "running": counts["running"],
-                        "pending": counts["pending"],
+                        "reason": "staging_active",
                         "staging_leases": active_leases,
                     },
                 )
-            raise RestoreConflictError(
-                f"{active_jobs} ingestion job(s) and {active_leases} staging lease(s) active"
-            )
+            raise RestoreConflictError(f"{active_leases} staging lease(s) active")
 
         try:
             archive_path = _downloads_module._download_backup_to_local(meta)

@@ -50,7 +50,6 @@ export function aSimilarityRun(overrides: Partial<SimilarityRun> = {}): Similari
     failure_code: null,
     created_at: FROZEN_NOW,
     finished_at: null,
-    last_activity_at: FROZEN_NOW,
     ...overrides,
   };
 }

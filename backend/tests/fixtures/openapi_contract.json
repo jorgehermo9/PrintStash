@@ -120,72 +120,6 @@
         "title": "ApiKeyRead",
         "type": "object"
       },
-      "ArchiveEntryRead": {
-        "properties": {
-          "entry_id": {
-            "title": "Entry Id",
-            "type": "string"
-          },
-          "file_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File Type"
-          },
-          "is_image": {
-            "default": false,
-            "title": "Is Image",
-            "type": "boolean"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "size_bytes": {
-            "title": "Size Bytes",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "entry_id",
-          "name",
-          "size_bytes"
-        ],
-        "title": "ArchiveEntryRead",
-        "type": "object"
-      },
-      "ArchiveManifest": {
-        "description": "Returned after staging an archive; entries are selectable for import.",
-        "properties": {
-          "archive_id": {
-            "title": "Archive Id",
-            "type": "string"
-          },
-          "archive_name": {
-            "title": "Archive Name",
-            "type": "string"
-          },
-          "entries": {
-            "items": {
-              "$ref": "#/components/schemas/ArchiveEntryRead"
-            },
-            "title": "Entries",
-            "type": "array"
-          }
-        },
-        "required": [
-          "archive_id",
-          "archive_name",
-          "entries"
-        ],
-        "title": "ArchiveManifest",
-        "type": "object"
-      },
       "ArchiveSelectRequest": {
         "description": "Body for POST /ingest/archive/{archive_id}/select.",
         "properties": {
@@ -1533,21 +1467,6 @@
         "title": "Body_import_library_archive_api_v1_models_library_import_post",
         "type": "object"
       },
-      "Body_ingest_archive_api_v1_ingest_archive_post": {
-        "properties": {
-          "file": {
-            "contentMediaType": "application/octet-stream",
-            "description": "The .zip archive",
-            "title": "File",
-            "type": "string"
-          }
-        },
-        "required": [
-          "file"
-        ],
-        "title": "Body_ingest_archive_api_v1_ingest_archive_post",
-        "type": "object"
-      },
       "Body_ingest_model_api_v1_ingest_model_post": {
         "properties": {
           "collection": {
@@ -1579,18 +1498,6 @@
             ],
             "description": "Display name for the model",
             "title": "Model Name"
-          },
-          "source_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Optional sha256 for dedup",
-            "title": "Source Hash"
           },
           "tags": {
             "anyOf": [
@@ -2566,6 +2473,18 @@
           "usage"
         ],
         "title": "CacheSettingsRead",
+        "type": "object"
+      },
+      "CancelQueued": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/JobKind"
+          }
+        },
+        "required": [
+          "definition"
+        ],
+        "title": "CancelQueued",
         "type": "object"
       },
       "CandidateSelection": {
@@ -3884,6 +3803,173 @@
         "title": "DecisionRequest",
         "type": "object"
       },
+      "DefinitionRead": {
+        "properties": {
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "derivative_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/DerivativeKind"
+            },
+            "title": "Derivative Kinds",
+            "type": "array"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "interrupted": {
+            "title": "Interrupted",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lane": {
+            "$ref": "#/components/schemas/LaneName"
+          },
+          "last_finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Finished At"
+          },
+          "name": {
+            "$ref": "#/components/schemas/JobKind"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due At"
+          },
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "lane",
+          "queued",
+          "running",
+          "interrupted",
+          "failed",
+          "completed",
+          "derivative_kinds"
+        ],
+        "title": "DefinitionRead",
+        "type": "object"
+      },
+      "DerivativeKind": {
+        "description": "An output derived from an Artifact's bytes, each at its own recipe.",
+        "enum": [
+          "metadata",
+          "thumbnail",
+          "toolpath"
+        ],
+        "title": "DerivativeKind",
+        "type": "string"
+      },
+      "DerivativeRead": {
+        "description": "One derivative kind of one Artifact at the current recipe.\n\n``pending`` means no attempt exists yet at the current recipe; every value\nthe derivative would supply is unknown until it is ``ready``.",
+        "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DerivativeKind"
+          },
+          "recipe_version": {
+            "title": "Recipe Version",
+            "type": "integer"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DerivativeStatus"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "kind",
+          "recipe_version",
+          "state"
+        ],
+        "title": "DerivativeRead",
+        "type": "object"
+      },
+      "DerivativeRegenerate": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/RegenerateMode",
+            "default": "missing"
+          }
+        },
+        "title": "DerivativeRegenerate",
+        "type": "object"
+      },
+      "DerivativeStatus": {
+        "description": "A derivative as a reader sees it: ``pending`` (no attempt at the current\nrecipe yet, or regenerated since) and every stored ``DerivativeState``.",
+        "enum": [
+          "pending",
+          "queued",
+          "running",
+          "ready",
+          "skipped",
+          "failed",
+          "cancelled"
+        ],
+        "title": "DerivativeStatus",
+        "type": "string"
+      },
       "DocumentCreate": {
         "additionalProperties": false,
         "description": "Create a markdown document. Binary docs come in via the upload endpoint.",
@@ -4425,6 +4511,58 @@
           "prefer_responses"
         ],
         "title": "EndpointRead",
+        "type": "object"
+      },
+      "ExecutorRead": {
+        "properties": {
+          "app_version": {
+            "title": "App Version",
+            "type": "string"
+          },
+          "executor_id": {
+            "title": "Executor Id",
+            "type": "string"
+          },
+          "heartbeat_at": {
+            "format": "date-time",
+            "title": "Heartbeat At",
+            "type": "string"
+          },
+          "hostname": {
+            "title": "Hostname",
+            "type": "string"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/LaneName"
+            },
+            "title": "Lanes",
+            "type": "array"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ProcessRole"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "executor_id",
+          "role",
+          "hostname",
+          "app_version",
+          "lanes",
+          "started_at",
+          "heartbeat_at",
+          "stale"
+        ],
+        "title": "ExecutorRead",
         "type": "object"
       },
       "ExternalLibraryCollectionMode": {
@@ -5653,29 +5791,6 @@
         "title": "HomeAxes",
         "type": "object"
       },
-      "ImportFailedItem": {
-        "properties": {
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "reason": {
-            "title": "Reason",
-            "type": "string"
-          },
-          "retryable": {
-            "default": false,
-            "title": "Retryable",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "name",
-          "reason"
-        ],
-        "title": "ImportFailedItem",
-        "type": "object"
-      },
       "ImportedPrintJobRead": {
         "properties": {
           "end_time": {
@@ -5878,17 +5993,6 @@
             "title": "Attempt Count",
             "type": "integer"
           },
-          "background_job_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Background Job Id"
-          },
           "completed_at": {
             "anyOf": [
               {
@@ -5941,6 +6045,17 @@
           "id": {
             "title": "Id",
             "type": "integer"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
           },
           "manifest": {
             "anyOf": [
@@ -6319,345 +6434,6 @@
         "title": "InferenceModelRead",
         "type": "object"
       },
-      "IngestJobStatus": {
-        "properties": {
-          "committed_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Committed At"
-          },
-          "completion": {
-            "anyOf": [
-              {
-                "enum": [
-                  "complete",
-                  "partial"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completion"
-          },
-          "current_item": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Item"
-          },
-          "deduplicated": {
-            "default": 0,
-            "title": "Deduplicated",
-            "type": "integer"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "failed": {
-            "default": 0,
-            "title": "Failed",
-            "type": "integer"
-          },
-          "failed_items": {
-            "items": {
-              "$ref": "#/components/schemas/ImportFailedItem"
-            },
-            "title": "Failed Items",
-            "type": "array"
-          },
-          "file_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File Id"
-          },
-          "fingerprint_status": {
-            "anyOf": [
-              {
-                "enum": [
-                  "pending",
-                  "ready",
-                  "partial",
-                  "unsupported",
-                  "failed",
-                  "stale",
-                  "skipped"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fingerprint Status"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          },
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          },
-          "kind": {
-            "default": "ingest",
-            "title": "Kind",
-            "type": "string"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "model_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Id"
-          },
-          "processed": {
-            "default": 0,
-            "title": "Processed",
-            "type": "integer"
-          },
-          "progress": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Progress"
-          },
-          "result": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Result"
-          },
-          "retryable": {
-            "default": false,
-            "title": "Retryable",
-            "type": "boolean"
-          },
-          "skipped": {
-            "default": 0,
-            "title": "Skipped",
-            "type": "integer"
-          },
-          "stage": {
-            "anyOf": [
-              {
-                "enum": [
-                  "resolving",
-                  "downloading",
-                  "inspecting",
-                  "extracting",
-                  "hashing",
-                  "ingesting",
-                  "thumbnailing",
-                  "completed"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stage"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "state": {
-            "enum": [
-              "pending",
-              "running",
-              "completed",
-              "failed"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "step": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Step"
-          },
-          "succeeded": {
-            "default": 0,
-            "title": "Succeeded",
-            "type": "integer"
-          },
-          "thumbnail_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Thumbnail Reason"
-          },
-          "thumbnail_status": {
-            "anyOf": [
-              {
-                "enum": [
-                  "generated",
-                  "fallback_generated",
-                  "skipped",
-                  "failed"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Thumbnail Status"
-          },
-          "total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total"
-          },
-          "total_steps": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Steps"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          }
-        },
-        "required": [
-          "job_id",
-          "state"
-        ],
-        "title": "IngestJobStatus",
-        "type": "object"
-      },
-      "IngestResponse": {
-        "description": "Returned immediately from POST /ingest/orca.",
-        "properties": {
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          },
-          "message": {
-            "default": "ingestion queued",
-            "title": "Message",
-            "type": "string"
-          },
-          "state": {
-            "enum": [
-              "pending",
-              "running",
-              "completed",
-              "failed"
-            ],
-            "title": "State",
-            "type": "string"
-          }
-        },
-        "required": [
-          "job_id",
-          "state"
-        ],
-        "title": "IngestResponse",
-        "type": "object"
-      },
       "InventoryBucket": {
         "properties": {
           "category": {
@@ -6718,6 +6494,96 @@
         "title": "InventoryReport",
         "type": "object"
       },
+      "JobAccepted": {
+        "description": "Returned by every endpoint that accepts background work.",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "message": {
+            "default": "queued",
+            "title": "Message",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState",
+            "default": "queued"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobAccepted",
+        "type": "object"
+      },
+      "JobFailedItem": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "reason"
+        ],
+        "title": "JobFailedItem",
+        "type": "object"
+      },
+      "JobKind": {
+        "description": "Every Job Definition, named ``<owner>.<verb>`` after the owning module.\n\nA Job's ``kind`` is one of these and nothing else: the catalog refuses a\ndefinition whose name is not listed here, and the API publishes the list,\nso a client can switch over it exhaustively. Adding a definition adds its\nmember here, in the owner's block.",
+        "enum": [
+          "administration.audit",
+          "backups.automatic",
+          "backups.create",
+          "backups.retry_destination",
+          "backups.trash_gc",
+          "derivatives.gcode",
+          "derivatives.mesh",
+          "derivatives.toolpath",
+          "identity.retention",
+          "inference.model_download",
+          "ingestion.archive_inspect",
+          "ingestion.archive_selection",
+          "ingestion.artifact_upload",
+          "ingestion.collection",
+          "ingestion.inbox_import",
+          "ingestion.inbox_resolve",
+          "ingestion.inbox_retention",
+          "ingestion.library_import",
+          "ingestion.upload",
+          "ingestion.upload_recovery",
+          "ingestion.url",
+          "ingestion.url_selection",
+          "notifications.deliver",
+          "notifications.retention",
+          "printing.dispatch",
+          "search.caption",
+          "search.caption_queue",
+          "search.expand",
+          "search.generation",
+          "search.index",
+          "search.project",
+          "search.repair",
+          "similarity.analyze",
+          "sources.scan",
+          "storage.inventory",
+          "storage.migrate",
+          "work.housekeeping"
+        ],
+        "title": "JobKind",
+        "type": "string"
+      },
       "JobPriority": {
         "enum": [
           "low",
@@ -6726,6 +6592,375 @@
         ],
         "title": "JobPriority",
         "type": "string"
+      },
+      "JobState": {
+        "description": "Lifecycle of one background Job, shared by every job definition.\n\n``interrupted`` is not terminal: the execution was lost (crash, upgrade,\nrestore) and the reconciler resubmits the same Job as its next attempt.",
+        "enum": [
+          "queued",
+          "running",
+          "interrupted",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "JobState",
+        "type": "string"
+      },
+      "JobStatus": {
+        "description": "One background Job: what it is doing, and what it did.\n\n``kind`` is the Job Definition, one of a closed set a client can switch\non. Counts and ``failed_items`` are filled by definitions that process\nseveral items (an archive, a collection); a single-item job reports\n``processed``/``total`` of 1. Nothing here is ever read back as the job's\ninput.",
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "committed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed At"
+          },
+          "completion": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Item"
+          },
+          "deduplicated": {
+            "default": 0,
+            "title": "Deduplicated",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "failed_items": {
+            "items": {
+              "$ref": "#/components/schemas/JobFailedItem"
+            },
+            "title": "Failed Items",
+            "type": "array"
+          },
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/JobKind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/WorkPriority"
+          },
+          "processed": {
+            "default": 0,
+            "title": "Processed",
+            "type": "integer"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "resubmits": {
+            "title": "Resubmits",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "skipped": {
+            "default": 0,
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "enum": [
+                  "resolving",
+                  "downloading",
+                  "inspecting",
+                  "extracting",
+                  "hashing",
+                  "ingesting",
+                  "completed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "succeeded": {
+            "default": 0,
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "total_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Steps"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "kind",
+          "state",
+          "priority",
+          "attempts",
+          "resubmits",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "JobStatus",
+        "type": "object"
+      },
+      "LaneName": {
+        "description": "A lane: a concurrency class of work, and the engine queue behind it.",
+        "enum": [
+          "captions",
+          "derive.light",
+          "derive.native",
+          "expansion",
+          "ingest",
+          "maintenance",
+          "network",
+          "notify",
+          "printing",
+          "reconcile",
+          "search",
+          "similarity"
+        ],
+        "title": "LaneName",
+        "type": "string"
+      },
+      "LaneRead": {
+        "properties": {
+          "concurrency": {
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "default_concurrency": {
+            "title": "Default Concurrency",
+            "type": "integer"
+          },
+          "name": {
+            "$ref": "#/components/schemas/LaneName"
+          },
+          "overridden": {
+            "title": "Overridden",
+            "type": "boolean"
+          },
+          "partitioned": {
+            "title": "Partitioned",
+            "type": "boolean"
+          },
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "worker",
+              "global"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "concurrency",
+          "default_concurrency",
+          "overridden",
+          "scope",
+          "partitioned",
+          "queued",
+          "running"
+        ],
+        "title": "LaneRead",
+        "type": "object"
+      },
+      "LaneUpdate": {
+        "properties": {
+          "concurrency": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concurrency"
+          }
+        },
+        "title": "LaneUpdate",
+        "type": "object"
       },
       "LegacyInboxManifestRead": {
         "additionalProperties": true,
@@ -13685,6 +13920,16 @@
         "title": "PrinterUpdate",
         "type": "object"
       },
+      "ProcessRole": {
+        "description": "What one process of a deployment does (``VAULT_PROCESS_ROLE``).\n\n``all`` serves HTTP and runs every Job; ``api`` is the HTTP process of a\ndeployment with workers; ``worker`` runs Jobs and serves nothing.",
+        "enum": [
+          "all",
+          "api",
+          "worker"
+        ],
+        "title": "ProcessRole",
+        "type": "string"
+      },
       "ProvenanceCaptureSummaryRead": {
         "properties": {
           "adapter_version": {
@@ -14235,6 +14480,15 @@
         ],
         "title": "RefreshRequest",
         "type": "object"
+      },
+      "RegenerateMode": {
+        "description": "``missing`` fills gaps; ``all`` re-derives every Artifact of the kind.",
+        "enum": [
+          "missing",
+          "all"
+        ],
+        "title": "RegenerateMode",
+        "type": "string"
       },
       "RetainRequest": {
         "properties": {
@@ -18869,6 +19123,60 @@
         ],
         "title": "VolumeEvidence",
         "type": "object"
+      },
+      "WorkOverview": {
+        "properties": {
+          "definitions": {
+            "items": {
+              "$ref": "#/components/schemas/DefinitionRead"
+            },
+            "title": "Definitions",
+            "type": "array"
+          },
+          "executors": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutorRead"
+            },
+            "title": "Executors",
+            "type": "array"
+          },
+          "failed_derivatives": {
+            "title": "Failed Derivatives",
+            "type": "integer"
+          },
+          "failed_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobStatus"
+            },
+            "title": "Failed Jobs",
+            "type": "array"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/LaneRead"
+            },
+            "title": "Lanes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "lanes",
+          "definitions",
+          "executors",
+          "failed_jobs",
+          "failed_derivatives"
+        ],
+        "title": "WorkOverview",
+        "type": "object"
+      },
+      "WorkPriority": {
+        "description": "Scheduling tier of a submission; children inherit it and may only lower it.",
+        "enum": [
+          "interactive",
+          "backfill"
+        ],
+        "title": "WorkPriority",
+        "type": "string"
       }
     },
     "securitySchemes": {
@@ -19474,6 +19782,194 @@
         "summary": "Reset User Password",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/work": {
+      "get": {
+        "operationId": "overview_api_v1_admin_work_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOverview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Background work overview",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/admin/work/cancel-queued": {
+      "post": {
+        "operationId": "cancel_queued_api_v1_admin_work_cancel_queued_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelQueued"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Queued Api V1 Admin Work Cancel Queued Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel every queued Job of one definition",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/admin/work/derivatives/{kind}/regenerate": {
+      "post": {
+        "operationId": "regenerate_api_v1_admin_work_derivatives__kind__regenerate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DerivativeKind"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DerivativeRegenerate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Regenerate Api V1 Admin Work Derivatives  Kind  Regenerate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Re-derive one derivative kind across the library",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/admin/work/lanes/{lane}": {
+      "put": {
+        "operationId": "update_lane_api_v1_admin_work_lanes__lane__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/LaneName"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaneUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOverview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Set (or reset) a lane's concurrency at runtime",
+        "tags": [
+          "jobs"
         ]
       }
     },
@@ -20514,16 +21010,14 @@
         ]
       },
       "post": {
-        "description": "Creates a full backup (database + all stored files) as a tar.gz archive. Runs synchronously — large vaults may take a while. Returns the backup metadata.",
+        "description": "Queues a full backup (database + all stored files) as a background Job and returns it. Poll GET /api/v1/jobs/{job_id}; the backup metadata lands in the Job's result, and a refused backup (no destination, unsupported database) ends the Job failed with its reason.",
         "operationId": "create_backup_api_v1_backups_post",
         "responses": {
           "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Backup Api V1 Backups Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -20848,6 +21342,7 @@
     },
     "/api/v1/backups/runs/destinations/{result_id}/retry": {
       "post": {
+        "description": "Queues a Job that republishes the exact archive to this destination from verified surviving bytes. Poll GET /api/v1/jobs/{job_id}; the destination as it now stands is the Job's result, and a refused retry ends the Job failed with its reason.",
         "operationId": "retry_backup_destination_api_v1_backups_runs_destinations__result_id__retry_post",
         "parameters": [
           {
@@ -20861,13 +21356,11 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Retry Backup Destination Api V1 Backups Runs Destinations  Result Id  Retry Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -23795,6 +24288,34 @@
         ]
       }
     },
+    "/api/v1/events/ticket": {
+      "post": {
+        "operationId": "create_events_ticket_api_v1_events_ticket_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Events Ticket Api V1 Events Ticket Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Issue a one-use ticket for the events WebSocket",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/api/v1/filament-profiles": {
       "get": {
         "operationId": "list_filament_profiles_api_v1_filament_profiles_get",
@@ -23964,28 +24485,31 @@
         ]
       }
     },
-    "/api/v1/files/thumbnails/rebuild": {
-      "post": {
-        "description": "Walks non-soft-deleted models and tries to render a thumbnail from the newest mesh file (STL/3MF/OBJ). By default only missing thumbnails are rebuilt; pass force=true to refresh existing thumbnails after renderer improvements without re-uploading. Runs in the background: poll GET /ingest/jobs/{job_id}; the final per-model summary lands in the job's `result` field.",
-        "operationId": "rebuild_missing_thumbnails_api_v1_files_thumbnails_rebuild_post",
+    "/api/v1/files/{file_id}/derivatives": {
+      "get": {
+        "description": "Every derivative kind that applies to the Artifact (metadata, thumbnail, toolpath) with its state. `pending` means no attempt exists yet at the current recipe, so every value the kind supplies is still unknown.",
+        "operationId": "list_file_derivatives_api_v1_files__file_id__derivatives_get",
         "parameters": [
           {
-            "in": "query",
-            "name": "force",
-            "required": false,
+            "in": "path",
+            "name": "file_id",
+            "required": true,
             "schema": {
-              "default": false,
-              "title": "Force",
-              "type": "boolean"
+              "title": "File Id",
+              "type": "integer"
             }
           }
         ],
         "responses": {
-          "202": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/DerivativeRead"
+                  },
+                  "title": "Response List File Derivatives Api V1 Files  File Id  Derivatives Get",
+                  "type": "array"
                 }
               }
             },
@@ -24007,7 +24531,66 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Regenerate mesh thumbnails for existing models",
+        "summary": "Derivative states of one Artifact at the current recipes",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/{file_id}/derivatives/{kind}/retry": {
+      "post": {
+        "operationId": "retry_file_derivative_api_v1_files__file_id__derivatives__kind__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DerivativeKind"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DerivativeRead"
+                  },
+                  "title": "Response Retry File Derivative Api V1 Files  File Id  Derivatives  Kind  Retry Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Retry one failed or cancelled derivative of an Artifact",
         "tags": [
           "files"
         ]
@@ -24354,6 +24937,7 @@
     },
     "/api/v1/files/{file_id}/toolpath": {
       "get": {
+        "description": "ASCII G-code is served from the Artifact itself. Binary G-code (.bgcode) is served from its toolpath derivative; while that is still being derived the response is 202 with the derivative's state, and a failed conversion answers 422 with its reason.",
         "operationId": "get_toolpath_api_v1_files__file_id__toolpath_get",
         "parameters": [
           {
@@ -24391,7 +24975,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Bounded ASCII toolpath from the original Artifact",
+        "summary": "Bounded ASCII toolpath of a G-code Artifact",
         "tags": [
           "files"
         ]
@@ -26353,55 +26937,9 @@
         ]
       }
     },
-    "/api/v1/ingest/archive": {
-      "post": {
-        "description": "Upload a .zip; it is staged and inspected (zip-slip/zip-bomb guarded) and the importable 3D entries are returned for selective import via POST /ingest/archive/{archive_id}/select.",
-        "operationId": "ingest_archive_api_v1_ingest_archive_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_ingest_archive_api_v1_ingest_archive_post"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ArchiveManifest"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Stage a .zip archive and return its importable entries",
-        "tags": [
-          "ingest"
-        ]
-      }
-    },
     "/api/v1/ingest/archive/inspect": {
       "post": {
+        "description": "The archive is staged under a lease owned by the returned Job, which inspects it (zip-slip/zip-bomb guarded) and ends with an archive manifest. Select entries with POST /ingest/archive/{archive_id}/select, where archive_id is the manifest's archive_id (the Job id).",
         "operationId": "inspect_archive_background_api_v1_ingest_archive_inspect_post",
         "requestBody": {
           "content": {
@@ -26418,7 +26956,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -26440,7 +26978,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Stage and inspect a ZIP archive in the background",
+        "summary": "Stage a ZIP archive and list its importable entries in the background",
         "tags": [
           "ingest"
         ]
@@ -26448,7 +26986,7 @@
     },
     "/api/v1/ingest/archive/{archive_id}/select": {
       "post": {
-        "description": "Extract the chosen entries from a previously staged archive and ingest each 3D file as its own Model, grouped under an auto-created Collection named after the archive.",
+        "description": "Hands the inspected archive to a new Job that extracts the chosen entries and ingests each 3D file as its own Model, grouped under an auto-created Collection named after the archive.",
         "operationId": "select_archive_entries_api_v1_ingest_archive__archive_id__select_post",
         "parameters": [
           {
@@ -26476,7 +27014,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -26498,7 +27036,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Import selected entries from a staged archive",
+        "summary": "Import selected entries from an inspected archive",
         "tags": [
           "ingest"
         ]
@@ -26506,7 +27044,7 @@
     },
     "/api/v1/ingest/collection/{collection_token}/select": {
       "post": {
-        "description": "Import the chosen members of a previously resolved collection (see the collection_manifest job result) into the target collection.",
+        "description": "Imports the chosen members of a previously resolved collection (see the collection_manifest job result) into the target collection.",
         "operationId": "select_collection_members_api_v1_ingest_collection__collection_token__select_post",
         "parameters": [
           {
@@ -26534,7 +27072,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -26562,123 +27100,9 @@
         ]
       }
     },
-    "/api/v1/ingest/jobs": {
-      "get": {
-        "operationId": "list_jobs_api_v1_ingest_jobs_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "terminal_limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "maximum": 100,
-              "minimum": 0,
-              "title": "Terminal Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tracked_job_id",
-            "required": false,
-            "schema": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "title": "Tracked Job Id",
-              "type": "array"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/IngestJobStatus"
-                  },
-                  "title": "Response List Jobs Api V1 Ingest Jobs Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "List reconnectable ingestion jobs for the current user",
-        "tags": [
-          "ingest"
-        ]
-      }
-    },
-    "/api/v1/ingest/jobs/{job_id}": {
-      "get": {
-        "operationId": "get_job_api_v1_ingest_jobs__job_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "job_id",
-            "required": true,
-            "schema": {
-              "title": "Job Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IngestJobStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Get the status of an ingestion job",
-        "tags": [
-          "ingest"
-        ]
-      }
-    },
     "/api/v1/ingest/model": {
       "post": {
-        "description": "Multipart upload of a source file. The file is staged and processed asynchronously: hashed, geometry and thumbnail extracted where supported, deduplicated, and persisted. Returns a job_id you can poll via GET /ingest/jobs/{job_id}.",
+        "description": "Multipart upload of a source file. The file is staged and committed as an Artifact by a background Job; geometry and a rendered thumbnail follow as derivatives where supported. Returns a job_id you can poll via GET /api/v1/jobs/{job_id}.",
         "operationId": "ingest_model_api_v1_ingest_model_post",
         "requestBody": {
           "content": {
@@ -26695,7 +27119,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -26725,7 +27149,7 @@
     },
     "/api/v1/ingest/orca": {
       "post": {
-        "description": "Multipart upload from the OrcaSlicer post-processing hook. The G-code is staged immediately and processed asynchronously: hashed, parsed for slicer metadata, thumbnail-extracted, deduplicated, and persisted. Returns a job_id you can poll via GET /ingest/jobs/{job_id}.",
+        "description": "Multipart upload from the OrcaSlicer post-processing hook. The G-code is staged and committed as an Artifact by a background Job; its slicer metadata and thumbnail follow as derivatives. Returns a job_id you can poll via GET /api/v1/jobs/{job_id}.",
         "operationId": "ingest_orca_api_v1_ingest_orca_post",
         "requestBody": {
           "content": {
@@ -26742,7 +27166,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -26772,7 +27196,7 @@
     },
     "/api/v1/ingest/url": {
       "post": {
-        "description": "Download a user-supplied URL server-side (SSRF-guarded) and ingest it. A direct mesh/G-code URL is imported immediately; a .zip resolves to an archive manifest (job result) for selective import via POST /ingest/archive/{archive_id}/select.",
+        "description": "Records the URL for a background Job that downloads it server-side (SSRF-guarded). A direct mesh/G-code URL is imported; a .zip, a multi-file model page or a collection in review mode ends the Job with a manifest whose token (the Job id) selects what to import.",
         "operationId": "ingest_url_api_v1_ingest_url_post",
         "requestBody": {
           "content": {
@@ -26789,7 +27213,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -26811,7 +27235,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Import a model from a direct file or .zip URL",
+        "summary": "Import a model from a direct file, a model page, a collection or a .zip URL",
         "tags": [
           "ingest"
         ]
@@ -26819,7 +27243,7 @@
     },
     "/api/v1/ingest/url/files/{files_token}/select": {
       "post": {
-        "description": "Download only the chosen files from a previously listed model page (see the model_files_manifest job result) and ingest each as its own Model.",
+        "description": "Downloads only the chosen files from a previously listed model page (see the model_files_manifest job result) and ingests each as its own Model.",
         "operationId": "select_model_files_api_v1_ingest_url_files__files_token__select_post",
         "parameters": [
           {
@@ -26847,7 +27271,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -26872,6 +27296,238 @@
         "summary": "Import selected files from a multi-file model page",
         "tags": [
           "ingest"
+        ]
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_v1_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "terminal_limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Terminal Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tracked_job_id",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tracked Job Id",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/JobKind"
+              },
+              "title": "Kind",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_system",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include System",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobStatus"
+                  },
+                  "title": "Response List Jobs Api V1 Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List active and recent Jobs",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_api_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get one Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "description": "Cancelling withdraws the intent behind the Job (a staged upload is released, a derivative is marked cancelled) before stopping its execution, so the reconciler does not bring it back.",
+        "operationId": "cancel_job_api_v1_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel a queued or running Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "retry_job_api_v1_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Retry a failed or cancelled Job",
+        "tags": [
+          "jobs"
         ]
       }
     },
@@ -27205,7 +27861,7 @@
     },
     "/api/v1/libraries/{library_id}/scan": {
       "post": {
-        "description": "Runs in the background; poll GET /ingest/jobs/{job_id} for progress.",
+        "description": "Runs as a background Job; poll GET /api/v1/jobs/{job_id}.",
         "operationId": "scan_now_api_v1_libraries__library_id__scan_post",
         "parameters": [
           {
@@ -27223,7 +27879,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -27280,7 +27936,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -28936,7 +29592,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestResponse"
+                  "$ref": "#/components/schemas/JobAccepted"
                 }
               }
             },
@@ -38157,53 +38813,6 @@
           }
         ],
         "summary": "Status",
-        "tags": [
-          "storage"
-        ]
-      }
-    },
-    "/api/v1/storage/migrations/{run_id}/advance": {
-      "post": {
-        "operationId": "advance_api_v1_storage_migrations__run_id__advance_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MigrationRunRead"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Advance",
         "tags": [
           "storage"
         ]

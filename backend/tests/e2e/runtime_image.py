@@ -218,6 +218,20 @@ class TestRuntimeImageBackup(unittest.TestCase):
                 print(stderr.decode(errors="replace"))
                 raise
 
+    def _completed(self, api: httpx.Client, accepted: httpx.Response) -> dict:
+        """Follow the Job an accepted request queued until it settles."""
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        job_id = accepted.json()["job_id"]
+        deadline = time.monotonic() + 120
+        job: dict = {}
+        while time.monotonic() < deadline:
+            job = api.get(f"/api/v1/jobs/{job_id}").json()
+            if job.get("state") in {"completed", "failed", "cancelled"}:
+                break
+            time.sleep(0.2)
+        self.assertEqual(job.get("state"), "completed", job)
+        return job
+
     def _recover(
         self,
         api: httpx.Client,
@@ -259,22 +273,12 @@ class TestRuntimeImageBackup(unittest.TestCase):
             files={"file": ("sample.gcode", payload, "text/plain")},
             data={"model_name": "Image recovery"},
         )
-        self.assertEqual(uploaded.status_code, 202, uploaded.text)
-        deadline = time.monotonic() + 120
-        job = {}
-        while time.monotonic() < deadline:
-            job = api.get(f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}").json()
-            if job["state"] in {"completed", "failed", "duplicate"}:
-                break
-            time.sleep(0.1)
-        self.assertEqual(job.get("state"), "completed", job)
+        self._completed(api, uploaded)
         models = api.get("/api/v1/models").json()
         model = next(row for row in models if row["name"] == "Image recovery")
         detail = api.get(f"/api/v1/models/{model['id']}").json()
         file_id = detail["files"][0]["id"]
-        created = api.post("/api/v1/backups")
-        self.assertEqual(created.status_code, 202, created.text)
-        meta = created.json()
+        meta = self._completed(api, api.post("/api/v1/backups"))["result"]
         self.assertEqual(meta["location"], f"opendal:{profile['kind']}")
         listed = api.get("/api/v1/backups/sources").json()
         self.assertIn(meta["source_ref"], [row["source_ref"] for row in listed])

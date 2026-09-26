@@ -12,7 +12,11 @@ def claim_installation(url, directory, username, barrier, outcomes):
     from app.api.v1.setup import router
     from app.core.config import _overlay
     from app.core.errors import OperationError
-    from app.db.session import get_session
+    from app.db.session import (
+        SQLiteSessionFactory,
+        get_session,
+        override_session_factory,
+    )
 
     _overlay.update(
         setup_mode="trusted_network",
@@ -23,6 +27,9 @@ def claim_installation(url, directory, username, barrier, outcomes):
     for name in ("data_dir", "thumb_dir", "staging_dir", "backup_dir"):
         _overlay[name] = Path(directory) / name
     engine = create_engine(url)
+    # A real API process has one database; the maintenance fences read it
+    # through the process-wide session factory, not the request's session.
+    override_session_factory(SQLiteSessionFactory(engine))
 
     def sessions():
         with Session(engine) as session:

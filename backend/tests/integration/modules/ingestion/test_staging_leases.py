@@ -48,21 +48,14 @@ from sqlmodel import Session, select
 import app.modules.ingestion.staging_cleanup as staging_cleanup
 from alembic import command
 from app.core.time import utcnow
-from app.db.models import BackgroundJob, InboxItem, StagingLease, User
+from app.db.models import InboxItem, JobKind, StagingLease, User
 from app.modules.ingestion import staging_leases
-from tests.factories import build_user
+from tests.factories import build_job, build_user
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
 
 
 def _inbox(session: Session, user: User) -> InboxItem:
     row = InboxItem(owner_user_id=user.id)
-    session.add(row)
-    session.flush()
-    return row
-
-
-def _job(session: Session, user: User) -> BackgroundJob:
-    row = BackgroundJob(id="lease-job", owner_user_id=user.id)
     session.add(row)
     session.flush()
     return row
@@ -127,13 +120,13 @@ class TestTransfer:
         lease = db_session.exec(
             select(StagingLease).where(StagingLease.inbox_item_id == inbox.id)
         ).one()
-        assert lease.background_job_id is None
-        job = _job(db_session, user)
+        assert lease.job_id is None
+        job = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=user)
         transferred = staging_leases.transfer_inbox_to_job(
             db_session, inbox_item_id=inbox.id, job_id=job.id
         )
         assert transferred.inbox_item_id is None
-        assert transferred.background_job_id == job.id
+        assert transferred.job_id == job.id
         db_session.commit()
         with pytest.raises(IntegrityError):
             db_session.add(

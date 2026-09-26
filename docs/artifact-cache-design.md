@@ -19,7 +19,7 @@ Artifact's digest cannot identify transformed bytes.
 |---|---|
 | Original authenticated and shared downloads | `plan_artifact` selects a leased cached path only after route authorization, conditional response, safe native delivery and true local path checks. |
 | Printer upload | `printer_jobs.transfer_artifact` holds `materialize()` through provider upload completion. |
-| Thumbnail generation | `thumbnail_generations` holds `materialize()` and supplies the declared Artifact format to its parser. |
+| Derivative production | `derivatives.producers` holds `materialize()` for the whole mesh load or G-code read and supplies the declared Artifact format to its parser. |
 | Mesh conversion and embedded G-code extraction | File routes materialize the original; mesh parsing uses its declared format even though the private path ends in `.blob`. |
 | User archive export | `library_transfer.create_archive` materializes each owned Artifact while writing its ZIP member. |
 | Mounted external libraries | Existing `ArtifactHandle` verification before exposure remains authoritative; these mutable linked sources never enter the managed cache. |

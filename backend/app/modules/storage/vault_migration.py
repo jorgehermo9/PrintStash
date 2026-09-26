@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.core.time import ensure_utc, utcnow
 from app.db.models import (
+    ArtifactDerivative,
     ArtifactUploadSession,
     CapacityReservation,
     CaptureUploadSlot,
@@ -24,7 +25,6 @@ from app.db.models import (
     ModelSourceCover,
     StagingLease,
     SystemConfig,
-    ThumbnailGeneration,
     VaultGeneration,
     VaultMigrationObject,
     VaultMigrationRun,
@@ -963,7 +963,7 @@ class VaultMigrations:
         for model, attributes in (
             (File, ("path", "thumbnail_path")),
             (Model, ("thumbnail_path",)),
-            (ThumbnailGeneration, ("storage_key",)),
+            (ArtifactDerivative, ("storage_key",)),
             (ModelSourceCover, ("storage_key",)),
             (CaptureUploadSlot, ("storage_key",)),
             (StagingLease, ("destination_key",)),

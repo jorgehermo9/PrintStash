@@ -22,10 +22,10 @@ from pathlib import Path
 from sqlmodel import Session, select
 
 from app.core.config import _overlay
-from app.db.models import ExternalLibrary, File, Model
+from app.db.models import ExternalLibrary, File, FileType, Model
 from app.db.scopes import live
 from app.modules.administration import runtime_config
-from app.modules.ingestion.ingestion import ingest_orca_gcode
+from app.modules.ingestion.ingestion import StagedArtifact, commit_staged_artifact
 from app.modules.library import trash
 from app.modules.sources import external_library
 from app.modules.storage.storage_backend.runtime import get_backend
@@ -52,15 +52,14 @@ def _ingest_vault_gcode(name: str, data: bytes) -> None:
     """Ingest a g-code into vault storage (no target library)."""
     staged = Path(_overlay["staging_dir"]) / "_incoming" / f"{uuid.uuid4().hex}.gcode"
     staged.write_bytes(data)
-    ingest_orca_gcode(
-        job_id=f"job-{uuid.uuid4().hex[:8]}",
-        staged_path=staged,
-        original_filename=name,
-        model_name=Path(name).stem,
-        collection=None,
-        tags=None,
-        source_hash=None,
-        target_library_id=None,
+    commit_staged_artifact(
+        StagedArtifact(
+            staged_path=staged,
+            original_filename=name,
+            model_name=Path(name).stem,
+            file_type=FileType.GCODE,
+        ),
+        ingestion_key=uuid.uuid4().hex,
     )
 
 

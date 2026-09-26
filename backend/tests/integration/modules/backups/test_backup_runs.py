@@ -12,6 +12,18 @@ from app.db.models import StorageConnectionPurpose
 from tests.factories import build_storage_connection
 
 
+def _retry_now(result_id: str) -> dict:
+    """Request a destination retry, then run it: the route's half, then the Job's."""
+    from app.db.session import get_session_factory
+
+    with get_session_factory().scoped_session() as session:
+        attempt_id = backup_retry_retry_commands.request_retry(
+            session, result_id, owner_user_id=None
+        )
+        session.commit()
+    return backup_retry_retry_commands.run_retry(attempt_id)
+
+
 class TestDurableBackupRuns:
     def test_invalid_selected_profile_is_a_durable_partial_result(self, backup_env):
         from app.db.models import BackupDestinationResult, BackupRun
@@ -53,7 +65,9 @@ class TestDurableBackupRuns:
             row.source_ref for row in backup_catalogue.list_backup_sources()
         }
         assert meta.path.startswith(str(configured))
-        assert backup_verification.verify_backup(meta.id, source_ref=meta.source_ref).valid
+        assert backup_verification.verify_backup(
+            meta.id, source_ref=meta.source_ref
+        ).valid
 
     def test_all_failed_response_retains_the_durable_run(self, backup_env, monkeypatch):
         from app.db.models import BackupRun, SystemConfig
@@ -99,7 +113,7 @@ class TestDurableBackupRuns:
 
         Path(meta.path).unlink()
         with pytest.raises(RuntimeError, match="backup_retry_new_backup_required"):
-            backup_retry_retry_commands.retry_destination(result_id)
+            _retry_now(result_id)
         assert list(backup_env.backup_dir.glob("*.tar.gz")) == []
 
 
@@ -177,7 +191,7 @@ class TestExactReplicaRetry:
             ).one()
             result_id, key = result.id, result.key
         monkeypatch.setattr(OpenDALRemoteIO, "publish_replica", original)
-        retried = backup_retry_retry_commands.retry_destination(result_id)
+        retried = _retry_now(result_id)
         assert retried["outcome"] == "completed"
         body = client.get_object(Bucket=bucket, Key=key.removeprefix(f"s3/{bucket}/"))[
             "Body"
@@ -222,7 +236,7 @@ class TestExactReplicaRetry:
                 )
             ).one()
             result_id = failed.id
-        retried = backup_retry_retry_commands.retry_destination(result_id)
+        retried = _retry_now(result_id)
         assert retried["outcome"] == "completed"
         assert retried["ownership_id"] is not None
         assert len(writes) == 1
@@ -249,7 +263,9 @@ class TestRunVerification:
             is not None
         )
 
-    def test_interrupted_run_remains_visible_as_a_failed_execution(self, backup_env):
+    def test_a_jobs_next_attempt_settles_the_run_it_left(self, backup_env):
+        # The attempt that began this run was lost mid-backup; the run stays
+        # visible, as a failed execution with its destination interrupted.
         from app.core.time import utcnow
         from app.modules.backups import backup_runs
         from app.modules.backups.backup_destination import BackupTrigger
@@ -259,11 +275,31 @@ class TestRunVerification:
             archive_name="interrupted.tar.gz",
             trigger=BackupTrigger.MANUAL,
             created_at=utcnow(),
+            job_id="backup-job",
         )
-        listing = backup_runs.list_runs()
-        run = next(row for row in listing if row["id"] == selection.run_id)
+
+        assert backup_runs.settle_job_runs("backup-job") == 1
+
+        run = backup_runs.run_detail(selection.run_id)
         assert run["outcome"] == "failed"
         assert run["destinations"][0]["error_code"] == "backup_publication_interrupted"
+
+    def test_another_jobs_run_is_not_settled(self, backup_env):
+        from app.core.time import utcnow
+        from app.modules.backups import backup_runs
+        from app.modules.backups.backup_destination import BackupTrigger
+
+        selection = backup_runs.begin_run(
+            backup_id="live",
+            archive_name="live.tar.gz",
+            trigger=BackupTrigger.MANUAL,
+            created_at=utcnow(),
+            job_id="live-job",
+        )
+
+        assert backup_runs.settle_job_runs("other-job") == 0
+
+        assert backup_runs.run_detail(selection.run_id)["outcome"] == "running"
 
 
 def _failed_s3_run(backup_env, monkeypatch):
@@ -316,7 +352,7 @@ class TestRetryIntegrity:
             session.add(profile)
             session.commit()
         with pytest.raises(RuntimeError, match="backup_retry_target_changed"):
-            backup_retry_retry_commands.retry_destination(result_id)
+            _retry_now(result_id)
         assert client.list_objects_v2(Bucket=bucket).get("KeyCount", 0) == 0
         assert backup_runs.run_detail(meta.run_id)["outcome"] == "partial"
 
@@ -325,13 +361,12 @@ class TestRetryIntegrity:
     ):
         from pathlib import Path
 
-
         meta, result_id, key, client, bucket = _failed_s3_run(backup_env, monkeypatch)
         archive = Path(meta.path)
         replacement = b"x" * archive.stat().st_size
         archive.write_bytes(replacement)
         with pytest.raises(RuntimeError, match="backup_retry_new_backup_required"):
-            backup_retry_retry_commands.retry_destination(result_id)
+            _retry_now(result_id)
         assert archive.read_bytes() == replacement
         assert client.list_objects_v2(Bucket=bucket).get("KeyCount", 0) == 0
 
@@ -341,7 +376,7 @@ class TestRetryIntegrity:
         object_key = key.removeprefix(f"s3/{bucket}/")
         client.put_object(Bucket=bucket, Key=object_key, Body=b"replacement")
         with pytest.raises(RuntimeError, match="backup_retry_publication_conflict"):
-            backup_retry_retry_commands.retry_destination(result_id)
+            _retry_now(result_id)
         body = client.get_object(Bucket=bucket, Key=object_key)["Body"]
         try:
             assert body.read() == b"replacement"
@@ -368,13 +403,9 @@ class TestRetryIntegrity:
 
         monkeypatch.setattr(OpenDALRemoteIO, "publish_replica", paused)
         with ThreadPoolExecutor(max_workers=2) as pool:
-            first = pool.submit(
-                copy_context().run, backup_retry_retry_commands.retry_destination, result_id
-            )
+            first = pool.submit(copy_context().run, _retry_now, result_id)
             assert entered.wait(10)
-            second = pool.submit(
-                copy_context().run, backup_retry_retry_commands.retry_destination, result_id
-            )
+            second = pool.submit(copy_context().run, _retry_now, result_id)
             release.set()
             assert first.result(timeout=20)["outcome"] == "completed"
             with pytest.raises(RuntimeError, match="backup_retry_not_failed"):
@@ -449,7 +480,7 @@ class TestRetryOtherDestinations:
             monkeypatch.setattr(backup_replication, "publish_file", original)
         else:
             monkeypatch.setattr(client, "put_object", original)
-        assert backup_retry_retry_commands.retry_destination(result_id)["outcome"] == "completed"
+        assert _retry_now(result_id)["outcome"] == "completed"
         if failed_kind == "local":
             payload = Path(key).read_bytes()
         else:
@@ -478,7 +509,7 @@ class TestRetryOtherDestinations:
 
         monkeypatch.setattr(backup_replica_retry, "_copy_exact", cancelled)
         with pytest.raises(asyncio.CancelledError):
-            backup_retry_retry_commands.retry_destination(result_id)
+            _retry_now(result_id)
         assert temporary_directories
         assert all(not directory.exists() for directory in temporary_directories)
         with backup_env.new_session() as session:
@@ -545,10 +576,12 @@ class TestNativeSurvivor:
         assert meta.outcome == "partial"
         local = next(row for row in meta.destination_results if row["kind"] == "local")
         monkeypatch.setattr(backup_replication, "publish_file", original)
-        result = backup_retry_retry_commands.retry_destination(local["id"])
+        result = _retry_now(local["id"])
         assert result["outcome"] == "completed"
         assert Path(result["key"]).is_file()
-        assert backup_verification.verify_backup(meta.id, source_ref=result["source_ref"]).valid
+        assert backup_verification.verify_backup(
+            meta.id, source_ref=result["source_ref"]
+        ).valid
 
 
 class TestLiveSurvivorBoundaries:

@@ -116,6 +116,7 @@ import { timeAgo } from "@/lib/format";
 import { rememberLastCollection, readLastView, rememberLastView } from "@/lib/last-collection";
 import { useAuthenticatedAssetUrl } from "@/lib/use-authenticated-asset-url";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { useThumbnailArrivals } from "@/lib/use-thumbnail-arrivals";
 import { cn } from "@/lib/utils";
 import { TabBar } from "@/components/ui/tabs";
 
@@ -1122,6 +1123,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     multipartGroupingQuery.error?.message ??
     multipartMembershipQuery.error?.message ??
     null;
+  // A fresh upload's card shows a placeholder until its thumbnail is derived;
+  // refetch the list when one lands instead of waiting for a reload.
+  const refreshModels = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.models });
+  }, [queryClient]);
+  useThumbnailArrivals(visibleModels, refreshModels);
+
   function loadMore() {
     if (hasMore && !loadingMore) fetchNextPage();
   }

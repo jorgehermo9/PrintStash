@@ -151,8 +151,8 @@ class TestSparse:
             sparse_provider.expand("bicycle", context=InferenceContext.bounded(0.1))
 
     def test_contains_sparse_native_memory(self, sparse_provider, monkeypatch):
-        from app.modules.media import compute_slots
+        from app.modules.inference import local
 
-        monkeypatch.setattr(compute_slots, "native_memory_budget_bytes", lambda: 1)
+        monkeypatch.setattr(local, "native_memory_budget_bytes", lambda: 1)
         with pytest.raises(EmbeddingError, match="embedding_worker_oom"):
             sparse_provider.validate()

@@ -38,14 +38,45 @@ image. See UPGRADE.md before pulling.**
 - Nine Compose files became two in the repository root: `docker-compose.yml`
   starts PrintStash as one container (web UI and full API) with no
   configuration, and `docker-compose.advanced.yml` wires every setting with its
-  default, plus optional PostgreSQL and S3. The light, production and
-  build-from-source variants are folded into the advanced file; maintainer
-  stacks moved under `deploy/`.
+  default, plus optional PostgreSQL, S3 and background workers. The light,
+  production and build-from-source variants are folded into the advanced file;
+  maintainer stacks moved under `deploy/`.
 
 - CI no longer runs the eight per-image Docker build and Grype jobs or the
   legacy MinIO-to-SeaweedFS migration job. Container publishing no longer runs
   Grype scans; release builds and the legacy migration helper remain available.
 
+- **Background work runs on a durable engine.** Imports, previews, metadata,
+  backups, scans, notifications, fleet dispatch, audits, migrations and AI
+  Search projection, indexing, captions, expansion and model downloads are Jobs
+  on DBOS, found by a reconciler from what the database says is owed, so a
+  crash, restart or upgrade resumes them instead of losing them. Uploads now
+  commit the Artifact and return; its metadata, thumbnail and binary G-code
+  toolpath are derived afterwards and appear on an open page without a reload.
+  A new kind or a renderer change re-derives the library in the background
+  while current previews stay visible. Native work is bounded by its lane, not
+  a database permit: indexing runs as similarity and search Jobs, and a search
+  query embeds inside the request, ahead of background inference, in a worker
+  with its own memory and time limits. An index build and a model download are
+  each a Job, followed and cancelled through the Jobs API.
+- Follow any Job at `GET /api/v1/jobs/{id}` (cancel and retry beside it) and
+  live changes on the `/api/v1/events/ws` socket. **Breaking:**
+  `/api/v1/ingest/jobs`, `POST /api/v1/files/thumbnails/rebuild`, plain
+  `POST /api/v1/ingest/archive` and `POST /api/v1/storage/migrations/{id}/advance`
+  are removed; `POST /api/v1/backups` and
+  `POST /api/v1/backups/runs/destinations/{id}/retry` now answer 202 with a
+  `job_id`, and the backup (or the retried destination) is the Job's result; a
+  binary toolpath still being derived answers 202; Pending Imports expose
+  `job_id` instead of `background_job_id`; similarity runs no longer report
+  `last_activity_at`.
+- Similarity runs, backup runs and destination retries each follow their Job:
+  the engine, not a lease the run held, decides what is running, and the next
+  attempt of an interrupted Job settles what the previous one left open.
+  Upgrading settles backups an interrupted process left running.
+- Restoring a backup rebuilds the engine's state from the restored database:
+  work the snapshot shows as owed is found again even though the engine that
+  was running it is gone, and a backup the snapshot shows in progress no longer
+  blocks the next one.
 - AI Search settings now separate guided setup, search types, AI servers and
   technical options. Search types and compatible models appear as visible choices;
   the active search is clearly separate from a new index build. Specialist index
@@ -66,6 +97,20 @@ image. See UPGRADE.md before pulling.**
 
 ### Added
 
+- Settings → **Background work** shows every lane with a runtime concurrency
+  override, each kind of Job with its queue and schedule, the processes running
+  work, and recent failures to retry; administrators can derive missing or
+  regenerate every thumbnail or metadata output. Each source Artifact shows what
+  is still being prepared and offers a retry for a failure.
+- Optional workers: `docker-compose.advanced.yml --profile workers` adds
+  `python -m app.worker` containers beside the API, on PostgreSQL with the
+  API's volumes, declared with `VAULT_SHARED_STORAGE=true`; with
+  `VAULT_API_RUNS_JOBS=false` the API leaves every Job to them. Realtime notices
+  cross processes over PostgreSQL `NOTIFY`. Both Compose files keep running
+  everything in one process by default. `.env.example` documents the
+  background-work settings, and the advanced file forwards
+  `VAULT_MAX_RENDER_JOBS` and `VAULT_JOBS_INGEST_CONCURRENCY`;
+  `VAULT_INGEST_WORKER_COUNT`, which nothing read, is gone.
 - Similar candidates are available from the Model detail Similar tab. Mobile
   navigation retains library-wide Similar Models discovery.
 - The search bar now uses an icon-only AI control to switch between AI and
@@ -129,6 +174,9 @@ image. See UPGRADE.md before pulling.**
 
 ### Fixed
 
+- A process that started while an interrupted restore or Vault migration still
+  needed recovery now starts its background work once recovery resolves it,
+  instead of queueing work nothing ran until the next restart.
 - Opening a folder in the library no longer swaps the grid for a loading
   skeleton; the current folder stays on screen until the next one is ready.
   Folders are also prefetched when the pointer rests on them or they receive
@@ -234,9 +282,6 @@ image. See UPGRADE.md before pulling.**
   repeated exact comparisons reuse compatible proofs after checking source bytes.
   Capture and ingestion share these improvements, including bounded STEP output
   and Linux service memory-limit detection.
-
-- Concurrent thumbnail requests recover from transient SQLite contention after
-  reserving shared compute capacity.
 
 - Active print jobs no longer remain paused indefinitely after an out-of-band
   emergency stop. Authoritative idle printer updates now close interrupted jobs,

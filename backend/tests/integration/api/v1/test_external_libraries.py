@@ -30,13 +30,15 @@ from app.db.models import (
     Collection,
     ExternalLibrary,
     File,
+    JobKind,
+    JobState,
     Model,
 )
 from app.db.scopes import live
 from app.modules.administration import runtime_config
 from app.modules.sources import external_library
 from app.modules.storage import root_markers
-from app.runtime.jobs import registry
+from app.modules.work.jobs import jobs
 from tests._env import use_local_storage
 from tests.factories import build_collection, build_external_library
 from tests.paths import FIXTURES_DIR
@@ -265,7 +267,7 @@ class TestCreateLibrary:
         class _FakeWatcher:
             refreshed = False
 
-            def refresh(self) -> None:
+            def request_refresh(self) -> None:
                 _FakeWatcher.refreshed = True
 
         client.app.state.library_watcher = _FakeWatcher()
@@ -544,13 +546,17 @@ class TestScanNow:
         for folder, size in (("Christine", 10), ("Pegboard", 12)):
             path = nas / folder / "part.stl"
             path.parent.mkdir(parents=True)
-            path.write_bytes(trimesh.creation.box(extents=(size, 10, 10)).export(file_type="stl"))
+            path.write_bytes(
+                trimesh.creation.box(extents=(size, 10, 10)).export(file_type="stl")
+            )
         library = build_external_library(db_session, nas, name="nas")
         external_library.scan_library(library.id)
         db_session.expire_all()
         original_roots = {
             row.name: row.id
-            for row in db_session.exec(select(Collection).where(Collection.parent_id == None)).all()  # noqa: E711
+            for row in db_session.exec(
+                select(Collection).where(Collection.parent_id == None)  # noqa: E711
+            ).all()
         }
         assert {"Christine", "Pegboard"} <= original_roots.keys()
         existing = db_session.exec(select(Model).where(Model.name == "part")).all()
@@ -560,17 +566,30 @@ class TestScanNow:
         uploaded = client.post(
             "/api/v1/ingest/model",
             headers=auth_headers,
-            files={"file": ("new.stl", trimesh.creation.box(extents=(14, 10, 10)).export(file_type="stl"), "model/stl")},
+            files={
+                "file": (
+                    "new.stl",
+                    trimesh.creation.box(extents=(14, 10, 10)).export(file_type="stl"),
+                    "model/stl",
+                )
+            },
             data={"model_name": "new", "collection": "Models/Christine"},
         )
         assert uploaded.status_code == 202, uploaded.text
-        job = client.get(f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=auth_headers)
+        from tests.integration.api.v1._ingest_assertions import drain_work
+
+        drain_work()
+        job = client.get(
+            f"/api/v1/jobs/{uploaded.json()['job_id']}", headers=auth_headers
+        )
         assert job.json()["state"] == "completed", job.text
 
         db_session.expire_all()
         after_roots = {
             row.name: row.id
-            for row in db_session.exec(select(Collection).where(Collection.parent_id == None)).all()  # noqa: E711
+            for row in db_session.exec(
+                select(Collection).where(Collection.parent_id == None)  # noqa: E711
+            ).all()
         }
         api_roots = {
             row["name"]: row["id"]
@@ -584,7 +603,12 @@ class TestScanNow:
         assert existing_file_ids <= {row.id for row in _external_files(db_session)}
 
     def test_scan_now_queues_job(
-        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+        self,
+        tmp_path: Path,
+        client,
+        db_session: Session,
+        auth_headers: dict,
+        work_engine,
     ) -> None:
         use_local_storage(tmp_path)
         _enable_feature(db_session)
@@ -594,24 +618,29 @@ class TestScanNow:
 
         resp = client.post(f"/api/v1/libraries/{lib.id}/scan", headers=auth_headers)
         assert resp.status_code == 202, resp.text
-        job_id = resp.json()["job_id"]
-        job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers)
+        work_engine.drain()
+        job = client.get(f"/api/v1/jobs/{resp.json()['job_id']}", headers=auth_headers)
         assert job.status_code == 200
         assert job.json()["state"] == "completed", job.json()
 
     def test_coalesces_onto_the_scan_that_is_already_running(
-        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+        self,
+        tmp_path: Path,
+        client,
+        db_session: Session,
+        auth_headers: dict,
+        make_job,
     ) -> None:
         use_local_storage(tmp_path)
         _enable_feature(db_session)
         nas = tmp_path / "nas"
         _drop_gcode(nas, "a.gcode")
         lib = build_external_library(db_session, nas, name="nas")
-        lib.scan_claim_token = "held-by-a-running-scan"
-        lib.scan_claim_expires_at = utcnow() + timedelta(minutes=30)
-        lib.scan_job_id = "running-job"
-        db_session.add(lib)
-        db_session.commit()
+        running = make_job(
+            kind=JobKind.SOURCES_SCAN,
+            state=JobState.RUNNING,
+            subject=f"library/{lib.id}",
+        )
 
         resp = client.post(f"/api/v1/libraries/{lib.id}/scan", headers=auth_headers)
 
@@ -619,9 +648,34 @@ class TestScanNow:
         # while one is running is the common case, not an edge one. The caller
         # gets the running job's id rather than a second scan of the same tree.
         assert resp.status_code == 202, resp.text
-        assert resp.json()["job_id"] == "running-job"
+        assert resp.json()["job_id"] == running.id
 
-    def test_starts_a_new_scan_once_the_claim_has_expired(
+    def test_records_a_request_the_running_scan_has_not_taken(
+        self,
+        tmp_path: Path,
+        client,
+        db_session: Session,
+        auth_headers: dict,
+        make_job,
+    ) -> None:
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        _drop_gcode(nas, "a.gcode")
+        lib = build_external_library(db_session, nas, name="nas")
+        make_job(
+            kind=JobKind.SOURCES_SCAN,
+            state=JobState.RUNNING,
+            subject=f"library/{lib.id}",
+        )
+
+        client.post(f"/api/v1/libraries/{lib.id}/scan", headers=auth_headers)
+
+        # Coalescing must not drop the click: the next scan takes the request.
+        db_session.refresh(lib)
+        assert lib.scan_requested_at is not None
+
+    def test_starts_a_new_scan_despite_a_claim_left_by_a_killed_process(
         self, tmp_path: Path, client, db_session: Session, auth_headers: dict
     ) -> None:
         use_local_storage(tmp_path)
@@ -651,7 +705,12 @@ class TestScanNow:
         assert resp.json()["detail"] == "library_not_found"
 
     def test_scan_via_api_runs_background_job_to_completion(
-        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+        self,
+        tmp_path: Path,
+        client,
+        db_session: Session,
+        auth_headers: dict,
+        work_engine,
     ) -> None:
         """Full round trip: create a library over HTTP, trigger a scan, and confirm
         the background job completes and the folder is indexed."""
@@ -673,8 +732,8 @@ class TestScanNow:
         assert scan.status_code == 202, scan.text
         job_id = scan.json()["job_id"]
 
-        # TestClient drains background tasks before returning, so the job is done.
-        job = registry.get(job_id)
+        work_engine.drain()
+        job = jobs.get(job_id)
         assert job is not None
         assert job.state == "completed"
         assert job.result["added"] == 2
@@ -690,7 +749,12 @@ class TestScanNow:
 
 class TestScanPath:
     def test_scan_path_queues_job_for_subfolder(
-        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+        self,
+        tmp_path: Path,
+        client,
+        db_session: Session,
+        auth_headers: dict,
+        work_engine,
     ) -> None:
         use_local_storage(tmp_path)
         _enable_feature(db_session)
@@ -704,8 +768,8 @@ class TestScanPath:
             json={"path": "functional"},
         )
         assert resp.status_code == 202, resp.text
-        job_id = resp.json()["job_id"]
-        job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=auth_headers)
+        work_engine.drain()
+        job = client.get(f"/api/v1/jobs/{resp.json()['job_id']}", headers=auth_headers)
         assert job.status_code == 200
         assert job.json()["state"] == "completed", job.json()
 

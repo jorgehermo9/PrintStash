@@ -97,11 +97,15 @@ def _run_entrypoint(
     tmp_path: Path,
     puid: str | None = None,
     pgid: str | None = None,
+    role: str | None = None,
     overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = {
         key: value for key, value in os.environ.items() if key not in _PATH_OVERRIDES
     }
+    env.pop("VAULT_PROCESS_ROLE", None)
+    if role is not None:
+        env["VAULT_PROCESS_ROLE"] = role
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     env["VAULT_DATA_ROOT"] = str(tmp_path / "data")
     env.update(overrides or {})
@@ -406,3 +410,48 @@ class TestDockerEntrypointIdentity:
         assert result.returncode != 0
         assert "positive numeric Linux user/group ID" in result.stderr
         assert not log.exists()
+
+
+def _steps(log: Path) -> list[str]:
+    """What ran after the identity was settled: migration and/or the server."""
+    return [
+        line.split(":", 1)[0]
+        for line in log.read_text().splitlines()
+        if line.startswith(("migration:", "server:"))
+    ]
+
+
+class TestDockerEntrypointRole:
+    """Only the API migrates; a worker waits for the schema the API applied.
+
+    Several worker replicas migrating at once would race, and a worker of an
+    older build must never touch a schema a newer API already upgraded.
+    """
+
+    @pytest.mark.parametrize("role", [None, "all", "api"])
+    def test_an_api_process_migrates_first(
+        self, tmp_path: Path, role: str | None
+    ) -> None:
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+
+        result = _run_entrypoint(script, fake_bin, server, tmp_path=tmp_path, role=role)
+
+        assert result.returncode == 0, result.stderr
+        assert _steps(log) == ["migration", "server"]
+
+    def test_a_worker_never_migrates(self, tmp_path: Path) -> None:
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+
+        result = _run_entrypoint(
+            script, fake_bin, server, tmp_path=tmp_path, role="worker"
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert _steps(log) == ["server"]
+
+    def test_a_worker_still_drops_privileges(self, tmp_path: Path) -> None:
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+
+        _run_entrypoint(script, fake_bin, server, tmp_path=tmp_path, role="worker")
+
+        assert log.read_text().splitlines()[-1].startswith("server:10001:10001:")

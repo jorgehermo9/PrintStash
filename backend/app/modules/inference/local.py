@@ -6,7 +6,6 @@ import base64
 import importlib.util
 import json
 import os
-import secrets
 import selectors
 import struct
 import subprocess
@@ -20,7 +19,6 @@ from printstash_core.inference import EmbeddingError, EmbeddingInput, EmbeddingS
 from printstash_core.inference.context import InferenceContext
 from printstash_core.inference.vectors import normalize
 from pydantic import ValidationError
-from sqlmodel import Session
 
 from app import __file__ as application_file
 from app.core.config import settings
@@ -39,39 +37,53 @@ from app.modules.inference.worker_protocol import (
     WorkerError,
     WorkerResult,
 )
-from app.modules.media import compute_slots
+from app.modules.media.mesh_processing import (
+    native_memory_budget_bytes,
+    process_rss_bytes,
+)
 
-_admission_lock = threading.Lock()
+_admission = threading.Condition()
 _waiting_queries = 0
+_running = 0
 
 
-def acquire_slot(session: Session, token: str, context: InferenceContext):
-    """Queries wait inside their deadline; background work yields to waiters.
+def _limit() -> int:
+    return max(int(settings.max_render_jobs), 1)
 
-    The durable media lease remains the single authority for compute capacity.
-    This process-local hint orders admission without creating another queue.
+
+def acquire_slot(context: InferenceContext) -> None:
+    """Admit one inference in this process; queries go before background work.
+
+    Background inference already runs inside a Job whose lane bounds it across
+    the deployment; this bounds what one process runs at once (queries run in
+    requests, outside any lane) and lets a waiting query go first. A query
+    waits inside its deadline; background work that would wait yields with
+    ``embedding_compute_busy`` and its Job retries later. Pair with
+    ``release_slot``.
     """
-    global _waiting_queries
+    global _waiting_queries, _running
     interactive = context.priority == "interactive"
-    with _admission_lock:
-        if interactive:
-            _waiting_queries += 1
-        elif _waiting_queries:
-            raise EmbeddingError("embedding_compute_busy")
-    try:
-        while True:
-            context.remaining()
-            slot = compute_slots.acquire(session, token)
-            if slot is not None:
-                return slot
-            if not interactive:
+    with _admission:
+        if not interactive:
+            if _waiting_queries or _running >= _limit():
                 raise EmbeddingError("embedding_compute_busy")
-            session.rollback()
-            time.sleep(min(0.025, context.remaining()))
-    finally:
-        if interactive:
-            with _admission_lock:
-                _waiting_queries -= 1
+            _running += 1
+            return
+        _waiting_queries += 1
+        try:
+            while _running >= _limit():
+                _admission.wait(min(0.025, context.remaining()))
+                context.remaining()
+            _running += 1
+        finally:
+            _waiting_queries -= 1
+
+
+def release_slot() -> None:
+    global _running
+    with _admission:
+        _running -= 1
+        _admission.notify_all()
 
 
 class LocalEmbeddingProvider:
@@ -147,11 +159,6 @@ class LocalEmbeddingProvider:
             raise EmbeddingError("embedding_text_unavailable")
         return self._execute(inputs, context=context)
 
-    @staticmethod
-    def _release_slot(session: Session, slot_id: int | None, token: str) -> None:
-        compute_slots.release(session, slot_id, token)
-        session.commit()
-
     def _execute(
         self,
         inputs: tuple[EmbeddingInput, ...],
@@ -210,13 +217,11 @@ class LocalEmbeddingProvider:
             raise EmbeddingError("embedding_runtime_unavailable")
         with ExitStack() as cleanup:
             cleanup.enter_context(pin(self.directory, context=context))
-            session = cleanup.enter_context(self.sessions.scoped_session())
-            token = "embedding:" + secrets.token_hex(20)
             admission_context = context or InferenceContext.bounded(
                 120, priority="background"
             )
-            slot = acquire_slot(session, token, admission_context)
-            cleanup.callback(self._release_slot, session, slot.id, token)
+            acquire_slot(admission_context)
+            cleanup.callback(release_slot)
             if len(payload) > MAX_INPUT_BYTES:
                 raise EmbeddingError("embedding_input_budget")
             key = self._worker_key()
@@ -269,7 +274,7 @@ class LocalEmbeddingProvider:
         """Monitor both pipe directions without blocking on a stalled child."""
         assert process.stdin is not None and process.stdout is not None
         deadline = time.monotonic() + min(settings.mesh_step_timeout_seconds, 90)
-        budget = compute_slots.native_memory_budget_bytes()
+        budget = native_memory_budget_bytes()
         result = bytearray()
         framed = struct.pack("!I", len(payload)) + payload
         offset = 0
@@ -282,9 +287,7 @@ class LocalEmbeddingProvider:
             while True:
                 if context is not None:
                     context.remaining()
-                pool.enforce_memory_budget(
-                    process, budget, compute_slots.native_process_rss_bytes
-                )
+                pool.enforce_memory_budget(process, budget, process_rss_bytes)
                 if time.monotonic() >= deadline:
                     raise EmbeddingError("embedding_timeout")
                 if process.poll() is not None:

@@ -703,7 +703,9 @@ def upload_backup_archive(
         return _upload_backup_archive(filename, source)
 
 
-def _upload_backup_archive(filename: str, source: BinaryIO) -> _contracts_module.BackupMeta:
+def _upload_backup_archive(
+    filename: str, source: BinaryIO
+) -> _contracts_module.BackupMeta:
     if not filename or "\\" in filename or Path(filename).name != filename:
         raise ValueError("backup_filename_invalid")
     if not filename.startswith(

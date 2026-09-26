@@ -193,7 +193,8 @@ class TestUpgrade:
         finally:
             engine.dispose()
 
-        command.upgrade(config, "head")
+        # The revision before the job engine renamed the column to job_id.
+        command.upgrade(config, "0118bda3e719")
 
         engine = create_engine(url)
         try:

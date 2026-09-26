@@ -55,7 +55,7 @@ const reviewItem: InboxItem = {
   },
   target_collection_id: null,
   requested_tags: [],
-  background_job_id: "job-7",
+  job_id: "job-7",
   resulting_model_id: null,
   results: [],
   error_code: null,

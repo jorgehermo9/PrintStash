@@ -42,7 +42,9 @@ def _verify_direct(
     """Bypass discovery (_list_local_backups re-reads the manifest to find the
     backup by id) and validate *archive* directly — some corruptions here also
     break discovery, which isn't what these tests are checking."""
-    monkeypatch.setattr(backup_catalogue, "get_backup_archive_path", lambda _id: archive)
+    monkeypatch.setattr(
+        backup_catalogue, "get_backup_archive_path", lambda _id: archive
+    )
     return backup_verification.verify_backup(_id_from(archive))
 
 
@@ -234,13 +236,17 @@ class TestBackupManifestStream:
     def test_endpoint_normalization_excludes_secret_components(
         self,
     ) -> None:
-        assert backup_targets._normalize_provider_endpoint("HTTPS://Example.COM:443/") == (
-            "https://example.com"
-        )
+        assert backup_targets._normalize_provider_endpoint(
+            "HTTPS://Example.COM:443/"
+        ) == ("https://example.com")
         with pytest.raises(ValueError, match="backup_s3_endpoint_invalid"):
-            backup_targets._normalize_provider_endpoint("https://user:secret@example.com")
+            backup_targets._normalize_provider_endpoint(
+                "https://user:secret@example.com"
+            )
         with pytest.raises(ValueError, match="backup_s3_endpoint_invalid"):
-            backup_targets._normalize_provider_endpoint("https://example.com/?token=secret")
+            backup_targets._normalize_provider_endpoint(
+                "https://example.com/?token=secret"
+            )
 
     def test_provider_ref_depends_only_on_destination_identity(
         self,
@@ -299,12 +305,12 @@ class TestBackupManifestStream:
             backup_targets._normalize_provider_endpoint(endpoint)
 
     def test_endpoint_normalization_preserves_canonical_identity(self) -> None:
-        assert backup_targets._normalize_provider_endpoint("HTTPS://Example.COM:443/") == (
-            "https://example.com"
-        )
-        assert backup_targets._normalize_provider_endpoint("http://[2001:DB8::1]:80/") == (
-            "http://[2001:db8::1]"
-        )
+        assert backup_targets._normalize_provider_endpoint(
+            "HTTPS://Example.COM:443/"
+        ) == ("https://example.com")
+        assert backup_targets._normalize_provider_endpoint(
+            "http://[2001:DB8::1]:80/"
+        ) == ("http://[2001:db8::1]")
         assert backup_targets._normalize_provider_endpoint("http://[2001:db8::1]") == (
             "http://[2001:db8::1]"
         )
@@ -388,7 +394,10 @@ class TestBackupManifestStream:
             {**base, "provider_ref": "b" * 64},
         )
 
-        refs = {backup_targets.source_reference(**candidate) for candidate in (base, *variants)}
+        refs = {
+            backup_targets.source_reference(**candidate)
+            for candidate in (base, *variants)
+        }
 
         assert len(refs) == 5
 
@@ -539,7 +548,8 @@ class TestRestoreJournalStateMachine:
         backup_maintenance._restore_gate.set()
         try:
             with pytest.raises(
-                backup_maintenance.RestoreConflictError, match="restore_storage_provider_changed"
+                backup_maintenance.RestoreConflictError,
+                match="restore_storage_provider_changed",
             ):
                 backup_restore.restore_backup("provider-switch")
         finally:
@@ -1094,7 +1104,9 @@ class TestRestoreJournalV2:
         def fail_marker_lookup(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("an unbound legacy journal cannot query a marker")
 
-        monkeypatch.setattr(backup_restore_journal, "_active_restore_marker", fail_marker_lookup)
+        monkeypatch.setattr(
+            backup_restore_journal, "_active_restore_marker", fail_marker_lookup
+        )
         backup_maintenance._restore_gate.clear()
         try:
             assert backup_recovery.inspect_restore_recovery() is True
@@ -1498,7 +1510,9 @@ class TestRestoreJournalV2:
         backup_maintenance._active_mutations = 1
         monkeypatch.setattr(backup_maintenance, "_RESTORE_DRAIN_TIMEOUT_S", 0)
         try:
-            with pytest.raises(backup_maintenance.RestoreConflictError, match="still active"):
+            with pytest.raises(
+                backup_maintenance.RestoreConflictError, match="still active"
+            ):
                 backup_maintenance.begin_restore_maintenance()
             assert backup_maintenance.restore_in_progress() is False
         finally:
@@ -1536,7 +1550,9 @@ class TestBackupStorageHelpers:
             backup_contracts.BackupOwnershipError,
             match="backup_remote_identity_unavailable",
         ):
-            backup_adoption._download_s3_archive(target, "printstash-backups/archive.tar.gz")
+            backup_adoption._download_s3_archive(
+                target, "printstash-backups/archive.tar.gz"
+            )
 
     def test_s3_archive_download_pins_etag_then_closes_the_body(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1625,7 +1641,9 @@ class TestBackupStorageHelpers:
         )
         monkeypatch.setattr(backup_catalogue, "list_backup_sources", lambda: [meta])
 
-        assert backup_catalogue.get_backup("shared", source_ref="unknown-source") is None
+        assert (
+            backup_catalogue.get_backup("shared", source_ref="unknown-source") is None
+        )
 
     def test_rejects_an_unsupported_database_backup(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1882,7 +1900,9 @@ class TestBackupStorageHelpers:
             etag=etag,
         )
 
-        assert backup_targets._s3_object_kwargs(bucket="bucket-a", key=row.key, row=row) == {
+        assert backup_targets._s3_object_kwargs(
+            bucket="bucket-a", key=row.key, row=row
+        ) == {
             "Bucket": "bucket-a",
             "Key": row.key,
             **expected,
@@ -1958,7 +1978,9 @@ class TestListS3BackupsSafety:
             signature="target",
         )
         monkeypatch.setattr(backup_targets, "_get_backup_s3_target", lambda: target)
-        monkeypatch.setattr(backup_catalogue, "_backup_ownership_rows", lambda **_kwargs: [])
+        monkeypatch.setattr(
+            backup_catalogue, "_backup_ownership_rows", lambda **_kwargs: []
+        )
 
         assert backup_catalogue._list_s3_backups() == []
         assert store.head_calls == 0
@@ -1983,7 +2005,9 @@ class TestListS3BackupsSafety:
             sha256="a" * 64,
         )
         monkeypatch.setattr(backup_targets, "_get_backup_s3_target", lambda: target)
-        monkeypatch.setattr(backup_catalogue, "_backup_ownership_rows", lambda **_kwargs: [row])
+        monkeypatch.setattr(
+            backup_catalogue, "_backup_ownership_rows", lambda **_kwargs: [row]
+        )
 
         assert backup_catalogue._list_s3_backups() == []
         assert store.head_calls == 0
@@ -2020,7 +2044,9 @@ class TestListS3BackupsSafety:
             etag='"etag"',
         )
         monkeypatch.setattr(backup_targets, "_get_backup_s3_target", lambda: target)
-        monkeypatch.setattr(backup_catalogue, "_backup_ownership_rows", lambda **_kwargs: [row])
+        monkeypatch.setattr(
+            backup_catalogue, "_backup_ownership_rows", lambda **_kwargs: [row]
+        )
 
         assert backup_catalogue._list_s3_backups() == []
 
@@ -2051,7 +2077,9 @@ class TestListBackupsSafety:
             location="s3",
             source_ref="remote-ref",
         )
-        monkeypatch.setattr(backup_publications, "reconcile_backup_publications", lambda: 0)
+        monkeypatch.setattr(
+            backup_publications, "reconcile_backup_publications", lambda: 0
+        )
         monkeypatch.setattr(backup_catalogue, "_list_local_backups", lambda: [local])
         monkeypatch.setattr(backup_catalogue, "_list_s3_backups", lambda: [remote])
 
@@ -2086,7 +2114,9 @@ class TestListBackupsSafety:
             archive_sha256="b" * 64,
             source_ref="right-ref",
         )
-        monkeypatch.setattr(backup_publications, "reconcile_backup_publications", lambda: 0)
+        monkeypatch.setattr(
+            backup_publications, "reconcile_backup_publications", lambda: 0
+        )
         monkeypatch.setattr(backup_catalogue, "_list_local_backups", lambda: [left])
         monkeypatch.setattr(backup_catalogue, "_list_s3_backups", lambda: [right])
 
@@ -2094,9 +2124,7 @@ class TestListBackupsSafety:
             "left-ref",
             "right-ref",
         }
-        with pytest.raises(
-            BackupIdentityConflictError, match="identity_conflict"
-        ):
+        with pytest.raises(BackupIdentityConflictError, match="identity_conflict"):
             backup_catalogue.get_backup("same-id")
         selected = backup_catalogue.get_backup("same-id", source_ref="right-ref")
         assert selected is not None
@@ -2120,7 +2148,9 @@ class TestListBackupsSafety:
     def test_rejects_a_missing_sqlite_database_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(backup_snapshot, "_db_path", lambda: tmp_path / "missing.sqlite")
+        monkeypatch.setattr(
+            backup_snapshot, "_db_path", lambda: tmp_path / "missing.sqlite"
+        )
 
         with pytest.raises(FileNotFoundError):
             with backup_snapshot._sqlite_snapshot_file():
@@ -2142,7 +2172,9 @@ class TestListBackupsSafety:
             def fetchone(self) -> tuple[str]:
                 return ("corrupt",)
 
-        monkeypatch.setattr(backup_snapshot.sqlite3, "connect", lambda _path: _Connection())
+        monkeypatch.setattr(
+            backup_snapshot.sqlite3, "connect", lambda _path: _Connection()
+        )
 
         with pytest.raises(RuntimeError, match="integrity_check_failed"):
             backup_snapshot._validate_sqlite_snapshot(tmp_path / "snapshot.sqlite")
@@ -2160,7 +2192,9 @@ class TestListBackupsSafety:
             observed.append(path)
             assert path.read_bytes() == b"snapshot-bytes"
 
-        monkeypatch.setattr(backup_snapshot, "_restore_database_from_path", capture_snapshot)
+        monkeypatch.setattr(
+            backup_snapshot, "_restore_database_from_path", capture_snapshot
+        )
 
         backup_snapshot._restore_database(b"snapshot-bytes")
 
@@ -2220,7 +2254,9 @@ class TestListBackupsSafety:
             def session(self) -> _Session:
                 return _Session()
 
-        monkeypatch.setattr(backup_restore_journal, "get_session_factory", lambda: _Factory())
+        monkeypatch.setattr(
+            backup_restore_journal, "get_session_factory", lambda: _Factory()
+        )
 
         assert (
             backup_restore_journal._active_restore_marker(

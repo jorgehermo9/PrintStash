@@ -73,6 +73,7 @@ import { SendToButtons } from "./send-to-buttons";
 import { ShareDialog } from "./share-dialog";
 import { SettingsTab } from "./settings-tab";
 import { SourceTab } from "./source-tab";
+import { useDerivativeRefresh } from "./use-derivative-refresh";
 import { useRevisionUpdater } from "./use-revision-updater";
 import { ViewerToolbar } from "./viewer-toolbar";
 import { Localized } from "@/components/ui/localized";
@@ -223,6 +224,8 @@ export function ModelDetail({ model: initialModel }: { model: ModelRead }) {
 
   // Quick actions on the Overview card (mark failed / recommend).
   const revisionUpdater = useRevisionUpdater(model.id, setModel);
+  // Thumbnails and metadata arrive after upload, derived in the background.
+  useDerivativeRefresh(model.id, setModel);
 
   async function toggleFavorite() {
     if (!auth.isAuthenticated || starBusy) {

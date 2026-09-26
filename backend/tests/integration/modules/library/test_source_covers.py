@@ -16,7 +16,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.db.models import (
-    BackgroundJob,
     CaptureUploadSlot,
     CaptureUploadSlotState,
     InboxItem,
@@ -43,7 +42,7 @@ from app.modules.storage.storage_ownership import (
     provider_ref_for_backend,
     record_creation,
 )
-from tests.factories import build_model, build_user
+from tests.factories import build_job, build_model, build_user
 
 
 def _png(color: str = "navy") -> bytes:
@@ -332,7 +331,7 @@ class TestPut:
 
         assert db_session.get(StagingLease, lease_id) is None
 
-    def test_refuses_a_cover_lease_that_also_names_a_background_job(
+    def test_refuses_a_cover_lease_that_also_names_a_job(
         self, db_session: Session
     ) -> None:
         source = _source(db_session)
@@ -341,8 +340,8 @@ class TestPut:
             storage_key="opaque/covers/conflict.webp",
             size_bytes=1,
         )
-        job = BackgroundJob(id="cover-owner-conflict")
-        db_session.add_all([cover, job])
+        job = build_job(db_session)
+        db_session.add(cover)
         db_session.commit()
         assert cover.id is not None
 
@@ -350,7 +349,7 @@ class TestPut:
             StagingLease(
                 id="cover-owner-conflict",
                 path="cover:invalid",
-                background_job_id=job.id,
+                job_id=job.id,
                 model_source_cover_id=cover.id,
                 size_bytes=1,
                 sha256="a" * 64,

@@ -1,10 +1,20 @@
-"""Actual libbgcode conversion checks its structure, codecs and original bytes."""
+"""Toolpath text: ASCII read straight from the Artifact, binary converted by libbgcode.
+
+Binary conversion is the ``derivatives.toolpath`` derivative's work: ``convert`` runs
+the bounded official converter on a temporary copy, once per recipe, and never
+touches the original. ``read_ascii`` serves ASCII G-code, which already is its
+toolpath. If this goes red, a hostile or broken file can exhaust the host, a
+partial conversion can be served as a preview, or the original bytes change.
+"""
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
 from app.core.config import _overlay
+from app.core.errors import ErrorKind, OperationError
+from app.db.models import FileType
 from app.modules.media import toolpath
 from app.modules.storage.storage_backend.runtime import get_backend
 from tests.paths import FIXTURES_DIR
@@ -25,39 +35,15 @@ def binary_artifact(make_model, make_file, bgcode_binary, tmp_path):
     return artifact
 
 
-@pytest.mark.bgcode
-class TestOfficialToolpath:
-    @pytest.mark.asyncio
-    async def test_matches_official_ascii_reference(self, binary_artifact):
-        original = get_backend().read_bytes(binary_artifact.path)
-        result = await toolpath.render(binary_artifact)
-        assert result == (FIXTURES_DIR / "bgcode/prusaslicer.gcode").read_bytes()
-        assert get_backend().read_bytes(binary_artifact.path) == original
-
-    @pytest.mark.asyncio
-    async def test_rejects_a_truncated_container(self, binary_artifact):
-        from app.core.errors import ErrorKind, OperationError
-
-        content = get_backend().read_bytes(binary_artifact.path)
-        get_backend().direct_path(binary_artifact.path).write_bytes(content[:-13])
-        with pytest.raises(OperationError) as error:
-            await toolpath.render(binary_artifact)
-        assert error.value.kind is ErrorKind.UNPROCESSABLE
-
-    @pytest.mark.asyncio
-    async def test_rejects_a_checksum_mismatch(self, binary_artifact):
-        from app.core.errors import ErrorKind, OperationError
-
-        content = bytearray(get_backend().read_bytes(binary_artifact.path))
-        content[-1] ^= 1
-        get_backend().direct_path(binary_artifact.path).write_bytes(bytes(content))
-        with pytest.raises(OperationError) as error:
-            await toolpath.render(binary_artifact)
-        assert error.value.kind is ErrorKind.UNPROCESSABLE
+@pytest.fixture
+def workdir(tmp_path: Path) -> Path:
+    directory = tmp_path / "conversion"
+    directory.mkdir()
+    return directory
 
 
 @pytest.fixture
-def constrained_artifact(make_model, make_file, tmp_path, monkeypatch):
+def constrained_artifact(make_model, make_file, tmp_path):
     content = b"GCDE\x01\x00\x00\x00\x01\x00"
     artifact = make_file(
         make_model(),
@@ -66,34 +52,77 @@ def constrained_artifact(make_model, make_file, tmp_path, monkeypatch):
         size_bytes=len(content),
     )
     get_backend().write_bytes(content, artifact.path)
-    temporary_directory = toolpath.tempfile.TemporaryDirectory
-    monkeypatch.setattr(
-        toolpath.tempfile,
-        "TemporaryDirectory",
-        lambda **kwargs: temporary_directory(dir=tmp_path, **kwargs),
-    )
     return artifact
 
 
-class TestToolpathLimits:
-    @pytest.mark.asyncio
-    async def test_input_limit_is_checked_before_storage_read(
-        self, constrained_artifact, monkeypatch
-    ):
-        from app.core.errors import ErrorKind, OperationError
+@pytest.mark.bgcode
+class TestOfficialConversion:
+    def test_matches_official_ascii_reference(self, binary_artifact, workdir):
+        output = toolpath.convert(binary_artifact, workdir)
 
+        assert (
+            output.read_bytes()
+            == (FIXTURES_DIR / "bgcode/prusaslicer.gcode").read_bytes()
+        )
+
+    def test_leaves_the_original_untouched(self, binary_artifact, workdir):
+        original = get_backend().read_bytes(binary_artifact.path)
+
+        toolpath.convert(binary_artifact, workdir)
+
+        assert get_backend().read_bytes(binary_artifact.path) == original
+
+    def test_rejects_a_truncated_container(self, binary_artifact, workdir):
+        content = get_backend().read_bytes(binary_artifact.path)
+        get_backend().direct_path(binary_artifact.path).write_bytes(content[:-13])
+
+        with pytest.raises(OperationError) as error:
+            toolpath.convert(binary_artifact, workdir)
+
+        assert error.value.kind is ErrorKind.UNPROCESSABLE
+
+    def test_rejects_a_checksum_mismatch(self, binary_artifact, workdir):
+        content = bytearray(get_backend().read_bytes(binary_artifact.path))
+        content[-1] ^= 1
+        get_backend().direct_path(binary_artifact.path).write_bytes(bytes(content))
+
+        with pytest.raises(OperationError) as error:
+            toolpath.convert(binary_artifact, workdir)
+
+        assert error.value.kind is ErrorKind.UNPROCESSABLE
+
+
+class TestConversionLimits:
+    def test_input_limit_is_checked_before_storage_read(
+        self, constrained_artifact, workdir, monkeypatch
+    ):
         _overlay["toolpath_input_max_mb"] = 1
         constrained_artifact.size_bytes = 2 * 1024 * 1024
         monkeypatch.setattr(
             toolpath, "resolve", lambda _file: pytest.fail("oversized Artifact opened")
         )
+
         with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
+            toolpath.convert(constrained_artifact, workdir)
+
         assert error.value.kind is ErrorKind.TOO_LARGE
 
-    @pytest.mark.asyncio
-    async def test_output_limit_stops_the_child(self, constrained_artifact, tmp_path):
-        from app.core.errors import ErrorKind, OperationError
+    def test_actual_input_bytes_obey_limit_despite_stale_size(
+        self, constrained_artifact, workdir
+    ):
+        _overlay["toolpath_input_max_mb"] = 1
+        get_backend().direct_path(constrained_artifact.path).write_bytes(
+            b"X" * (1024 * 1024 + 1)
+        )
+
+        with pytest.raises(OperationError) as error:
+            toolpath.convert(constrained_artifact, workdir)
+
+        assert error.value.kind is ErrorKind.TOO_LARGE
+
+    def test_output_limit_stops_the_child(
+        self, constrained_artifact, workdir, tmp_path
+    ):
         from tests.fakes.bgcode import converter_script
 
         _overlay["toolpath_output_max_mb"] = 1
@@ -103,16 +132,13 @@ class TestToolpathLimits:
                 "source.with_suffix('.gcode').write_bytes(b'X' * (2 * 1024 * 1024))",
             )
         )
-        with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
-        assert error.value.kind is ErrorKind.TOO_LARGE
-        assert list(tmp_path.glob("printstash-toolpath-*")) == []
 
-    @pytest.mark.asyncio
-    async def test_timeout_cleans_conversion_resources(
-        self, constrained_artifact, tmp_path
-    ):
-        from app.core.errors import ErrorKind, OperationError
+        with pytest.raises(OperationError) as error:
+            toolpath.convert(constrained_artifact, workdir)
+
+        assert error.value.kind is ErrorKind.TOO_LARGE
+
+    def test_timeout_stops_the_child(self, constrained_artifact, workdir, tmp_path):
         from tests.fakes.bgcode import converter_script
 
         _overlay["toolpath_timeout_seconds"] = 1
@@ -122,116 +148,45 @@ class TestToolpathLimits:
                 "source.with_suffix('.gcode').write_bytes(b'partial')\ntime.sleep(60)",
             )
         )
+
         with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
+            toolpath.convert(constrained_artifact, workdir)
+
         assert error.value.kind is ErrorKind.TIMEOUT
-        assert list(tmp_path.glob("printstash-toolpath-*")) == []
 
-    @pytest.mark.asyncio
-    async def test_cancel_cleans_conversion_resources(
-        self, constrained_artifact, tmp_path
+    def test_address_space_limit_prevents_unbounded_allocation(
+        self, constrained_artifact, workdir, tmp_path
     ):
-        import asyncio
-
-        from tests.fakes.bgcode import converter_script
-
-        _overlay["bgcode_executable"] = str(
-            converter_script(
-                tmp_path,
-                "source.with_suffix('.gcode').write_bytes(b'partial')\ntime.sleep(60)",
-            )
-        )
-        task = asyncio.create_task(toolpath.render(constrained_artifact))
-        try:
-            async with asyncio.timeout(10):
-                while not list(tmp_path.glob("printstash-toolpath-*/input.gcode")):
-                    await asyncio.sleep(0.01)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-            assert list(tmp_path.glob("printstash-toolpath-*")) == []
-            assert toolpath._active == 0
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-
-    @pytest.mark.asyncio
-    async def test_busy_converter_does_not_start_another_process(
-        self, constrained_artifact, monkeypatch
-    ):
-        from app.core.errors import ErrorKind, OperationError
-
-        monkeypatch.setattr(toolpath, "_active", 2)
-        monkeypatch.setattr(
-            toolpath,
-            "resolve",
-            lambda _file: pytest.fail("busy converter read storage"),
-        )
-        with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
-        assert error.value.kind is ErrorKind.BUSY
-        assert error.value.retry_after_seconds == 2
-
-    @pytest.mark.asyncio
-    async def test_address_space_limit_prevents_unbounded_allocation(
-        self, constrained_artifact, tmp_path
-    ):
-        from app.core.errors import ErrorKind, OperationError
         from tests.fakes.bgcode import converter_script
 
         _overlay["toolpath_memory_max_mb"] = 64
         _overlay["bgcode_executable"] = str(
             converter_script(
                 tmp_path,
-                "content = bytearray(128 * 1024 * 1024)\nsource.with_suffix('.gcode').write_bytes(b'unlimited')",
+                "content = bytearray(128 * 1024 * 1024)\n"
+                "source.with_suffix('.gcode').write_bytes(b'unlimited')",
             )
         )
+
         with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
+            toolpath.convert(constrained_artifact, workdir)
+
         assert error.value.kind is ErrorKind.UNPROCESSABLE
-        assert list(tmp_path.glob("printstash-toolpath-*")) == []
-
-    @pytest.mark.asyncio
-    async def test_cancel_during_storage_copy_waits_for_writer_cleanup(
-        self, constrained_artifact, tmp_path, monkeypatch
-    ):
-        import asyncio
-        import threading
-
-        started = threading.Event()
-        release = threading.Event()
-        original_copy = toolpath._copy_input
-
-        def delayed_copy(file, target):
-            started.set()
-            if not release.wait(timeout=10):
-                raise RuntimeError("writer not released")
-            original_copy(file, target)
-
-        monkeypatch.setattr(toolpath, "_copy_input", delayed_copy)
-        task = asyncio.create_task(toolpath.render(constrained_artifact))
-        try:
-            assert await asyncio.to_thread(started.wait, 5)
-            task.cancel()
-            await asyncio.sleep(0.01)
-            assert not task.done()
-            release.set()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-            assert list(tmp_path.glob("printstash-toolpath-*")) == []
-        finally:
-            release.set()
-            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.bgcode
 class TestDocumentedCodecs:
     @pytest.mark.parametrize("compression", [0, 1, 2, 3])
     @pytest.mark.parametrize("encoding", [0, 1, 2])
-    @pytest.mark.asyncio
-    async def test_all_documented_gcode_codecs_preserve_commands(
-        self, compression, encoding, bgcode_binary, tmp_path, make_model, make_file
+    def test_all_documented_gcode_codecs_preserve_commands(
+        self,
+        compression,
+        encoding,
+        bgcode_binary,
+        tmp_path,
+        workdir,
+        make_model,
+        make_file,
     ):
         import re
         import subprocess
@@ -260,7 +215,8 @@ class TestDocumentedCodecs:
         )
         get_backend().write_bytes(encoded, artifact.path)
         _overlay["bgcode_executable"] = str(bgcode_binary)
-        converted = await toolpath.render(artifact)
+
+        converted = toolpath.convert(artifact, workdir).read_bytes()
 
         def commands(content):
             return [
@@ -272,7 +228,7 @@ class TestDocumentedCodecs:
         assert commands(converted) == commands(original)
 
 
-class TestToolpathValidation:
+class TestConversionValidation:
     def test_failed_destination_never_acquires_source_resources(
         self, constrained_artifact, tmp_path, monkeypatch
     ):
@@ -281,87 +237,69 @@ class TestToolpathValidation:
             "resolve",
             lambda _file: pytest.fail("source acquired before destination"),
         )
+
         with pytest.raises(FileNotFoundError):
             toolpath._copy_input(
                 constrained_artifact, tmp_path / "absent" / "input.bgcode"
             )
 
-    @pytest.mark.asyncio
-    async def test_rejects_non_gcode_artifacts(self, make_model, make_file):
-        from app.core.errors import ErrorKind, OperationError
-        from app.db.models import FileType
-
+    def test_rejects_non_gcode_artifacts(self, make_model, make_file, workdir):
         artifact = make_file(make_model(), file_type=FileType.STL)
+
         with pytest.raises(OperationError) as error:
-            await toolpath.render(artifact)
+            toolpath.convert(artifact, workdir)
+
         assert error.value.kind is ErrorKind.NOT_FOUND
 
     @pytest.mark.parametrize(
-        "content", [b"plain text", b"GCDE", b"GCDE\x02\x00\x00\x00\x01\x00"]
+        "content",
+        [
+            pytest.param(b"plain text", id="text-named-bgcode"),
+            pytest.param(b"GCDE", id="short-header"),
+            pytest.param(b"GCDE\x02\x00\x00\x00\x01\x00", id="unsupported-version"),
+        ],
     )
-    @pytest.mark.asyncio
-    async def test_refuses_invalid_binary_headers(
-        self, constrained_artifact, content, tmp_path
+    def test_refuses_invalid_binary_headers(
+        self, constrained_artifact, content, workdir
     ):
-        from app.core.errors import ErrorKind, OperationError
-
         get_backend().direct_path(constrained_artifact.path).write_bytes(content)
+
         with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
+            toolpath.convert(constrained_artifact, workdir)
+
         assert error.value.kind is ErrorKind.UNPROCESSABLE
-        assert list(tmp_path.glob("printstash-toolpath-*")) == []
 
-    @pytest.mark.asyncio
-    async def test_missing_converter_is_actionable(self, constrained_artifact):
-        from app.core.errors import ErrorKind, OperationError
-
+    def test_missing_converter_is_actionable(self, constrained_artifact, workdir):
         _overlay["bgcode_executable"] = "/nonexistent/printstash-bgcode"
+
         with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
-        assert error.value.kind is ErrorKind.UNAVAILABLE
-        assert error.value.detail == "toolpath_converter_unavailable"
+            toolpath.convert(constrained_artifact, workdir)
 
-    @pytest.mark.asyncio
-    async def test_missing_original_does_not_produce_partial_preview(
-        self, constrained_artifact
-    ):
-        from app.core.errors import ErrorKind, OperationError
+        assert (error.value.kind, error.value.detail) == (
+            ErrorKind.UNAVAILABLE,
+            "toolpath_converter_unavailable",
+        )
 
+    def test_missing_original_is_reported_gone(self, constrained_artifact, workdir):
         get_backend().direct_path(constrained_artifact.path).unlink()
+
         with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
+            toolpath.convert(constrained_artifact, workdir)
+
         assert error.value.kind is ErrorKind.GONE
 
-    @pytest.mark.asyncio
-    async def test_actual_input_bytes_obey_limit_despite_stale_size(
-        self, constrained_artifact, tmp_path
-    ):
-        from app.core.errors import ErrorKind, OperationError
 
-        _overlay["toolpath_input_max_mb"] = 1
-        get_backend().direct_path(constrained_artifact.path).write_bytes(
-            b"X" * (1024 * 1024 + 1)
+class TestReadAscii:
+    def test_serves_the_artifact_bytes_as_its_toolpath(self, make_model, make_file):
+        content = b"G90\nG1 X10 E1\n"
+        artifact = make_file(
+            make_model(), filename="plain.gcode", size_bytes=len(content)
         )
-        with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
-        assert error.value.kind is ErrorKind.TOO_LARGE
-        assert list(tmp_path.glob("printstash-toolpath-*")) == []
+        get_backend().write_bytes(content, artifact.path)
 
-    @pytest.mark.asyncio
-    async def test_ascii_output_obeys_browser_size_bound(self, constrained_artifact):
-        from app.core.errors import ErrorKind, OperationError
+        assert toolpath.read_ascii(artifact) == content
 
-        _overlay["toolpath_output_max_mb"] = 1
-        constrained_artifact.original_filename = "large.gcode"
-        get_backend().direct_path(constrained_artifact.path).write_bytes(
-            b";" * (1024 * 1024 + 1)
-        )
-        with pytest.raises(OperationError) as error:
-            await toolpath.render(constrained_artifact)
-        assert error.value.kind is ErrorKind.TOO_LARGE
-
-    @pytest.mark.asyncio
-    async def test_verified_library_source_has_the_same_toolpath(
+    def test_serves_a_verified_library_source_unchanged(
         self, make_model, make_file, tmp_path
     ):
         content = b"G90\nG1 X10 E1\n"
@@ -375,5 +313,43 @@ class TestToolpathValidation:
             size_bytes=len(content),
             sha256=hashlib.sha256(content).hexdigest(),
         )
-        assert await toolpath.render(artifact) == content
+
+        assert toolpath.read_ascii(artifact) == content
         assert path.read_bytes() == content
+
+    def test_output_obeys_the_browser_size_bound(self, constrained_artifact):
+        _overlay["toolpath_output_max_mb"] = 1
+        constrained_artifact.original_filename = "large.gcode"
+        get_backend().direct_path(constrained_artifact.path).write_bytes(
+            b";" * (1024 * 1024 + 1)
+        )
+
+        with pytest.raises(OperationError) as error:
+            toolpath.read_ascii(constrained_artifact)
+
+        assert error.value.kind is ErrorKind.TOO_LARGE
+
+    def test_refuses_binary_content_behind_an_ascii_name(self, constrained_artifact):
+        constrained_artifact.original_filename = "disguised.gcode"
+
+        with pytest.raises(OperationError) as error:
+            toolpath.read_ascii(constrained_artifact)
+
+        assert error.value.detail == "toolpath_requires_conversion"
+
+    def test_rejects_non_gcode_artifacts(self, make_model, make_file):
+        artifact = make_file(make_model(), file_type=FileType.STL)
+
+        with pytest.raises(OperationError) as error:
+            toolpath.read_ascii(artifact)
+
+        assert error.value.kind is ErrorKind.NOT_FOUND
+
+    def test_missing_original_is_reported_gone(self, constrained_artifact):
+        constrained_artifact.original_filename = "gone.gcode"
+        get_backend().direct_path(constrained_artifact.path).unlink()
+
+        with pytest.raises(OperationError) as error:
+            toolpath.read_ascii(constrained_artifact)
+
+        assert error.value.kind is ErrorKind.GONE

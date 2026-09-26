@@ -103,9 +103,6 @@ from tests.factories.manufacturing import (
     build_multipart_build_part,
     build_multipart_part,
 )
-from tests.factories.media import (
-    build_thumbnail_generation as build_thumbnail_generation,
-)
 from tests.factories.ops import (
     build_artifact_upload,
     build_artifact_upload_part,
@@ -113,10 +110,10 @@ from tests.factories.ops import (
     build_audit_finding,
     build_audit_policy,
     build_audit_run,
-    build_background_job,
     build_backup_destination_result,
     build_backup_retry_attempt,
     build_backup_run,
+    build_derivative,
     build_discovery_directory,
     build_discovery_entry,
     build_discovery_inventory,
@@ -124,12 +121,16 @@ from tests.factories.ops import (
     build_external_library,
     build_failure_domain_declaration,
     build_filament_profile,
+    build_ingest_request,
+    build_job,
     build_library_observation,
     build_notification_channel,
     build_restore_marker,
     build_share_link,
     build_storage_connection,
     build_system_config,
+    build_work_executor,
+    build_work_fence,
 )
 from tests.factories.printers import (
     build_material_requirement,
@@ -228,7 +229,11 @@ __all__ = [
     "build_audit_event",
     "build_audit_finding",
     "build_audit_run",
-    "build_background_job",
+    "build_derivative",
+    "build_ingest_request",
+    "build_job",
+    "build_work_executor",
+    "build_work_fence",
     "build_capture",
     "build_capture_slot",
     "build_collection",
@@ -330,5 +335,3 @@ __all__ += [
 
 
 __all__ += ["build_search_projection_request"]
-
-__all__ += ["build_thumbnail_generation"]

@@ -24,7 +24,6 @@ import {
   getLatestRelease,
   getSetupStatus,
   getVaultConfig,
-  rebuildModelThumbnails,
   updateVaultConfig,
 } from "@/lib/api/config";
 import { invalidateApiCache } from "@/lib/api/request";
@@ -131,16 +130,6 @@ describe("getLatestRelease", () => {
     // The server caches this to stay off GitHub's rate limit; the flag is how
     // the "check now" button gets past it.
     expectRequest("/api/v1/health/releases/latest?refresh=true");
-  });
-});
-
-describe("rebuildModelThumbnails", () => {
-  it("asks for a forced rebuild", async () => {
-    respondWith({ job_id: "abc", state: "pending" });
-
-    await rebuildModelThumbnails();
-
-    expectRequest("/api/v1/files/thumbnails/rebuild?force=true", "POST");
   });
 });
 

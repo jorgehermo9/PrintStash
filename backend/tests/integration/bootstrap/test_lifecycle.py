@@ -9,7 +9,6 @@ This starts it for real via Starlette's TestClient context-manager protocol.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 from io import BytesIO
@@ -424,26 +423,6 @@ def _fake_request(
     return StarletteRequest(scope)
 
 
-class TestCancelTasks:
-    @pytest.mark.asyncio
-    async def test_cancel_tasks_waits_for_each_task_to_finish_cleaning_up(self) -> None:
-        cleaned_up = asyncio.Event()
-
-        async def worker() -> None:
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cleaned_up.set()
-
-        task = asyncio.create_task(worker())
-        await asyncio.sleep(0)
-
-        await lifecycle._cancel_tasks(task)
-
-        assert cleaned_up.is_set()
-        assert task.cancelled()
-
-
 class TestCloseOutboundClients:
     @pytest.mark.asyncio
     async def test_close_outbound_clients_closes_provider_after_existing_client_fails(
@@ -691,7 +670,6 @@ class TestLifespan:
             inbox, "reconcile_storage_publications", _unexpected_recovery
         )
         monkeypatch.setattr(inbox, "reconcile_interrupted_items", _unexpected_recovery)
-        _silence_fleet_scheduler(monkeypatch)
 
         runtime_config.update_storage_provider(
             db_session,
@@ -767,70 +745,98 @@ class TestLifespan:
         headers = {"Authorization": f"Bearer {token}"}
 
         with TestClient(app) as client:
-            # Background tasks wired onto app.state by the real lifespan, not the
-            # per-test fixture shortcut.
-            for attr in (
-                "printer_hub",
-                "library_watcher",
-                "gc_task",
-                "external_scan_task",
-                "automatic_backup_task",
-                "notification_task",
-                "fleet_scheduler_task",
-                "work_wakeup",
-            ):
+            # Supervisors and the event bus wired onto app.state by the real
+            # lifespan, not the per-test fixture shortcut.
+            for attr in ("printer_hub", "library_watcher", "event_bus"):
                 assert hasattr(app.state, attr), f"app.state.{attr} not set by lifespan"
             assert isinstance(app.state.printer_hub.bus, InProcessBus)
             assert (
                 app.state.printer_hub._session_factory
                 is lifecycle.get_session_factory()
             )
-            assert not app.state.fleet_scheduler_task.done()
-            assert not app.state.gc_task.done()
 
             response = client.get("/api/v1/health/details", headers=headers)
             assert response.status_code == 200
             body = response.json()
             # Not asserting overall body["status"] == "ok": components like backup
             # (none configured) legitimately report degraded on a fresh install —
-            # this test is about the scheduler/storage wiring lifespan sets up,
-            # not full green health.
-            assert body["components"]["fleet_scheduler"]["ok"] is True
+            # this test is about the wiring lifespan sets up, not full green health.
             assert body["components"]["fleet_scheduler"]["running"] is True
             assert body["components"]["storage"]["ok"] is True
 
             liveness = client.get("/api/v1/health")
             assert liveness.status_code == 200
 
-        # Shutdown (TestClient.__exit__) must cancel every background task.
-        assert app.state.fleet_scheduler_task.cancelled()
-        assert app.state.gc_task.cancelled()
-        assert app.state.external_scan_task.cancelled()
-        assert app.state.automatic_backup_task.cancelled()
-        assert app.state.notification_task.cancelled()
+    def test_lifespan_starts_background_work(
+        self, _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.bootstrap import work as work_bootstrap
+        from app.main import app
+        from app.modules.administration import runtime_config
 
-    def test_lifespan_warns_once_for_every_nonzero_reconcile_count(
+        monkeypatch.setattr(
+            runtime_config, "ensure_storage_identity", _fixed_storage_identity
+        )
+
+        with TestClient(app):
+            runtime = work_bootstrap.current()
+            launched = runtime is not None and runtime.engine.launched
+
+        assert launched is True
+
+    def test_lifespan_stops_background_work_on_shutdown(
         self,
         _local_storage: None,
         db_session,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
+        work_engine,
     ) -> None:
-        _stub_reconcilers(monkeypatch)
-        _silence_fleet_scheduler(monkeypatch)
+        from app.bootstrap import work as work_bootstrap
+        from app.main import app
+        from app.modules.administration import runtime_config
 
+        monkeypatch.setattr(
+            runtime_config, "ensure_storage_identity", _fixed_storage_identity
+        )
+
+        with TestClient(app):
+            pass
+
+        assert (work_bootstrap.current(), work_engine.launched) == (None, False)
+
+    def test_lifespan_holds_background_work_while_a_restore_is_unresolved(
+        self, _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.bootstrap import work as work_bootstrap
         from app.main import app
 
-        with caplog.at_level(logging.WARNING, logger=lifecycle.logger.name):
-            with TestClient(app):
-                pass
+        monkeypatch.setattr(lifecycle, "inspect_restore_recovery", lambda: True)
 
-        messages = [record.getMessage() for record in caplog.records]
-        assert any("reset 2 external library scan" in m for m in messages)
-        assert any("reconciled 3 interrupted background job" in m for m in messages)
-        assert any("reconciled 4 interrupted vault audit" in m for m in messages)
-        assert any("reconciled 5 interrupted pending import" in m for m in messages)
-        assert any("reconciled 6 stranded fleet dispatch" in m for m in messages)
+        with TestClient(app):
+            held = work_bootstrap.current() is None
+
+        # The restore journal governs: no Job may run against a database that
+        # is about to be replaced or is mid-recovery.
+        assert held is True
+
+    def test_lifespan_starts_held_work_once_recovery_resolves_the_restore(
+        self, _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Nothing restarts the process after recovery, so the work it held
+        # starts in place; otherwise every nudge would reach no engine.
+        from app.bootstrap import work as work_bootstrap
+        from app.main import app
+        from app.runtime.maintenance import end_restore_maintenance
+
+        monkeypatch.setattr(lifecycle, "inspect_restore_recovery", lambda: True)
+
+        with TestClient(app):
+            end_restore_maintenance()
+            released = work_bootstrap.release_held()
+            runtime = work_bootstrap.current()
+            launched = runtime is not None and runtime.engine.launched
+
+        assert (released, launched) == (True, True)
 
     def test_lifespan_finishes_starting_up_after_the_watcher_fails(
         self,
@@ -847,7 +853,6 @@ class TestLifespan:
         monkeypatch.setattr(
             library_watcher.LibraryWatcher, "start_all", _boom_start_all
         )
-        _silence_fleet_scheduler(monkeypatch)
 
         from app.main import app
 
@@ -864,313 +869,10 @@ class TestLifespan:
         )
 
 
-def _stub_reconcilers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make every reconcile_* call report a distinct nonzero count.
-
-    Distinct so the assertions can tell which warning came from which reconciler —
-    identical counts would pass even if one call's message named the wrong thing.
-    """
-    from app.modules.administration import vault_audit
-    from app.modules.ingestion import inbox
-    from app.modules.sources import external_library
-    from app.runtime import jobs
-
-    monkeypatch.setattr(external_library, "reset_orphaned_scans", lambda _session: 2)
-    monkeypatch.setattr(jobs, "reconcile_interrupted_jobs", lambda: 3)
-    monkeypatch.setattr(vault_audit, "reconcile_interrupted_runs", lambda: 4)
-    monkeypatch.setattr(inbox, "reconcile_interrupted_items", lambda: 5)
-    monkeypatch.setattr(lifecycle, "reconcile_stranded_dispatches", lambda: 6)
-
-
-def _silence_fleet_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the scheduler from racing a test's log assertions.
-
-    It keeps the production composition signature, so lifespan still wires it the
-    way it really does; it just returns instead of looping.
-    """
-
-    async def _noop_scheduler(_work_wakeup, _provider_builder) -> None:
-        return None
-
-    monkeypatch.setattr(lifecycle, "run_fleet_scheduler", _noop_scheduler)
-
-
-class TestGcLoop:
-    @pytest.mark.asyncio
-    async def test_gc_loop_defers_destruction_during_migration_maintenance(
-        self, monkeypatch
-    ):
-        from unittest.mock import Mock
-
-        from app.runtime.maintenance import (
-            end_restore_maintenance,
-            hold_restore_maintenance,
-        )
-
-        gc = Mock()
-        delays = []
-
-        async def stop_at_retry(seconds):
-            delays.append(seconds)
-            raise asyncio.CancelledError
-
-        monkeypatch.setattr(lifecycle, "run_scheduled_gc", gc)
-        monkeypatch.setattr(lifecycle.asyncio, "sleep", stop_at_retry)
-        hold_restore_maintenance()
-        try:
-            with pytest.raises(asyncio.CancelledError):
-                await lifecycle._gc_loop()
-        finally:
-            end_restore_maintenance()
-        gc.assert_not_called()
-        assert delays == [1]
-
-    @pytest.mark.asyncio
-    async def test_gc_loop_runs_every_step_even_when_each_one_fails(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """A failed maintenance step does not prevent later work in the same tick."""
-        import asyncio
-
-        from app.modules.identity import auth
-        from app.modules.ingestion import artifact_uploads, inbox
-        from app.modules.notifications import notifications
-        from app.modules.storage import storage_inventory
-
-        monkeypatch.setattr(
-            lifecycle,
-            "run_scheduled_gc",
-            lambda: (_ for _ in ()).throw(RuntimeError("gc fail")),
-        )
-        monkeypatch.setattr(
-            storage_inventory, "refresh_inventory_sample", lambda _: None
-        )
-        monkeypatch.setattr(
-            notifications,
-            "prune_deliveries",
-            lambda: (_ for _ in ()).throw(RuntimeError("prune fail")),
-        )
-        monkeypatch.setattr(
-            inbox,
-            "prune_history",
-            lambda: (_ for _ in ()).throw(RuntimeError("history fail")),
-        )
-        monkeypatch.setattr(
-            artifact_uploads,
-            "reconcile_artifact_uploads",
-            lambda: (_ for _ in ()).throw(RuntimeError("upload reconciliation fail")),
-        )
-        monkeypatch.setattr(auth, "prune_expired_refresh_tokens", lambda: None)
-
-        with caplog.at_level(logging.ERROR, logger=lifecycle.logger.name):
-            task = asyncio.create_task(lifecycle._gc_loop())
-            # One pass runs immediately (no initial sleep). Each step is a real
-            # asyncio.to_thread() round-trip, so a fixed short sleep is flaky
-            # under CI load — poll for all four log lines instead, bounded by
-            # a generous timeout, before cancelling ahead of sleep(3600).
-            deadline = asyncio.get_event_loop().time() + 10
-            expected = {
-                "scheduled GC failed",
-                "notification delivery pruning failed",
-                "pending import history pruning failed",
-                "artifact upload reconciliation failed",
-            }
-            while asyncio.get_event_loop().time() < deadline:
-                messages = [r.getMessage() for r in caplog.records]
-                if all(any(exp in m for m in messages) for exp in expected):
-                    break
-                await asyncio.sleep(0.01)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("scheduled GC failed" in m for m in messages)
-        assert any("notification delivery pruning failed" in m for m in messages)
-        assert any("pending import history pruning failed" in m for m in messages)
-        assert any("artifact upload reconciliation failed" in m for m in messages)
-
-    @pytest.mark.asyncio
-    async def test_gc_loop_never_runs_storage_maintenance_when_unconfigured(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        called = False
-        real_sleep = asyncio.sleep
-
-        def gc() -> None:
-            nonlocal called
-            called = True
-
-        async def stop_after_first_tick(_seconds: float) -> None:
-            await real_sleep(0)
-            raise asyncio.CancelledError
-
-        monkeypatch.setattr(lifecycle, "run_scheduled_gc", gc)
-        monkeypatch.setattr(lifecycle.asyncio, "sleep", stop_after_first_tick)
-
-        with pytest.raises(asyncio.CancelledError):
-            await lifecycle._gc_loop(storage_maintenance_enabled=False)
-
-        assert called is False
-
-
-class TestExternalScanLoop:
-    @pytest.mark.asyncio
-    async def test_external_scan_loop_skips_during_restore_then_logs_scan_failure(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """_external_scan_loop must (a) skip a tick entirely while a restore is in
-        progress, (b) log-and-continue if the scan tick itself raises, and (c)
-        release every admitted mutation slot."""
-        import asyncio
-
-        _real_sleep = asyncio.sleep
-
-        # Collapse the loop's per-tick 60s sleep so several iterations happen fast.
-        monkeypatch.setattr(lifecycle.asyncio, "sleep", lambda _s: _real_sleep(0))
-
-        calls = {
-            "admission_checks": 0,
-            "admitted": 0,
-            "scan_calls": 0,
-            "mutation_ends": 0,
-        }
-
-        def _begin_mutating_operation() -> bool:
-            calls["admission_checks"] += 1
-            # First tick: restore in progress (must skip). Second+ tick: clear.
-            admitted = calls["admission_checks"] > 1
-            if admitted:
-                calls["admitted"] += 1
-            return admitted
-
-        def _end_mutating_operation() -> None:
-            calls["mutation_ends"] += 1
-
-        def _run_due_external_scans() -> None:
-            calls["scan_calls"] += 1
-            raise RuntimeError("scan tick blew up")
-
-        monkeypatch.setattr(
-            lifecycle, "begin_mutating_operation", _begin_mutating_operation
-        )
-        monkeypatch.setattr(
-            lifecycle, "end_mutating_operation", _end_mutating_operation
-        )
-        monkeypatch.setattr(
-            lifecycle, "_run_due_external_scans", _run_due_external_scans
-        )
-
-        with caplog.at_level(logging.ERROR, logger=lifecycle.logger.name):
-            task = asyncio.create_task(lifecycle._external_scan_loop())
-            # Let a few ticks run before cancelling.
-            for _ in range(5):
-                await asyncio.sleep(0)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-        # Skipped on the first tick (restore in progress): scan must not have run then.
-        assert calls["admission_checks"] >= 2
-        assert calls["scan_calls"] >= 1
-        # Cancellation may land after admission but before the worker thread starts;
-        # every admitted slot must still be released exactly once.
-        assert calls["mutation_ends"] == calls["admitted"]
-        assert any(
-            "external library scan tick failed" in r.getMessage()
-            for r in caplog.records
-        )
-
-
-class TestAutomaticBackupLoop:
-    @pytest.mark.asyncio
-    async def test_failure_releases_the_mutation_slot(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        real_sleep = asyncio.sleep
-        calls = {"attempts": 0, "ends": 0}
-
-        async def tick(_seconds: float) -> None:
-            await real_sleep(0)
-
-        def fail_backup() -> None:
-            calls["attempts"] += 1
-            raise RuntimeError("backup failed")
-
-        def end_mutation() -> None:
-            calls["ends"] += 1
-
-        monkeypatch.setattr(lifecycle.asyncio, "sleep", tick)
-        monkeypatch.setattr(lifecycle, "begin_mutating_operation", lambda: True)
-        monkeypatch.setattr(lifecycle, "end_mutating_operation", end_mutation)
-        monkeypatch.setattr(lifecycle, "run_due_backup", fail_backup)
-
-        with caplog.at_level(logging.ERROR, logger=lifecycle.logger.name):
-            task = asyncio.create_task(lifecycle._automatic_backup_loop())
-            while calls["attempts"] < 2:
-                await real_sleep(0)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-        assert calls["ends"] == calls["attempts"]
-        assert calls["attempts"] >= 2
-        assert any(
-            "automatic backup failed" in record.getMessage()
-            for record in caplog.records
-        )
-
-
-class TestRunDueExternalScans:
-    def test_run_due_external_scans_noop_when_disabled(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from app.modules.administration import runtime_config
-        from app.modules.sources import external_library
-
-        monkeypatch.setattr(
-            runtime_config, "external_libraries_enabled", lambda _session: False
-        )
-        called = {"scan": False}
-        monkeypatch.setattr(
-            external_library,
-            "scan_library",
-            lambda _id: called.__setitem__("scan", True),
-        )
-
-        lifecycle._run_due_external_scans()
-
-        assert called["scan"] is False
-
-    def test_runs_every_due_scan_even_after_one_of_them_fails(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        from app.modules.administration import runtime_config
-        from app.modules.sources import external_library
-
-        monkeypatch.setattr(
-            runtime_config, "external_libraries_enabled", lambda _session: True
-        )
-        monkeypatch.setattr(
-            external_library, "libraries_due_for_scan", lambda _session: [1, 2]
-        )
-        scanned: list[int] = []
-
-        def _scan(library_id: int) -> None:
-            scanned.append(library_id)
-            if library_id == 1:
-                raise RuntimeError("scan blew up")
-
-        monkeypatch.setattr(external_library, "scan_library", _scan)
-
-        with caplog.at_level(logging.ERROR, logger=lifecycle.logger.name):
-            lifecycle._run_due_external_scans()
-
-        # Both libraries are attempted even though the first raised.
-        assert scanned == [1, 2]
-        assert any(
-            "scheduled scan failed for library 1" in r.getMessage()
-            for r in caplog.records
-        )
+def _fixed_storage_identity(_session) -> str:
+    """Keep the fixture roots bound: the lifespan runs on the shared test DB."""
+    _overlay["storage_identity"] = "a" * 64
+    return "a" * 64
 
 
 class TestParseCorsOrigins:

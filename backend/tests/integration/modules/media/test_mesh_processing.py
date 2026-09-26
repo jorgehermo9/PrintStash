@@ -31,9 +31,9 @@ from pathlib import Path
 import psutil
 import pytest
 
-import app.modules.media.mesh_operations as mesh_operations
 from app.core.config import _overlay
 from app.modules.media import mesh_processing
+from tests.fixtures.mesh_analysis import analyze, is_partial_render
 from tests.paths import TESTDATA_DIR
 
 # mesh_processing lazy-imports trimesh, so importing it above is safe without it;
@@ -105,10 +105,11 @@ class TestLoadMesh:
 
         # The estimator reads the real binary-STL header, so trimesh is skipped.
         # The bounded STL path still provides useful geometry and a thumbnail.
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] == tri
         assert geometry["bbox_x_mm"] and geometry["bbox_x_mm"] > 0
-        assert isinstance(thumb, mesh_processing.FallbackThumbnail)
+        assert is_partial_render(result)
         assert thumb.startswith(mesh_processing._PNG_MAGIC)
 
     def test_real_oversize_file_uses_streaming_fallback(
@@ -123,10 +124,11 @@ class TestLoadMesh:
         assert size_mb > 1.0
         monkeypatch.setitem(_overlay, "mesh_max_load_mb", 1)
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] == tri
         assert geometry["bbox_x_mm"] and geometry["bbox_x_mm"] > 0
-        assert isinstance(thumb, mesh_processing.FallbackThumbnail)
+        assert is_partial_render(result)
         assert thumb.startswith(mesh_processing._PNG_MAGIC)
 
     def test_real_compression_bomb_3mf_is_not_decompressed(
@@ -151,7 +153,8 @@ class TestLoadMesh:
         # ...but the uncompressed estimate is huge, so it's skipped.
         assert mesh_processing._estimate_triangle_count(p) > 1000
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] is None
         assert thumb == png
 
@@ -161,7 +164,8 @@ class TestLoadMesh:
         p = tmp_path / "sphere.stl"
         tri = _write_real_stl(p, subdivisions=4)
 
-        geometry, thumb = mesh_operations.analyze_mesh(p)
+        result = analyze(p)
+        geometry, thumb = result.geometry, result.image
         assert geometry["triangle_count"] == tri
         assert geometry["bbox_x_mm"] and geometry["bbox_x_mm"] > 0
         assert thumb is not None and thumb.startswith(mesh_processing._PNG_MAGIC)
@@ -188,7 +192,8 @@ class TestLoadMesh:
         path = tmp_path / "sphere.stl"
         _write_real_stl(path, subdivisions=6)  # ~80k triangles — a real load
 
-        geometry, thumb = mesh_operations.analyze_mesh(path)
+        result = analyze(path)
+        geometry, thumb = result.geometry, result.image
         gc.collect()
 
         assert thumb is not None  # real work happened
@@ -222,7 +227,7 @@ class TestLoadMesh:
         start_peak = _peak_rss_kb()
         for f in files:
             # Must not raise and must not blow the budget — the whole point of #29.
-            mesh_operations.analyze_mesh(f)
+            analyze(f)
             peak = _peak_rss_kb()
             if peak is not None and start_peak is not None:
                 peak_mb = (peak - start_peak) / 1024

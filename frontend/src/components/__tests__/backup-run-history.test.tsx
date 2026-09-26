@@ -5,7 +5,26 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { BackupRunHistory } from "@/components/backup-run-history";
 import type { BackupRun } from "@/lib/api/backup";
-import { json, renderApp } from "@/test-support/render";
+import { aJob } from "@/test-support/factories";
+import { json, renderApp, type RouteTable } from "@/test-support/render";
+import type { JobStatus } from "@/types";
+
+/**
+ * A retry is a Job: the POST only queues it, and the copy is published when
+ * the Job completes. Ids are distinct per test because the Task Center keeps
+ * a terminal Job's outcome for the life of the module.
+ */
+function retryAccepted(jobId: string) {
+  return { job_id: jobId, state: "queued", message: "queued" };
+}
+
+function retryJob(job: Partial<JobStatus> & { job_id: string }): RouteTable {
+  const status = aJob({ kind: "backups.retry_destination", model_id: null, file_id: null, ...job });
+  return {
+    "GET /api/v1/jobs": json([status]),
+    [`GET /api/v1/jobs/${job.job_id}`]: json(status),
+  };
+}
 
 function partialRun(): BackupRun {
   return {
@@ -68,8 +87,9 @@ describe("Backup run history", () => {
               verified_at: result.kind === "local" ? "2026-01-02T00:00:00Z" : null,
             })),
           };
-          return json(run.destinations[1]);
+          return json(retryAccepted("retry-published"), 202);
         },
+        ...retryJob({ job_id: "retry-published" }),
       },
     });
     await userEvent.click(await screen.findByRole("button", { name: "Retry this destination" }));
@@ -82,9 +102,10 @@ describe("Backup run history", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("explains why a new archive is required after a refused retry", async () => {
+  it("explains why a new archive is required after a failed retry", async () => {
     let run = partialRun();
-    renderApp(<BackupRunHistory refreshKey={0} onPublished={vi.fn<() => void>()} />, {
+    const published = vi.fn<() => void>();
+    renderApp(<BackupRunHistory refreshKey={0} onPublished={published} />, {
       routes: {
         "GET /api/v1/backups/runs": () => json([run]),
         "POST /api/v1/backups/runs/destinations/remote-result/retry": () => {
@@ -96,8 +117,13 @@ describe("Backup run history", () => {
                 : result,
             ),
           };
-          return json({ detail: "backup_retry_new_backup_required" }, 409);
+          return json(retryAccepted("retry-refused"), 202);
         },
+        ...retryJob({
+          job_id: "retry-refused",
+          state: "failed",
+          error: "backup_retry_new_backup_required",
+        }),
       },
     });
     await userEvent.click(await screen.findByRole("button", { name: "Retry this destination" }));
@@ -107,6 +133,21 @@ describe("Backup run history", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Retry this destination" })).toBeEnabled(),
     );
+    expect(published).not.toHaveBeenCalled();
+  });
+
+  it("reports a retry another request already started", async () => {
+    renderApp(<BackupRunHistory refreshKey={0} onPublished={vi.fn<() => void>()} />, {
+      routes: {
+        "GET /api/v1/backups/runs": () => json([partialRun()]),
+        "POST /api/v1/backups/runs/destinations/remote-result/retry": () =>
+          json({ detail: "backup_retry_in_progress" }, 409),
+      },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Retry this destination" }));
+    expect(
+      await screen.findByText("A retry is already in progress for this destination."),
+    ).toBeVisible();
   });
 
   it("keeps historical archives available when no runs exist", async () => {

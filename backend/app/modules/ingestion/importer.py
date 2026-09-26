@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -54,9 +52,10 @@ from app.core.url_safety import (
 )
 from app.db.models import SUFFIX_TO_FILE_TYPE
 from app.db.session import SessionFactory, get_session_factory
-from app.modules.ingestion.ingestion import ingest_mesh, ingest_orca_gcode
+from app.modules.ingestion.ingestion import StagedArtifact, commit_staged_artifact
 from app.modules.storage.capacity import CapacityManager, CapacityResource
-from app.runtime.jobs import registry
+from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import jobs as registry
 
 if TYPE_CHECKING:
     from app.modules.library.provenance import ProvenanceContext
@@ -257,65 +256,6 @@ def extract_selected(path: Path, names: list[str]) -> list[tuple[Path, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Pending-archive registry (bridges /ingest/archive -> /select two-step flow)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class PendingArchive:
-    path: Path
-    archive_name: str
-    owner_user_id: Optional[int]
-    entries: list[ArchiveEntry]
-    source_url: Optional[str] = None
-    created_at: float = field(default_factory=time.time)
-    claimed: bool = False
-
-
-class _ArchiveRegistry:
-    """In-process store of staged archives awaiting entry selection (1h TTL)."""
-
-    _TTL = 3600.0
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._items: dict[str, PendingArchive] = {}
-
-    def add(self, pending: PendingArchive) -> str:
-        archive_id = uuid.uuid4().hex
-        with self._lock:
-            self._prune()
-            self._items[archive_id] = pending
-        return archive_id
-
-    def get(self, archive_id: str) -> PendingArchive | None:
-        with self._lock:
-            return self._items.get(archive_id)
-
-    def claim(self, archive_id: str) -> PendingArchive | None:
-        with self._lock:
-            item = self._items.get(archive_id)
-            if item is None or item.claimed:
-                return None
-            item.claimed = True
-            return item
-
-    def pop(self, archive_id: str) -> PendingArchive | None:
-        with self._lock:
-            return self._items.pop(archive_id, None)
-
-    def _prune(self) -> None:
-        cutoff = time.time() - self._TTL
-        for key in [k for k, v in self._items.items() if v.created_at < cutoff]:
-            stale = self._items.pop(key, None)
-            if stale is not None:
-                stale.path.unlink(missing_ok=True)
-
-
-archives = _ArchiveRegistry()
-
-
-# ---------------------------------------------------------------------------
 # Grouped import — each 3D file becomes its own Model under one Collection
 # ---------------------------------------------------------------------------
 
@@ -338,9 +278,10 @@ def _ingest_one_file(
     model_name: Optional[str],
     actor_user_id: Optional[int],
     session_factory: SessionFactory,
+    ingestion_key: str,
     provenance_context: ProvenanceContext | None = None,
 ) -> Optional[dict]:
-    """Ingest one staged file under its own child job.
+    """Commit one staged file as its own Artifact.
 
     Returns a result dict (``model_id``/``file_id``/``name`` on success, or
     ``name``/``error`` on failure), or ``None`` if the suffix is not importable
@@ -349,60 +290,54 @@ def _ingest_one_file(
     ``original_filename`` may carry an archive-relative path; only its basename
     is used for the suffix, model name, and stored filename. Callers that want
     the directory mirrored into a sub-collection derive that into ``collection``
-    before calling (see ``import_assets``' ``nest_subdirs``).
+    before calling (see ``import_assets``' ``nest_subdirs``). ``ingestion_key``
+    makes a resubmitted import skip files a previous attempt already committed.
     """
-    original_filename = PurePosixPath(original_filename.replace("\\", "/")).name
+    relative = original_filename.replace("\\", "/")
+    original_filename = PurePosixPath(relative).name
     suffix = Path(original_filename).suffix.lower()
     resolved_name = model_name or Path(original_filename).stem
-    child = registry.create(owner_user_id=actor_user_id, visible=False, kind="artifact")
+    file_type = SUFFIX_TO_FILE_TYPE.get(
+        ".gcode" if suffix in _GCODE_SUFFIXES else suffix
+    )
+    if file_type is None:
+        staged.unlink(missing_ok=True)
+        return None
     try:
-        if suffix in _GCODE_SUFFIXES:
-            ingest_orca_gcode(
-                job_id=child,
+        outcome = commit_staged_artifact(
+            StagedArtifact(
                 staged_path=staged,
                 original_filename=original_filename,
                 model_name=resolved_name,
-                collection=collection,
-                tags=tags,
-                source_hash=None,
-                actor_user_id=actor_user_id,
-                session_factory=session_factory,
-                source_url=source_url,
-                provenance_context=provenance_context,
-            )
-        else:
-            file_type = SUFFIX_TO_FILE_TYPE.get(suffix)
-            if file_type is None:
-                staged.unlink(missing_ok=True)
-                return None
-            ingest_mesh(
-                job_id=child,
-                staged_path=staged,
-                original_filename=original_filename,
-                model_name=resolved_name,
-                collection=collection,
-                tags=tags,
                 file_type=file_type,
-                source_hash=None,
-                actor_user_id=actor_user_id,
-                session_factory=session_factory,
+                collection=collection,
+                tags=tags,
                 source_url=source_url,
-                provenance_context=provenance_context,
-            )
-        child_status = registry.get(child)
-        if child_status and child_status.state == "completed":
-            return {
-                "model_id": child_status.model_id,
-                "file_id": child_status.file_id,
-                "name": original_filename,
-                "deduplicated": child_status.deduplicated > 0,
-            }
-        err = child_status.error if child_status else "unknown_error"
-        return {"name": original_filename, "error": err}
+            ),
+            ingestion_key=ingestion_key,
+            actor_user_id=actor_user_id,
+            session_factory=session_factory,
+            provenance_context=provenance_context,
+        )
     except Exception as exc:  # noqa: BLE001 — per-file boundary; continue
         logger.exception("import file failed: %s", original_filename)
         staged.unlink(missing_ok=True)
         return {"name": original_filename, "error": str(exc)}
+    staged.unlink(missing_ok=True)
+    return {
+        "model_id": outcome.model_id,
+        "file_id": outcome.file_id,
+        "name": original_filename,
+        "deduplicated": outcome.deduplicated,
+    }
+
+
+def item_ingestion_key(job_id: str, name: str) -> str:
+    """A stable per-file ingestion key within one Job (at most 64 characters)."""
+    import hashlib
+
+    digest = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    return f"{job_id[:40]}:{digest}"
 
 
 def import_assets(
@@ -433,15 +368,13 @@ def import_assets(
     """
     total = len(staged_files)
     if total == 0:
-        registry.update(job_id, state="failed", error="no_importable_files")
+        registry.finish(job_id, JobOutcome.FAILED, error="no_importable_files")
         return
     override = model_name.strip() if model_name and total == 1 else None
-    registry.update(
-        job_id, state="running", total_steps=total, total=total, stage="ingesting"
-    )
+    registry.update(job_id, total_steps=total, total=total, stage="ingesting")
     results: list[dict] = []
     done = 0
-    for staged_file in staged_files:
+    for index, staged_file in enumerate(staged_files):
         if isinstance(staged_file, StagedAsset):
             staged, rel_name = (
                 staged_file.staged_path,
@@ -472,6 +405,7 @@ def import_assets(
             model_name=override,
             actor_user_id=actor_user_id,
             session_factory=session_factory,
+            ingestion_key=item_ingestion_key(job_id, f"{index}:{rel_name}"),
             provenance_context=provenance_context,
         )
         if res is None:
@@ -489,9 +423,9 @@ def import_assets(
     imported = [r for r in results if r.get("model_id")]
     failures = [r for r in results if r.get("error")]
     deduplicated = sum(bool(r.get("deduplicated")) for r in imported)
-    registry.update(
+    registry.finish(
         job_id,
-        state="completed" if imported else "failed",
+        JobOutcome.COMPLETED if imported else JobOutcome.FAILED,
         model_id=imported[0]["model_id"] if imported else None,
         result={"imported": len(imported), "total": total, "items": results},
         processed=len(results),
@@ -566,20 +500,19 @@ def import_resolved_groups(
     total = sum(len(g.staged_files) for g in groups)
     registry.update(
         job_id,
-        state="running",
         total_steps=max(total, 1),
         total=total,
         stage="ingesting",
     )
     results: list[dict] = []
     done = 0
-    for group in groups:
+    for group_index, group in enumerate(groups):
         if not group.staged_files:
             results.append(
                 {"name": group.title, "error": group.error or "no_importable_files"}
             )
             continue
-        for staged, original_filename in group.staged_files:
+        for file_index, (staged, original_filename) in enumerate(group.staged_files):
             res = _ingest_one_file(
                 staged,
                 original_filename,
@@ -589,6 +522,9 @@ def import_resolved_groups(
                 model_name=None,
                 actor_user_id=actor_user_id,
                 session_factory=session_factory,
+                ingestion_key=item_ingestion_key(
+                    job_id, f"{group_index}:{file_index}:{original_filename}"
+                ),
             )
             if res is None:
                 continue
@@ -619,9 +555,9 @@ def import_resolved_groups(
             if len(member_errors) == 1
             else "collection_import_failed"
         )
-        registry.update(
+        registry.finish(
             job_id,
-            state="failed",
+            JobOutcome.FAILED,
             error=error,
             result=result,
             processed=len(results),
@@ -639,9 +575,9 @@ def import_resolved_groups(
         )
         return
 
-    registry.update(
+    registry.finish(
         job_id,
-        state="completed",
+        JobOutcome.COMPLETED,
         model_id=imported[0]["model_id"],
         result=result,
         processed=len(results),
