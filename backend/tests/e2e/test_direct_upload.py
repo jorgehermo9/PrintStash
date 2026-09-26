@@ -1,7 +1,7 @@
 """A browser's direct upload reaches the library without sending its bytes again.
 
-The browser puts the parts straight into the bucket; PrintStash verifies and
-parses a downloaded copy, then publishes the Artifact by copying the finished
+The browser puts the parts straight into the bucket; PrintStash verifies a
+downloaded copy, then publishes the Artifact by copying the finished
 upload inside the store. Driven through the real API against a real store
 (SeaweedFS), so the copy is only proven when the store itself performed it.
 
