@@ -500,6 +500,36 @@ class TestDeleteLibrary:
         # ...NAS files untouched.
         assert p1.exists() and p2.exists()
 
+    def test_delete_library_succeeds_when_an_indexed_file_is_already_trashed(
+        self, tmp_path: Path, client, db_session: Session, auth_headers: dict
+    ) -> None:
+        use_local_storage(tmp_path)
+        _enable_feature(db_session)
+        nas = tmp_path / "nas"
+        p1 = _drop_gcode(nas, "a.gcode", marker="a")
+        p2 = _drop_gcode(nas, "b.gcode", marker="b")
+        lib = build_external_library(db_session, nas, name="nas")
+        lib_id = lib.id
+        external_library.scan_library(lib_id)
+        already_trashed, still_live = _external_files(db_session)
+        already_trashed.deleted_at = utcnow()
+        db_session.add(already_trashed)
+        db_session.commit()
+        trashed_id, live_id = already_trashed.id, still_live.id
+
+        resp = client.delete(f"/api/v1/libraries/{lib_id}", headers=auth_headers)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["files_trashed"] == 1
+        db_session.expunge_all()
+        assert db_session.get(ExternalLibrary, lib_id) is None
+        # The earlier trash entry keeps its row, detached from the removed library.
+        earlier = db_session.get(File, trashed_id)
+        assert earlier.deleted_at is not None
+        assert earlier.external_library_id is None
+        assert db_session.get(File, live_id).deleted_at is not None
+        assert p1.exists() and p2.exists()
+
 
 class TestScanNow:
     def test_scanned_roots_remain_listed_after_overlapping_vault_upload(

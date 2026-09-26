@@ -249,6 +249,10 @@ image. See UPGRADE.md before pulling.**
   of leaving a conflicted source behind, reports read-only marker failures
   explicitly, and documents the one-time writable mount required for enrollment.
 
+- Removing a library source no longer fails with a server error when one of its
+  files was already in the trash. The failed attempt had also moved the source's
+  models to the trash while leaving the source itself in place.
+
 - PrusaLink now discovers the printer's advertised storage root, using `/usb`
   on Buddy/Core One firmware while retaining `/local` compatibility, so file
   inventory, upload, start and deletion no longer surface a false authentication

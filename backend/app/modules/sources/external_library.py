@@ -1406,6 +1406,13 @@ def purge_library_index(session: Session, library_id: int) -> int:
         session.add(f)
         if f.model_id is not None:
             affected_models.add(f.model_id)
+    # Files already in the trash still point at the library, and the same RESTRICT
+    # foreign key blocks the delete for them. They stay trashed; only the link goes.
+    session.exec(
+        update(File)
+        .where(File.external_library_id == library_id)
+        .values(external_library_id=None)
+    )
     content_changed(session, "model", affected_models)
     session.commit()
 
