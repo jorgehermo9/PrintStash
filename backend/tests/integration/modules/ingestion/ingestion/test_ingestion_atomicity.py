@@ -4,12 +4,16 @@ It used to commit the File row before writing the thumbnail and the Metadata
 row. A failure in between (a corrupt image, a full disk) left a committed File
 with no metadata — a model that renders but has no print time, filament or cost,
 and no error anywhere to explain it.
+
+Thumbnails are no longer part of the commit at all: they are derivatives,
+published later by their own job (``tests/integration/modules/media/
+test_thumbnail_publication.py``). What remains here is that the commit is
+bare, atomic, and hands the Artifact to the derivative source.
 """
 
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import threading
 from pathlib import Path
@@ -22,10 +26,12 @@ from app.core.config import _overlay
 from app.db.models import (
     File,
     FileType,
+    JobKind,
     Metadata,
     Model,
     ModelProvenanceField,
     ProvenanceCapture,
+    ReconcileCursor,
 )
 from app.db.session import (
     SQLiteSessionFactory,
@@ -34,11 +40,9 @@ from app.db.session import (
 )
 from app.modules.ingestion import ingestion
 from app.modules.library import provenance
-from app.modules.media import thumbnail
 from app.modules.storage.storage_backend.contracts import StorageConfigurationError
 from app.modules.storage.storage_backend.local import LocalStorageBackend
 from app.modules.storage.storage_backend.runtime import get_backend
-from app.runtime.jobs import registry
 from tests.factories import (
     build_external_library,
     build_file,
@@ -75,14 +79,6 @@ def _staged(tmp_path: Path, name: str = "bracket.stl") -> Path:
     return staged
 
 
-def _visible_png() -> bytes:
-    from PIL import Image
-
-    output = io.BytesIO()
-    Image.new("RGBA", (8, 8), (120, 150, 210, 255)).save(output, format="PNG")
-    return output.getvalue()
-
-
 def _persist(db_session: Session, model: Model, staged: Path, **kwargs):
     defaults = dict(
         model=model,
@@ -91,8 +87,6 @@ def _persist(db_session: Session, model: Model, staged: Path, **kwargs):
         file_type=FileType.STL,
         blob_hash="b" * 64,
         meta={"estimated_time_s": 120},
-        thumb_bytes=None,
-        overwrite_thumbnail=True,
     )
     defaults.update(kwargs)
     return ingestion.persist_artifact(db_session, **defaults)
@@ -123,7 +117,11 @@ class TestPersistArtifact:
 
         try:
             with monkeypatch.context() as patch:
-                patch.setattr(LocalStorageBackend, "_open_pinned_parent", replace_before_publication)
+                patch.setattr(
+                    LocalStorageBackend,
+                    "_open_pinned_parent",
+                    replace_before_publication,
+                )
                 with pytest.raises(StorageConfigurationError):
                     _persist(
                         db_session,
@@ -155,7 +153,10 @@ class TestPersistArtifact:
         )
         assert destination.read_bytes() == original
         assert saved.path == str(destination)
-        assert len(db_session.exec(select(File).where(File.model_id == model.id)).all()) == 1
+        assert (
+            len(db_session.exec(select(File).where(File.model_id == model.id)).all())
+            == 1
+        )
 
     def test_persist_never_overwrites_an_unclaimed_destination(
         self, db_session: Session, storage, model: Model, tmp_path: Path
@@ -296,8 +297,6 @@ class TestReserveNextVersion:
                         file_type=FileType.GCODE,
                         blob_hash=hashlib.sha256(content).hexdigest(),
                         meta={},
-                        thumb_bytes=None,
-                        overwrite_thumbnail=False,
                         session_factory=session_factory,
                     )
             except BaseException as exc:  # pragma: no cover - asserted below
@@ -382,12 +381,7 @@ class TestMetadata:
                 raise ConnectionError("acknowledgement lost after commit")
 
         monkeypatch.setattr(db_session, "commit", commit_then_lose_ack)
-        file_row = _persist(
-            db_session,
-            model,
-            _staged(tmp_path),
-            thumb_bytes=b"thumbnail-is-deferred",
-        )
+        file_row = _persist(db_session, model, _staged(tmp_path))
 
         assert file_row.id is not None
         with get_session_factory().session() as fresh:
@@ -539,21 +533,16 @@ class TestProvenance:
             value="Local",
         )
         db_session.commit()
-        job_id = registry.create(owner_user_id=actor.id)
-        strategy = ingestion.IngestionStrategy(
-            FileType.STL, True, lambda _path, _report: ({}, None), ()
-        )
         engine = db_session.get_bind()
         assert isinstance(engine, Engine)
-        ingestion.run_ingestion_pipeline(
-            job_id=job_id,
-            staged_path=staged,
-            original_filename=staged.name,
-            model_name="Ignored",
-            collection=None,
-            tags=None,
-            source_hash=None,
-            strategy=strategy,
+        ingestion.commit_staged_artifact(
+            ingestion.StagedArtifact(
+                staged_path=staged,
+                original_filename=staged.name,
+                model_name="Ignored",
+                file_type=FileType.STL,
+            ),
+            ingestion_key="recapture",
             actor_user_id=actor.id,
             session_factory=SQLiteSessionFactory(engine),
             provenance_context=provenance.ProvenanceContext(
@@ -575,71 +564,38 @@ class TestProvenance:
         assert provenance.effective_value(title) == "Local"
 
 
-class TestThumbnail:
-    def test_failed_thumbnail_preserves_artifact_without_derived_pointer(
-        self,
-        db_session: Session,
-        storage,
-        model: Model,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        def _boom(_data: bytes) -> bytes:
-            raise ValueError("corrupt image")
-
-        monkeypatch.setattr(thumbnail, "to_webp", _boom)
-
-        file_row = _persist(
-            db_session, model, _staged(tmp_path), thumb_bytes=b"not-an-image"
-        )
-
-        db_session.refresh(model)
-        assert file_row.id is not None
-        assert Path(file_row.path).exists()
-        assert file_row.thumbnail_path is None
-        assert model.thumbnail_file_id is None
-        assert (
-            db_session.exec(
-                select(Metadata).where(Metadata.file_id == file_row.id)
-            ).first()
-            is not None
-        )
-
-    def test_a_thumbnail_collision_never_overwrites_the_occupying_bytes(
-        self,
-        db_session: Session,
-        storage,
-        model: Model,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        occupied = Path(storage.thumbnail_key(1))
-        occupied.parent.mkdir(parents=True, exist_ok=True)
-        occupied.write_bytes(b"user-owned thumbnail-shaped file")
-        monkeypatch.setattr(
-            storage,
-            "thumbnail_variant_key",
-            lambda _file_id, _sha, _recipe: str(occupied),
-        )
-
-        file_row = _persist(
-            db_session,
-            model,
-            _staged(tmp_path),
-            thumb_bytes=_visible_png(),
-        )
-
-        assert occupied.read_bytes() == b"user-owned thumbnail-shaped file"
-        assert Path(file_row.path).exists()
-        assert file_row.thumbnail_path is None
-
-    def test_a_new_thumbnail_becomes_the_models_selected_one(
+class TestDerivativeHandoff:
+    def test_commits_the_artifact_without_a_thumbnail(
         self, db_session: Session, storage, model: Model, tmp_path: Path
     ) -> None:
-        png = _visible_png()
-        file_row = _persist(db_session, model, _staged(tmp_path), thumb_bytes=png)
+        file_row = _persist(db_session, model, _staged(tmp_path))
 
-        db_session.refresh(model)
-        assert model.thumbnail_file_id == file_row.id
-        assert file_row.thumbnail_path is not None
-        assert Path(file_row.thumbnail_path).exists()
+        assert file_row.thumbnail_path is None
+
+    def test_nudges_the_derivative_source_after_the_commit(
+        self, db_session: Session, storage, model: Model, tmp_path: Path
+    ) -> None:
+        _persist(db_session, model, _staged(tmp_path))
+
+        cursor = db_session.get(ReconcileCursor, JobKind.DERIVATIVES_MESH)
+        assert cursor is not None and cursor.nudged_at is not None
+
+    def test_never_nudges_for_an_artifact_that_did_not_commit(
+        self,
+        db_session: Session,
+        storage,
+        model: Model,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("metadata boom")
+
+        _boom.model_fields = ingestion.Metadata.model_fields
+        monkeypatch.setattr(ingestion, "Metadata", _boom)
+
+        with pytest.raises(RuntimeError, match="metadata boom"):
+            _persist(db_session, model, _staged(tmp_path))
+
+        db_session.rollback()
+        assert db_session.get(ReconcileCursor, JobKind.DERIVATIVES_MESH) is None

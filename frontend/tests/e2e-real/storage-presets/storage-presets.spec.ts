@@ -19,9 +19,20 @@ test.describe("storage presets", () => {
     expect((await page.request.put(remoteUrl, { data: body })).ok()).toBe(true);
     try {
       await page.goto("/settings?section=remote-storage");
-      await page.getByLabel("Provider").selectOption("koofr");
+      const remote = page.getByRole("region", { name: "Remote storage" });
+      await remote
+        .getByRole("group", { name: "Storage category" })
+        .getByRole("button", { name: "Nextcloud and WebDAV" })
+        .click();
+      await remote
+        .getByRole("group", { name: "Provider" })
+        .getByRole("button", { name: "Koofr — WebDAV" })
+        .click();
       await page.getByLabel("Connection name").fill(name);
-      await page.getByRole("combobox", { name: "Use for", exact: true }).selectOption("library");
+      await remote
+        .getByRole("group", { name: "Use for" })
+        .getByRole("button", { name: "Library sources" })
+        .click();
       await page.getByLabel("Server URL").fill(webdavBase);
       await page.getByLabel("Base folder", { exact: true }).fill(root);
       await page.getByLabel("Username", { exact: true }).fill("webdav-user");

@@ -14,7 +14,13 @@ from pathlib import Path
 
 import pytest
 
-ENTRYPOINT = Path(__file__).resolve().parents[3] / "backend" / "docker-entrypoint.sh"
+from tests.paths import REPO_ROOT
+
+ENTRYPOINT = REPO_ROOT / "backend" / "docker-entrypoint.sh"
+# A developer shell may export these; each test chooses its own layout.
+_PATH_OVERRIDES = frozenset(
+    {"VAULT_DATA_DIR", "VAULT_THUMB_DIR", "VAULT_STAGING_DIR", "VAULT_BACKUP_DIR"}
+)
 
 
 def _write_executable(path: Path, body: str) -> Path:
@@ -79,7 +85,6 @@ printf 'server:%s:%s:%s\\n' "$FAKE_UID" "$FAKE_GID" "$*" >> {command_log}
 
     source = ENTRYPOINT.read_text()
     source = source.replace("/app/.venv/bin/python", str(fake_python))
-    source = source.replace("/data/db", str(tmp_path / "db"))
     script = _write_executable(tmp_path / "entrypoint.sh", source)
     return script, command_log, fake_bin, fake_server
 
@@ -92,13 +97,18 @@ def _run_entrypoint(
     tmp_path: Path,
     puid: str | None = None,
     pgid: str | None = None,
+    role: str | None = None,
+    overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+    env = {
+        key: value for key, value in os.environ.items() if key not in _PATH_OVERRIDES
+    }
+    env.pop("VAULT_PROCESS_ROLE", None)
+    if role is not None:
+        env["VAULT_PROCESS_ROLE"] = role
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
-    env["VAULT_DATA_DIR"] = str(tmp_path / "files")
-    env["VAULT_THUMB_DIR"] = str(tmp_path / "thumbs")
-    env["VAULT_STAGING_DIR"] = str(tmp_path / "staging")
-    env["VAULT_BACKUP_DIR"] = str(tmp_path / "backups")
+    env["VAULT_DATA_ROOT"] = str(tmp_path / "data")
+    env.update(overrides or {})
     if puid is None:
         env.pop("PUID", None)
     else:
@@ -114,6 +124,17 @@ def _run_entrypoint(
         text=True,
         check=False,
     )
+
+
+def _repaired_paths(log: Path, identity: str) -> list[str]:
+    """Every path handed to chown for *identity*, one entry per hand-off."""
+    prefix = f"chown:-h {identity} "
+    return [
+        path
+        for line in log.read_text().splitlines()
+        if line.startswith(prefix)
+        for path in line.removeprefix(prefix).split(" ")
+    ]
 
 
 class TestDockerEntrypointIdentity:
@@ -148,16 +169,36 @@ class TestDockerEntrypointIdentity:
             for line in log.read_text().splitlines()
         )
 
-    def test_re_owns_every_data_root_for_the_requested_identity(
-        self, tmp_path: Path
+    @pytest.mark.parametrize(
+        "directory", ["files", "thumbs", "staging", "backups", "db"]
+    )
+    def test_creates_the_layout_under_the_data_root(
+        self, tmp_path: Path, directory: str
     ) -> None:
-        """All five roots, not the ones a contributor remembered.
+        script, _log, fake_bin, server = _entrypoint_harness(tmp_path)
 
-        A root left owned by the previous uid is one the container can read and
-        not write, which surfaces later as a single feature failing — thumbnails,
-        or backups — rather than as a startup error.
+        result = _run_entrypoint(script, fake_bin, server, tmp_path=tmp_path)
+
+        assert result.returncode == 0, result.stderr
+        assert (tmp_path / "data" / directory).is_dir()
+
+    @pytest.mark.parametrize(
+        "directory",
+        # A cache the app creates later is re-owned as well: the root pass
+        # covers whatever lives on the volume, not a list to keep in sync.
+        ["files", "thumbs", "staging", "backups", "db", "ai-models"],
+    )
+    def test_re_owns_every_directory_under_the_data_root(
+        self, tmp_path: Path, directory: str
+    ) -> None:
+        """Every directory, not the ones a contributor remembered.
+
+        A directory left owned by the previous uid is one the container can read
+        and not write, which surfaces later as a single feature failing —
+        thumbnails, or backups — rather than as a startup error.
         """
         script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+        (tmp_path / "data" / "ai-models").mkdir(parents=True)
 
         result = _run_entrypoint(
             script,
@@ -169,20 +210,82 @@ class TestDockerEntrypointIdentity:
         )
 
         assert result.returncode == 0, result.stderr
-        ownership_repairs = [
-            line
-            for line in log.read_text().splitlines()
-            if line.startswith("chown:-h 1234:2345 ")
-        ]
-        for root in ("files", "thumbs", "staging", "backups", "db"):
-            assert any(str(tmp_path / root) in line for line in ownership_repairs)
+        repaired = _repaired_paths(log, "1234:2345")
+        assert str(tmp_path / "data" / directory) in repaired
+
+    def test_repairs_each_entry_once(self, tmp_path: Path) -> None:
+        # The managed children sit on the root's own mount here, so a root walk
+        # that did not prune them would hand every library file to chown twice.
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+        artifact = tmp_path / "data" / "files" / "model" / "part.stl"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(b"solid")
+
+        result = _run_entrypoint(
+            script, fake_bin, server, tmp_path=tmp_path, puid="1234", pgid="2345"
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert _repaired_paths(log, "1234:2345").count(str(artifact)) == 1
+
+    def test_places_an_overridden_directory_outside_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        script, _log, fake_bin, server = _entrypoint_harness(tmp_path)
+        backups = tmp_path / "hdd" / "backups"
+
+        result = _run_entrypoint(
+            script,
+            fake_bin,
+            server,
+            tmp_path=tmp_path,
+            overrides={"VAULT_BACKUP_DIR": str(backups)},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert backups.is_dir()
+
+    def test_re_owns_an_overridden_directory_outside_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+        backups = tmp_path / "hdd" / "backups"
+
+        result = _run_entrypoint(
+            script,
+            fake_bin,
+            server,
+            tmp_path=tmp_path,
+            puid="1234",
+            pgid="2345",
+            overrides={"VAULT_BACKUP_DIR": str(backups)},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert str(backups) in _repaired_paths(log, "1234:2345")
+
+    def test_treats_an_empty_override_as_the_default(self, tmp_path: Path) -> None:
+        # An unset Compose variable renders as an empty string, which must mean
+        # the layout path and never the working directory.
+        script, _log, fake_bin, server = _entrypoint_harness(tmp_path)
+
+        result = _run_entrypoint(
+            script,
+            fake_bin,
+            server,
+            tmp_path=tmp_path,
+            overrides={"VAULT_STAGING_DIR": ""},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert (tmp_path / "data" / "staging").is_dir()
 
     def test_preserves_metadata_for_entries_already_owned_by_runtime_identity(
         self, tmp_path: Path
     ) -> None:
         script, log, fake_bin, server = _entrypoint_harness(tmp_path)
-        archive = tmp_path / "backups" / "owned-backup.tar.gz"
-        archive.parent.mkdir()
+        archive = tmp_path / "data" / "backups" / "owned-backup.tar.gz"
+        archive.parent.mkdir(parents=True)
         archive.write_bytes(b"owned")
 
         result = _run_entrypoint(
@@ -256,8 +359,8 @@ class TestDockerEntrypointIdentity:
         script, log, fake_bin, server = _entrypoint_harness(tmp_path)
         target = tmp_path / "protected-target"
         target.write_text("keep me")
-        managed_tree = tmp_path / "files"
-        managed_tree.mkdir()
+        managed_tree = tmp_path / "data" / "files"
+        managed_tree.mkdir(parents=True)
         descendant = managed_tree / "managed-descendant"
         descendant.symlink_to(target)
 
@@ -307,3 +410,48 @@ class TestDockerEntrypointIdentity:
         assert result.returncode != 0
         assert "positive numeric Linux user/group ID" in result.stderr
         assert not log.exists()
+
+
+def _steps(log: Path) -> list[str]:
+    """What ran after the identity was settled: migration and/or the server."""
+    return [
+        line.split(":", 1)[0]
+        for line in log.read_text().splitlines()
+        if line.startswith(("migration:", "server:"))
+    ]
+
+
+class TestDockerEntrypointRole:
+    """Only the API migrates; a worker waits for the schema the API applied.
+
+    Several worker replicas migrating at once would race, and a worker of an
+    older build must never touch a schema a newer API already upgraded.
+    """
+
+    @pytest.mark.parametrize("role", [None, "all", "api"])
+    def test_an_api_process_migrates_first(
+        self, tmp_path: Path, role: str | None
+    ) -> None:
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+
+        result = _run_entrypoint(script, fake_bin, server, tmp_path=tmp_path, role=role)
+
+        assert result.returncode == 0, result.stderr
+        assert _steps(log) == ["migration", "server"]
+
+    def test_a_worker_never_migrates(self, tmp_path: Path) -> None:
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+
+        result = _run_entrypoint(
+            script, fake_bin, server, tmp_path=tmp_path, role="worker"
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert _steps(log) == ["server"]
+
+    def test_a_worker_still_drops_privileges(self, tmp_path: Path) -> None:
+        script, log, fake_bin, server = _entrypoint_harness(tmp_path)
+
+        _run_entrypoint(script, fake_bin, server, tmp_path=tmp_path, role="worker")
+
+        assert log.read_text().splitlines()[-1].startswith("server:10001:10001:")

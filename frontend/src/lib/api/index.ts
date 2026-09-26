@@ -3,6 +3,7 @@ export {
   getAssetUrl,
   getAuthenticatedBlob,
   getAuthenticatedText,
+  getDerivedText,
   getUrl,
   getWsUrl,
   invalidateApiCache,
@@ -18,6 +19,7 @@ export * from "@/lib/api/gc";
 export * from "@/lib/api/libraries";
 export * from "@/lib/api/storage-connections";
 export * from "@/lib/api/inbox";
+export * from "@/lib/api/jobs";
 export * from "@/lib/api/provenance";
 export * from "@/lib/api/provider-connections";
 export * from "@/lib/api/maintenance";
@@ -32,3 +34,4 @@ export * from "@/lib/api/spoolman";
 export * from "@/lib/api/statistics";
 export * from "@/lib/api/system";
 export * from "@/lib/api/taxonomy";
+export * from "@/lib/api/work";

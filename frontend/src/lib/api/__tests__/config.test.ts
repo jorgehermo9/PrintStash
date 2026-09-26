@@ -24,7 +24,6 @@ import {
   getLatestRelease,
   getSetupStatus,
   getVaultConfig,
-  rebuildModelThumbnails,
   updateVaultConfig,
 } from "@/lib/api/config";
 import { invalidateApiCache } from "@/lib/api/request";
@@ -134,16 +133,6 @@ describe("getLatestRelease", () => {
   });
 });
 
-describe("rebuildModelThumbnails", () => {
-  it("asks for a forced rebuild", async () => {
-    respondWith({ job_id: "abc", state: "pending" });
-
-    await rebuildModelThumbnails();
-
-    expectRequest("/api/v1/files/thumbnails/rebuild?force=true", "POST");
-  });
-});
-
 describe("browser preparation contracts", () => {
   it("starts the preparation session without a manual credential", async () => {
     respondWith({ csrf: "automatic-proof", expires_in: 3600 });
@@ -162,5 +151,15 @@ describe("browser preparation contracts", () => {
     respondWith({ ready: true, checks: [] });
     await prepareSetupStorage();
     expectRequest("/api/v1/setup/prepare-storage", "POST");
+  });
+  it("retries preparation with an empty body", async () => {
+    respondWith({ ready: true, checks: [] });
+    await prepareSetupStorage();
+    expect(lastBody()).toEqual({});
+  });
+  it("sends a storage choice to the preparation endpoint", async () => {
+    respondWith({ ready: true, checks: [] });
+    await prepareSetupStorage({ storage_backend: "local" });
+    expect(lastBody()).toEqual({ storage_backend: "local" });
   });
 });

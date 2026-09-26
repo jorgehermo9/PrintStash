@@ -83,6 +83,24 @@ describe("parseApiError", () => {
     expect(userMessage(err)).toMatch(/PrintStash is running/i);
   });
 
+  it.each(["Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed"])(
+    "maps the %s fetch rejection to the network code",
+    (message) => {
+      expect(parseApiError(new TypeError(message)).code).toBe("network_unreachable");
+    },
+  );
+
+  it("keeps a TypeError thrown by page code apart from a network failure", () => {
+    // What a plain-HTTP origin raised before any request: `crypto.subtle` is undefined.
+    const err = parseApiError(
+      new TypeError("Cannot read properties of undefined (reading 'digest')"),
+    );
+    expect(err.code).toBe("browser_error");
+    expect(err.detail).toMatch(/digest/);
+    expect(userMessage(err)).toMatch(/reload the page/i);
+    expect(userMessage(err)).not.toMatch(/PrintStash is running/i);
+  });
+
   it("treats a bare snake_case message as a server detail code", () => {
     // Failed background jobs surface a bare code with no HTTP envelope.
     const err = parseApiError(new Error("url_not_a_direct_file"));

@@ -13,4 +13,9 @@ describe("filterValueText", () => {
     expect(filterValueText("printer_model", "known_good")).toBe("known_good");
     expect(filterValueText("material_type", "Unknown")).toBe("Unknown");
   });
+  it("shows print duration filters in readable units", () => {
+    expect(filterValueText("print_duration_max_s", "10800")).toBe("3h 0m");
+    expect(filterValueText("print_duration_min_s", "0")).toBe("0s");
+    expect(filterValueText("print_duration_max_s", "invalid")).toBe("invalid");
+  });
 });

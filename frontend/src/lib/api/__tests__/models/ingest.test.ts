@@ -16,20 +16,15 @@
  * The selection bodies are pinned whole for a related reason: the backend cannot
  * tell an omitted field from a deliberate one, so a review flag that does not
  * reach the server auto-imports a collection the user wanted to look at first.
- *
- * Job reads are uncached. Polling a cached job status never sees it finish.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   addGcodeRevision,
-  getJobStatus,
-  ingestArchive,
   ingestModel,
   ingestOrca,
   ingestUrl,
   inspectArchive,
-  listIngestJobs,
   selectArchiveEntries,
   selectCollectionMembers,
   selectModelFiles,
@@ -38,7 +33,7 @@ import { invalidateApiCache } from "@/lib/api/request";
 
 import { expectRequest, fetchMock, lastBody, lastCall, respondWith } from "../_wire";
 
-const QUEUED = { job_id: "job-1", state: "pending", message: "ingestion queued" };
+const QUEUED = { job_id: "job-1", state: "queued", message: "ingestion queued" };
 
 function form(): FormData {
   const data = new FormData();
@@ -61,7 +56,6 @@ describe("multipart uploads", () => {
   it.each([
     ["a sliced G-code file", () => ingestOrca(form()), "/api/v1/ingest/orca"],
     ["a source mesh", () => ingestModel(form()), "/api/v1/ingest/model"],
-    ["an archive", () => ingestArchive(form()), "/api/v1/ingest/archive"],
     ["an archive for inspection", () => inspectArchive(form()), "/api/v1/ingest/archive/inspect"],
     ["a G-code revision", () => addGcodeRevision(4, form()), "/api/v1/models/4/gcode-revisions"],
   ])("POSTs %s as multipart", async (_name, call, url) => {
@@ -126,35 +120,5 @@ describe("selectArchiveEntries", () => {
     // The id *is* the staged work; a wrong path imports nothing and loses it.
     expectRequest("/api/v1/ingest/archive/arch-1/select", "POST");
     expect(lastBody()).toMatchObject({ names: ["cube.stl"] });
-  });
-});
-
-describe("getJobStatus", () => {
-  it("reads one job fresh", async () => {
-    respondWith({ job_id: "abc", state: "running" });
-
-    await getJobStatus("abc");
-
-    // Polling a cached job status never sees it finish.
-    expectRequest("/api/v1/ingest/jobs/abc");
-    expect(lastCall().init).toMatchObject({ cache: "no-store" });
-  });
-});
-
-describe("listIngestJobs", () => {
-  it("lists jobs fresh", async () => {
-    respondWith([]);
-
-    await listIngestJobs();
-
-    expect(lastCall().init).toMatchObject({ cache: "no-store" });
-  });
-
-  it("requests the exact persisted jobs the task center is reconnecting", async () => {
-    respondWith([]);
-
-    await listIngestJobs(["thumbnail-job", "upload job"]);
-
-    expectRequest("/api/v1/ingest/jobs?tracked_job_id=thumbnail-job&tracked_job_id=upload+job");
   });
 });

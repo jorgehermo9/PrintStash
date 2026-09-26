@@ -10,7 +10,6 @@ from pathlib import Path
 
 from sqlmodel import col, select
 
-import app.runtime.maintenance as backup_maintenance
 from app.core.config import settings
 from app.core.time import utcnow
 from app.db.models import (
@@ -48,7 +47,12 @@ class SelectedRun:
 
 
 def begin_run(
-    *, backup_id: str, archive_name: str, trigger: BackupTrigger, created_at: datetime
+    *,
+    backup_id: str,
+    archive_name: str,
+    trigger: BackupTrigger,
+    created_at: datetime,
+    job_id: str | None = None,
 ) -> SelectedRun:
     """Commit every selected target before constructing any transport adapter.
 
@@ -85,6 +89,7 @@ def begin_run(
         run = BackupRun(
             id=run_id,
             backup_id=backup_id,
+            job_id=job_id,
             trigger=trigger.value,
             archive_name=archive_name,
             created_at=created_at,
@@ -170,34 +175,38 @@ def archive_ready(run_id: str, *, digest: str, size: int, file_count: int) -> No
         session.commit()
 
 
+def summarise_run(session, run_id: str, *, error_code: str | None = None) -> str:
+    """Settle a run's outcome from its destinations, in ``session``'s transaction."""
+    run = session.get(BackupRun, run_id)
+    assert run is not None
+    results = session.exec(
+        select(BackupDestinationResult).where(BackupDestinationResult.run_id == run_id)
+    ).all()
+    for result in results:
+        if result.outcome in {"pending", "publishing"}:
+            result.outcome = "failed"
+            result.error_code = error_code or "backup_publication_interrupted"
+            result.updated_at = utcnow()
+            session.add(result)
+    complete = sum(result.outcome == "completed" for result in results)
+    run.outcome = (
+        "completed"
+        if results and complete == len(results)
+        else "partial"
+        if complete
+        else "failed"
+    )
+    run.error_code = error_code
+    run.finished_at = utcnow()
+    session.add(run)
+    return run.outcome
+
+
 def finish_run(run_id: str, *, error_code: str | None = None) -> str:
     with get_session_factory().scoped_session() as session:
-        run = session.get(BackupRun, run_id)
-        assert run is not None
-        results = session.exec(
-            select(BackupDestinationResult).where(
-                BackupDestinationResult.run_id == run_id
-            )
-        ).all()
-        for result in results:
-            if result.outcome in {"pending", "publishing"}:
-                result.outcome = "failed"
-                result.error_code = error_code or "backup_publication_interrupted"
-                result.updated_at = utcnow()
-                session.add(result)
-        complete = sum(result.outcome == "completed" for result in results)
-        run.outcome = (
-            "completed"
-            if results and complete == len(results)
-            else "partial"
-            if complete
-            else "failed"
-        )
-        run.error_code = error_code
-        run.finished_at = utcnow()
-        session.add(run)
+        outcome = summarise_run(session, run_id, error_code=error_code)
         session.commit()
-        return run.outcome
+        return outcome
 
 
 def run_detail(run_id: str) -> dict:
@@ -275,7 +284,6 @@ def publication_completed(result_id: str, meta) -> None:
 
 
 def list_runs(*, limit: int = 50, offset: int = 0) -> list[dict]:
-    reconcile_interrupted_runs()
     with get_session_factory().scoped_session() as session:
         ids = session.exec(
             select(BackupRun.id)
@@ -286,57 +294,25 @@ def list_runs(*, limit: int = 50, offset: int = 0) -> list[dict]:
     return [run_detail(run_id) for run_id in ids]
 
 
-def reconcile_interrupted_runs() -> None:
-    """Recover execution status after acquiring the process-wide operation lock.
+def settle_job_runs(job_id: str) -> int:
+    """Settle the runs ``job_id`` left running: its attempt that built them is gone.
 
-    The supported deployment has one process. Once this lock is held, publishing
-    states from earlier operations are interrupted, never concurrent writers.
-    Storage reconciliation remains exact and is performed before a retry.
+    Called when the Job's next attempt starts, and when the Job fails or is
+    cancelled. The engine runs one attempt of a Job at a time, so a run of
+    this Job still "running" at those moments is never being written.
+    Destinations still publishing are recorded as interrupted.
     """
-    from app.db.models import BackupRetryAttempt
-
-    with backup_maintenance.backup_operation_lock:
-        with get_session_factory().scoped_session() as session:
-            runs = session.exec(
-                select(BackupRun).where(BackupRun.outcome == "running")
-            ).all()
-            active_results = session.exec(
-                select(BackupDestinationResult).where(
-                    BackupDestinationResult.outcome == "publishing"
+    with get_session_factory().scoped_session() as session:
+        run_ids = list(
+            session.exec(
+                select(BackupRun.id).where(
+                    BackupRun.job_id == job_id, BackupRun.outcome == "running"
                 )
             ).all()
-            run_ids = {run.id for run in runs} | {
-                result.run_id for result in active_results
-            }
-            for result in active_results:
-                result.outcome = "failed"
-                result.error_code = "backup_publication_interrupted"
-                result.updated_at = utcnow()
-                session.add(result)
-            attempts = session.exec(
-                select(BackupRetryAttempt).where(
-                    BackupRetryAttempt.outcome == "running"
-                )
-            ).all()
-            for attempt in attempts:
-                result = session.get(
-                    BackupDestinationResult, attempt.destination_result_id
-                )
-                attempt.outcome = (
-                    "completed"
-                    if result is not None and result.outcome == "completed"
-                    else "failed"
-                )
-                attempt.error_code = (
-                    None
-                    if attempt.outcome == "completed"
-                    else "backup_publication_interrupted"
-                )
-                attempt.finished_at = utcnow()
-                session.add(attempt)
-            session.commit()
-        for run_id in run_ids:
-            finish_run(run_id)
+        )
+    for run_id in run_ids:
+        finish_run(run_id)
+    return len(run_ids)
 
 
 def record_verification(

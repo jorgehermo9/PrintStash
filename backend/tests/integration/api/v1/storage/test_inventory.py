@@ -59,10 +59,7 @@ class TestStorageInventory:
         ],
     )
     def test_denies_non_admin_cleanup(self, client, user_headers, endpoint):
-        assert (
-            client.post(endpoint, headers=user_headers()).status_code
-            == 403
-        )
+        assert client.post(endpoint, headers=user_headers()).status_code == 403
 
     def test_bounds_drilldown_page_size(self, client, auth_headers):
         assert (
@@ -143,7 +140,9 @@ class TestStorageInventory:
         assert backend.exists(thumbnail_key)
         assert (
             db_session.exec(
-                select(AuditLog).where(AuditLog.action == "storage.cleanup_derived_cache")
+                select(AuditLog).where(
+                    AuditLog.action == "storage.cleanup_derived_cache"
+                )
             ).first()
             is not None
         )

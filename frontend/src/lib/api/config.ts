@@ -10,7 +10,6 @@ import {
   StorageProvider,
   StorageRootEnrollmentRead,
   StorageRootRole,
-  IngestResponse,
 } from "@/types";
 
 export function getSetupStatus(): Promise<SetupStatus> {
@@ -32,8 +31,12 @@ export function checkSetupStorage(
   return sendJson("/api/v1/setup/check-storage", "POST", body, { "X-PrintStash-Setup-CSRF": csrf });
 }
 
-export function prepareSetupStorage(): Promise<SetupStorageCheck> {
-  return sendJson("/api/v1/setup/prepare-storage", "POST", {});
+/**
+ * Finish pending storage. With a body, choose it: the owner provisioned from
+ * VAULT_SETUP_ADMIN_* signs in before any storage exists.
+ */
+export function prepareSetupStorage(body: SetupStorageRequest = {}): Promise<SetupStorageCheck> {
+  return sendJson("/api/v1/setup/prepare-storage", "POST", body);
 }
 
 export function completeSetup(body: SetupRequest, csrf: string): Promise<SetupResponse> {
@@ -74,8 +77,4 @@ export function getLatestRelease(refresh = false): Promise<ReleaseStatus> {
 
 export function updateVaultConfig(body: VaultConfigUpdate): Promise<VaultConfigRead> {
   return sendJson<VaultConfigRead>("/api/v1/config", "PUT", body);
-}
-
-export function rebuildModelThumbnails(): Promise<IngestResponse> {
-  return sendJson<IngestResponse>("/api/v1/files/thumbnails/rebuild?force=true", "POST", {});
 }

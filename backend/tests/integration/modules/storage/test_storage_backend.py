@@ -33,7 +33,13 @@ class _LocalSettings:
     data_dir: Path
     thumb_dir: Path
     backup_dir: Path
+    staging_dir: Path | None = None
     storage_identity: str = "a" * 64
+
+    def __post_init__(self) -> None:
+        # As in the deployment layout, staging is a sibling of the library.
+        if self.staging_dir is None:
+            self.staging_dir = self.data_dir.parent / "staging"
 
 
 @dataclass

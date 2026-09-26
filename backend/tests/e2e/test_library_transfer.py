@@ -14,7 +14,6 @@ backup/restore).
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -27,6 +26,7 @@ from app.db.models import File, PrintJobState
 from app.db.session import SQLiteSessionFactory, override_session_factory
 from app.modules.library import provenance
 from app.schemas.provenance import CaptureManifestV2
+from tests.e2e._jobs import completed_job
 from tests.factories import print_job_config
 from tests.paths import FIXTURES_DIR
 
@@ -92,17 +92,7 @@ class TestLibraryTransfer:
             data={"model_name": "Portable Drawing"},
             headers=headers_a,
         )
-        assert uploaded.status_code == 202, uploaded.text
-        for _ in range(50):
-            job = (
-                await api.get(
-                    f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=headers_a
-                )
-            ).json()
-            if job["state"] in ("completed", "failed", "duplicate"):
-                break
-            await asyncio.sleep(0.05)
-        assert job["state"] == "completed", job
+        await completed_job(api, uploaded, headers_a)
         exported = await api.get("/api/v1/models/library-archive", headers=headers_a)
         assert exported.status_code == 200, exported.text
 
@@ -115,11 +105,7 @@ class TestLibraryTransfer:
             headers=headers_b,
             files={"file": ("library.zip", exported.content, "application/zip")},
         )
-        assert imported.status_code == 202, imported.text
-        result = await api.get(
-            f"/api/v1/ingest/jobs/{imported.json()['job_id']}", headers=headers_b
-        )
-        assert result.json()["state"] == "completed", result.text
+        await completed_job(api, imported, headers_b)
         models = (await api.get("/api/v1/models", headers=headers_b)).json()
         model = next(item for item in models if item["name"] == "Portable Drawing")
         detail = await api.get(f"/api/v1/models/{model['id']}", headers=headers_b)
@@ -147,16 +133,7 @@ class TestLibraryTransfer:
             data={"model_name": "Transfer Benchy"},
             headers=headers_a,
         )
-        assert upload.status_code == 202, upload.text
-        job_id = upload.json()["job_id"]
-        for _ in range(50):
-            status = (
-                await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers_a)
-            ).json()
-            if status["state"] in ("completed", "failed", "duplicate"):
-                break
-            await asyncio.sleep(0.05)
-        assert status["state"] == "completed", status
+        await completed_job(api, upload, headers_a)
 
         models = (await api.get("/api/v1/models", headers=headers_a)).json()
         model = next(m for m in models if m["name"] == "Transfer Benchy")
@@ -252,12 +229,7 @@ class TestLibraryTransfer:
                 "file": ("printstash-library-v1.zip", archive_bytes, "application/zip")
             },
         )
-        assert imported.status_code == 202, imported.text
-        import_status = await api.get(
-            f"/api/v1/ingest/jobs/{imported.json()['job_id']}", headers=headers_b
-        )
-        assert import_status.json()["state"] == "completed", import_status.text
-        counts = import_status.json()["result"]
+        counts = (await completed_job(api, imported, headers_b))["result"]
         assert counts["created_models"] == 1
         assert counts["created_files"] == 1
         assert counts["imported_jobs"] == 1
@@ -308,15 +280,7 @@ class TestLibraryTransfer:
             data={"model_name": "Idempotent Benchy"},
             headers=headers_a,
         )
-        job_id = upload.json()["job_id"]
-        for _ in range(50):
-            status = (
-                await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers_a)
-            ).json()
-            if status["state"] in ("completed", "failed", "duplicate"):
-                break
-            await asyncio.sleep(0.05)
-        assert status["state"] == "completed", status
+        await completed_job(api, upload, headers_a)
 
         export = await api.get("/api/v1/models/library-archive", headers=headers_a)
         archive_bytes = export.content
@@ -331,22 +295,16 @@ class TestLibraryTransfer:
             headers=headers_b,
             files={"file": ("archive.zip", archive_bytes, "application/zip")},
         )
-        assert first.status_code == 202, first.text
-        first_status = await api.get(
-            f"/api/v1/ingest/jobs/{first.json()['job_id']}", headers=headers_b
-        )
-        assert first_status.json()["result"]["created_models"] == 1
+        first_status = await completed_job(api, first, headers_b)
+        assert first_status["result"]["created_models"] == 1
 
         second = await api.post(
             "/api/v1/models/library-import",
             headers=headers_b,
             files={"file": ("archive.zip", archive_bytes, "application/zip")},
         )
-        assert second.status_code == 202, second.text
-        second_status = await api.get(
-            f"/api/v1/ingest/jobs/{second.json()['job_id']}", headers=headers_b
-        )
-        assert second_status.json()["result"] == {
+        second_status = await completed_job(api, second, headers_b)
+        assert second_status["result"] == {
             "created_models": 0,
             "created_files": 0,
             "skipped_files": 1,

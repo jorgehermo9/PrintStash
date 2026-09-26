@@ -8,6 +8,8 @@ import { prepareSetupStorage, listModelPage, discoverLibraryLocations } from "@/
 import { listTasks, subscribeTasks, taskDetail, type TaskItem } from "@/lib/task-center";
 import { SetupFrame } from "@/components/setup-frame";
 import { SetupFolder } from "@/components/setup-folder";
+import { SetupStorageChoice } from "@/components/setup-storage-choice";
+import { ApiError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { UploadModal } from "@/components/upload-modal";
 import type { ModelListItem } from "@/types";
@@ -17,7 +19,7 @@ export default function GettingStartedPage() {
   const router = useRouter();
   const { t } = useI18n();
   const heading = useRef<HTMLHeadingElement>(null);
-  const [storage, setStorage] = useState<"checking" | "pending" | "ready">("checking");
+  const [storage, setStorage] = useState<"checking" | "choose" | "pending" | "ready">("checking");
   const [upload, setUpload] = useState(false);
   const [folder, setFolder] = useState(false);
   const [folderBusy, setFolderBusy] = useState(false);
@@ -50,6 +52,15 @@ export default function GettingStartedPage() {
       discoverLibraryLocations().then(setLocations, () => setLocations([])),
     ]);
   }, [refresh]);
+  // An owner provisioned from VAULT_SETUP_ADMIN_* has no storage yet: the
+  // server says so instead of finishing a choice nobody made.
+  const handleUnprepared = useCallback((error: Error) => {
+    setStorage(
+      error instanceof ApiError && error.code === "setup_storage_choice_required"
+        ? "choose"
+        : "pending",
+    );
+  }, []);
   useEffect(() => {
     if (loading) return;
     if (!user) {
@@ -60,8 +71,8 @@ export default function GettingStartedPage() {
       router.replace("/");
       return;
     }
-    void prepareSetupStorage().then(handlePrepared, () => setStorage("pending"));
-  }, [loading, user, router, handlePrepared]);
+    void prepareSetupStorage().then(handlePrepared, handleUnprepared);
+  }, [loading, user, router, handlePrepared, handleUnprepared]);
   useEffect(() => {
     if (!taskId) return;
     const update = () => setTask(listTasks().find((item) => item.id === taskId));
@@ -80,9 +91,18 @@ export default function GettingStartedPage() {
     router.push("/");
   }
   const uploading = task?.status === "running" || task?.status === "pending";
+  // The owner provisioned from VAULT_SETUP_ADMIN_* is still on the storage step.
+  const choosing = storage === "choose";
+  const headingKey = choosing
+    ? "setup.files"
+    : folder
+      ? "setup.connect"
+      : models.length
+        ? "setup.firstSuccess"
+        : "setup.firstTitle";
   if (!user?.is_superuser) return null;
   return (
-    <SetupFrame step={3}>
+    <SetupFrame step={choosing ? 2 : 3}>
       <div className="space-y-6">
         {folder && (
           <Button
@@ -108,11 +128,9 @@ export default function GettingStartedPage() {
             tabIndex={-1}
             className="text-2xl font-bold tracking-tight outline-none sm:text-3xl"
           >
-            {t(
-              folder ? "setup.connect" : models.length ? "setup.firstSuccess" : "setup.firstTitle",
-            )}
+            {t(headingKey)}
           </h2>
-          {!folder && (
+          {!folder && !choosing && (
             <p className="max-w-lg text-sm leading-relaxed text-muted-foreground">
               {t(models.length ? "setup.successHelp" : "setup.startHelp")}
             </p>
@@ -129,14 +147,16 @@ export default function GettingStartedPage() {
             </Button>
           </div>
         )}
-        {storage !== "ready" ? (
+        {choosing ? (
+          <SetupStorageChoice onPrepared={() => void handlePrepared()} />
+        ) : storage !== "ready" ? (
           <div role="status" className="space-y-3 rounded-md bg-muted p-4 text-sm leading-relaxed">
             <p>{t(storage === "checking" ? "setup.checking" : "setup.pending")}</p>
             {storage === "pending" && (
               <Button
                 onClick={() => {
                   setStorage("checking");
-                  void prepareSetupStorage().then(handlePrepared, () => setStorage("pending"));
+                  void prepareSetupStorage().then(handlePrepared, handleUnprepared);
                 }}
               >
                 {t("setup.retry")}
@@ -271,7 +291,8 @@ export default function GettingStartedPage() {
             />
           </>
         )}
-        {!folder && (
+        {/* Deferring is not offered before storage exists: every page leads back here. */}
+        {!folder && !choosing && (
           <footer className="border-t border-border pt-5">
             {models.length ? (
               <details>

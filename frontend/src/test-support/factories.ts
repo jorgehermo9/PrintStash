@@ -38,8 +38,9 @@ import type { ArtifactCacheRead } from "@/lib/api/artifact-cache";
 
 import type {
   CollectionRead,
+  DerivativeRead,
   ExternalLibrary,
-  IngestJobStatus,
+  JobStatus,
   ModelListItem,
   PrinterAccess,
   PrinterCapabilities,
@@ -49,6 +50,7 @@ import type {
   StorageUsageRead,
   TagRead,
   VaultStatsRead,
+  WorkOverview,
 } from "@/types";
 
 /** A fixed instant. Every builder's timestamps derive from this one. */
@@ -181,6 +183,7 @@ export function aCollection(override?: Partial<CollectionRead>): CollectionRead 
     model_count: 2,
     effective_role: "admin",
     tags: [],
+    has_readme: false,
     ...override,
   };
 }
@@ -506,16 +509,101 @@ export function anExternalLibrary(override?: Partial<ExternalLibrary>): External
   };
 }
 
-/** A terminal ingestion job; callers supply distinct IDs to isolate the task cache. */
-export function anIngestJob(override?: Partial<IngestJobStatus>): IngestJobStatus {
+/** A completed import Job; callers supply distinct IDs to isolate the task cache. */
+export function aJob(override?: Partial<JobStatus>): JobStatus {
   return {
     job_id: "test-job",
+    kind: "ingestion.upload",
     state: "completed",
+    priority: "interactive",
+    attempts: 1,
+    resubmits: 0,
     model_id: 1,
     file_id: 1,
     error: null,
+    retryable: false,
+    created_at: FROZEN_NOW,
+    updated_at: FROZEN_NOW,
     started_at: FROZEN_NOW,
     finished_at: FROZEN_NOW,
+    committed_at: null,
+    step: null,
+    total_steps: null,
+    label: null,
+    progress: null,
+    result: null,
+    stage: null,
+    current_item: null,
+    processed: 0,
+    total: null,
+    succeeded: 0,
+    deduplicated: 0,
+    skipped: 0,
+    failed: 0,
+    completion: null,
+    failed_items: [],
+    ...override,
+  };
+}
+
+/** One derivative of an Artifact; `ready` unless the test says otherwise. */
+export function aDerivative(override?: Partial<DerivativeRead>): DerivativeRead {
+  return {
+    kind: "thumbnail",
+    recipe_version: 1,
+    state: "ready",
+    attempts: 1,
+    failure_reason: null,
+    updated_at: FROZEN_NOW,
+    retryable: false,
+    ...override,
+  };
+}
+
+/** The Background work overview of a single-process install with nothing queued. */
+export function aWorkOverview(override?: Partial<WorkOverview>): WorkOverview {
+  return {
+    lanes: [
+      {
+        name: "derive.native",
+        concurrency: 1,
+        default_concurrency: 1,
+        overridden: false,
+        scope: "worker",
+        partitioned: false,
+        queued: 0,
+        running: 0,
+      },
+    ],
+    definitions: [
+      {
+        name: "derivatives.mesh",
+        label: "Mesh derivatives",
+        lane: "derive.native",
+        queued: 0,
+        running: 0,
+        interrupted: 0,
+        failed: 0,
+        completed: 3,
+        derivative_kinds: ["metadata", "thumbnail"],
+        next_due_at: null,
+        last_finished_at: FROZEN_NOW,
+      },
+    ],
+    executors: [
+      {
+        executor_id: "all-host-1",
+        role: "all",
+        hostname: "host",
+        app_version: "0.13.0",
+        lanes: ["derive.native"],
+        started_at: FROZEN_NOW,
+        heartbeat_at: FROZEN_NOW,
+        stale: false,
+      },
+    ],
+    failed_jobs: [],
+    failed_derivatives: 0,
     ...override,
   };
 }
@@ -585,6 +673,64 @@ export function aMigrationBackup(
     app_version: "0.13.0",
     location: "local",
     source_ref: "exact-backup-source",
+    ...override,
+  };
+}
+
+/** A local-storage vault configuration as `GET /api/v1/config` returns it. */
+export function aVaultConfig(
+  override?: Partial<import("@/types").VaultConfigRead>,
+): import("@/types").VaultConfigRead {
+  return {
+    storage_backend: "local",
+    storage_provider: "local",
+    storage_provider_config: {
+      provider: "local",
+      data_dir: "/data/files",
+      thumb_dir: "/data/thumbs",
+    },
+    storage_tier: "verified",
+    storage_warnings: [],
+    storage_unverified_acknowledged: false,
+    data_dir: "/data/files",
+    thumb_dir: "/data/thumbs",
+    s3_bucket: "",
+    s3_endpoint_url: "",
+    s3_region: "auto",
+    s3_access_key: "",
+    s3_secret_key: "",
+    has_s3_access_key: false,
+    has_s3_secret_key: false,
+    backup_retention_days: 30,
+    automatic_backups_enabled: false,
+    automatic_backup_time_utc: "02:00",
+    automatic_backup_last_attempt_at: null,
+    manual_local_backup_enabled: true,
+    automatic_local_backup_enabled: true,
+    trash_retention_days: 30,
+    backup_s3_bucket: "",
+    backup_s3_endpoint_url: "",
+    backup_s3_region: "auto",
+    backup_s3_access_key: "",
+    backup_s3_secret_key: "",
+    has_backup_s3_access_key: false,
+    has_backup_s3_secret_key: false,
+    has_backup_s3: false,
+    auto_mark_known_good: true,
+    external_libraries_enabled: false,
+    currency: "USD",
+    model_thumbnail_width: 640,
+    oidc_enabled: false,
+    oidc_issuer_url: "",
+    oidc_client_id: "",
+    has_oidc_client_secret: false,
+    oidc_scopes: "openid profile email",
+    oidc_username_claim: "preferred_username",
+    oidc_groups_claim: "groups",
+    oidc_admin_groups: "",
+    oidc_display_name: "",
+    oidc_redirect_uri: "",
+    oidc_allow_insecure_http: false,
     ...override,
   };
 }

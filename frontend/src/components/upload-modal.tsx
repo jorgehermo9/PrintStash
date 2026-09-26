@@ -60,7 +60,7 @@ import {
   CollectionRead,
   ExternalLibrary,
   IngestJobResult,
-  IngestJobStatus,
+  JobStatus,
 } from "@/types";
 import { ApiError } from "@/lib/errors";
 import { useRouter } from "@/lib/navigation";
@@ -353,12 +353,12 @@ export function UploadModal({
       completedDetail: string;
       completeTask: boolean;
     },
-  ): Promise<IngestJobStatus> {
+  ): Promise<JobStatus> {
     void progressStart;
     void pendingDetail;
     void runningDetail;
     const status = await waitForImportJob(jid);
-    if (status.state === "failed") {
+    if (status.state === "failed" || status.state === "cancelled") {
       throw new Error(status.error || "Ingestion job failed");
     }
     updateTask(taskId, {
@@ -641,7 +641,8 @@ export function UploadModal({
         uiMessage("Inspect {value1}", { value1: String(zipFile.name) }),
       );
       const status = await waitForJobInline(response.job_id);
-      if (status.state === "failed") throw new Error(status.error || "Archive inspection failed");
+      if (status.state !== "completed")
+        throw new Error(status.error || "Archive inspection failed");
       const result: IngestJobResult = status.result ?? {};
       const m: ArchiveManifest = {
         archive_id: String(result.archive_id),
@@ -1428,30 +1429,32 @@ export function BulkFiles({
         >
           {uiText("Or select a folder")}
         </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={MESH_ACCEPT}
-          multiple
-          onChange={(e) => {
-            if (e.target.files?.length) onAddItems(fileListToItems(e.target.files));
-            // Allow re-picking the same files after a removal.
-            e.target.value = "";
-          }}
-          className="hidden"
-        />
-        <input
-          ref={folderInputRef}
-          type="file"
-          webkitdirectory=""
-          multiple
-          onChange={(e) => {
-            if (e.target.files?.length) onAddItems(fileListToItems(e.target.files));
-            e.target.value = "";
-          }}
-          className="hidden"
-        />
       </div>
+      {/* Outside the drop zone: a programmatic click on either input bubbles, and the
+          zone's own onClick would open the file picker over the folder picker. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={MESH_ACCEPT}
+        multiple
+        onChange={(e) => {
+          if (e.target.files?.length) onAddItems(fileListToItems(e.target.files));
+          // Allow re-picking the same files after a removal.
+          e.target.value = "";
+        }}
+        className="hidden"
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        webkitdirectory=""
+        multiple
+        onChange={(e) => {
+          if (e.target.files?.length) onAddItems(fileListToItems(e.target.files));
+          e.target.value = "";
+        }}
+        className="hidden"
+      />
       {items.length > 0 && (
         <>
           <div className="flex items-center justify-between mt-2 mb-1.5">

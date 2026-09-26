@@ -27,8 +27,8 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
-import app.modules.media.mesh_operations as mesh_operations
 from app.modules.media import mesh_processing
+from tests.fixtures.mesh_analysis import analyze
 from tests.paths import FIXTURES_DIR
 
 from .._meshes import _real_binary_stl_cube
@@ -46,7 +46,8 @@ class TestLoadMesh:
         path = FIXTURES_DIR / "cascadio_material.stp"
 
         mesh = mesh_processing._load_mesh(path)
-        geometry, thumbnail = mesh_operations.analyze_mesh(path)
+        result = analyze(path)
+        geometry, thumbnail = result.geometry, result.image
 
         assert mesh is not None
         assert len(mesh.faces) > 0
@@ -114,9 +115,7 @@ class TestLoadMesh:
 
         p = tmp_path / "broken-graph.3mf"
         p.write_bytes(b"placeholder")
-        monkeypatch.setattr(
-            trimesh, "load_scene", lambda *a, **k: UnflattenableScene()
-        )
+        monkeypatch.setattr(trimesh, "load_scene", lambda *a, **k: UnflattenableScene())
 
         assert mesh_processing._load_mesh(p) is None
 

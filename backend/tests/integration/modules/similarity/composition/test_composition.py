@@ -20,6 +20,7 @@ from app.modules.similarity.processing import SimilarityProcessor
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.schemas.multipart_models import MultipartPartWrite
 from tests.factories.geometry import tetrahedron, three_mf
+from tests.factories.similarity import TEST_WRITER
 
 
 class TestComposition:
@@ -53,7 +54,9 @@ class TestComposition:
             files.append(file)
         run = runs.start(db_session, actor)
         for _ in range(40):
-            SimilarityProcessor(get_session_factory(), backend).work_one()
+            SimilarityProcessor(get_session_factory(), backend).work_one(
+                run.id, TEST_WRITER
+            )
             db_session.expire_all()
             if db_session.get(SimilarityRun, run.id).state in runs.TERMINAL:
                 break

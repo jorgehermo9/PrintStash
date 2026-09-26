@@ -90,13 +90,11 @@ PY
 echo "==> Boot smoke: app starts against the upgraded DB"
 # The seeded DB has no SystemConfig storage overlay (that's only written by the
 # setup wizard), so init_backend() falls back to the frozen Settings default
-# (/data/files) unless VAULT_DATA_DIR etc. point it elsewhere here — /data
-# isn't writable on a bare CI runner (no Docker volume, no root).
+# under /data unless VAULT_DATA_ROOT points it elsewhere here — /data isn't
+# writable on a bare CI runner (no Docker volume, no root).
 VAULT_DB_URL="sqlite:///$DB_FILE" \
 VAULT_JWT_SECRET="$(openssl rand -hex 32)" \
-VAULT_DATA_DIR="$WORKDIR/data/files" \
-VAULT_THUMB_DIR="$WORKDIR/data/thumbs" \
-VAULT_STAGING_DIR="$WORKDIR/data/staging" \
+VAULT_DATA_ROOT="$WORKDIR/data" \
   uv run python -c "
 from fastapi.testclient import TestClient
 from app.main import app

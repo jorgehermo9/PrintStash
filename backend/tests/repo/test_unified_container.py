@@ -168,13 +168,7 @@ class TestUnifiedCompose:
         assert [(port["published"], port["target"]) for port in service["ports"]] == [
             ("3000", 3000)
         ]
-        assert {volume["target"] for volume in service["volumes"]} == {
-            "/data/files",
-            "/data/thumbs",
-            "/data/db",
-            "/data/staging",
-            "/data/backups",
-        }
+        assert [volume["target"] for volume in service["volumes"]] == ["/data"]
         assert service["restart"] == "unless-stopped"
         assert service["environment"]["VAULT_RESTART_ENABLED"] == "true"
         assert "VAULT_DB_URL" not in service["environment"]

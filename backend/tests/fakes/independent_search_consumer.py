@@ -19,8 +19,8 @@ from app.modules.inference import model_cache
 from app.modules.inference.local import configured_provider
 from app.modules.search import vector_store
 from app.modules.search.access import visible_passage_ids
-from app.runtime.search import process_one
 from tests.paths import FIXTURES_DIR
+from tests.search_projection import _search_round
 
 
 def exercise_search(client):
@@ -39,9 +39,9 @@ def exercise_search(client):
         data={"model_name": "red assembly bracket"},
     )
     assert upload.status_code == 202, upload.text
-    for _ in range(100):
-        job = client.get(f"/api/v1/ingest/jobs/{upload.json()['job_id']}").json()
-        if job["state"] in {"completed", "failed", "duplicate"}:
+    for _ in range(600):
+        job = client.get(f"/api/v1/jobs/{upload.json()['job_id']}").json()
+        if job["state"] in {"completed", "failed", "cancelled"}:
             break
         time.sleep(0.05)
     assert job["state"] == "completed", job
@@ -77,7 +77,7 @@ def exercise_search(client):
         )
         assert proposal.status_code == 202, proposal.text
         proposed = proposal.json()["id"]
-        for step in range(80):
+        for _ in range(80):
             if active is not None:
                 serving = client.get(
                     "/api/v1/search", params={"q": "red", "legs[]": "semantic_text"}
@@ -87,7 +87,9 @@ def exercise_search(client):
                 assert {
                     row["subject_type"] for row in serving.json()["items"]
                 } == expected
-            process_one(tuple(SubjectType)[step % len(SubjectType)])
+            # The app's own search Jobs run too; this only hurries them along.
+            _search_round()
+            time.sleep(0.05)
             generations = client.get("/api/v1/search/generations").json()
             generation = next(row for row in generations if row["id"] == proposed)
             if generation["state"] == "active":
@@ -118,7 +120,13 @@ def run():
     ensure_dirs()
     run_migrations()
     with TestClient(app) as client:
-        assert app.state.similarity_task is None
+        from app.bootstrap.work import current
+
+        runtime = current()
+        assert runtime is not None
+        assert not any(
+            name.startswith("similarity.") for name in runtime.catalog.definitions
+        )
         client.headers["Origin"] = "http://testserver"
         preparation = client.post("/api/v1/setup/session")
         assert preparation.status_code == 200

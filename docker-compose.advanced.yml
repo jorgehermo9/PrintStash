@@ -7,9 +7,12 @@
 #
 #   docker compose -f docker-compose.advanced.yml up -d
 #
-# Optional extras (both internal-only, never published to the host):
+# Optional extras (all internal-only, never published to the host):
 #   --profile postgres   PostgreSQL instead of SQLite (also set VAULT_DB_URL below)
 #   --profile s3         SeaweedFS as a local S3-compatible store
+#   --profile workers    Background-work containers beside the API; needs
+#                        PostgreSQL, VAULT_PROCESS_ROLE=api and
+#                        VAULT_SHARED_STORAGE=true (docs/deployment.md#background-work-and-workers)
 #
 # Behind a TLS reverse proxy: bind the web port to 127.0.0.1 (see frontend
 # ports), set VAULT_SESSION_COOKIE_SECURE=true, a strong VAULT_JWT_SECRET, and
@@ -24,6 +27,15 @@ x-logging: &default-logging
   options:
     max-size: "10m"
     max-file: "3"
+
+# The API's volumes, shared by the workers: an upload the API stages is
+# committed by whichever process runs its Job.
+x-vault-volumes: &vault-volumes
+  # Everything PrintStash keeps. A host folder works too:
+  # /srv/printstash:/data (set PUID/PGID to its owner).
+  - printstash:/data
+  # An extra disk for a moved directory (see the api storage comments):
+  # - /mnt/hdd/printstash:/mnt/hdd/printstash
 
 services:
   frontend:
@@ -63,18 +75,31 @@ services:
     # No host port: the frontend proxies /api/v1 to it inside the Docker network.
     expose:
       - "8000"
-    environment:
+    # Anchored: the optional workers read exactly the same settings.
+    environment: &api-environment
       # --- Storage ---
       VAULT_STORAGE_BACKEND: ${VAULT_STORAGE_BACKEND:-local}
-      VAULT_DATA_DIR: /data/files
-      VAULT_THUMB_DIR: /data/thumbs
-      VAULT_STAGING_DIR: /data/staging
-      # DB path must always point at the persistent volume — never use ${VAULT_DB_URL}
-      # here because a local-dev shell export (e.g. sqlite:///./dev.sqlite) would
-      # silently redirect the DB outside the volume and wipe state on every rebuild.
-      # PostgreSQL (with --profile postgres): replace the value with
-      # postgresql+psycopg://printstash:<POSTGRES_PASSWORD>@postgres:5432/printstash
-      VAULT_DB_URL: sqlite:////data/db/printstash.sqlite
+      # Every app-owned path lives under the one volume mounted at /data (see
+      # `volumes` below): files, thumbs, staging, backups, db, artifact-cache
+      # and ai-models. The SQLite database defaults to /data/db/printstash.sqlite.
+      #
+      # Each directory can move on its own, e.g. files onto a large HDD while
+      # the database stays on an SSD. Mount the other disk inside the
+      # container and point one of these at it:
+      #   VAULT_DATA_DIR: /mnt/hdd/printstash/files
+      #   VAULT_THUMB_DIR: /mnt/ssd/printstash/thumbs
+      #   VAULT_STAGING_DIR: /mnt/hdd/printstash/staging
+      #   VAULT_BACKUP_DIR: /mnt/backups/printstash
+      #   VAULT_ARTIFACT_CACHE_ROOT: /mnt/ssd/printstash/artifact-cache
+      #   VAULT_EMBEDDING_CACHE_DIR: /mnt/ssd/printstash/ai-models
+      # Keep VAULT_STAGING_DIR on the same mount as VAULT_DATA_DIR: imports
+      # publish staged files into the library by hard link, which only works
+      # within one mount. Split them, or map a second volume onto a subfolder
+      # of /data (e.g. `- hdd:/data/files`), and every import copies its file;
+      # Settings then warns. docs/deployment.md#hard-linked-imports
+      #
+      # PostgreSQL (with --profile postgres) instead of SQLite:
+      #   VAULT_DB_URL: postgresql+psycopg://printstash:<POSTGRES_PASSWORD>@postgres:5432/printstash
       VAULT_SQLITE_SYNCHRONOUS: ${VAULT_SQLITE_SYNCHRONOUS:-NORMAL}
       # S3-compatible primary storage (VAULT_STORAGE_BACKEND=s3). With
       # --profile s3 the endpoint is http://seaweedfs:8333.
@@ -87,7 +112,6 @@ services:
       VAULT_S3_MULTIPART_THRESHOLD_MB: ${VAULT_S3_MULTIPART_THRESHOLD_MB:-50}
 
       # --- Backups ---
-      VAULT_BACKUP_DIR: /data/backups
       VAULT_BACKUP_RETENTION_DAYS: ${VAULT_BACKUP_RETENTION_DAYS:-30}
       VAULT_BACKUP_S3_BUCKET: ${VAULT_BACKUP_S3_BUCKET:-}
       VAULT_BACKUP_S3_ENDPOINT_URL: ${VAULT_BACKUP_S3_ENDPOINT_URL:-}
@@ -102,10 +126,17 @@ services:
       # for any internet-facing install. Do not set it to an empty string; that is
       # taken as a deliberate choice and skips the generated secret.
       VAULT_JWT_SECRET: ${VAULT_JWT_SECRET:-changeme_jwt_secret_please_change}
-      # trusted_network enables browser registration of the first administrator
-      # from private addresses. Use `disabled` once setup is done, or when exposed.
+      # How the first administrator is created: trusted_network (browser
+      # registration from private addresses), environment (from the
+      # VAULT_SETUP_ADMIN_* variables below, at startup), or disabled. Use
+      # `disabled` once setup is done, or when exposed.
       VAULT_SETUP_MODE: ${VAULT_SETUP_MODE:-trusted_network}
       VAULT_SETUP_ALLOWED_HOSTS: ${VAULT_SETUP_ALLOWED_HOSTS:-}
+      # Only with VAULT_SETUP_MODE=environment; set in any other mode they are
+      # a misconfiguration the setup page explains. Used once; blank is unset.
+      VAULT_SETUP_ADMIN_USERNAME: ${VAULT_SETUP_ADMIN_USERNAME:-}
+      VAULT_SETUP_ADMIN_PASSWORD: ${VAULT_SETUP_ADMIN_PASSWORD:-}
+      VAULT_SETUP_ADMIN_EMAIL: ${VAULT_SETUP_ADMIN_EMAIL:-}
       VAULT_SECRETS_KEY: ${VAULT_SECRETS_KEY:-}
       # Set true when PrintStash is served over HTTPS.
       VAULT_SESSION_COOKIE_SECURE: ${VAULT_SESSION_COOKIE_SECURE:-false}
@@ -134,8 +165,20 @@ services:
       VAULT_STAGING_MAX_ACTIVE_PER_USER: ${VAULT_STAGING_MAX_ACTIVE_PER_USER:-4}
       VAULT_STAGING_MAX_GB: ${VAULT_STAGING_MAX_GB:-4}
       VAULT_STAGING_MIN_FREE_GB: ${VAULT_STAGING_MIN_FREE_GB:-1}
-      VAULT_INGEST_WORKER_COUNT: ${VAULT_INGEST_WORKER_COUNT:-2}
       VAULT_MEDIA_WORKER_TIMEOUT_SECONDS: ${VAULT_MEDIA_WORKER_TIMEOUT_SECONDS:-180}
+
+      # --- Background work ---
+      # `all` (default): this API runs HTTP and every background Job itself.
+      # With --profile workers set `api`, PostgreSQL and VAULT_SHARED_STORAGE=true;
+      # VAULT_API_RUNS_JOBS=false then leaves every Job to the workers.
+      VAULT_PROCESS_ROLE: ${VAULT_PROCESS_ROLE:-all}
+      VAULT_API_RUNS_JOBS: ${VAULT_API_RUNS_JOBS:-true}
+      VAULT_SHARED_STORAGE: ${VAULT_SHARED_STORAGE:-false}
+      # Per process: mesh renders at once (each can peak hundreds of MB), and
+      # uploads committed at once. Settings → Background work overrides every
+      # lane's concurrency at runtime for all processes.
+      VAULT_MAX_RENDER_JOBS: ${VAULT_MAX_RENDER_JOBS:-1}
+      VAULT_JOBS_INGEST_CONCURRENCY: ${VAULT_JOBS_INGEST_CONCURRENCY:-2}
 
       # --- Runtime ---
       VAULT_LOG_LEVEL: ${VAULT_LOG_LEVEL:-INFO}
@@ -153,12 +196,7 @@ services:
       # proxy's address, or rate limiting and audit logs see only the proxy's IP.
       # See docs/known-limitations.md.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-}
-    volumes:
-      - printstash_data:/data/files
-      - printstash_thumbs:/data/thumbs
-      - printstash_db:/data/db
-      - printstash_staging:/data/staging
-      - printstash_backups:/data/backups
+    volumes: *vault-volumes
     networks:
       - printstash_net
     healthcheck:
@@ -169,6 +207,31 @@ services:
       start_period: 10s
     # No command override: the image entrypoint runs DB migrations on every
     # start, then launches the server. Overriding it can skip migrations (#29).
+
+  worker:
+    # Background work only: no HTTP, never migrates (it waits for the API's
+    # schema). Same image, settings and volumes as the API.
+    image: ghcr.io/xiao-villamor/printstash-api:${PRINTSTASH_VERSION:-latest}
+    # build:
+    #   context: ./backend
+    restart: unless-stopped
+    logging: *default-logging
+    profiles:
+      - workers
+    command: ["/app/.venv/bin/python", "-m", "app.worker"]
+    environment:
+      <<: *api-environment
+      VAULT_PROCESS_ROLE: worker
+    volumes: *vault-volumes
+    networks:
+      - printstash_net
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      replicas: ${PRINTSTASH_WORKERS:-2}
+    # SIGTERM ends the current step's bookkeeping; the engine reruns the rest.
+    stop_grace_period: 60s
 
   postgres:
     image: postgres:16-alpine
@@ -222,10 +285,6 @@ networks:
     driver: bridge
 
 volumes:
-  printstash_data:
-  printstash_thumbs:
-  printstash_db:
-  printstash_staging:
-  printstash_backups:
+  printstash:
   printstash_postgres:
   printstash_seaweedfs:

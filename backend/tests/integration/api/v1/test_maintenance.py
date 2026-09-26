@@ -29,7 +29,7 @@ from app.db.models import (
     VaultAuditRunState,
     VaultAuditSeverity,
 )
-from app.modules.administration import vault_audit
+from tests.integration.api.v1._ingest_assertions import drain_work
 from tests.integration.conftest import UserHeaders
 
 # Every route on the router, for the auth sweeps.
@@ -86,23 +86,13 @@ def make_finding(db_session: Session):
     return build
 
 
-@pytest.fixture
-def deferred_execution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep a started run PENDING.
-
-    TestClient runs BackgroundTasks synchronously before the response returns, so the
-    real `execute_run` would finish the audit immediately and there would never be an
-    active run to deduplicate against.
-    """
-    monkeypatch.setattr(vault_audit, "execute_run", lambda _run_id: None)
-
-
 class TestStartAudit:
+    # A started run stays pending until its ``administration.audit`` Job is drained, so
+    # every test before the drain sees the active run.
     def test_accepts_the_request(
         self,
         client: TestClient,
         auth_headers: dict[str, str],
-        deferred_execution: None,
     ) -> None:
         response = client.post(
             "/api/v1/maintenance/audits", headers=auth_headers, json={"mode": "quick"}
@@ -116,7 +106,6 @@ class TestStartAudit:
         client: TestClient,
         auth_headers: dict[str, str],
         db_session: Session,
-        deferred_execution: None,
     ) -> None:
         run_id = client.post(
             "/api/v1/maintenance/audits", headers=auth_headers, json={"mode": "quick"}
@@ -128,7 +117,6 @@ class TestStartAudit:
         self,
         client: TestClient,
         auth_headers: dict[str, str],
-        deferred_execution: None,
     ) -> None:
         first = client.post(
             "/api/v1/maintenance/audits", headers=auth_headers, json={"mode": "quick"}
@@ -146,12 +134,12 @@ class TestStartAudit:
     def test_runs_the_audit_in_the_background(
         self, client: TestClient, auth_headers: dict[str, str]
     ) -> None:
-        # Without the stand-in, TestClient runs the background task inline, so a
-        # completed run proves it was scheduled at all.
         response = client.post(
             "/api/v1/maintenance/audits", headers=auth_headers, json={"mode": "quick"}
         )
+        drain_work()
 
+        # A completed run proves the request queued the audit's Job at all.
         run_id = response.json()["id"]
         follow_up = client.get(
             f"/api/v1/maintenance/audits/{run_id}", headers=auth_headers
@@ -174,7 +162,6 @@ class TestStartAudit:
         self,
         client: TestClient,
         auth_headers: dict[str, str],
-        deferred_execution: None,
         mode: VaultAuditMode,
     ) -> None:
         response = client.post(

@@ -26,6 +26,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StorageConfigCard } from "@/components/storage-config-card";
+import { aVaultConfig } from "@/test-support/factories";
 import { adminSession, json, renderApp, type RenderAppOptions } from "@/test-support/render";
 import type { StorageHealthRead, StorageProvider, VaultConfigRead } from "@/types";
 
@@ -155,63 +156,8 @@ const PROVIDERS: StorageProvider[] = [
   },
 ];
 
-function aConfig(over: Partial<VaultConfigRead> = {}): VaultConfigRead {
-  return {
-    storage_backend: "local",
-    storage_provider: "local",
-    storage_provider_config: {
-      provider: "local",
-      data_dir: "/data/files",
-      thumb_dir: "/data/thumbs",
-    },
-    storage_tier: "verified",
-    storage_warnings: [],
-    storage_unverified_acknowledged: false,
-    data_dir: "/data/files",
-    thumb_dir: "/data/thumbs",
-    s3_bucket: "",
-    s3_endpoint_url: "",
-    s3_region: "auto",
-    s3_access_key: "",
-    s3_secret_key: "",
-    has_s3_access_key: false,
-    has_s3_secret_key: false,
-    backup_retention_days: 30,
-    automatic_backups_enabled: false,
-    automatic_backup_time_utc: "02:00",
-    automatic_backup_last_attempt_at: null,
-    manual_local_backup_enabled: true,
-    automatic_local_backup_enabled: true,
-    trash_retention_days: 30,
-    backup_s3_bucket: "",
-    backup_s3_endpoint_url: "",
-    backup_s3_region: "auto",
-    backup_s3_access_key: "",
-    backup_s3_secret_key: "",
-    has_backup_s3_access_key: false,
-    has_backup_s3_secret_key: false,
-    has_backup_s3: false,
-    auto_mark_known_good: true,
-    external_libraries_enabled: false,
-    currency: "USD",
-    model_thumbnail_width: 640,
-    oidc_enabled: false,
-    oidc_issuer_url: "",
-    oidc_client_id: "",
-    has_oidc_client_secret: false,
-    oidc_scopes: "openid profile email",
-    oidc_username_claim: "preferred_username",
-    oidc_groups_claim: "groups",
-    oidc_admin_groups: "",
-    oidc_display_name: "",
-    oidc_redirect_uri: "",
-    oidc_allow_insecure_http: false,
-    ...over,
-  };
-}
-
 function anS3Config(over: Partial<VaultConfigRead> = {}): VaultConfigRead {
-  return aConfig({
+  return aVaultConfig({
     storage_backend: "s3",
     storage_provider: "s3",
     storage_provider_config: {
@@ -230,7 +176,13 @@ function renderCard(
     migrationManaged?: boolean;
   } = {},
 ) {
-  const { config = aConfig(), storageHealth, migrationManaged, routes = {}, ...rest } = options;
+  const {
+    config = aVaultConfig(),
+    storageHealth,
+    migrationManaged,
+    routes = {},
+    ...rest
+  } = options;
   return renderApp(
     <StorageConfigCard storageHealth={storageHealth} migrationManaged={migrationManaged} />,
     {
@@ -255,6 +207,19 @@ afterEach(() => {
 });
 
 describe("StorageConfigCard", () => {
+  it("reserves the current storage layout while configuration loads", async () => {
+    let finish: (response: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+    renderCard({ routes: { "GET /api/v1/config": () => pending } });
+
+    expect(screen.getByRole("status", { name: "Current storage" })).toBeVisible();
+    finish(json(aVaultConfig()));
+    expect(await screen.findByDisplayValue("/data/files")).toBeVisible();
+    expect(screen.queryByRole("status", { name: "Current storage" })).toBeNull();
+  });
+
   describe("a local deployment", () => {
     it("explains a missing root without offering unsafe acknowledgement", async () => {
       renderCard({
@@ -269,6 +234,21 @@ describe("StorageConfigCard", () => {
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent("Storage needs attention");
       expect(alert).toHaveTextContent("Do not acknowledge this warning");
+    });
+
+    it("warns that imports copy when staging cannot hard-link", async () => {
+      renderCard({
+        storageHealth: {
+          ok: true,
+          provider: "local",
+          tier: "verified",
+          diagnostics: { staged_hardlink: false },
+        },
+      });
+
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "Imports are copied, not hard-linked",
+      );
     });
 
     it("offers explicit enrollment for a missing legacy marker", async () => {
@@ -494,7 +474,7 @@ describe("StorageConfigCard", () => {
     it("sends the SFTP host key the operator entered", async () => {
       const user = userEvent.setup();
       const { requestsWithMethod } = renderCard({
-        config: aConfig({
+        config: aVaultConfig({
           storage_provider: "sftp",
           storage_provider_config: {
             provider: "sftp",
@@ -582,14 +562,30 @@ describe("StorageConfigCard", () => {
 describe("Configured Vault migration entry", () => {
   it("keeps the active provider tier visible when location changes require migration", async () => {
     renderCard({ migrationManaged: true, config: anS3Config() });
-    await userEvent.setup().click(await screen.findByText("Storage connection details"));
-    expect(await screen.findByText("Active: Guarded")).toBeVisible();
-    expect(screen.getByText("Expected: Guarded")).toBeVisible();
-    expect(screen.getByText("Support: Stable")).toBeVisible();
+    expect(await screen.findByText("Storage safety: Guarded")).toBeVisible();
+    expect(screen.queryByText("Expected: Guarded")).toBeNull();
+    expect(screen.queryByText("Support: Stable")).toBeNull();
+  });
+  it("shows a concise current storage summary", async () => {
+    renderCard({ migrationManaged: true });
+    expect(await screen.findByText("Local disk")).toBeVisible();
+    expect(screen.getByText("Storage safety: Verified")).toBeVisible();
+    expect(screen.getByText("/data/files")).toBeVisible();
+    expect(screen.getByText("/data/thumbs")).toBeVisible();
+    expect(screen.queryByText("Verified on local filesystems with working hardlinks.")).toBeNull();
+  });
+  it("shows configured local paths when the provider has no path overrides", async () => {
+    renderCard({
+      migrationManaged: true,
+      config: aVaultConfig({ storage_provider_config: { provider: "local" } }),
+    });
+    const details = await screen.findByRole("region", { name: "Storage connection details" });
+    expect(within(details).getByText("/data/files")).toBeVisible();
+    expect(within(details).getByText("/data/thumbs")).toBeVisible();
+    expect(within(details).queryByText("Root")).toBeNull();
   });
   it("keeps guarded deletion consequences visible when location changes require migration", async () => {
     renderCard({ migrationManaged: true, config: anS3Config() });
-    await userEvent.setup().click(await screen.findByText("Storage connection details"));
     expect(await screen.findByText("Guarded storage consequences")).toBeVisible();
     expect(screen.getByText("Object versions guard destructive operations.")).toBeVisible();
     expect(screen.getByText("Confirmed catalog removal retains stored bytes.")).toBeVisible();
@@ -597,18 +593,14 @@ describe("Configured Vault migration entry", () => {
   });
   it("routes location changes through the verified migration flow", async () => {
     renderCard({ migrationManaged: true });
-    expect(
-      await screen.findByRole("button", { name: "Move storage with a verified migration" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Move storage" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Save configuration" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Data directory")).not.toBeInTheDocument();
   });
   it("hides the migration entry without an administrator session", async () => {
     renderCard({ migrationManaged: true, auth: adminSession({ user: null }) });
-    await screen.findByText(/Changing locations requires/);
-    expect(
-      screen.queryByRole("button", { name: "Move storage with a verified migration" }),
-    ).not.toBeInTheDocument();
+    await screen.findByText("Local disk");
+    expect(screen.queryByRole("button", { name: "Move storage" })).not.toBeInTheDocument();
   });
   it("keeps current credentials editable without exposing location fields", async () => {
     renderCard({ migrationManaged: true, config: anS3Config() });

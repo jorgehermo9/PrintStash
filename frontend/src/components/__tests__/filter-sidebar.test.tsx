@@ -201,6 +201,98 @@ describe("FilterSidebar", () => {
       );
     });
 
+    it("shows parent totals that include models in nested folders", () => {
+      renderSidebar({
+        collections: [
+          aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 4 }),
+          aCollection({ id: 2, name: "Child", path: "parent/child", parent_id: 1, model_count: 3 }),
+          aCollection({
+            id: 3,
+            name: "Grandchild",
+            path: "parent/child/grandchild",
+            parent_id: 2,
+            model_count: 2,
+          }),
+        ],
+        models: [
+          outlinerModel({ id: 1, collection: "parent", collection_id: 1 }),
+          outlinerModel({ id: 2, collection: "parent/child", collection_id: 2 }),
+          outlinerModel({ id: 3, collection: "parent/child/grandchild", collection_id: 3 }),
+          outlinerModel({ id: 4, collection: "parent/child/grandchild", collection_id: 3 }),
+        ],
+      });
+
+      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
+        "Parent4",
+      );
+      expect(screen.getByRole("button", { name: "Child" }).parentElement).toHaveTextContent(
+        "Child3",
+      );
+    });
+
+    it("uses the collection total when only part of a folder is loaded", () => {
+      renderSidebar({
+        collections: [aCollection({ id: 1, name: "Archive", path: "archive", model_count: 501 })],
+        models: [outlinerModel({ collection: "archive", collection_id: 1 })],
+      });
+
+      expect(screen.getByRole("button", { name: "Archive" }).parentElement).toHaveTextContent(
+        "Archive501",
+      );
+    });
+
+    it("includes multipart sets stored under child folders in the parent total", () => {
+      renderSidebar({
+        collections: [
+          aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 0 }),
+          aCollection({ id: 2, name: "Child", path: "parent/child", parent_id: 1, model_count: 0 }),
+        ],
+        multipartModels: [multipartSet({ collection: "parent/child", collection_id: 2 })],
+      });
+
+      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
+        "Parent1",
+      );
+    });
+
+    it("counts only matching models while filtering the outliner", async () => {
+      const user = userEvent.setup();
+      renderSidebar({
+        collections: [
+          aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 3 }),
+          aCollection({ id: 2, name: "Child", path: "parent/child", parent_id: 1, model_count: 2 }),
+        ],
+        models: [
+          outlinerModel({ id: 1, name: "Other", collection: "parent", collection_id: 1 }),
+          outlinerModel({ id: 2, name: "Match", collection: "parent/child", collection_id: 2 }),
+          outlinerModel({ id: 3, name: "Another", collection: "parent/child", collection_id: 2 }),
+        ],
+      });
+      await user.type(screen.getByPlaceholderText("Filter outliner..."), "Match");
+
+      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
+        "Parent1",
+      );
+      expect(screen.getByRole("button", { name: "Child" }).parentElement).toHaveTextContent(
+        "Child1",
+      );
+    });
+
+    it("counts only Multipart Models in the Multipart view", () => {
+      renderSidebar({
+        collections: [
+          aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 5 }),
+          aCollection({ id: 2, name: "Child", path: "parent/child", parent_id: 1, model_count: 5 }),
+        ],
+        multipartModels: [multipartSet({ collection: "parent/child", collection_id: 2 })],
+        libraryView: "multipart",
+      });
+
+      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
+        "Parent1",
+      );
+    });
+
     it("folds a branch away on request", async () => {
       // A deep library is unscannable fully expanded, so a parent has to be
       // collapsible without losing the selection inside it.

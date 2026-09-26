@@ -19,6 +19,7 @@ from sqlmodel import Session
 
 from app.core.config import DEFAULT_JWT_SECRET, settings
 from app.core.time import utcnow
+from app.modules.administration import setup_policy
 from app.modules.administration.setup_bootstrap import require_open
 
 COOKIE = "printstash_setup"
@@ -30,6 +31,9 @@ _NETWORKS = tuple(
         "10.0.0.0/8",
         "172.16.0.0/12",
         "192.168.0.0/16",
+        # Not 100.64.0.0/10: RFC 6598 shared space numbers ISP carrier-grade NAT,
+        # where other customers can reach a forwarded port. Tailscale reuses it,
+        # so a tailnet address must be allowed explicitly.
         "127.0.0.0/8",
         "::1/128",
         "fc00::/7",
@@ -48,6 +52,8 @@ def host_allowed(host: str) -> bool:
     if (
         host in explicit
         or host == "localhost"
+        # Not ``.ts.net``: Tailscale Funnel publishes those names to the public
+        # internet, so a tailnet name must be allowed explicitly as well.
         or host.endswith((".localhost", ".local", ".home.arpa"))
     ):
         return True
@@ -67,7 +73,9 @@ def host_allowed(host: str) -> bool:
 
 def require_origin(request: Request) -> None:
     """Check the browser origin against the preserved Host, including its port."""
-    if settings.setup_mode != "trusted_network":
+    # Only a valid trusted_network policy opens the browser door; environment,
+    # disabled and misconfigured settings all keep it shut.
+    if not isinstance(setup_policy.current(), setup_policy.TrustedNetwork):
         raise HTTPException(403, "setup_disabled")
     try:
         origin = urlsplit(request.headers.get("origin", ""))

@@ -37,15 +37,33 @@ describe("Search results", () => {
     expect(app.requests().some((request) => request.url.startsWith("/api/v1/search?"))).toBe(false);
     expect(app.requestsWithMethod("POST")).toHaveLength(0);
   });
-  it("exposes search options on demand", async () => {
-    const user = userEvent.setup();
+  it("runs a filter-only search", async () => {
+    const app = results({ at: "/search?favorites=true" });
+    expect(await screen.findByRole("link", { name: "Desk bracket" })).toBeVisible();
+    const request = app.requests().find(({ url }) => url.startsWith("/api/v1/search?"));
+    const query = new URL(request?.url ?? "/api/v1/search", "http://localhost").searchParams;
+    expect(query.get("q")).toBe("");
+    expect(JSON.parse(query.get("filters") ?? "{}")).toMatchObject({ favorites: true });
+  });
+  it("offers a next step when a keyword search finds nothing", async () => {
+    results({ routes: { "GET /api/v1/search?": json(searchResponse()) } });
+    expect(await screen.findByText("No results")).toBeVisible();
+    expect(screen.getByText("Try another description or fewer filters.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+  it("explains AI filter interpretation failure", async () => {
+    results({ at: "/search?q=bracket&parse_error=1" });
+    expect(
+      await screen.findByText("Could not interpret the filters. Searching your original text."),
+    ).toBeVisible();
+    expect(await screen.findByRole("link", { name: "Desk bracket" })).toBeVisible();
+  });
+  it("keeps result type filters visible", async () => {
     results();
     await screen.findByRole("link", { name: "Desk bracket" });
-    expect(screen.getByRole("combobox", { name: "Search mode" })).not.toBeVisible();
-    await user.click(screen.getByText("Search options"));
-    expect(screen.getByRole("combobox", { name: "Search mode" })).toBeVisible();
-    await user.click(screen.getByText("Search options"));
-    expect(screen.getByRole("combobox", { name: "Search mode" })).not.toBeVisible();
+    expect(screen.getByRole("group", { name: "Result types" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Document" })).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Search mode" })).toBeNull();
   });
   it("changes the result layout without repeating the search", async () => {
     const user = userEvent.setup();
@@ -302,11 +320,16 @@ describe("Search results", () => {
       "/models/12",
     );
     expect(screen.getByRole("link", { name: "Tools" })).toHaveAttribute("href", "/?c=Tools");
+    expect(screen.getByRole("link", { name: "Tools" })).toHaveAccessibleDescription("Collection");
     expect(screen.getByRole("link", { name: "Robot" })).toHaveAttribute(
       "href",
       "/multipart-models/4",
     );
+    expect(screen.getByRole("link", { name: "Robot" })).toHaveAccessibleDescription(
+      "Multipart Model",
+    );
     expect(screen.getByRole("link", { name: "Guide" })).toHaveAttribute("href", "/documents/5");
+    expect(screen.getByRole("link", { name: "Guide" })).toHaveAccessibleDescription("Document");
     expect(screen.queryByText("Why this result")).toBeNull();
     expect(document.querySelector("script")).toBeNull();
   });
@@ -383,7 +406,6 @@ describe("Search results", () => {
   it("applies Subject filters through the canonical URL", async () => {
     const user = userEvent.setup();
     const app = results();
-    await user.click(screen.getByText("Search options"));
     await user.click(screen.getByRole("button", { name: "Document" }));
     await waitFor(() =>
       expect(app.requests().some((request) => request.url.includes("types%5B%5D=document"))).toBe(

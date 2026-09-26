@@ -582,7 +582,9 @@ def backup_s3_env(backup_env: BackupEnv) -> Iterator[BackupEnv]:
 class TestBackupS3Key:
     def test_backup_s3_key_prefixes_archive_name(self):
         assert (
-            backup_targets._backup_s3_key("printstash-backup-20240101-000000-abc123.tar.gz")
+            backup_targets._backup_s3_key(
+                "printstash-backup-20240101-000000-abc123.tar.gz"
+            )
             == "printstash-backups/printstash-backup-20240101-000000-abc123.tar.gz"
         )
 
@@ -1291,13 +1293,16 @@ class TestUploadBackupArchive:
         archive = Path(original.path)
         payload = archive.read_bytes()
         filename = archive.name
-        assert backup_deletion.delete_backup(original.id, source_ref=original.source_ref)
+        assert backup_deletion.delete_backup(
+            original.id, source_ref=original.source_ref
+        )
 
         uploaded = backup_adoption.upload_backup_archive(filename, io.BytesIO(payload))
 
         assert Path(uploaded.path).read_bytes() == payload
         assert (
-            backup_catalogue.get_backup(uploaded.id, source_ref=uploaded.source_ref) is not None
+            backup_catalogue.get_backup(uploaded.id, source_ref=uploaded.source_ref)
+            is not None
         )
 
     def test_refuses_to_replace_an_existing_archive(
@@ -1316,7 +1321,9 @@ class TestUploadBackupArchive:
         filename = "printstash-backup-20260101-000000-invalid.tar.gz"
 
         with pytest.raises((RuntimeError, gzip.BadGzipFile, tarfile.TarError)):
-            backup_adoption.upload_backup_archive(filename, io.BytesIO(b"not an archive"))
+            backup_adoption.upload_backup_archive(
+                filename, io.BytesIO(b"not an archive")
+            )
 
         assert list(backup_env.backup_dir.iterdir()) == []
 
@@ -1365,7 +1372,9 @@ class TestListBackups:
             location="s3",
             archive_sha256=local_meta.archive_sha256,
         )
-        monkeypatch.setattr(backup_catalogue, "_list_s3_backups", lambda: [s3_only, s3_dupe])
+        monkeypatch.setattr(
+            backup_catalogue, "_list_s3_backups", lambda: [s3_only, s3_dupe]
+        )
 
         merged = {m.id: m for m in backup_catalogue.list_backups()}
 
@@ -1404,7 +1413,9 @@ class TestListBackups:
             archive_sha256=local_meta.archive_sha256,
         )
         monkeypatch.setattr(
-            backup_catalogue, "_list_s3_backups", lambda: [cloud_only, duplicate_of_local]
+            backup_catalogue,
+            "_list_s3_backups",
+            lambda: [cloud_only, duplicate_of_local],
         )
 
         merged = backup_catalogue.list_backups()
@@ -1687,7 +1698,9 @@ class TestVerifyBackupOwnership:
             object_kind="backup",
             provider_ref="unavailable-profile",
         )
-        monkeypatch.setattr(backup_destination, "destination_for_ownership", lambda _row: None)
+        monkeypatch.setattr(
+            backup_destination, "destination_for_ownership", lambda _row: None
+        )
 
         result = backup_verification.verify_backup_ownership(row.id)
 
@@ -1715,7 +1728,9 @@ class TestVerifyBackupOwnership:
         monkeypatch.setattr(
             backup_destination, "destination_for_ownership", lambda _row: destination
         )
-        monkeypatch.setattr(backup_downloads, "_download_backup_to_local", lambda _meta: cache)
+        monkeypatch.setattr(
+            backup_downloads, "_download_backup_to_local", lambda _meta: cache
+        )
         monkeypatch.setattr(
             backup_verification, "verify_backup", lambda *_args, **_kwargs: verification
         )
@@ -1816,7 +1831,9 @@ class TestVerifyBackupOwnership:
                 id="digest",
             ),
             pytest.param(
-                backup_contracts.BackupOwnershipError("backup_provider_identity_mismatch"),
+                backup_contracts.BackupOwnershipError(
+                    "backup_provider_identity_mismatch"
+                ),
                 "identity",
                 "backup_provider_identity_mismatch",
                 id="identity",
@@ -1873,7 +1890,9 @@ class TestVerifyBackupOwnership:
         cache = tmp_path / "remote-cache.tar.gz"
         verification = self._verification(valid=True)
         cleaned: list[Path] = []
-        monkeypatch.setattr(backup_downloads, "_download_backup_to_local", lambda _meta: cache)
+        monkeypatch.setattr(
+            backup_downloads, "_download_backup_to_local", lambda _meta: cache
+        )
         monkeypatch.setattr(
             backup_verification, "verify_backup", lambda *_args, **_kwargs: verification
         )
@@ -1947,7 +1966,9 @@ class TestDeleteBackup:
                 return True
 
         destination = Destination()
-        monkeypatch.setattr(backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta)
+        monkeypatch.setattr(
+            backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta
+        )
         monkeypatch.setattr(
             backup_destination, "destination_for_ownership", lambda _row: destination
         )
@@ -1992,14 +2013,19 @@ class TestDeleteBackup:
                 assert allow_unversioned is False
                 return False
 
-        monkeypatch.setattr(backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta)
-        monkeypatch.setattr(backup_downloads, "_require_backup_archive_owned", lambda _meta: row)
+        monkeypatch.setattr(
+            backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta
+        )
+        monkeypatch.setattr(
+            backup_downloads, "_require_backup_archive_owned", lambda _meta: row
+        )
         monkeypatch.setattr(
             backup_destination, "destination_for_ownership", lambda _row: Destination()
         )
 
         with pytest.raises(
-            backup_contracts.BackupDeleteUnsupportedError, match="backup_exact_delete_unsupported"
+            backup_contracts.BackupDeleteUnsupportedError,
+            match="backup_exact_delete_unsupported",
         ):
             backup_deletion.delete_backup(meta.id)
 
@@ -2016,7 +2042,9 @@ class TestDeleteBackup:
             path="printstash-backups/unavailable-s3.tar.gz",
             location="s3",
         )
-        monkeypatch.setattr(backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta)
+        monkeypatch.setattr(
+            backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta
+        )
         monkeypatch.setattr(backup_targets, "_get_backup_s3_target", lambda: None)
 
         with pytest.raises(
@@ -2125,7 +2153,9 @@ class TestDeleteBackup:
             if source.id == meta.id and source.location == "s3"
         )
         assert cloud.source_ref is not None
-        assert backup_deletion.delete_backup(meta.id, source_ref=cloud.source_ref) is True
+        assert (
+            backup_deletion.delete_backup(meta.id, source_ref=cloud.source_ref) is True
+        )
 
         import botocore.exceptions
 
@@ -2194,7 +2224,9 @@ class TestDownloadBackupToLocal:
         monkeypatch.setitem(_overlay, "backup_s3_bucket", "archive-bucket")
         monkeypatch.setattr(backup_targets, "_get_backup_s3", lambda: Store())
         monkeypatch.setattr(
-            backup_downloads, "_require_backup_archive_owned", lambda *_args, **_kwargs: owned
+            backup_downloads,
+            "_require_backup_archive_owned",
+            lambda *_args, **_kwargs: owned,
         )
 
         downloaded = backup_downloads._download_backup_to_local(meta)
@@ -2262,10 +2294,14 @@ class TestBackupCacheRecovery:
         )
         store = _BackupObjectStore(payload, "cache-token")
         monkeypatch.setitem(_overlay, "backup_s3_bucket", "archive-bucket")
-        monkeypatch.setattr(backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta)
+        monkeypatch.setattr(
+            backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta
+        )
         monkeypatch.setattr(backup_targets, "_get_backup_s3", lambda: store)
         monkeypatch.setattr(
-            backup_downloads, "_require_backup_archive_owned", lambda *_args, **_kwargs: remote
+            backup_downloads,
+            "_require_backup_archive_owned",
+            lambda *_args, **_kwargs: remote,
         )
 
         backup_restore.restore_backup(meta.id)
@@ -2493,9 +2529,7 @@ class TestBackupCacheRecovery:
             row = build_owned_storage_object(
                 session,
                 backend="local",
-                namespace=storage_local.LocalStorageBackend().namespace_for(
-                    str(cache)
-                ),
+                namespace=storage_local.LocalStorageBackend().namespace_for(str(cache)),
                 key=str(cache),
                 object_kind="backup-cloud-cache",
                 state=StorageObjectState.PENDING,
@@ -2525,9 +2559,7 @@ class TestBackupCacheRecovery:
             row = build_owned_storage_object(
                 session,
                 backend="local",
-                namespace=storage_local.LocalStorageBackend().namespace_for(
-                    str(cache)
-                ),
+                namespace=storage_local.LocalStorageBackend().namespace_for(str(cache)),
                 key=str(cache),
                 object_kind="backup-cloud-cache",
                 state=StorageObjectState.PENDING,
@@ -2664,10 +2696,14 @@ class TestBackupCacheRecovery:
         )
         store = _BackupObjectStore(payload, "cache-token")
         monkeypatch.setitem(_overlay, "backup_s3_bucket", "archive-bucket")
-        monkeypatch.setattr(backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta)
+        monkeypatch.setattr(
+            backup_catalogue, "get_backup", lambda *_args, **_kwargs: meta
+        )
         monkeypatch.setattr(backup_targets, "_get_backup_s3", lambda: store)
         monkeypatch.setattr(
-            backup_downloads, "_require_backup_archive_owned", lambda *_args, **_kwargs: remote
+            backup_downloads,
+            "_require_backup_archive_owned",
+            lambda *_args, **_kwargs: remote,
         )
         real_append = backup_restore_journal._append_restore_journal
 
@@ -2676,7 +2712,9 @@ class TestBackupCacheRecovery:
             if event.get("event") == "database_active":
                 raise KeyboardInterrupt
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", interrupt_after_active)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", interrupt_after_active
+        )
         try:
             with pytest.raises(KeyboardInterrupt):
                 backup_restore.restore_backup(meta.id)
@@ -2841,11 +2879,14 @@ class TestBackupCacheRecovery:
             lambda: _BackupObjectStore(payload, "collision-token"),
         )
         monkeypatch.setattr(
-            backup_downloads, "_require_backup_archive_owned", lambda *_args, **_kwargs: remote
+            backup_downloads,
+            "_require_backup_archive_owned",
+            lambda *_args, **_kwargs: remote,
         )
 
         with pytest.raises(
-            backup_contracts.BackupOwnershipError, match="backup_cache_ownership_unverified"
+            backup_contracts.BackupOwnershipError,
+            match="backup_cache_ownership_unverified",
         ):
             backup_downloads._download_backup_to_local(meta)
 
@@ -2879,7 +2920,7 @@ class TestDownloadBackupEndpoints:
         assert Path(meta.path).name in resp.headers["content-disposition"]
 
     def test_download_then_restore_endpoint_round_trip(
-        self, client: TestClient, backup_env: BackupEnv
+        self, client: TestClient, backup_env: BackupEnv, work_engine
     ):
         content = b"solid endpoint widget\nendsolid\n"
         _model_id, key = seed_model_with_blob(
@@ -2889,7 +2930,9 @@ class TestDownloadBackupEndpoints:
 
         create = client.post("/api/v1/backups", headers=headers)
         assert create.status_code == 202, create.text
-        backup_id = create.json()["backup_id"]
+        work_engine.drain()
+        job = client.get(f"/api/v1/jobs/{create.json()['job_id']}", headers=headers)
+        backup_id = job.json()["result"]["backup_id"]
 
         download = client.get(f"/api/v1/backups/{backup_id}/download", headers=headers)
         assert download.status_code == 200, download.text
@@ -3286,7 +3329,9 @@ class TestRestoreDatabase:
         )
         backend = get_backend()
         namespace = backend.namespace_for(key)
-        current_provider = backup_ownership.provider_ref_for_backend(backend, namespace=namespace)
+        current_provider = backup_ownership.provider_ref_for_backend(
+            backend, namespace=namespace
+        )
         old_provider = "f" * 64
         receipt = storage_contracts.CreationReceipt(
             key=key,
@@ -3427,11 +3472,15 @@ class TestRestoreDatabase:
             if event.get("event") == "database_swap_intent":
                 raise KeyboardInterrupt
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", interrupt_at_swap)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", interrupt_at_swap
+        )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", real_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", real_append
+        )
         backup_restore.restore_backup(meta.id)
 
         assert [event["event"] for event in events].count("database_swap_intent") == 1
@@ -3454,10 +3503,14 @@ class TestRestoreDatabase:
             if event.get("event") == "database_swap_intent":
                 raise KeyboardInterrupt
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", interrupt_at_swap)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", interrupt_at_swap
+        )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", real_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", real_append
+        )
 
         journal = backup_env.backup_dir / f".restore-{meta.id}.journal"
         started = json.loads(journal.read_text().splitlines()[0])
@@ -3478,7 +3531,9 @@ class TestRestoreDatabase:
             resumed_events.append(dict(event))
             real_append(path, event)
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", record_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", record_append
+        )
         backup_restore.restore_backup(meta.id)
 
         names = [event["event"] for event in resumed_events]
@@ -3509,10 +3564,14 @@ class TestRestoreDatabase:
         def leave_terminal_journal(path: Path) -> None:
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(backup_restore_journal, "_remove_restore_journal", leave_terminal_journal)
+        monkeypatch.setattr(
+            backup_restore_journal, "_remove_restore_journal", leave_terminal_journal
+        )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
-        monkeypatch.setattr(backup_restore_journal, "_remove_restore_journal", real_remove)
+        monkeypatch.setattr(
+            backup_restore_journal, "_remove_restore_journal", real_remove
+        )
 
         journal = backup_env.backup_dir / f".restore-{meta.id}.journal"
         assert journal.exists()
@@ -3524,7 +3583,9 @@ class TestRestoreDatabase:
                 session.commit()
         else:
             monkeypatch.setattr(
-                backup_restore_journal, "_active_restore_marker", lambda *_args, **_kwargs: None
+                backup_restore_journal,
+                "_active_restore_marker",
+                lambda *_args, **_kwargs: None,
             )
 
         monkeypatch.setattr(
@@ -3533,7 +3594,8 @@ class TestRestoreDatabase:
             lambda *_args, **_kwargs: pytest.fail("terminal restore replayed bytes"),
         )
         with pytest.raises(
-            backup_maintenance.RestoreConflictError, match="restore_database_state_unknown"
+            backup_maintenance.RestoreConflictError,
+            match="restore_database_state_unknown",
         ):
             backup_restore.restore_backup(meta.id)
 
@@ -3565,10 +3627,14 @@ class TestRestoreDatabase:
             if event.get("event") == "database_active":
                 raise KeyboardInterrupt
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", interrupt_at_active)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", interrupt_at_active
+        )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", real_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", real_append
+        )
 
         journal = backup_env.backup_dir / f".restore-{meta.id}.journal"
         before_journal = journal.read_bytes()
@@ -3917,7 +3983,9 @@ class TestRestoreDatabase:
             ).one().name = "Current First"
             session.commit()
 
-        with pytest.raises(backup_maintenance.RestoreConflictError, match="destination_exists"):
+        with pytest.raises(
+            backup_maintenance.RestoreConflictError, match="destination_exists"
+        ):
             backup_restore.restore_backup(meta.id)
 
         assert Path(first_key).read_bytes() == b"current-first"
@@ -3937,7 +4005,9 @@ class TestRestoreDatabase:
         Path(conflicting_key).write_bytes(b"current")
         journal = backup_env.backup_dir / f".restore-{meta.id}.journal"
 
-        with pytest.raises(backup_maintenance.RestoreConflictError, match="destination_exists"):
+        with pytest.raises(
+            backup_maintenance.RestoreConflictError, match="destination_exists"
+        ):
             backup_restore.restore_backup(meta.id)
 
         assert Path(matching_key).read_bytes() == b"matching"
@@ -3950,7 +4020,9 @@ class TestRestoreDatabase:
         meta = backup_creation.create_backup()
         Path(key).write_bytes(b"current")
 
-        with pytest.raises(backup_maintenance.RestoreConflictError, match="destination_exists"):
+        with pytest.raises(
+            backup_maintenance.RestoreConflictError, match="destination_exists"
+        ):
             backup_restore.restore_backup(meta.id)
 
         assert backup_maintenance.restore_in_progress() is False
@@ -4005,9 +4077,12 @@ class TestRestoreDatabase:
         )
 
         with pytest.raises(
-            backup_maintenance.RestoreConflictError, match="restore_duplicate_destination"
+            backup_maintenance.RestoreConflictError,
+            match="restore_duplicate_destination",
         ):
-            backup_restore_blobs._apply_staged_blobs([blob, blob], backup_env.root / "rollback")
+            backup_restore_blobs._apply_staged_blobs(
+                [blob, blob], backup_env.root / "rollback"
+            )
 
         assert not Path(key).exists()
 
@@ -4045,7 +4120,9 @@ class TestRestoreDatabase:
             real_restore(path)
             raise OSError("acknowledgement lost")
 
-        monkeypatch.setattr(backup_snapshot, "_restore_database_from_path", swap_then_raise)
+        monkeypatch.setattr(
+            backup_snapshot, "_restore_database_from_path", swap_then_raise
+        )
 
         result = backup_restore.restore_backup(meta.id)
 
@@ -4090,7 +4167,9 @@ class TestRestoreDatabase:
                 raise OSError("journal terminal failure")
             real_append(path, event)
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", fail_active_ack)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", fail_active_ack
+        )
         try:
             with pytest.raises(
                 backup_maintenance.RestoreConflictError,
@@ -4118,12 +4197,15 @@ class TestRestoreDatabase:
             lambda _path: (_ for _ in ()).throw(OSError("swap uncertain")),
         )
         monkeypatch.setattr(
-            backup_restore_journal, "_active_restore_marker", lambda _id, **_kwargs: None
+            backup_restore_journal,
+            "_active_restore_marker",
+            lambda _id, **_kwargs: None,
         )
 
         try:
             with pytest.raises(
-                backup_maintenance.RestoreConflictError, match="restore_database_state_unknown"
+                backup_maintenance.RestoreConflictError,
+                match="restore_database_state_unknown",
             ):
                 backup_restore.restore_backup(meta.id)
             assert backup_maintenance.restore_in_progress() is True
@@ -4146,7 +4228,9 @@ class TestRestoreDatabase:
             Path(key).write_bytes(b"foreign-final-mutation")
             return result
 
-        monkeypatch.setattr(backup_restore_blobs, "_apply_staged_blobs", mutate_after_apply)
+        monkeypatch.setattr(
+            backup_restore_blobs, "_apply_staged_blobs", mutate_after_apply
+        )
 
         with pytest.raises(
             backup_maintenance.RestoreConflictError, match="restore_destination_changed"
@@ -4378,7 +4462,8 @@ class TestRestoreDatabase:
         other.write_text("reserved")
 
         with pytest.raises(
-            backup_maintenance.RestoreConflictError, match="restore_incomplete_other_backup"
+            backup_maintenance.RestoreConflictError,
+            match="restore_incomplete_other_backup",
         ):
             backup_restore.restore_backup(meta.id)
 
@@ -4402,11 +4487,15 @@ class TestRestoreDatabase:
                 raise KeyboardInterrupt
 
         monkeypatch.setattr(
-            backup_restore_journal, "_append_restore_journal", interrupt_after_publication
+            backup_restore_journal,
+            "_append_restore_journal",
+            interrupt_after_publication,
         )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", real_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", real_append
+        )
         Path(key).unlink()
         backend = get_backend()
         real_create = backend.create_stream
@@ -4499,10 +4588,14 @@ class TestRestoreDatabase:
             if event.get("event") == "published":
                 raise KeyboardInterrupt
 
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", crash_after_journal)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", crash_after_journal
+        )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", real_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", real_append
+        )
 
         backup_restore.restore_backup(meta.id)
 
@@ -4544,11 +4637,15 @@ class TestRestoreDatabase:
                 raise KeyboardInterrupt
 
         monkeypatch.setattr(
-            backup_restore_journal, "_append_restore_journal", interrupt_after_publication
+            backup_restore_journal,
+            "_append_restore_journal",
+            interrupt_after_publication,
         )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", real_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", real_append
+        )
         journal = backup_env.backup_dir / f".restore-{meta.id}.journal"
         events = [json.loads(line) for line in journal.read_text().splitlines()]
         published = events[-1]
@@ -4578,11 +4675,15 @@ class TestRestoreDatabase:
                 raise KeyboardInterrupt
 
         monkeypatch.setattr(
-            backup_restore_journal, "_append_restore_journal", interrupt_after_publication
+            backup_restore_journal,
+            "_append_restore_journal",
+            interrupt_after_publication,
         )
         with pytest.raises(KeyboardInterrupt):
             backup_restore.restore_backup(meta.id)
-        monkeypatch.setattr(backup_restore_journal, "_append_restore_journal", real_append)
+        monkeypatch.setattr(
+            backup_restore_journal, "_append_restore_journal", real_append
+        )
         monkeypatch.setattr(
             get_backend(),
             "creation_matches",
@@ -4840,19 +4941,21 @@ class TestRestoreDatabase:
 
         assert result["restored_files"] == 1
 
-    def test_restore_rejected_while_job_running(self, backup_env: BackupEnv):
-        from app.runtime.jobs import registry
-
+    def test_restore_rejected_while_a_write_stays_admitted(
+        self, backup_env: BackupEnv, monkeypatch: pytest.MonkeyPatch
+    ):
         model_id, _key = seed_model_with_blob(backup_env, name="Widget", content=b"x")
         meta = backup_creation.create_backup()
+        # A job step mid-write is an admitted mutation; the restore waits for
+        # it to drain and gives up when it does not.
+        monkeypatch.setattr(backup_maintenance, "_RESTORE_DRAIN_TIMEOUT_S", 0.1)
 
-        job_id = registry.create()
-        registry.update(job_id, state="running")
+        assert backup_maintenance.begin_mutating_operation() is True
         try:
             with pytest.raises(backup_maintenance.RestoreConflictError):
                 backup_restore.restore_backup(meta.id)
         finally:
-            registry.update(job_id, state="completed")
+            backup_maintenance.end_mutating_operation()
 
         assert not backup_maintenance.restore_in_progress()
         with backup_env.new_session() as session:
@@ -5030,7 +5133,9 @@ class TestPurgeOldBackups:
         from app.core.time import utcnow
 
         # An old backup: pin create_backup's clock 60 days into the past.
-        monkeypatch.setattr(backup_creation, "utcnow", lambda: utcnow() - timedelta(days=60))
+        monkeypatch.setattr(
+            backup_creation, "utcnow", lambda: utcnow() - timedelta(days=60)
+        )
         old = backup_creation.create_backup()
 
         # A fresh backup at the real clock.
@@ -5075,7 +5180,9 @@ class TestPurgeOldBackups:
         def delete(source_id: str, *, source_ref: str | None = None) -> bool:
             attempted.append((source_id, source_ref))
             if source_id == "unverifiable":
-                raise backup_contracts.BackupOwnershipError("provider credentials leaked")
+                raise backup_contracts.BackupOwnershipError(
+                    "provider credentials leaked"
+                )
             return True
 
         monkeypatch.setattr(backup_catalogue, "list_backup_sources", lambda: sources)
@@ -5132,28 +5239,27 @@ class TestDocument:
 
 
 class TestStart:
-    def test_a_restore_refused_for_a_running_job_is_audited(
+    def test_a_restore_refused_for_an_admitted_write_is_audited(
         self,
         backup_env: BackupEnv,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         from app.db.models import AuditLog
-        from app.runtime.jobs import registry
 
         seed_model_with_blob(backup_env, name="Widget", content=b"x")
         meta = backup_creation.create_backup()
+        monkeypatch.setattr(backup_maintenance, "_RESTORE_DRAIN_TIMEOUT_S", 0.1)
 
-        job_id = registry.create()
-        registry.update(job_id, state="running")
+        assert backup_maintenance.begin_mutating_operation() is True
         try:
             with pytest.raises(backup_maintenance.RestoreConflictError):
                 backup_restore.restore_backup(meta.id)
         finally:
-            registry.update(job_id, state="completed")
+            backup_maintenance.end_mutating_operation()
 
-        # No DB swap happened, so both rows survive in the current database.
+        # Refused before it began, so no DB swap happened and nothing started.
         with backup_env.new_session() as session:
             actions = {row.action for row in session.exec(select(AuditLog)).all()}
-        assert "restore.start" in actions
         assert "restore.failed" in actions
 
 
@@ -5180,7 +5286,8 @@ class TestRaises:
         backup_maintenance._restore_gate.set()
         try:
             with pytest.raises(
-                backup_maintenance.RestoreConflictError, match="restore_recovery_required"
+                backup_maintenance.RestoreConflictError,
+                match="restore_recovery_required",
             ):
                 backup_restore.restore_backup("different-backup")
         finally:
@@ -5346,7 +5453,9 @@ class TestDiscoverUnownedS3Backups:
             location="s3",
             namespace=f"archive-bucket/{backup_contracts._LEGACY_BACKUP_S3_PREFIX}",
             path=key,
-            provider_ref=backup_targets._backup_provider_ref(backup_targets._backup_s3_config()),
+            provider_ref=backup_targets._backup_provider_ref(
+                backup_targets._backup_s3_config()
+            ),
         )
         assert store.get_kwargs is not None
         assert store.get_kwargs["VersionId"] == "version-1"
@@ -5415,7 +5524,9 @@ class TestAdoptS3Backup:
         key = f"{backup_contracts._LEGACY_BACKUP_S3_PREFIX}{Path(meta.path).name}"
         monkeypatch.setitem(_overlay, "backup_s3_bucket", "archive-bucket")
         monkeypatch.setattr(
-            backup_targets, "_get_backup_s3", lambda: _BackupObjectStore(payload, "unused")
+            backup_targets,
+            "_get_backup_s3",
+            lambda: _BackupObjectStore(payload, "unused"),
         )
 
         with pytest.raises(ValueError, match="backup_source_ref_mismatch"):
@@ -5572,7 +5683,9 @@ class TestAdoptS3Backup:
                 )
             ).one()
             assert row.state is StorageObjectState.COMMITTED
-            assert row.namespace == f"archive-bucket/{backup_contracts._BACKUP_S3_PREFIX}"
+            assert (
+                row.namespace == f"archive-bucket/{backup_contracts._BACKUP_S3_PREFIX}"
+            )
             assert row.size_bytes == len(payload)
             assert row.sha256 == digest
             assert row.etag == '"archive-etag"'
@@ -5780,7 +5893,9 @@ class TestReconcileBackupPublications:
         seed_model_with_blob(backup_env, name="Changed OpenDAL", content=b"remote")
         meta = backup_creation.create_backup()
         key = "gdrive/PrintStash/printstash-backups/changed-opendal.tar.gz"
-        monkeypatch.setattr(backup_destination, "destination_for_ownership", lambda _row: None)
+        monkeypatch.setattr(
+            backup_destination, "destination_for_ownership", lambda _row: None
+        )
         with backup_env.new_session() as session:
             row = session.exec(
                 select(OwnedStorageObject).where(
@@ -6151,9 +6266,7 @@ class TestListS3Backups:
                 )
             ).one()
             row.backend = "backup-s3"
-            row.namespace = (
-                f"{backup_targets.settings.backup_s3_bucket}/{backup_contracts._BACKUP_S3_PREFIX}"
-            )
+            row.namespace = f"{backup_targets.settings.backup_s3_bucket}/{backup_contracts._BACKUP_S3_PREFIX}"
             row.key = key
             target = backup_targets._get_backup_s3_target()
             assert target is not None
@@ -6293,7 +6406,9 @@ class TestListS3Backups:
             row.token = "listing-token"
             row.etag = '"archive-etag"'
             row.version_id = "version-1"
-            row.provider_ref = backup_targets._backup_provider_ref(backup_targets._backup_s3_config())
+            row.provider_ref = backup_targets._backup_provider_ref(
+                backup_targets._backup_s3_config()
+            )
             store.token = row.token
             session.add(row)
             session.commit()

@@ -16,6 +16,11 @@
  * disabled is a request against a route the user may have no role on, which
  * surfaces as a spurious 403 in the console on pages that look fine.
  *
+ * **Warm navigation.** Opening a folder must not drop the grid back to its
+ * first-load skeleton, and a folder warmed on hover must be read from the cache
+ * entry the prefetch filled — a warmer that fills a different key is a request
+ * the user pays for twice.
+ *
  * Pagination is server-owned: the sort goes to the server and the next cursor is
  * requested only on demand. A client that re-sorted locally would paginate a
  * different order than the one it displays.
@@ -29,10 +34,13 @@ import type { ReactNode } from "react";
 import {
   QueryApiProvider,
   defaultQueryApi,
+  useCollectionReadme,
   useCollections,
   useFilamentProfiles,
+  useLibraryPrefetch,
   useModelFacets,
   useModelList,
+  useMultipartModels,
   usePrinterProfiles,
   usePrinters,
   useOutlinerModels,
@@ -46,6 +54,7 @@ import type {
   ModelFacetsRead,
   ModelListItem,
   ModelPageRead,
+  MultipartModelListItem,
   OutlinerModelRead,
   PrinterProfileRead,
   TagRead,
@@ -63,11 +72,13 @@ import { aPrinter } from "@/test-support/factories";
 // for exactly the reads the hooks below perform; every other member keeps its
 // real implementation and is never reached from here.
 const stubs = {
+  getCollectionReadme: vi.fn<QueryApi["getCollectionReadme"]>(),
   getModelFacets: vi.fn<QueryApi["getModelFacets"]>(),
   getVaultStats: vi.fn<QueryApi["getVaultStats"]>(),
   listCollections: vi.fn<QueryApi["listCollections"]>(),
   listFilamentProfiles: vi.fn<QueryApi["listFilamentProfiles"]>(),
   listModelPage: vi.fn<QueryApi["listModelPage"]>(),
+  listMultipartModels: vi.fn<QueryApi["listMultipartModels"]>(),
   listOutlinerModels: vi.fn<QueryApi["listOutlinerModels"]>(),
   listPrinterProfiles: vi.fn<QueryApi["listPrinterProfiles"]>(),
   listPrinters: vi.fn<QueryApi["listPrinters"]>(),
@@ -87,6 +98,7 @@ const collection: CollectionRead = {
   model_count: 1,
   effective_role: null,
   tags: [],
+  has_readme: false,
 };
 
 const tag: TagRead = { id: 1, name: "petg", slug: "petg", model_count: 1 };
@@ -179,9 +191,10 @@ function emptyFacets(): ModelFacetsRead {
   };
 }
 
-function wrapper() {
+/** `staleTime` mirrors production's 30s when a test depends on freshness. */
+function wrapper(options: { staleTime?: number } = {}) {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, staleTime: options.staleTime ?? 0 } },
   });
   return ({ children }: { children: ReactNode }) => (
     <QueryApiProvider value={api}>
@@ -360,5 +373,151 @@ describe("server-owned Model pagination", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");
     expect(stubs.listOutlinerModels).not.toHaveBeenCalled();
+  });
+});
+
+describe("folder navigation", () => {
+  function aMultipartModel(id: number, name: string): MultipartModelListItem {
+    return {
+      id,
+      name,
+      slug: name.toLowerCase(),
+      description: null,
+      collection: "parts",
+      collection_id: 1,
+      part_count: 1,
+      model_count: 1,
+      guide_count: 0,
+      cover_model_id: null,
+      cover_image_url: null,
+      cover_image_uploaded: false,
+      cover_thumbnail_url: null,
+      member_model_ids: [id],
+      tags: [],
+      starred: false,
+      effective_role: "admin",
+      updated_at: TIMESTAMP,
+    };
+  }
+
+  it("keeps the previous folder's multipart list while the next one loads", async () => {
+    // Dropping it flips the grid to its first-load skeleton on every folder.
+    const parts = [aMultipartModel(1, "Rack")];
+    let resolveNext!: (value: MultipartModelListItem[]) => void;
+    stubs.listMultipartModels.mockResolvedValueOnce(parts).mockImplementationOnce(
+      () =>
+        new Promise<MultipartModelListItem[]>((resolve) => {
+          resolveNext = resolve;
+        }),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ collection }) => useMultipartModels({ collection, direct: true }),
+      { initialProps: { collection: "parts" }, wrapper: wrapper() },
+    );
+    await waitFor(() => expect(result.current.data).toEqual(parts));
+    rerender({ collection: "parts/rack" });
+    await waitFor(() => expect(stubs.listMultipartModels).toHaveBeenCalledTimes(2));
+
+    expect(result.current.data).toEqual(parts);
+    expect(result.current.isLoading).toBe(false);
+    resolveNext([]);
+    await waitFor(() => expect(result.current.data).toEqual([]));
+  });
+
+  it("reads a folder's readme text", async () => {
+    stubs.getCollectionReadme.mockResolvedValue({ readme: "# Rack" });
+
+    const { result } = renderHook(() => useCollectionReadme(5), { wrapper: wrapper() });
+
+    await waitFor(() => expect(result.current.data).toBe("# Rack"));
+    expect(stubs.getCollectionReadme).toHaveBeenCalledWith(5);
+  });
+
+  it("does not request a readme while disabled", async () => {
+    const { result } = renderHook(() => useCollectionReadme(5, { enabled: false }), {
+      wrapper: wrapper(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(stubs.getCollectionReadme).not.toHaveBeenCalled();
+  });
+
+  /** Warm through the prefetcher, then mount `read` on the same cache. */
+  async function warmThenRead<T>(
+    warm: (prefetch: ReturnType<typeof useLibraryPrefetch>) => Promise<void>,
+    read: () => T,
+  ) {
+    const shared = wrapper({ staleTime: 30_000 });
+    const warmer = renderHook(() => useLibraryPrefetch(), { wrapper: shared });
+    await act(() => warm(warmer.result.current));
+    return renderHook(read, { wrapper: shared }).result;
+  }
+
+  it("serves a warmed model page to the grid without another request", async () => {
+    const page: ModelPageRead = { items: [makeListItem(1, "Rack")], next_cursor: null, total: 1 };
+    stubs.listModelPage.mockResolvedValue(page);
+    const filters = { collection: "parts", direct: true };
+
+    const result = await warmThenRead(
+      (prefetch) => prefetch.modelList(filters, 60, "date-desc"),
+      () => useModelList(filters, 60, "date-desc"),
+    );
+
+    expect(result.current.data?.pages).toEqual([page]);
+    expect(stubs.listModelPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a warmed multipart list without another request", async () => {
+    const parts = [aMultipartModel(1, "Rack")];
+    stubs.listMultipartModels.mockResolvedValue(parts);
+    const filters = { collection: "parts", direct: true, limit: 500 };
+
+    const result = await warmThenRead(
+      (prefetch) => prefetch.multipartModels(filters),
+      () => useMultipartModels(filters),
+    );
+
+    expect(result.current.data).toEqual(parts);
+    expect(stubs.listMultipartModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves warmed facets without another request", async () => {
+    const facets = { ...emptyFacets(), material_type: [{ value: "PLA", count: 1 }] };
+    stubs.getModelFacets.mockResolvedValue(facets);
+    const filters = { collection: "parts", direct: true };
+
+    const result = await warmThenRead(
+      (prefetch) => prefetch.modelFacets(filters),
+      () => useModelFacets(filters),
+    );
+
+    expect(result.current.data).toEqual(facets);
+    expect(stubs.getModelFacets).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a warmed readme without another request", async () => {
+    stubs.getCollectionReadme.mockResolvedValue({ readme: "# Rack" });
+
+    const result = await warmThenRead(
+      (prefetch) => prefetch.collectionReadme(5),
+      () => useCollectionReadme(5),
+    );
+
+    expect(result.current.data).toBe("# Rack");
+    expect(stubs.getCollectionReadme).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-request a folder warmed moments ago", async () => {
+    // Moving the pointer back and forth over a folder must not hammer the server.
+    const filters = { collection: "parts", direct: true };
+    const shared = wrapper({ staleTime: 30_000 });
+    const { result } = renderHook(() => useLibraryPrefetch(), { wrapper: shared });
+
+    await act(() => result.current.modelList(filters, 60, "date-desc"));
+    await act(() => result.current.modelList(filters, 60, "date-desc"));
+
+    expect(stubs.listModelPage).toHaveBeenCalledTimes(1);
   });
 });

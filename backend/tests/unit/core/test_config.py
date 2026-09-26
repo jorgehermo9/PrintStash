@@ -1,11 +1,16 @@
-"""Validation contracts for environment-backed numeric settings."""
+"""Validation contracts for environment-backed settings: numbers and paths."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import FrozenSettings
+from app.core.config import DATA_ROOT_LAYOUT, ConfigResolver, FrozenSettings, _overlay
+
+DATA_ROOT = Path("/srv/printstash")
+POSTGRES_URL = "postgresql+psycopg://printstash:secret@postgres:5432/printstash"
 
 
 class TestSettings:
@@ -67,3 +72,102 @@ class TestSettings:
                 max_archive_entry_mb=100,
                 max_archive_uncompressed_mb=99,
             )
+
+
+class TestDefaultUnderDataRoot:
+    """One volume holds every app path, so one variable must place them all.
+
+    A path that silently kept its own default would land outside the mounted
+    volume and vanish with the container, and staging outside the library's
+    mount turns every hard-linked import back into a full copy.
+    """
+
+    def test_defaults_the_data_root_to_the_container_volume(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("VAULT_DATA_ROOT")
+
+        configured = FrozenSettings(_env_file=None)
+
+        assert configured.data_root == Path("/data")
+
+    @pytest.mark.parametrize(
+        ("field", "child"),
+        sorted(DATA_ROOT_LAYOUT.items()),
+        ids=sorted(DATA_ROOT_LAYOUT),
+    )
+    def test_derives_each_app_path_under_the_data_root(
+        self, field: str, child: str
+    ) -> None:
+        configured = FrozenSettings(_env_file=None, data_root=DATA_ROOT)
+
+        assert getattr(configured, field) == DATA_ROOT / child
+
+    def test_derives_the_sqlite_database_under_the_data_root(self) -> None:
+        configured = FrozenSettings(_env_file=None, data_root=DATA_ROOT)
+
+        assert configured.db_url == "sqlite:////srv/printstash/db/printstash.sqlite"
+
+    def test_derives_a_relative_database_from_a_relative_root(self) -> None:
+        configured = FrozenSettings(_env_file=None, data_root=Path("_data"))
+
+        assert configured.db_url == "sqlite:///_data/db/printstash.sqlite"
+
+    @pytest.mark.parametrize("field", sorted(DATA_ROOT_LAYOUT))
+    def test_keeps_an_explicit_directory_override(
+        self, monkeypatch: pytest.MonkeyPatch, field: str
+    ) -> None:
+        monkeypatch.setenv(f"VAULT_{field.upper()}", "/mnt/hdd/moved")
+
+        configured = FrozenSettings(_env_file=None, data_root=DATA_ROOT)
+
+        assert getattr(configured, field) == Path("/mnt/hdd/moved")
+
+    def test_moves_only_the_overridden_directory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VAULT_DATA_DIR", "/mnt/hdd/files")
+
+        configured = FrozenSettings(_env_file=None, data_root=DATA_ROOT)
+
+        assert configured.staging_dir == DATA_ROOT / "staging"
+
+    @pytest.mark.parametrize("field", sorted(DATA_ROOT_LAYOUT))
+    def test_treats_an_empty_override_as_the_layout_default(
+        self, monkeypatch: pytest.MonkeyPatch, field: str
+    ) -> None:
+        # An unset `${VAR:-}` in Compose renders as an empty string. Taken
+        # literally it would be Path(""), the process's working directory.
+        monkeypatch.setenv(f"VAULT_{field.upper()}", "")
+
+        configured = FrozenSettings(_env_file=None, data_root=DATA_ROOT)
+
+        assert getattr(configured, field) == DATA_ROOT / DATA_ROOT_LAYOUT[field]
+
+    def test_keeps_an_explicit_database_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VAULT_DB_URL", POSTGRES_URL)
+
+        configured = FrozenSettings(_env_file=None, data_root=DATA_ROOT)
+
+        assert configured.db_url == POSTGRES_URL
+
+    def test_treats_an_empty_database_url_as_the_layout_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VAULT_DB_URL", "")
+
+        configured = FrozenSettings(_env_file=None, data_root=DATA_ROOT)
+
+        assert configured.db_url == "sqlite:////srv/printstash/db/printstash.sqlite"
+
+
+class TestConfigResolver:
+    def test_frozen_ignores_a_runtime_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        resolver = ConfigResolver(FrozenSettings(_env_file=None, data_root=DATA_ROOT))
+        monkeypatch.setitem(_overlay, "data_dir", Path("/mnt/runtime/files"))
+
+        assert resolver.frozen.data_dir == DATA_ROOT / "files"

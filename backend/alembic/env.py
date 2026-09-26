@@ -10,6 +10,7 @@ from alembic import context
 from app.core.config import settings
 from app.db import models  # noqa: F401
 from app.db.derived_objects import managed_names
+from app.db.enum_columns import EnumText  # also registers the enum CHECK comparator
 from app.db.migration_guards import (
     acknowledged_drops,
     dropped_and_added_columns,
@@ -81,11 +82,25 @@ def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool
     free to move.
 
     `AutoString` is `sa.String` with a length, so rendering it as one loses nothing.
+    An enum column (`EnumText`) is TEXT in the database, so it renders as
+    `sa.Text()`; its values live in the CHECK constraint beside it.
     """
+    if type_ == "type" and isinstance(obj, EnumText):
+        return "sa.Text()"
     if type_ == "type" and type(obj).__module__.startswith("sqlmodel"):
         length = getattr(obj, "length", None)
         return f"sa.String(length={length})" if length else "sa.String()"
     return False
+
+
+def _include_name(name: str | None, type_: str, parent_names: object) -> bool:
+    """Leave the job engine's schema alone.
+
+    On PostgreSQL the engine keeps its system tables in a ``dbos`` schema of the
+    application database. They are the engine's, disposable and versioned by
+    it, so autogenerate must never offer to drop or reshape them.
+    """
+    return not (type_ == "schema" and name == "dbos")
 
 
 def _is_sqlite_url(url: str) -> bool:
@@ -106,7 +121,9 @@ def _configure_context(
         connection.commit()
     kwargs = {
         "include_object": lambda obj, name, kind, reflected, compare_to: not (kind == "table" and name in derived),
-        "include_name": lambda name, kind, parents: not (kind == "table" and name in derived),
+        "include_name": lambda name, kind, parents: (
+            not (kind == "table" and name in derived) and _include_name(name, kind, parents)
+        ),
         "target_metadata": target_metadata,
         "compare_type": True,
         "compare_server_default": True,

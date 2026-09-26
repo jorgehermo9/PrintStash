@@ -410,9 +410,10 @@ class TestOriginalBinaryAfterPreview:
             )
 
             async def preview_then_send():
-                preview = await toolpath.render(artifact)
+                converted = toolpath.convert(artifact, tmp_path)
                 assert (
-                    preview == (FIXTURES_DIR / "bgcode/prusaslicer.gcode").read_bytes()
+                    converted.read_bytes()
+                    == (FIXTURES_DIR / "bgcode/prusaslicer.gcode").read_bytes()
                 )
                 with resolve(artifact).materialize() as original:
                     await provider.upload(original, "original.bgcode")

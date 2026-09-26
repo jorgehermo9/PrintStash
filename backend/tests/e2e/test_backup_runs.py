@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e._backup_helpers import setup_and_login
+from tests.e2e._jobs import completed_job, create_backup
 
 
 class TestReplicaRunRecovery:
@@ -34,9 +35,7 @@ class TestReplicaRunRecovery:
             },
         )
         assert connection.status_code == 201, connection.text
-        created = await api.post("/api/v1/backups", headers=headers)
-        assert created.status_code == 202, created.text
-        body = created.json()
+        body = await create_backup(api, headers)
         assert body["outcome"] == "partial"
         failed = next(
             row for row in body["destination_results"] if row["kind"] == "connection"
@@ -50,8 +49,7 @@ class TestReplicaRunRecovery:
         response = await api.post(
             f"/api/v1/backups/runs/destinations/{failed['id']}/retry", headers=headers
         )
-        assert response.status_code == 200, response.text
-        result = response.json()
+        result = (await completed_job(api, response, headers))["result"]
         assert result["outcome"] == "completed"
         assert result["retry_attempts"][0]["source_result_id"] == local["id"]
         archives = list((tmp_path / "webdav").rglob("*.tar.gz"))

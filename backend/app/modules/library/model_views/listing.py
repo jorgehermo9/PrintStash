@@ -22,7 +22,9 @@ from .filters import _filtered_stmt, filtered_with_rank
 from .projections import _hydrate_list_rows, collection_name_for
 
 
-def read_items_by_ids(session: Session, user: User, model_ids: list[int]) -> list[ModelListItem]:
+def read_items_by_ids(
+    session: Session, user: User, model_ids: list[int]
+) -> list[ModelListItem]:
     """Reuse authorized Model cards in heterogeneous, bounded result pages."""
     if len(model_ids) > 2048:
         raise ValueError("model_projection_limit")
@@ -32,7 +34,9 @@ def read_items_by_ids(session: Session, user: User, model_ids: list[int]) -> lis
         select(Model).where(
             Model.id.in_(model_ids),
             Model.id.in_(
-                accessible_live_model_ids_stmt(session, user).where(Model.id.in_(model_ids))
+                accessible_live_model_ids_stmt(session, user).where(
+                    Model.id.in_(model_ids)
+                )
             ),
         )
     ).all()

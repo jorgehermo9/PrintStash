@@ -25,6 +25,7 @@ from sqlmodel import select
 from app.db.models import File
 from app.modules.storage.storage_backend.runtime import bind_backend
 from app.modules.storage.storage_backend.s3 import S3StorageBackend
+from tests.e2e._jobs import settle
 from tests.factories import content
 from tests.fakes.s3_delivery import browser_s3
 
@@ -157,6 +158,7 @@ class TestDirectUpload:
                     headers=superuser_headers,
                 )
                 assert finalized.status_code == 200, finalized.text
+                settle()
 
             status = await api.get(
                 f"/api/v1/artifact-uploads/{upload_id}", headers=superuser_headers

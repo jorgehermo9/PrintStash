@@ -1,7 +1,7 @@
 """URL + ZIP import coverage driven by *real* benchy testdata and real-world
 model-host URLs (Printables / MakerWorld).
 
-These exercise the ``/ingest/url`` and ``/ingest/archive`` surfaces end-to-end:
+These exercise the ``/ingest/url`` and ``/ingest/archive/*`` surfaces end-to-end:
 
 * A direct-file URL import (as if Printables served the STL directly) ingests
   the real ``testdata/benchy`` mesh and records the source URL on the model.
@@ -43,6 +43,7 @@ from app.core.config import _overlay, settings
 from app.db.models import Collection, File, FileType, Model
 from app.modules.ingestion import import_resolvers, importer
 from tests._env import use_local_storage
+from tests.integration.api.v1._ingest_assertions import drain_work
 from tests.paths import TESTDATA_DIR, require_fixtures
 
 # --------------------------------------------------------------------------- #
@@ -138,7 +139,8 @@ def _benchy_zip_bytes(*sources: Path) -> bytes:
 def _job(client: TestClient, resp, headers: dict[str, str]) -> dict:
     assert resp.status_code == 202, resp.text
     job_id = resp.json()["job_id"]
-    job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
+    drain_work()
+    job = client.get(f"/api/v1/jobs/{job_id}", headers=headers)
     assert job.status_code == 200, job.text
     return job.json()
 
@@ -346,13 +348,17 @@ class TestImportFromUrl:
         expected.sort()
         zip_bytes = _benchy_zip_bytes(*sources)
 
-        manifest = client.post(
-            "/api/v1/ingest/archive",
-            headers=auth_headers,
-            files={"file": ("benchy-bundle.zip", zip_bytes, "application/zip")},
+        inspected = _job(
+            client,
+            client.post(
+                "/api/v1/ingest/archive/inspect",
+                headers=auth_headers,
+                files={"file": ("benchy-bundle.zip", zip_bytes, "application/zip")},
+            ),
+            auth_headers,
         )
-        assert manifest.status_code == 200, manifest.text
-        body = manifest.json()
+        assert inspected["state"] == "completed", inspected
+        body = inspected["result"]
         archive_id = body["archive_id"]
         importable = sorted(e["name"] for e in body["entries"] if e["file_type"])
         # The G-code files (including binary .bgcode) are importable; the .txt isn't.
@@ -401,13 +407,17 @@ class TestImportFromUrl:
             zf.writestr("Terrain/wall_benchy.gcode", BENCHY_GCODE_B.read_bytes())
         zip_bytes = buf.getvalue()
 
-        manifest = client.post(
-            "/api/v1/ingest/archive",
-            headers=auth_headers,
-            files={"file": ("structured-pack.zip", zip_bytes, "application/zip")},
+        inspected = _job(
+            client,
+            client.post(
+                "/api/v1/ingest/archive/inspect",
+                headers=auth_headers,
+                files={"file": ("structured-pack.zip", zip_bytes, "application/zip")},
+            ),
+            auth_headers,
         )
-        assert manifest.status_code == 200, manifest.text
-        body = manifest.json()
+        assert inspected["state"] == "completed", inspected
+        body = inspected["result"]
         archive_id = body["archive_id"]
         names = sorted(e["name"] for e in body["entries"] if e["file_type"])
         # The manifest carries each entry's archive-relative path, not a bare name.

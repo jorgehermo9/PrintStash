@@ -42,6 +42,9 @@ export const queryKeys = {
   multipartCandidates: (id: number, q: string) =>
     ["multipart-models", id, "candidates", q] as const,
   collections: ["collections"] as const,
+  // Under the collections root, so a readme write's `collections` invalidation
+  // refreshes it together with the list's `has_readme` flag.
+  collectionReadme: (id: number) => ["collections", id, "readme"] as const,
   tags: ["tags"] as const,
   printers: ["printers"] as const,
   printerDashboard: ["printers", "dashboard"] as const,

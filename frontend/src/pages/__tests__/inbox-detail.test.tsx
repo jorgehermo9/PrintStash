@@ -55,7 +55,7 @@ const reviewItem: InboxItem = {
   },
   target_collection_id: null,
   requested_tags: [],
-  background_job_id: "job-7",
+  job_id: "job-7",
   resulting_model_id: null,
   results: [],
   error_code: null,
@@ -107,6 +107,7 @@ describe("InboxDetailPage", () => {
       parent_id: null,
       model_count: 0,
       tags: [],
+      has_readme: false,
       effective_role: "admin",
     });
     vi.mocked(api.dismissPendingImport).mockResolvedValue();
@@ -155,6 +156,7 @@ describe("InboxDetailPage", () => {
       model_count: 2,
       effective_role: "edit",
       tags: [],
+      has_readme: false,
     };
     vi.mocked(api.getPendingImport).mockResolvedValue(reviewItem);
     vi.mocked(api.importPendingImport).mockResolvedValue({

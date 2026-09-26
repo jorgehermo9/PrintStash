@@ -105,9 +105,10 @@ COPY docker-entrypoint.sh ./docker-entrypoint.sh
 # well as execute permission regardless of the build context's local umask.
 RUN chmod 0755 ./docker-entrypoint.sh
 
-ENV VAULT_DATA_DIR=/data/files \
-    VAULT_THUMB_DIR=/data/thumbs \
-    VAULT_DB_URL=sqlite:////data/db/printstash.sqlite \
+# Mount one volume here. Every app-owned path (database, files, thumbnails,
+# staging, backups, caches) is a child, and staging must share that mount for
+# imports to publish by hard link instead of copying.
+ENV VAULT_DATA_ROOT=/data \
     PUID=10001 \
     PGID=10001 \
     PRINTSTASH_IMAGE_VARIANT=${PRINTSTASH_VARIANT}

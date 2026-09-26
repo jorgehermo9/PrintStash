@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { listIngestJobs } from "@/lib/api/models";
+import { listJobs } from "@/lib/api/jobs";
 import {
+  MODEL_DOWNLOAD_KIND,
   actOnSearchGeneration,
   cancelInferenceDownload,
   deleteInferenceModel,
@@ -48,9 +49,9 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
   });
   const downloads = useQuery({
     queryKey: ["ai-search", "downloads"],
-    queryFn: async () => (await listIngestJobs()).filter((job) => job.kind === "model_download"),
+    queryFn: async () => (await listJobs()).filter((job) => job.kind === MODEL_DOWNLOAD_KIND),
     refetchInterval: (query) =>
-      query.state.data?.some((job) => job.state === "pending" || job.state === "running")
+      query.state.data?.some((job) => job.state === "queued" || job.state === "running")
         ? 1500
         : 15000,
   });
@@ -389,7 +390,7 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
                       !settings.settings.download_enabled ||
                       !local.runtime_available ||
                       downloads.data?.some(
-                        (job) => job.state === "running" || job.state === "pending",
+                        (job) => job.state === "running" || job.state === "queued",
                       )
                     }
                     onClick={() => download.mutate(local.key)}
@@ -640,7 +641,7 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
                     </p>
                   )}
                 </div>
-                {(job.state === "pending" || job.state === "running") && (
+                {(job.state === "queued" || job.state === "running") && (
                   <Button
                     variant="outline"
                     size="sm"

@@ -93,6 +93,10 @@ of taste.
 - **Surfaces** — the vault grid, model detail's split pane, the public share
   page. These own the whole viewport and do not use `PageContainer`. A grid of
   print models *should* use every pixel of a farm monitor.
+- **Search results** are a browsing surface too. Keep the result grid at the
+  surface width, put everyday filters and view controls beside the results, and
+  let each result carry its own visual boundary. Do not wrap the grid in a
+  document-width card or hide result-type controls behind a disclosure.
 - **Prose** — long-form reading (document detail) uses
   `<PageContainer width="prose">` (`max-w-4xl`), a reading measure.
 
@@ -111,6 +115,31 @@ detail) render their own `<h1>` instead of composing `PageHeader`; that is the
 only sanctioned exception, and it does not license a third heading style.
 
 ### Framed work surfaces
+
+Primary settings sections and the current state needed to use them stay visible.
+Do not put a whole feature, its enable control, or its safety status inside a
+`details` dropdown. Use disclosure only for genuinely optional supporting
+information; when several technical views need separation, use the existing
+`TabBar` and keep the everyday controls outside the tabs. Prefer aligned text
+for a small set of related status values instead of a row of decorative badges.
+For current storage, lead with the provider and one active safety state. Keep
+paths readable but secondary; explain migration in its workflow, not in the
+status card. Similar candidates belong in each Model's Similar tab; do not
+duplicate that entry in the library toolbar or global header. Keep Model detail
+tabs in one row, with horizontal scrolling only when their labels cannot fit.
+Async settings cards keep their header and reserve the shape of their content
+with skeletons until initial reads settle. Do not expose a partial form whose
+provider fields appear later. Remote storage uses the same visible category and
+provider choices as Move Vault storage; keep selected state and field framing
+consistent between the two flows.
+Collection tree counts describe the whole branch, including child collections.
+Keep count badges visible at the default sidebar width and truncate long names
+before allowing a badge to slide outside the viewport.
+Show storage capacity summaries and editable limits in human units such as MB
+or GB. Convert edits to bytes at the API boundary. Keep precise B/KB values
+only where a small file's exact size helps a technical task.
+Format stored durations as hours and minutes in filter summaries; keep the input
+unit explicit wherever users enter a number.
 
 Dense document workflows such as Profiles, Settings, and Pending Imports use a
 shared visual grammar: **one framed work surface**, not a collection of loose

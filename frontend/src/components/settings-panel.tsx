@@ -29,6 +29,7 @@ import {
   FolderTree,
   HardDrive,
   HeartPulse,
+  Activity,
   Info,
   Images,
   KeyRound,
@@ -64,6 +65,7 @@ import { ExternalLibrariesPanel } from "@/components/external-libraries-panel";
 import { StorageInventoryPanel } from "@/components/storage-inventory-panel";
 import { ArtifactCacheCard } from "@/components/artifact-cache-card";
 import { StorageConfigCard } from "@/components/storage-config-card";
+import { ImportCopyWarning } from "@/components/import-copy-warning";
 import { VaultMigrationPanel } from "@/components/vault-migration-panel";
 import { RemoteStorageConnections } from "@/components/remote-storage-connections";
 import { MakerWorldConnectCard } from "@/components/makerworld-connect-card";
@@ -73,6 +75,7 @@ import { SpoolmanConnectCard } from "@/components/spoolman-connect-card";
 import { OidcSettingsCard } from "@/components/oidc-settings-card";
 import { AiSearchSettings } from "@/components/ai-search-settings";
 import { MaintenancePanel } from "@/components/maintenance-panel";
+import { BackgroundWorkPanel } from "@/components/background-work-panel";
 import { BrandMark } from "@/components/brand-mark";
 import {
   createApiKey,
@@ -93,7 +96,8 @@ import {
   downloadModelExport,
   downloadLibraryArchive,
   importLibraryArchive,
-  rebuildModelThumbnails,
+  regenerateDerivatives,
+  backupFromJob,
   getHealthDetails,
   getActiveGcPlan,
   getLatestRelease,
@@ -164,7 +168,7 @@ import {
   type PreviewQuality,
   type ScreenshotScale,
 } from "@/lib/preview-preferences";
-import { trackImportJob } from "@/lib/task-center";
+import { waitForImportJob } from "@/lib/task-center";
 import { prepareBrowserExtensionSetup } from "@/lib/browser-extension-setup";
 import type {
   ApiKeyRead,
@@ -191,6 +195,7 @@ type SettingsSection =
   | "remote-storage"
   | "imports"
   | "maintenance"
+  | "work"
   | "ai-search"
   | "libraries"
   | "notifications"
@@ -214,6 +219,7 @@ const SETTINGS_SECTIONS: {
   { id: "imports", labelKey: "settings.imports", icon: Download },
   { id: "ai-search", labelKey: "aiSearch.settingsTitle", icon: Search },
   { id: "maintenance", labelKey: "settings.maintenance", icon: HeartPulse },
+  { id: "work", labelKey: "settings.backgroundWork", icon: Activity },
   { id: "libraries", labelKey: "settings.libraries", icon: FolderSync },
   { id: "notifications", labelKey: "settings.notifications", icon: Bell },
   { id: "sso", labelKey: "settings.sso", icon: ShieldCheck },
@@ -554,7 +560,8 @@ export function SettingsPanel() {
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const visibleSettingsSections = SETTINGS_SECTIONS.filter(
-    (section) => !["sso", "maintenance", "ai-search"].includes(section.id) || user?.is_superuser,
+    (section) =>
+      !["sso", "maintenance", "work", "ai-search"].includes(section.id) || user?.is_superuser,
   );
 
   function changeSection(section: SettingsSection) {
@@ -893,9 +900,9 @@ export function SettingsPanel() {
   async function recreateModelImages() {
     setPreviewBusy("rebuild");
     try {
-      const response = await rebuildModelThumbnails();
-      trackImportJob(response.job_id, "Recreate Model preview images");
-      toast.success(uiText("Model preview recreation queued. Follow it in Tasks."));
+      // Every current preview stays visible until its replacement is ready.
+      await regenerateDerivatives("thumbnail", "all");
+      toast.success(uiText("Model preview recreation queued. Follow it in Background work."));
     } catch (e) {
       toast.error(e);
     } finally {
@@ -906,7 +913,10 @@ export function SettingsPanel() {
   async function handleBackupNow() {
     setBackingUp(true);
     try {
-      const meta = await createBackup();
+      const accepted = await createBackup();
+      const job = await waitForImportJob(accepted.job_id, "Backup");
+      const meta = backupFromJob(job);
+      if (!meta) throw new Error(job.error ?? "backup_failed");
       const mb = formatNumber(meta.size_bytes / 1024 / 1024, {
         maximumFractionDigits: 1,
         minimumFractionDigits: 1,
@@ -1879,6 +1889,7 @@ export function SettingsPanel() {
                     </div>
                   </div>
                 )}
+                <ImportCopyWarning storageHealth={storageHealth} />
                 {/* KPI tiles */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   {kpiItems.map((item) => {
@@ -2707,16 +2718,7 @@ export function SettingsPanel() {
                 <StorageConfigCard storageHealth={storageHealth} migrationManaged />
                 {user?.is_superuser && <StorageInventoryPanel />}
                 {user?.is_superuser && <VaultMigrationPanel />}
-                {user?.is_superuser && (
-                  <details>
-                    <summary className="cursor-pointer rounded-md px-2 py-2 text-sm font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      {uiText("Remote file cache")}
-                    </summary>
-                    <div className="mt-3">
-                      <ArtifactCacheCard />
-                    </div>
-                  </details>
-                )}
+                {user?.is_superuser && <ArtifactCacheCard />}
               </div>
             )}
 
@@ -3377,6 +3379,8 @@ export function SettingsPanel() {
             {activeSection === "ai-search" && user?.is_superuser && <AiSearchSettings />}
 
             {activeSection === "maintenance" && user?.is_superuser && <MaintenancePanel />}
+
+            {activeSection === "work" && user?.is_superuser && <BackgroundWorkPanel />}
 
             {activeSection === "libraries" && (
               <div className="space-y-6 animate-panel-in">

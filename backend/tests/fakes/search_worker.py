@@ -8,7 +8,6 @@ from app.db.models import IndexGeneration
 from app.db.session import get_session_factory
 from app.modules.inference.transport import close_client
 from app.modules.search.indexing import IndexProcessor
-from app.runtime.jobs import reconcile_interrupted_jobs
 
 
 def main():
@@ -17,7 +16,6 @@ def main():
     args = parser.parse_args()
     sessions = get_session_factory()
     processor = IndexProcessor(sessions)
-    reconcile_interrupted_jobs()
     try:
         for _ in range(100):
             processor.work_one()

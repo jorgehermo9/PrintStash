@@ -6,10 +6,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 from printstash_core.inference import EmbeddingError, EmbeddingInput
-from sqlmodel import select
 
-from app.db.models import ThumbnailRenderSlot
 from app.db.session import get_session_factory
+from app.modules.inference import local
 from app.modules.inference.local import LocalEmbeddingProvider
 from tests.factories.embeddings import local_embedding_assets
 
@@ -17,6 +16,23 @@ from tests.factories.embeddings import local_embedding_assets
 @pytest.fixture
 def assets(tmp_path):
     return local_embedding_assets(tmp_path / "assets")
+
+
+def _hold_every_slot() -> int:
+    """Occupy this process's inference admission, as busy renders would."""
+    from printstash_core.inference.context import InferenceContext
+
+    from app.core.config import settings
+
+    held = max(int(settings.max_render_jobs), 1)
+    for _ in range(held):
+        local.acquire_slot(InferenceContext.bounded(1, priority="background"))
+    return held
+
+
+def _release(count: int) -> None:
+    for _ in range(count):
+        local.release_slot()
 
 
 class TestLocalProvider:
@@ -68,42 +84,20 @@ class TestLocalProvider:
         finally:
             pool.close()
 
-        db_session.expire_all()
-        assert all(
-            row.lease_token is None
-            for row in db_session.exec(select(ThumbnailRenderSlot))
-        )
+        # A failed exchange still hands its admission back.
+        assert local._running == 0
 
-    def test_yields_background_admission_to_waiting_queries(
-        self, db_session, assets, monkeypatch
-    ):
-        import threading
+    def test_yields_background_admission_to_waiting_queries(self, db_session, assets):
+        import time
         from concurrent.futures import ThreadPoolExecutor
 
         from printstash_core.inference.context import InferenceContext
-
-        from app.core.config import settings
-        from app.modules.media import compute_slots
 
         provider = LocalEmbeddingProvider(
             get_session_factory(), assets, "two-tower-contract", 1
         )
         provider.validate()
-        slots = [
-            compute_slots.acquire(db_session, f"render-{index}")
-            for index in range(settings.max_render_jobs)
-        ]
-        waiting, proceed = threading.Event(), threading.Event()
-        acquire = compute_slots.acquire
-
-        def pause_waiter(session, token, **kwargs):
-            slot = acquire(session, token, **kwargs)
-            if slot is None:
-                waiting.set()
-                assert proceed.wait(3)
-            return slot
-
-        monkeypatch.setattr(compute_slots, "acquire", pause_waiter)
+        held = _hold_every_slot()
         with ThreadPoolExecutor(max_workers=1) as executor:
             result = executor.submit(
                 provider.embed,
@@ -112,18 +106,24 @@ class TestLocalProvider:
                 context=InferenceContext.bounded(5),
             )
             try:
-                assert waiting.wait(3)
-                for index, slot in enumerate(slots):
-                    compute_slots.release(db_session, slot.id, f"render-{index}")
-                db_session.commit()
-                with pytest.raises(EmbeddingError, match="embedding_compute_busy"):
-                    provider.embed(
-                        (EmbeddingInput("text", text="red"),),
-                        provider.space,
-                        context=InferenceContext.bounded(1, priority="background"),
-                    )
+                deadline = time.monotonic() + 3
+                while local._waiting_queries == 0:
+                    assert time.monotonic() < deadline, "the query never waited"
+                    time.sleep(0.01)
+                # A waiting query goes first, even once a slot frees. Freeing
+                # it and asking for background admission under the admission
+                # lock (re-entrant) keeps the query from taking the slot and
+                # finishing in between, which would make this a race.
+                with local._admission:
+                    _release(1)
+                    held -= 1
+                    assert local._waiting_queries == 1
+                    with pytest.raises(EmbeddingError, match="embedding_compute_busy"):
+                        local.acquire_slot(
+                            InferenceContext.bounded(1, priority="background")
+                        )
             finally:
-                proceed.set()
+                _release(held)
             assert result.result(3) == ((1, 0, 0),)
         # Completed waiters cannot starve the next background batch.
         assert provider.embed(
@@ -132,31 +132,19 @@ class TestLocalProvider:
             context=InferenceContext.bounded(3, priority="background"),
         ) == ((1, 0, 0),)
 
-    def test_waits_for_shared_compute_within_the_query_deadline(
+    def test_waits_for_local_compute_within_the_query_deadline(
         self, db_session, assets
     ):
         import threading
 
         from printstash_core.inference.context import InferenceContext
 
-        from app.core.config import settings
-        from app.modules.media import compute_slots
-
-        sessions = get_session_factory()
-        provider = LocalEmbeddingProvider(sessions, assets, "two-tower-contract", 1)
+        provider = LocalEmbeddingProvider(
+            get_session_factory(), assets, "two-tower-contract", 1
+        )
         provider.validate()
-        slots = [
-            compute_slots.acquire(db_session, f"render-{index}")
-            for index in range(settings.max_render_jobs)
-        ]
-
-        def finish_render():
-            with sessions.scoped_session() as session:
-                for index, slot in enumerate(slots):
-                    compute_slots.release(session, slot.id, f"render-{index}")
-                session.commit()
-
-        timer = threading.Timer(0.15, finish_render)
+        held = _hold_every_slot()
+        timer = threading.Timer(0.15, _release, args=(held,))
         timer.start()
         try:
             assert provider.embed(
@@ -167,23 +155,22 @@ class TestLocalProvider:
         finally:
             timer.join()
 
-    def test_times_out_while_waiting_for_shared_compute(self, db_session, assets):
+    def test_times_out_while_waiting_for_local_compute(self, db_session, assets):
         from printstash_core.inference.context import InferenceContext
 
-        from app.core.config import settings
-        from app.modules.media import compute_slots
-
-        for index in range(settings.max_render_jobs):
-            assert compute_slots.acquire(db_session, f"render-{index}") is not None
+        held = _hold_every_slot()
         provider = LocalEmbeddingProvider(
             get_session_factory(), assets, "two-tower-contract", 1
         )
-        with pytest.raises(EmbeddingError, match="inference_timeout"):
-            provider.embed(
-                (EmbeddingInput("text", text="red"),),
-                provider.space,
-                context=InferenceContext.bounded(0.05),
-            )
+        try:
+            with pytest.raises(EmbeddingError, match="inference_timeout"):
+                provider.embed(
+                    (EmbeddingInput("text", text="red"),),
+                    provider.space,
+                    context=InferenceContext.bounded(0.05),
+                )
+        finally:
+            _release(held)
 
     def test_accepts_read_only_offline_models(self, db_session, assets, monkeypatch):
         import os
@@ -232,11 +219,6 @@ class TestLocalProvider:
             provider.space,
         )
         np.testing.assert_allclose(vectors, [[1, 0, 0], [1, 0, 0]])
-        db_session.expire_all()
-        assert all(
-            slot.lease_token is None
-            for slot in db_session.exec(select(ThumbnailRenderSlot)).all()
-        )
 
     def test_verifies_canaries_before_availability(self, db_session, assets):
         provider = LocalEmbeddingProvider(
@@ -299,22 +281,10 @@ class TestLocalProvider:
         with pytest.raises(EmbeddingError, match="batch_budget"):
             provider.embed((EmbeddingInput("text", text="red"),) * 9, provider.space)
 
-    def test_preserves_render_backpressure(self, db_session, assets):
-        from app.core.config import settings
-        from app.modules.media import compute_slots
-
-        for index in range(settings.max_render_jobs):
-            assert compute_slots.acquire(db_session, f"busy-{index}") is not None
-        provider = LocalEmbeddingProvider(
-            get_session_factory(), assets, "two-tower-contract", 1
-        )
-        with pytest.raises(EmbeddingError, match="compute_busy"):
-            provider.validate()
-
     def test_contains_worker_memory_limit(self, db_session, assets, monkeypatch):
-        from app.modules.media import compute_slots
+        from app.modules.inference import local
 
-        monkeypatch.setattr(compute_slots, "native_memory_budget_bytes", lambda: 1)
+        monkeypatch.setattr(local, "native_memory_budget_bytes", lambda: 1)
         provider = LocalEmbeddingProvider(
             get_session_factory(), assets, "two-tower-contract", 1
         )
@@ -322,7 +292,6 @@ class TestLocalProvider:
             provider.validate()
 
     def test_contains_worker_deadline(self, db_session, assets, monkeypatch):
-
         from app.core.config import _overlay
 
         monkeypatch.setitem(_overlay, "mesh_step_timeout_seconds", 0.00001)

@@ -210,8 +210,9 @@ Current intentional lint warnings:
   purge it only on disposable data.
 - Register or mock a Moonraker printer, sync files, and import matching print
   history into one model.
-- Queue `POST /api/v1/files/thumbnails/rebuild` on a small library and poll the
-  returned ingest job until completion.
+- Queue `POST /api/v1/admin/work/derivatives/thumbnail/regenerate` with
+  `{"mode": "all"}` on a small library and watch Settings → Background work
+  until the thumbnail queue drains; every preview stays visible meanwhile.
 
 ## Release Content
 

@@ -125,16 +125,20 @@ test.describe("Browser onboarding", () => {
       await page.getByRole("button", { name: "Check storage" }).press("Enter");
       await expect(page.getByText("Storage ready", { exact: true })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath("storage-desktop.png"), fullPage: true });
+      let accountRequests = 0;
       if (loseResponse) {
-        await page.route(
-          "**/api/v1/setup",
-          async (route) => {
-            const response = await route.fetch();
-            expect(response.status()).toBe(201);
-            await route.abort("connectionreset");
-          },
-          { times: 1 },
-        );
+        // Keep routing enabled until the context closes. Removing a one-use
+        // handler while fulfilling can stall the immediate recovery request.
+        await page.route("**/api/v1/setup", async (route) => {
+          accountRequests += 1;
+          const response = await route.fetch();
+          expect(response.status()).toBe(201);
+          await route.fulfill({
+            status: 502,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: "setup_response_lost" }),
+          });
+        });
       }
       await page.getByRole("button", { name: "Create my account and continue" }).press("Enter");
       if (loseResponse) {
@@ -238,6 +242,7 @@ test.describe("Browser onboarding", () => {
         page.getByRole("heading", { name: "My first model", exact: true }),
       ).toBeVisible();
       await page.goto("/settings");
+      await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
       await expect(
         page.getByRole("button", { name: "Resume the getting-started guide" }),
       ).toHaveCount(0);
@@ -254,6 +259,7 @@ test.describe("Browser onboarding", () => {
         .getByRole("button", { name: "Connect and find models", exact: true })
         .press("Enter");
       await expect(page.getByRole("link", { name: "Connected model", exact: true })).toBeVisible();
+      if (loseResponse) expect(accountRequests).toBe(1);
     },
   );
 });

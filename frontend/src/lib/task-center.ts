@@ -2,24 +2,52 @@
 
 import { getErrorMessage } from "./errors";
 
-import { listIngestJobs } from "@/lib/api/models";
-import type { IngestJobStatus } from "@/types";
+import { listJobs } from "@/lib/api/jobs";
+import { subscribeEvents } from "@/lib/events";
+import type { JobState, JobStatus } from "@/types";
 import { uiText, knownUiText, uiMessage, type MessageDescriptor } from "./locale";
 
 export type TaskStatus = "pending" | "running" | "completed" | "failed";
 
-/** How the Task Center reads the server's import-job list. */
-export type IngestJobSource = (trackedJobIds: string[]) => Promise<IngestJobStatus[]>;
+/** How the Task Center reads the server's list of the user's Jobs. */
+export type JobSource = (trackedJobIds: string[]) => Promise<JobStatus[]>;
 
-let ingestJobSource: IngestJobSource = listIngestJobs;
+let jobSource: JobSource = listJobs;
 
 /**
  * Point the Task Center at a different job source. Production keeps the default
- * (`listIngestJobs`); tests inject a stub so the polling state machine can be
- * driven without a network.
+ * (`listJobs`); tests inject a stub so the sync state machine can be driven
+ * without a network.
  */
-export function setIngestJobSource(source: IngestJobSource): void {
-  ingestJobSource = source;
+export function setJobSource(source: JobSource): void {
+  jobSource = source;
+}
+
+/**
+ * A Job's state as a task row shows it. `interrupted` is a Job about to run
+ * again after its process stopped, so it reads as waiting, not failed; a
+ * cancelled Job is finished without a result.
+ */
+export function taskStatusOf(state: JobState): TaskStatus {
+  switch (state) {
+    case "queued":
+    case "interrupted":
+      return "pending";
+    case "running":
+      return "running";
+    case "completed":
+      return "completed";
+    case "failed":
+    case "cancelled":
+      return "failed";
+  }
+}
+
+function titleForJob(job: JobStatus): MessageDescriptor | string {
+  if (job.kind.startsWith("ingestion.")) {
+    return uiMessage("Import");
+  }
+  return job.label ?? job.kind;
 }
 
 export interface TaskItem {
@@ -35,16 +63,16 @@ export interface TaskItem {
   jobId?: string;
   jobIds?: string[];
   expectedJobCount?: number;
-  stage?: IngestJobStatus["stage"];
+  stage?: JobStatus["stage"];
   processed?: number;
   total?: number | null;
   succeeded?: number;
   deduplicated?: number;
   skipped?: number;
   failed?: number;
-  completion?: IngestJobStatus["completion"];
-  thumbnailStatus?: IngestJobStatus["thumbnail_status"];
-  thumbnailReason?: string | null;
+  completion?: JobStatus["completion"];
+  /** The Job's own state; `interrupted` and `cancelled` refine `status`. */
+  jobState?: JobState;
   currentItem?: string | null;
   error?: string | null;
   serverUpdatedAt?: string | null;
@@ -63,7 +91,7 @@ const EMITTED_TERMINALS_KEY = "printstash:emitted-import-terminals:v1";
 declare global {
   interface WindowEventMap {
     /** Dispatched by `publishTerminal` with the job that reached a terminal state. */
-    [TERMINAL_EVENT]: CustomEvent<IngestJobStatus>;
+    [TERMINAL_EVENT]: CustomEvent<JobStatus>;
   }
 }
 
@@ -77,8 +105,20 @@ const isBrowser = (): boolean => "window" in globalThis;
 let tasks: TaskItem[] = loadTasks();
 const dismissedJobIds = loadDismissedJobIds();
 const emittedTerminalJobIds = loadIdSet(EMITTED_TERMINALS_KEY);
-const terminalJobs = new Map<string, IngestJobStatus>();
-const terminalWaiters = new Map<string, Set<(job: IngestJobStatus) => void>>();
+const terminalJobs = new Map<string, JobStatus>();
+interface TerminalWaiter {
+  resolve: (job: JobStatus) => void;
+  reject: (error: Error) => void;
+}
+const terminalWaiters = new Map<string, Set<TerminalWaiter>>();
+
+/** The server no longer reports a Job this browser was waiting on. */
+export class JobStatusUnavailableError extends Error {
+  constructor(readonly jobId: string) {
+    super("job_status_unavailable");
+    this.name = "JobStatusUnavailableError";
+  }
+}
 let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncSubscribers = 0;
@@ -220,7 +260,7 @@ export function taskDetail(task: TaskItem): string | undefined {
   if ((task.jobId || task.jobIds?.length) && task.stage && task.status !== "failed") {
     return detailForJob({
       job_id: task.jobId,
-      state: task.status,
+      state: task.jobState ?? (task.status === "pending" ? "queued" : task.status),
       stage: task.stage,
       processed: task.processed,
       total: task.total,
@@ -229,7 +269,6 @@ export function taskDetail(task: TaskItem): string | undefined {
       skipped: task.skipped,
       failed: task.failed,
       completion: task.completion,
-      thumbnail_reason: task.thumbnailReason,
       current_item: task.currentItem,
       error: task.error,
     });
@@ -301,20 +340,18 @@ export function clearCompletedTasks(): void {
   scheduleCleanup();
 }
 
-function detailForJob(job: Pick<IngestJobStatus, "state"> & Partial<IngestJobStatus>): string {
-  const stage = knownUiText(job.stage ?? job.state);
+function detailForJob(job: Pick<JobStatus, "state"> & Partial<JobStatus>): string {
+  if (job.state === "cancelled") return uiText("Cancelled");
+  if (job.state === "interrupted") return uiText("Interrupted · resumes automatically");
+  const stage = knownUiText(job.stage ?? (job.state === "queued" ? "pending" : job.state));
   const count = job.total == null ? "" : ` ${job.processed ?? 0}/${job.total}`;
   const item = job.current_item ? ` · ${job.current_item}` : "";
   if (job.state === "completed") {
     if (job.completion === "partial") {
-      const reason =
-        job.thumbnail_reason || job.error
-          ? getErrorMessage(job.thumbnail_reason ?? job.error ?? "unknown")
-          : uiText("optional output unavailable");
-      return uiText(
-        "{succeeded} succeeded · partial: {reason} · repair available in Vault Maintenance",
-        { succeeded: job.succeeded ?? 0, reason },
-      );
+      return uiText("{succeeded} succeeded · {failed} failed", {
+        succeeded: job.succeeded ?? 0,
+        failed: job.failed ?? 0,
+      });
     }
     return uiText(
       "{succeeded} succeeded, {deduplicated} deduplicated, {skipped} skipped, {failed} failed",
@@ -333,22 +370,34 @@ function detailForJob(job: Pick<IngestJobStatus, "state"> & Partial<IngestJobSta
   return uiText("{stage}{count}{item} · continues in background", { stage, count, item });
 }
 
-function isTerminal(job: IngestJobStatus): boolean {
-  return job.state === "completed" || job.state === "failed";
+function isTerminal(job: JobStatus): boolean {
+  return job.state === "completed" || job.state === "failed" || job.state === "cancelled";
 }
 
-function publishTerminal(job: IngestJobStatus): void {
+function isActive(job: JobStatus): boolean {
+  return !isTerminal(job);
+}
+
+function publishTerminal(job: JobStatus): void {
   if (!isTerminal(job)) return;
   terminalJobs.set(job.job_id, job);
-  for (const resolve of terminalWaiters.get(job.job_id) ?? []) resolve(job);
+  for (const waiter of terminalWaiters.get(job.job_id) ?? []) waiter.resolve(job);
   terminalWaiters.delete(job.job_id);
   if (emittedTerminalJobIds.has(job.job_id) || !isBrowser()) return;
   emittedTerminalJobIds.add(job.job_id);
   persistIdSet(EMITTED_TERMINALS_KEY, emittedTerminalJobIds);
-  window.dispatchEvent(new CustomEvent<IngestJobStatus>(TERMINAL_EVENT, { detail: job }));
+  window.dispatchEvent(new CustomEvent<JobStatus>(TERMINAL_EVENT, { detail: job }));
 }
 
-function applyJob(job: IngestJobStatus): void {
+/** A Job that vanished has no status to report: its waiters fail, nobody is told it completed. */
+function rejectLostJob(jobId: string): void {
+  for (const waiter of terminalWaiters.get(jobId) ?? []) {
+    waiter.reject(new JobStatusUnavailableError(jobId));
+  }
+  terminalWaiters.delete(jobId);
+}
+
+function applyJob(job: JobStatus): void {
   if (dismissedJobIds.has(job.job_id)) return;
   const existing = tasks.find(
     (task) => task.jobId === job.job_id || task.jobIds?.includes(job.job_id),
@@ -363,17 +412,17 @@ function applyJob(job: IngestJobStatus): void {
     if (isTerminal(job)) publishTerminal(job);
     return;
   }
-  if (existing?.status === "running" && job.state === "pending") return;
   if (
     existing?.serverUpdatedAt &&
     job.updated_at &&
     Date.parse(job.updated_at) < Date.parse(existing.serverUpdatedAt)
   )
     return;
-  const status: TaskStatus = job.state;
+  const status = taskStatusOf(job.state);
   const patch = {
     jobId: job.job_id,
     status,
+    jobState: job.state,
     progress: job.progress ?? (job.total ? ((job.processed ?? 0) / job.total) * 100 : 0),
     detail: detailForJob(job),
     stage: job.stage,
@@ -386,27 +435,25 @@ function applyJob(job: IngestJobStatus): void {
     completion: job.completion,
     retryable: job.retryable,
     failedItems: job.failed_items,
-    thumbnailStatus: job.thumbnail_status,
-    thumbnailReason: job.thumbnail_reason,
     currentItem: job.current_item,
     error: job.error,
     serverUpdatedAt: job.updated_at,
   };
   if (existing) updateTask(existing.id, patch);
-  else createTask({ title: uiMessage("Import"), ...patch });
+  else createTask({ title: titleForJob(job), ...patch });
   publishTerminal(job);
 }
 
-function applyGroupedJobs(task: TaskItem, jobs: IngestJobStatus[]): void {
+function applyGroupedJobs(task: TaskItem, jobs: JobStatus[]): void {
   jobs.forEach(publishTerminal);
   if (task.status === "completed" || task.status === "failed") return;
   const expected = Math.max(task.expectedJobCount ?? task.jobIds?.length ?? 1, 1);
-  const failedJob = jobs.find((job) => job.state === "failed");
+  const failedJob = jobs.find((job) => job.state === "failed" || job.state === "cancelled");
   if (failedJob) {
     updateTask(task.id, {
       status: "failed",
       progress: 100,
-      detail: failedJob.error ?? "Upload failed",
+      detail: failedJob.state === "cancelled" ? "Cancelled" : (failedJob.error ?? "Upload failed"),
     });
     return;
   }
@@ -424,9 +471,7 @@ function applyGroupedJobs(task: TaskItem, jobs: IngestJobStatus[]): void {
     return;
   }
 
-  const current = [...jobs]
-    .reverse()
-    .find((job) => job.state === "running" || job.state === "pending");
+  const current = [...jobs].reverse().find(isActive);
   const completedProgress = jobs.reduce(
     (sum, job) => sum + (job.state === "completed" ? 100 : (job.progress ?? 0)),
     0,
@@ -462,16 +507,25 @@ export function waitForImportJob(
   jobId: string,
   title = "Import",
   timeoutMs = 15 * 60_000,
-): Promise<IngestJobStatus> {
+): Promise<JobStatus> {
   trackImportJob(jobId, title);
   const known = terminalJobs.get(jobId);
   if (known) return Promise.resolve(known);
   return new Promise((resolve, reject) => {
     const stopSync = startImportJobSync();
-    const waiter = (job: IngestJobStatus) => {
+    const settle = () => {
       clearTimeout(timeout);
       stopSync();
-      resolve(job);
+    };
+    const waiter: TerminalWaiter = {
+      resolve: (job) => {
+        settle();
+        resolve(job);
+      },
+      reject: (error) => {
+        settle();
+        reject(error);
+      },
     };
     const timeout = setTimeout(() => {
       terminalWaiters.get(jobId)?.delete(waiter);
@@ -516,9 +570,7 @@ export async function syncImportJobs(): Promise<boolean> {
     ),
   ].slice(0, 20);
   const requestedJobIds = new Set(trackedJobIds);
-  const jobs = (await ingestJobSource(trackedJobIds)).filter(
-    (job) => !dismissedJobIds.has(job.job_id),
-  );
+  const jobs = (await jobSource(trackedJobIds)).filter((job) => !dismissedJobIds.has(job.job_id));
   const jobsById = new Map(jobs.map((job) => [job.job_id, job]));
   const claimedJobIds = new Set<string>();
 
@@ -526,7 +578,7 @@ export async function syncImportJobs(): Promise<boolean> {
     if (!task.jobIds?.length) continue;
     const groupedJobs = task.jobIds
       .map((jobId) => jobsById.get(jobId))
-      .filter((job): job is IngestJobStatus => job !== undefined);
+      .filter((job): job is JobStatus => job !== undefined);
     task.jobIds.forEach((jobId) => claimedJobIds.add(jobId));
     if (groupedJobs.length) applyGroupedJobs(task, groupedJobs);
   }
@@ -548,21 +600,9 @@ export async function syncImportJobs(): Promise<boolean> {
       detail: unavailableDetail,
       retryable: true,
     });
-    for (const jobId of missingJobIds) {
-      publishTerminal({
-        job_id: jobId,
-        state: "failed",
-        model_id: null,
-        file_id: null,
-        error: "job_status_unavailable",
-        retryable: true,
-        started_at: null,
-        finished_at: null,
-        updated_at: new Date().toISOString(),
-      });
-    }
+    for (const jobId of missingJobIds) rejectLostJob(jobId);
   }
-  return jobs.some((job) => job.state === "pending" || job.state === "running");
+  return jobs.some(isActive);
 }
 
 function hasTrackedActiveJobs(): boolean {
@@ -634,12 +674,22 @@ function onConnectivityRestored(): void {
   scheduleImportJobSync(0);
 }
 
+let stopEvents: (() => void) | null = null;
+
+/**
+ * Keep the Task Center in step with the server while anyone shows it. The
+ * events socket wakes a sync the moment a Job changes (or after a reconnect);
+ * the 1s poll while work is active is the fallback when a notice is dropped.
+ */
 export function startImportJobSync(): () => void {
   if (!isBrowser()) return () => {};
   syncSubscribers += 1;
   if (syncSubscribers === 1) {
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("online", onConnectivityRestored);
+    stopEvents = subscribeEvents((notice) => {
+      if (notice.type === "job" || notice.type === "resync") wakeImportJobSync();
+    });
     scheduleImportJobSync(0);
   }
   let stopped = false;
@@ -650,6 +700,8 @@ export function startImportJobSync(): () => void {
     if (syncSubscribers === 0) {
       clearSyncTimer();
       syncWakePending = false;
+      stopEvents?.();
+      stopEvents = null;
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("online", onConnectivityRestored);
     }
@@ -663,10 +715,10 @@ export function subscribeTasks(callback: () => void): () => void {
 }
 
 export function subscribeImportJobCompletions(
-  callback: (job: IngestJobStatus) => void | Promise<void>,
+  callback: (job: JobStatus) => void | Promise<void>,
 ): () => void {
   if (!isBrowser()) return () => {};
-  const listener = (event: CustomEvent<IngestJobStatus>) => {
+  const listener = (event: CustomEvent<JobStatus>) => {
     void callback(event.detail);
   };
   window.addEventListener(TERMINAL_EVENT, listener);

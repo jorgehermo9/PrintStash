@@ -21,6 +21,8 @@ export default defineConfig({
     "storage-presets/**/*.spec.ts",
     "critical/**/*.spec.ts",
     "onboarding/**/*.spec.ts",
+    // Needs a backend started with VAULT_SETUP_ADMIN_*; its own config does that.
+    "environment-admin/**/*.spec.ts",
     "delivery/**/*.spec.ts",
     "migration/**/*.spec.ts",
   ],

@@ -26,8 +26,9 @@ def index(db_session, tmp_path, make_user):
     configuration.update_settings(
         db_session, actor, {"enabled": True, "embeddings_enabled": True}
     )
-    runs.start(db_session, actor)
-    run, token = runs.claim(db_session)
+    started = runs.start(db_session, actor)
+    token = "job:1"
+    run = runs.take(db_session, started.id, token)
     run.state = "running"
     db_session.add(run)
     db_session.commit()
@@ -62,7 +63,7 @@ class TestNativeStore:
                 input_hash=file.sha256,
                 vector=[1, 0, 0],
                 run_id=run.id,
-                lease_token=token,
+                writer=token,
             )
         rows = db_session.exec(select(PassageVector)).all()
         assert len({row.unit_key for row in rows}) == 3
@@ -82,13 +83,15 @@ class TestNativeStore:
             input_hash=file.sha256,
             vector=[1, 0, 0],
             run_id=run.id,
-            lease_token=token,
+            writer=token,
         )
         assert store.publish(db_session, actor, **arguments)
         assert store.publish(db_session, actor, **arguments) is False
         assert len(db_session.exec(select(PassageVector)).all()) == 1
 
-    @pytest.mark.parametrize("fence", ["source", "lease", "cancel", "trash", "queued"])
+    @pytest.mark.parametrize(
+        "fence", ["source", "superseded", "cancel", "trash", "queued"]
+    )
     def test_discards_fenced_publication(
         self, db_session, index, make_model, make_file, fence
     ):
@@ -97,8 +100,8 @@ class TestNativeStore:
         source_hash = file.sha256
         if fence == "source":
             file.sha256 = "f" * 64
-        elif fence == "lease":
-            run.lease_token = "successor"
+        elif fence == "superseded":
+            run.writer = "job:2"
         elif fence == "cancel":
             run.cancel_requested = True
         elif fence == "queued":
@@ -118,7 +121,7 @@ class TestNativeStore:
                 input_hash=source_hash,
                 vector=[1, 0, 0],
                 run_id=run.id,
-                lease_token=token,
+                writer=token,
             )
             is False
         )
@@ -154,7 +157,7 @@ class TestNativeStore:
                 input_hash=file.sha256,
                 vector=[1, 0, 0],
                 run_id=run.id,
-                lease_token=token,
+                writer=token,
             )
         result = store.query(
             db_session,
@@ -181,7 +184,7 @@ class TestNativeStore:
             input_hash=file.sha256,
             vector=[1, 0, 0],
             run_id=run.id,
-            lease_token=token,
+            writer=token,
         )
         file.sha256 = "f" * 64
         db_session.add(file)
@@ -213,7 +216,7 @@ class TestNativeStore:
                 input_hash=file.sha256,
                 vector=[1, 0, 0],
                 run_id=run.id,
-                lease_token=token,
+                writer=token,
             )
 
 

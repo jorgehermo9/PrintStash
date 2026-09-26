@@ -6,7 +6,29 @@
 `docker-compose.advanced.yml`; `docker-compose.yml` now runs the single-container
 image. See UPGRADE.md before pulling.**
 
+**Compose installs: both Compose files now mount one `printstash` volume at
+`/data` instead of five. Copy your data into it before starting the new file
+(one command, in UPGRADE.md), or the app starts empty at first-run setup.**
+
 ### Changed
+
+- Collection tree badges now count Models in child folders, use the complete
+  total when only part of a large library is loaded, and stay visible in the
+  default sidebar width.
+
+- Storage settings now show one clear current safety state and the location,
+  while remote file cache is visible without nested dropdowns. Cache limits
+  and activity have separate views; sizes use MB or GB. Storage cards reserve
+  their layout while loading, and remote connection setup uses the same visible
+  category and provider choices as Move Vault storage.
+- **One data volume.** Every path PrintStash writes (database, files,
+  thumbnails, staging, backups, caches) lives under `VAULT_DATA_ROOT`, `/data`
+  in the container, so a deployment mounts one volume. Each directory can still
+  be moved on its own with its existing variable. The artifact cache and
+  downloaded AI search models, previously left in the container's own layer,
+  now persist across updates. The Unraid template's Appdata field now says to
+  keep that folder on one pool with no second mapping inside it, so imports
+  keep hard-linking.
 
 - Model Families have been removed. Existing Models, files, G-code revisions and
   print history remain independent; existing Family relationships and covers
@@ -16,23 +38,102 @@ image. See UPGRADE.md before pulling.**
 - Nine Compose files became two in the repository root: `docker-compose.yml`
   starts PrintStash as one container (web UI and full API) with no
   configuration, and `docker-compose.advanced.yml` wires every setting with its
-  default, plus optional PostgreSQL and S3. The light, production and
-  build-from-source variants are folded into the advanced file; maintainer
-  stacks moved under `deploy/`.
+  default, plus optional PostgreSQL, S3 and background workers. The light,
+  production and build-from-source variants are folded into the advanced file;
+  maintainer stacks moved under `deploy/`.
 
 - CI no longer runs the eight per-image Docker build and Grype jobs or the
   legacy MinIO-to-SeaweedFS migration job. Container publishing no longer runs
   Grype scans; release builds and the legacy migration helper remain available.
 
+- **Background work runs on a durable engine.** Imports, previews, metadata,
+  backups, scans, notifications, fleet dispatch, audits, migrations and AI
+  Search projection, indexing, captions, expansion and model downloads are Jobs
+  on DBOS, found by a reconciler from what the database says is owed, so a
+  crash, restart or upgrade resumes them instead of losing them. Uploads now
+  commit the Artifact and return; its metadata, thumbnail and binary G-code
+  toolpath are derived afterwards and appear on an open page without a reload.
+  A new kind or a renderer change re-derives the library in the background
+  while current previews stay visible. Native work is bounded by its lane, not
+  a database permit: indexing runs as similarity and search Jobs, and a search
+  query embeds inside the request, ahead of background inference, in a worker
+  with its own memory and time limits. An index build and a model download are
+  each a Job, followed and cancelled through the Jobs API.
+- Follow any Job at `GET /api/v1/jobs/{id}` (cancel and retry beside it) and
+  live changes on the `/api/v1/events/ws` socket. **Breaking:**
+  `/api/v1/ingest/jobs`, `POST /api/v1/files/thumbnails/rebuild`, plain
+  `POST /api/v1/ingest/archive` and `POST /api/v1/storage/migrations/{id}/advance`
+  are removed; `POST /api/v1/backups` and
+  `POST /api/v1/backups/runs/destinations/{id}/retry` now answer 202 with a
+  `job_id`, and the backup (or the retried destination) is the Job's result; a
+  binary toolpath still being derived answers 202; Pending Imports expose
+  `job_id` instead of `background_job_id`; similarity runs no longer report
+  `last_activity_at`.
+- Similarity runs, backup runs and destination retries each follow their Job:
+  the engine, not a lease the run held, decides what is running, and the next
+  attempt of an interrupted Job settles what the previous one left open.
+  Upgrading settles backups an interrupted process left running.
+- Restoring a backup rebuilds the engine's state from the restored database:
+  work the snapshot shows as owed is found again even though the engine that
+  was running it is gone, and a backup the snapshot shows in progress no longer
+  blocks the next one.
 - AI Search settings now separate guided setup, search types, AI servers and
   technical options. Search types and compatible models appear as visible choices;
   the active search is clearly separate from a new index build. Specialist index
   tuning has its own view; server editing and custom model choices no longer
   depend on nested dropdown sections.
 
+### Performance
+
+- **Imports no longer copy files into local storage.** A staged upload, URL
+  import, library-transfer archive entry or Bambu print capture
+  becomes its library file by hard link when staging shares the library's
+  mount, which the single `/data` volume guarantees: instant, whatever the file
+  size, with no second copy on disk. Local backups publish their archive the
+  same way when no remote replica needs it. Where a link is impossible (another
+  mount, or a filesystem without hard links) the file is copied as before, and
+  Settings warns "Imports are copied, not hard-linked" with a link to the
+  storage layout guide, which lists the layouts that keep hard links.
+
 ### Added
 
-- Similar models is now one click from the desktop header and one tap from the mobile navigation bar.
+- Settings → **Background work** shows every lane with a runtime concurrency
+  override, each kind of Job with its queue and schedule, the processes running
+  work, and recent failures to retry; administrators can derive missing or
+  regenerate every thumbnail or metadata output. Each source Artifact shows what
+  is still being prepared and offers a retry for a failure.
+- Optional workers: `docker-compose.advanced.yml --profile workers` adds
+  `python -m app.worker` containers beside the API, on PostgreSQL with the
+  API's volumes, declared with `VAULT_SHARED_STORAGE=true`; with
+  `VAULT_API_RUNS_JOBS=false` the API leaves every Job to them. Realtime notices
+  cross processes over PostgreSQL `NOTIFY`. Both Compose files keep running
+  everything in one process by default. `.env.example` documents the
+  background-work settings, and the advanced file forwards
+  `VAULT_MAX_RENDER_JOBS` and `VAULT_JOBS_INGEST_CONCURRENCY`;
+  `VAULT_INGEST_WORKER_COUNT`, which nothing read, is gone.
+- Similar candidates are available from the Model detail Similar tab. Mobile
+  navigation retains library-wide Similar Models discovery.
+- The search bar now uses an icon-only AI control to switch between AI and
+  keyword results. Search results use the full browsing surface with visible
+  filters and simpler result cards instead of a nested results panel. Print
+  duration filters show readable time in the results toolbar.
+- **First administrator from the deployment.** `VAULT_SETUP_MODE=environment`
+  with `VAULT_SETUP_ADMIN_USERNAME` and `VAULT_SETUP_ADMIN_PASSWORD` (plus
+  optional `VAULT_SETUP_ADMIN_EMAIL`) creates the first administrator at
+  startup, for app-store install forms and unattended deployments that cannot
+  use browser registration. The administrator signs in and chooses storage in
+  the browser. The variables are used once and never change an existing
+  account. The mode and variables are checked together: a contradicting
+  combination keeps setup closed instead of silently falling back to browser
+  registration.
+- App-store manifests for Runtipi, Umbrel and CasaOS/ZimaOS live in
+  `catalogues/` and are published with each release. The Unraid template now
+  shows optional administrator username, password and email fields, and the
+  `PUID`/`PGID` fields, without opening Advanced.
+- When the browser cannot create the first administrator, the setup page now
+  says why and lists what to change: the address PrintStash saw, or the
+  first-run variables that don't fit together. It previously showed a single
+  "registration is disabled" message.
 - DXF files can be imported as source Artifacts, downloaded with their original
   bytes, and included in backups. Drawing previews are not yet available.
 - Managed source Artifacts can be moved to trash and restored individually from
@@ -85,15 +186,33 @@ image. See UPGRADE.md before pulling.**
 
 ### Fixed
 
+- A process that started while an interrupted restore or Vault migration still
+  needed recovery now starts its background work once recovery resolves it,
+  instead of queueing work nothing ran until the next restart.
+- Opening a folder in the library no longer swaps the grid for a loading
+  skeleton; the current folder stays on screen until the next one is ready.
+  Folders are also prefetched when the pointer rests on them or they receive
+  keyboard focus, and a folder's readme is requested only when it has one and
+  is cached for later visits (`CollectionRead` gains `has_readme`).
+
 - Mounted Library source folders keep their exact capitalization and spaces in
   collection labels and write-back destinations. Case- or punctuation-distinct
   folders remain separate, including on rescan of previously indexed sources.
 - Double-clicking a collection in the library sidebar keeps that collection open
   instead of returning to All Models.
 - Long nested collection paths stay within the upload dialog's collection selector.
+
+- "Or select a folder" in the Bulk upload tab opens the folder picker again. The
+  hidden inputs sat inside the clickable drop zone, so the folder input's click
+  bubbled to the zone and the file picker opened on top of it; only drag-and-drop
+  could queue a folder.
+
 - Browser Back now returns through the Vault's collection navigation before leaving for an earlier page.
 - Model cards show the collection name in their badge instead of its full hierarchy path.
 - Long collection paths no longer push the Create Family model picker beyond the dialog edge.
+- A fault inside the browser tab is no longer reported as "Couldn't reach the
+  server". Only real `fetch` rejections map to that message; any other `TypeError`
+  now says to reload the page, and keeps its original text for diagnostics.
 
 - The Unraid Community Applications catalog has one current PrintStash listing;
   the old API and frontend templates are marked deprecated for existing users.
@@ -105,6 +224,13 @@ image. See UPGRADE.md before pulling.**
   before downloading, avoiding repeated permission dialogs for multi-file imports.
 - Browser captures accept multi-file selections within the review limit, release
   unfinished upload slots after transfer failures, and explain capacity errors.
+
+- Uploads work again when PrintStash is opened over plain HTTP on a LAN address
+  (for example `http://192.168.1.10:3000`). Browsers hide `crypto.subtle` outside
+  secure contexts, so the new resumable upload failed while hashing the file and
+  reported "Couldn't reach the server" before sending anything. The browser now
+  falls back to a JavaScript SHA-256 there.
+
 - Provider connection errors now distinguish missing MyMiniFactory OAuth setup,
   rejected Cults credentials, provider outages, and invalid provider responses.
 - Routine HTTP client requests no longer fill INFO logs during PrusaLink polling;
@@ -116,8 +242,8 @@ image. See UPGRADE.md before pulling.**
 - Library search keeps typing and Enter in the current library view. A labeled
   “Search with AI” action opens AI results; result cards no longer show retrieval
   explanations.
-- Model detail tabs fit their panel without horizontal scrolling. Similar Models
-  keep readable names and reachable comparison actions in narrow panels.
+- Model detail tabs stay in one row, scrolling within the tab bar when needed.
+  Similar Models keep readable names and reachable comparison actions in narrow panels.
 - The library exposes multipart creation as a separate action on desktop and mobile.
 
 - AI search recovers bounded name misspellings, finds functional holder metadata,
@@ -169,9 +295,6 @@ image. See UPGRADE.md before pulling.**
   Capture and ingestion share these improvements, including bounded STEP output
   and Linux service memory-limit detection.
 
-- Concurrent thumbnail requests recover from transient SQLite contention after
-  reserving shared compute capacity.
-
 - Active print jobs no longer remain paused indefinitely after an out-of-band
   emergency stop. Authoritative idle printer updates now close interrupted jobs,
   with an operator recovery action for stale history when no update arrives.
@@ -182,6 +305,10 @@ image. See UPGRADE.md before pulling.**
 - Mounted Library source enrollment now rolls back known marker failures instead
   of leaving a conflicted source behind, reports read-only marker failures
   explicitly, and documents the one-time writable mount required for enrollment.
+
+- Removing a library source no longer fails with a server error when one of its
+  files was already in the trash. The failed attempt had also moved the source's
+  models to the trash while leaving the source itself in place.
 
 - PrusaLink now discovers the printer's advertised storage root, using `/usb`
   on Buddy/Core One firmware while retaining `/local` compatibility, so file

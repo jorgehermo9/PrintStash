@@ -16,6 +16,7 @@ class FakeSettings:
     data_dir: Path
     thumb_dir: Path
     backup_dir: Path | None = None
+    staging_dir: Path | None = None
     storage_identity: str = "a" * 64
 
 
@@ -23,16 +24,23 @@ class FakeSettings:
 def configured_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> LocalStorageBackend:
-    """A local adapter rooted entirely inside the test's throwaway directory."""
+    """A local adapter rooted entirely inside the test's throwaway directory.
+
+    Like the deployment layout, every root is a sibling on one filesystem, so
+    staging can hard-link into the library.
+    """
     settings = FakeSettings(
         data_dir=tmp_path / "files",
         thumb_dir=tmp_path / "thumbs",
         backup_dir=tmp_path / "backups",
+        staging_dir=tmp_path / "staging",
     )
     settings.data_dir.mkdir()
     settings.thumb_dir.mkdir()
     assert settings.backup_dir is not None
     settings.backup_dir.mkdir()
+    assert settings.staging_dir is not None
+    settings.staging_dir.mkdir()
     for role, root in (("data", settings.data_dir), ("thumb", settings.thumb_dir)):
         (root / ".printstash-storage-root.json").write_text(
             '{"format":1,"installation":"%s","role":"%s"}' % ("a" * 64, role),

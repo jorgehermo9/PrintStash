@@ -41,11 +41,10 @@ class TestSearchPassageLifecycle:
     async def test_searches_all_public_subject_types(
         self, projection, api, superuser_headers, fts_available
     ):
-        import asyncio
-
         from sqlalchemy import text
 
         from app.modules.search.lexical_index import rebuild_partition
+        from tests.e2e._jobs import completed_job
         from tests.paths import FIXTURES_DIR
 
         collection = await api.post(
@@ -77,17 +76,7 @@ class TestSearchPassageLifecycle:
             files={"file": (source.name, source.read_bytes(), "text/plain")},
             data={"model_name": "Assembly bracket"},
         )
-        assert upload.status_code == 202, upload.text
-        for _ in range(100):
-            response = await api.get(
-                f"/api/v1/ingest/jobs/{upload.json()['job_id']}",
-                headers=superuser_headers,
-            )
-            job = response.json()
-            if job["state"] in {"completed", "failed", "duplicate"}:
-                break
-            await asyncio.sleep(0.05)
-        assert job["state"] == "completed", job
+        await completed_job(api, upload, superuser_headers)
         with get_session_factory().scoped_session() as session:
             drain_search(session)
         response = await api.get(

@@ -6,15 +6,19 @@ being a takeover: the browser preparation session, the refusal to run twice,
 and the refusal to run at all once a user exists. If any of them regresses, anyone who can
 reach the port can seize an established vault, so those rows are the point of this file.
 
-The storage validation is the other half. It runs *before* the database is touched,
-because a vault directory that already holds someone's model library is not an empty
-blob store, and roots that overlap — directly or through a symlink — would let one
-subsystem delete another's files. Every rejection asserts that no user was created, not
-just that the status code was 400.
+Storage validation itself lives in ``modules.administration.setup_storage`` and is
+tested there. What this file keeps is its HTTP half: a refusal reaches the browser as
+a 400 with its detail code, and it arrives *before* the database is touched, so no
+user is created — not just a status code.
+
+``prepare-storage`` is the one setup route an authenticated owner uses: it retries
+storage that failed to activate, and lets an owner provisioned from
+``VAULT_SETUP_ADMIN_*`` choose storage after signing in, from any host.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.core.config import _overlay
+from app.core.config import _overlay, settings
 from app.db.models import SystemConfig, User
 from app.modules.administration import runtime_config
 from tests.factories import build_user
@@ -65,6 +69,26 @@ def _complete(client: TestClient, **overrides: Any):
     return client.post("/api/v1/setup", json=_payload(**overrides))
 
 
+@pytest.fixture
+def provisioned_owner(
+    auth_headers: dict[str, str], make_system_config
+) -> dict[str, str]:
+    """What startup leaves for ``VAULT_SETUP_ADMIN_*``: a signed-in owner, no storage."""
+    make_system_config(
+        configured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        setup_storage_pending=True,
+    )
+    return auth_headers
+
+
+def _local_choice(root: Path) -> dict[str, str]:
+    return {
+        "storage_backend": "local",
+        "data_dir": str(root / "chosen-files"),
+        "thumb_dir": str(root / "chosen-thumbs"),
+    }
+
+
 def _sftp_payload(**overrides: Any) -> dict[str, Any]:
     body = _payload()
     body.pop("storage_backend")
@@ -84,62 +108,6 @@ def _sftp_payload(**overrides: Any) -> dict[str, Any]:
     return body
 
 
-def _hostile_path(failing_call: str):
-    """A ``Path`` stand-in whose *one* named call fails the way a bad mount does.
-
-    ``pathlib.Path`` cannot be subclassed usefully on 3.11, and a real filesystem
-    cannot be made to refuse ``mkdir`` or ``iterdir`` on demand, so this delegates
-    everything except the call under test.
-    """
-
-    class _HostilePath:
-        def __init__(self, *parts: Any) -> None:
-            self._path = Path(*parts)
-
-        def _wrap(self, path: Path) -> "_HostilePath":
-            return _HostilePath(path)
-
-        def resolve(self, *args: Any, **kwargs: Any) -> "_HostilePath":
-            if failing_call == "resolve":
-                raise OSError("cannot resolve")
-            return self._wrap(self._path.resolve(*args, **kwargs))
-
-        def expanduser(self) -> "_HostilePath":
-            return self._wrap(self._path.expanduser())
-
-        def mkdir(self, *args: Any, **kwargs: Any) -> None:
-            if failing_call == "mkdir":
-                raise OSError("read-only filesystem")
-            self._path.mkdir(*args, **kwargs)
-
-        def iterdir(self):
-            if failing_call == "iterdir":
-                raise OSError("cannot list")
-            return self._path.iterdir()
-
-        def unlink(self, *args: Any, **kwargs: Any) -> None:
-            if failing_call == "unlink":
-                raise OSError("cannot unlink")
-            self._path.unlink(*args, **kwargs)
-
-        def exists(self) -> bool:
-            return self._path.exists()
-
-        def is_dir(self) -> bool:
-            return self._path.is_dir()
-
-        def __truediv__(self, other: Any) -> "_HostilePath":
-            return self._wrap(self._path / other)
-
-        def __fspath__(self) -> str:
-            return str(self._path)
-
-        def __str__(self) -> str:
-            return str(self._path)
-
-    return _HostilePath
-
-
 class TestSetupStatus:
     def test_reports_registration_disabled_by_default(self, client: TestClient) -> None:
         _overlay["setup_mode"] = "disabled"
@@ -153,11 +121,21 @@ class TestSetupStatus:
         assert body["configured"] is False
         assert body["setup_available"] is True
 
-    def test_offers_the_wizard_its_defaults(self, client: TestClient) -> None:
+    @pytest.mark.parametrize("role", ["data", "thumb"])
+    def test_offers_the_deployment_path_as_the_wizard_default(
+        self, client: TestClient, role: str
+    ) -> None:
+        # A runtime edit (the overlay this suite always sets) is not what a
+        # blank field means: the deployment's own VAULT_DATA_ROOT layout is.
         body = client.get("/api/v1/setup/status").json()
 
-        assert body["default_data_dir"]
-        assert body["default_thumb_dir"]
+        assert body[f"default_{role}_dir"] == str(
+            getattr(settings.frozen, f"{role}_dir")
+        )
+
+    def test_reports_the_effective_library_path(self, client: TestClient) -> None:
+        body = client.get("/api/v1/setup/status").json()
+
         assert body["current_data_dir"] == str(_overlay["data_dir"])
 
     def test_closes_setup_for_existing_users(
@@ -179,6 +157,7 @@ class TestSetupStatus:
             "configured": True,
             "setup_available": False,
             "recovery_required": False,
+            "storage_choice_required": False,
             "user_count": 0,
         }
 
@@ -203,6 +182,193 @@ class TestSetupStatus:
             "a completion marker never reopens first ownership"
         )
 
+    def test_reports_that_an_environment_owner_must_choose_storage(
+        self, client: TestClient, provisioned_owner: dict[str, str]
+    ) -> None:
+        body = client.get("/api/v1/setup/status").json()
+
+        assert body["storage_choice_required"] is True
+
+    def test_reports_an_untrusted_host_as_the_reason(self, client: TestClient) -> None:
+        body = client.get("http://public.example/api/v1/setup/status").json()
+
+        assert body["unavailable_reason"] == "untrusted_host"
+
+    def test_names_the_refused_host(self, client: TestClient) -> None:
+        body = client.get("http://public.example/api/v1/setup/status").json()
+
+        assert body["observed_host"] == "public.example"
+
+    def test_reports_disabled_registration_as_the_reason(
+        self, client: TestClient
+    ) -> None:
+        _overlay["setup_mode"] = "disabled"
+
+        body = client.get("/api/v1/setup/status").json()
+
+        assert body["unavailable_reason"] == "disabled"
+
+    def test_omits_the_reason_while_registration_is_available(
+        self, client: TestClient
+    ) -> None:
+        body = client.get("/api/v1/setup/status").json()
+
+        assert "unavailable_reason" not in body
+
+    def test_reports_environment_mode_as_the_reason(
+        self, client: TestClient, environment_admin
+    ) -> None:
+        # The owner is created at startup; until then the browser has no door.
+        environment_admin("store-owner", "StoreFormPassword123")
+
+        body = client.get("/api/v1/setup/status").json()
+
+        assert body["unavailable_reason"] == "environment"
+
+    def test_reports_a_misconfiguration_as_the_reason(
+        self, client: TestClient, environment_admin
+    ) -> None:
+        environment_admin("store-owner", "")
+
+        body = client.get("/api/v1/setup/status").json()
+
+        assert body["unavailable_reason"] == "admin_credentials_missing"
+
+    def test_names_the_variables_to_fix(
+        self, client: TestClient, environment_admin
+    ) -> None:
+        environment_admin("store-owner", "")
+
+        body = client.get("/api/v1/setup/status").json()
+
+        assert body["unavailable_variables"] == ["VAULT_SETUP_ADMIN_PASSWORD"]
+
+    def test_never_reports_a_credential_value(
+        self, client: TestClient, environment_admin
+    ) -> None:
+        # Credentials in the wrong mode are misconfigured, and the anonymous
+        # status may name them but must not echo them.
+        environment_admin("store-owner", "StoreFormPassword123", mode="trusted_network")
+
+        text = client.get("/api/v1/setup/status").text
+
+        assert "StoreFormPassword123" not in text
+
+
+class TestPrepareStorage:
+    def test_chooses_storage_for_an_environment_owner(
+        self, client: TestClient, provisioned_owner: dict[str, str], tmp_path: Path
+    ) -> None:
+        response = client.post(
+            "/api/v1/setup/prepare-storage",
+            json=_local_choice(tmp_path),
+            headers=provisioned_owner,
+        )
+
+        assert response.status_code == 200, response.text
+
+    def test_closes_the_storage_choice(
+        self, client: TestClient, provisioned_owner: dict[str, str], tmp_path: Path
+    ) -> None:
+        client.post(
+            "/api/v1/setup/prepare-storage",
+            json=_local_choice(tmp_path),
+            headers=provisioned_owner,
+        )
+
+        body = client.get("/api/v1/setup/status").json()
+
+        assert body["storage_choice_required"] is False
+
+    def test_chooses_storage_from_an_untrusted_host(
+        self, client: TestClient, provisioned_owner: dict[str, str], tmp_path: Path
+    ) -> None:
+        # A signed-in owner is already trusted. This is the path that still works
+        # behind an app-store proxy that rewrites Host to a service name.
+        response = client.post(
+            "http://printstash-web/api/v1/setup/prepare-storage",
+            json=_local_choice(tmp_path),
+            headers=provisioned_owner,
+        )
+
+        assert response.status_code == 200, response.text
+
+    def test_asks_for_a_choice_when_none_was_made(
+        self, client: TestClient, provisioned_owner: dict[str, str]
+    ) -> None:
+        # Finishing unchosen storage would activate unpinned environment defaults.
+        response = client.post(
+            "/api/v1/setup/prepare-storage", headers=provisioned_owner
+        )
+
+        assert (response.status_code, response.json()["detail"]) == (
+            409,
+            "setup_storage_choice_required",
+        )
+
+    def test_treats_an_empty_body_as_no_choice(
+        self, client: TestClient, provisioned_owner: dict[str, str]
+    ) -> None:
+        response = client.post(
+            "/api/v1/setup/prepare-storage", json={}, headers=provisioned_owner
+        )
+
+        assert response.json()["detail"] == "setup_storage_choice_required"
+
+    def test_refuses_a_choice_once_storage_was_chosen(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        token = _complete(client).json()["access_token"]
+
+        response = client.post(
+            "/api/v1/setup/prepare-storage",
+            json=_local_choice(tmp_path / "elsewhere"),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert (response.status_code, response.json()["detail"]) == (
+            409,
+            "setup_storage_already_chosen",
+        )
+
+    def test_reports_a_failed_activation_as_retryable(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The account and the choice are kept; the owner retries the same call.
+        monkeypatch.setattr(
+            "app.modules.storage.storage_backend.local.enroll_legacy_local_root",
+            lambda *args, **kwargs: False,
+        )
+        token = _complete(client).json()["access_token"]
+
+        response = client.post(
+            "/api/v1/setup/prepare-storage",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert (response.status_code, response.json()["detail"]) == (
+            503,
+            "storage_root_enrollment_failed",
+        )
+
+    def test_reports_a_refused_choice(
+        self, client: TestClient, provisioned_owner: dict[str, str], tmp_path: Path
+    ) -> None:
+        populated = tmp_path / "chosen-files"
+        populated.mkdir()
+        (populated / "someone-elses-model.stl").write_text("solid")
+
+        response = client.post(
+            "/api/v1/setup/prepare-storage",
+            json=_local_choice(tmp_path),
+            headers=provisioned_owner,
+        )
+
+        assert (response.status_code, response.json()["detail"]) == (
+            400,
+            "data_dir_not_empty",
+        )
+
 
 class TestCompleteSetup:
     def test_rejects_a_missing_browser_session(self, client: TestClient) -> None:
@@ -216,7 +382,7 @@ class TestCompleteSetup:
         self, client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            'app.modules.storage.storage_backend.local.enroll_legacy_local_root',
+            "app.modules.storage.storage_backend.local.enroll_legacy_local_root",
             lambda *args, **kwargs: False,
         )
 
@@ -230,7 +396,7 @@ class TestCompleteSetup:
     ) -> None:
         with monkeypatch.context() as patch:
             patch.setattr(
-                'app.modules.storage.storage_backend.local.enroll_legacy_local_root',
+                "app.modules.storage.storage_backend.local.enroll_legacy_local_root",
                 lambda *args, **kwargs: False,
             )
             _complete(client)
@@ -598,115 +764,8 @@ class TestStorageValidation:
         # validated — not only an explicit override.
         assert response.json()["detail"] == "data_dir_not_empty"
 
-    def test_leaves_a_populated_directory_untouched(self, client: TestClient) -> None:
-        existing = Path(_overlay["data_dir"]) / "Jonathan" / "part.stl"
-        existing.parent.mkdir(parents=True)
-        existing.write_bytes(b"user-owned")
-
-        _complete(client)
-
-        assert existing.read_bytes() == b"user-owned"
-
-    def test_refuses_nested_storage_roots(
-        self, client: TestClient, runtime_dirs: Path
-    ) -> None:
-        shared = runtime_dirs / "shared"
-
-        response = _complete(
-            client, data_dir=str(shared), thumb_dir=str(shared / "thumbs")
-        )
-
-        assert response.status_code == 400, response.text
-        assert response.json()["detail"] == "storage_paths_overlap"
-
-    def test_refuses_roots_aliased_by_a_symlink(
-        self, client: TestClient, runtime_dirs: Path
-    ) -> None:
-        shared = runtime_dirs / "shared"
-        shared.mkdir()
-        alias = runtime_dirs / "alias"
-        alias.symlink_to(shared, target_is_directory=True)
-
-        response = _complete(client, data_dir=str(shared), thumb_dir=str(alias))
-
-        assert response.status_code == 400, response.text
-        assert response.json()["detail"] == "storage_paths_overlap"
-
-    @pytest.mark.parametrize("managed_root", ["staging_dir", "backup_dir"], ids=str)
-    def test_refuses_a_root_that_swallows_a_managed_scratch_root(
-        self, client: TestClient, managed_root: str
-    ) -> None:
-        response = _complete(client, data_dir=str(_overlay[managed_root]))
-
-        assert response.status_code == 400, response.text
-        assert response.json()["detail"] == "storage_paths_overlap"
-
-    def test_refuses_a_root_that_swallows_the_database_file(
-        self, client: TestClient, runtime_dirs: Path
-    ) -> None:
-        # A vault root containing the SQLite file would put the database inside the
-        # blob store the GC walks.
-        _overlay["db_url"] = f"sqlite:///{runtime_dirs / 'files' / 'vault.sqlite'}"
-
-        response = _complete(client)
-
-        assert response.status_code == 400, response.text
-        assert response.json()["detail"] == "storage_paths_overlap"
-
-    @pytest.mark.parametrize(
-        ("failing_call", "detail"),
-        [
-            pytest.param("resolve", "invalid_data_dir_path", id="unresolvable"),
-            pytest.param("mkdir", "data_dir_not_creatable", id="not-creatable"),
-            pytest.param("iterdir", "data_dir_not_readable", id="not-readable"),
-        ],
-    )
-    def test_reports_a_root_the_filesystem_refuses(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        failing_call: str,
-        detail: str,
-    ) -> None:
-        # A real filesystem cannot be made to fail these on demand, so only the one
-        # call under test is stood in for — bound in the setup module's namespace, so
-        # the pathlib.Path every other module holds is untouched.
-        import app.api.v1.setup as setup_mod
-
-        monkeypatch.setattr(setup_mod, "Path", _hostile_path(failing_call))
-
-        response = _complete(client)
-
-        assert response.status_code == 400, response.text
-        assert response.json()["detail"] == detail
-
-    def test_completes_when_the_write_probe_cannot_be_removed(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Probe cleanup is best-effort: a filesystem that refuses the unlink must not
-        # fail an otherwise valid setup.
-        import app.api.v1.setup as setup_mod
-
-        monkeypatch.setattr(setup_mod, "Path", _hostile_path("unlink"))
-
-        response = _complete(client)
-
-        assert response.status_code == 201, response.text
-
-    def test_refuses_a_read_only_root(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def read_only_mount(*_args: object, **_kwargs: object):
-            raise PermissionError("read-only mount")
-
-        monkeypatch.setattr(
-            "app.api.v1.setup.tempfile.NamedTemporaryFile", read_only_mount
-        )
-
-        response = _complete(client)
-
-        assert response.status_code == 400, response.text
-        assert response.json()["detail"] == "data_dir_not_writable"
+    # Each refusal itself is tested where the validation lives:
+    # tests/integration/modules/administration/test_setup_storage.py::TestPrepare.
 
     @pytest.mark.parametrize(
         "rejection",
@@ -849,13 +908,48 @@ class TestBrowserPreparation:
         assert response.status_code == 200
 
     @pytest.mark.parametrize(
-        "host", ["public.example", "127.0.0.1.evil.example", "8.8.8.8", "100.64.0.1"]
+        "host",
+        [
+            "public.example",
+            "127.0.0.1.evil.example",
+            "8.8.8.8",
+            # Shared carrier-grade NAT space: other ISP customers, not a LAN.
+            "100.64.0.1",
+            # Tailscale Funnel can publish a tailnet name to the internet.
+            "vault.tailnet-1234.ts.net",
+        ],
     )
     def test_unapproved_host_cannot_prepare_setup(self, client, host):
         response = client.post(
             f"http://{host}/api/v1/setup/session", headers={"Origin": f"http://{host}"}
         )
         assert response.status_code == 403
+
+    @pytest.mark.parametrize(
+        ("username", "password", "mode"),
+        [
+            pytest.param("", "", "environment", id="environment-mode"),
+            pytest.param(
+                "store-owner",
+                "StoreFormPassword123",
+                "trusted_network",
+                id="misconfigured",
+            ),
+        ],
+    )
+    def test_only_a_valid_trusted_network_policy_opens_the_browser_door(
+        self, client, environment_admin, username, password, mode
+    ):
+        # Misconfigured settings fail closed: a half-filled install form must
+        # never turn into first-come registration.
+        environment_admin(username, password, mode=mode)
+
+        response = client.post("/api/v1/setup/session")
+
+        assert (response.status_code, response.json()["detail"]) == (
+            403,
+            "setup_disabled",
+        )
 
     def test_expired_preparation_is_rejected(self, client):
         from datetime import timedelta
@@ -903,7 +997,8 @@ class TestLibraryLocationDiscovery:
         directory = runtime_dirs / "files"
         directory.mkdir()
         monkeypatch.setattr(
-            "app.modules.sources.library_locations.mounted_directories", lambda: [directory]
+            "app.modules.sources.library_locations.mounted_directories",
+            lambda: [directory],
         )
         assert (
             client.get("/api/v1/libraries/locations", headers=auth_headers).json() == []
@@ -915,7 +1010,8 @@ class TestLibraryLocationDiscovery:
         directory = tmp_path / "models-to-connect"
         directory.mkdir()
         monkeypatch.setattr(
-            "app.modules.sources.library_locations.mounted_directories", lambda: [directory]
+            "app.modules.sources.library_locations.mounted_directories",
+            lambda: [directory],
         )
         response = client.get("/api/v1/libraries/locations", headers=auth_headers)
         assert response.json() == [str(directory)]

@@ -19,6 +19,7 @@ from app.db.url import normalize_database_url
 from app.modules.search.projection import LibraryProjection
 from tests.containers import postgres_url
 from tests.e2e._backup_helpers import setup_and_login
+from tests.e2e._jobs import create_backup
 from tests.search_projection import drain_search
 
 
@@ -66,9 +67,8 @@ class TestPostgresBackup:
         )
         assert created.status_code == 201, created.text
         document_id = created.json()["id"]
-        backup = await api.post("/api/v1/backups", headers=headers)
-        assert backup.status_code == 202, backup.text
-        backup_id = backup.json()["backup_id"]
+        # A backup is a Job: the route answers 202, the Job builds the archive.
+        backup_id = (await create_backup(api, headers))["backup_id"]
         postgres_e2e_db.execute(text("UPDATE documents SET name='Lost',body='Missing'"))
         postgres_e2e_db.commit()
         restored = await api.post(
@@ -81,6 +81,10 @@ class TestPostgresBackup:
         assert result.json()["body"] == "Mount the shelf"
         # ASGITransport does not start the background projection worker.
         drain_search(postgres_e2e_db)
-        found = await api.get("/api/v1/search", params={"q": "Bracket"}, headers=headers)
+        found = await api.get(
+            "/api/v1/search", params={"q": "Bracket"}, headers=headers
+        )
         assert found.status_code == 200, found.text
-        assert [(item["subject_type"], item["subject_id"]) for item in found.json()["items"]] == [("document", document_id)]
+        assert [
+            (item["subject_type"], item["subject_id"]) for item in found.json()["items"]
+        ] == [("document", document_id)]

@@ -578,6 +578,9 @@ class CollectionRead(BaseModel):
     model_count: int = 0
     effective_role: Optional[CollectionRole] = None
     tags: List[str] = []
+    # Lets a folder view skip the readme request for the folders (most of them)
+    # that have none.
+    has_readme: bool = False
 
 
 class CollectionCreate(BaseModel):

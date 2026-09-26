@@ -101,10 +101,8 @@ describe("Natural-language search filters", () => {
     const app = setup();
     const user = userEvent.setup();
     await waitForParsedSearch();
-    await user.click(
-      await screen.findByRole("button", { name: "Edit Actual duration < seconds: 10800" }),
-    );
-    const input = screen.getByRole("textbox", { name: "Actual duration < seconds" });
+    await user.click(await screen.findByRole("button", { name: "Edit Actual duration < 3h 0m" }));
+    const input = screen.getByRole("textbox", { name: "Actual duration < (Seconds)" });
     await user.clear(input);
     await user.type(input, "7200");
     await user.click(screen.getByRole("button", { name: "Apply filters" }));
@@ -154,7 +152,6 @@ describe("Natural-language search filters", () => {
     });
     const user = userEvent.setup();
     await waitForParsedSearch();
-    await user.click(screen.getByText("Search options"));
     await user.click(screen.getByRole("button", { name: "Saved views" }));
     await user.click(screen.getByRole("button", { name: /Save current view/ }));
     await user.type(screen.getByRole("textbox", { name: "View name" }), "My brackets");

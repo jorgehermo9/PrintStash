@@ -56,7 +56,7 @@ function renderTopBar({ at = "/", auth = session() }: { at?: string; auth?: Auth
       auth,
       routes: {
         "GET /api/v1/search/status": json(searchStatus()),
-        "GET /api/v1/ingest/jobs": json([]),
+        "GET /api/v1/jobs": json([]),
       },
     },
   );
@@ -237,24 +237,9 @@ describe("TopBar", () => {
     });
   });
 
-  describe("Similar models shortcut", () => {
-    it("opens the similarity finder from the header", async () => {
-      const user = userEvent.setup();
-      renderTopBar();
-
-      await user.click(screen.getByRole("link", { name: "Similar models" }));
-
-      expect(screen.getByTestId("location")).toHaveTextContent("/library/similar");
-    });
-
-    it("marks comparison pages as part of Similar models", () => {
-      renderTopBar({ at: "/library/similar/41" });
-
-      expect(screen.getByRole("link", { name: "Similar models" })).toHaveAttribute(
-        "aria-current",
-        "page",
-      );
-    });
+  it("keeps Similar models out of the desktop header", () => {
+    renderTopBar();
+    expect(screen.queryByRole("link", { name: "Similar models" })).toBeNull();
   });
 
   describe("home link", () => {

@@ -15,6 +15,11 @@
  * id. Fetching in an effect repaints the previous folder's description first,
  * which reads as the new folder having inherited it.
  *
+ * Opening a folder is the hot path of browsing the vault, so the description
+ * must cost nothing it does not need: a folder the collection list flags as
+ * having none is never asked for one, and a folder already read is not read
+ * again on the way back.
+ *
  * Saving an emptied description means *removing* it, so an empty string travels
  * as null rather than as a description consisting of nothing.
  */
@@ -28,10 +33,20 @@ import { CollectionReadme } from "@/components/collection-readme";
 import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
 
 function renderReadme(
-  options: RenderAppOptions & { readme?: string | null; canEdit?: boolean } = {},
+  options: RenderAppOptions & {
+    readme?: string | null;
+    canEdit?: boolean;
+    hasReadme?: boolean;
+  } = {},
 ) {
-  const { readme = null, canEdit = true, routes = {}, ...rest } = options;
-  return renderApp(<CollectionReadme collectionId={5} canEdit={canEdit} />, {
+  const {
+    readme = null,
+    canEdit = true,
+    hasReadme = readme !== null,
+    routes = {},
+    ...rest
+  } = options;
+  return renderApp(<CollectionReadme collectionId={5} canEdit={canEdit} hasReadme={hasReadme} />, {
     routes: {
       "GET /api/v1/collections/5/readme": json({ readme }),
       "PUT /api/v1/collections/5/readme": json({ readme: "saved" }),
@@ -39,6 +54,12 @@ function renderReadme(
     },
     ...rest,
   });
+}
+
+function readmeReads(requestsWithMethod: (method: string) => { url: string }[], id: number) {
+  return requestsWithMethod("GET").filter((call) =>
+    call.url.endsWith(`/api/v1/collections/${id}/readme`),
+  );
 }
 
 beforeEach(() => {
@@ -80,6 +101,15 @@ describe("CollectionReadme", () => {
   });
 
   describe("a folder with none", () => {
+    it("never asks the server for one", async () => {
+      // The collection list already said there is nothing to read; asking anyway
+      // is a round-trip on every folder a user opens.
+      const { requestsWithMethod } = renderReadme({ hasReadme: false });
+
+      await screen.findByRole("button", { name: /Add a description for this collection/ });
+      expect(readmeReads(requestsWithMethod, 5)).toHaveLength(0);
+    });
+
     it("invites somebody who may write to add one", async () => {
       renderReadme();
 
@@ -97,6 +127,32 @@ describe("CollectionReadme", () => {
     });
   });
 
+  describe("revisiting a folder", () => {
+    it("shows its description without reading it again", async () => {
+      const { requestsWithMethod, rerender } = renderReadme({
+        readme: "Brackets.",
+        routes: { "GET /api/v1/collections/6/readme": json({ readme: "Bolts." }) },
+      });
+      await screen.findByText("Brackets.");
+      rerender(<CollectionReadme collectionId={6} canEdit hasReadme />);
+      await screen.findByText("Bolts.");
+
+      rerender(<CollectionReadme collectionId={5} canEdit hasReadme />);
+
+      expect(await screen.findByText("Brackets.")).toBeInTheDocument();
+      expect(readmeReads(requestsWithMethod, 5)).toHaveLength(1);
+    });
+
+    it("never shows the previous folder's description on the next one", async () => {
+      const { rerender } = renderReadme({ readme: "Brackets." });
+      await screen.findByText("Brackets.");
+
+      rerender(<CollectionReadme collectionId={6} canEdit hasReadme={false} />);
+
+      expect(screen.queryByText("Brackets.")).toBeNull();
+    });
+  });
+
   describe("writing one", () => {
     it("saves what the user wrote", async () => {
       const user = userEvent.setup();
@@ -111,6 +167,20 @@ describe("CollectionReadme", () => {
           readme: "Brackets for the shelf rig.",
         }),
       );
+    });
+
+    it("shows the saved description without reading it back", async () => {
+      const user = userEvent.setup();
+      const { requestsWithMethod } = renderReadme({
+        routes: { "PUT /api/v1/collections/5/readme": json({ readme: "Shelf rig." }) },
+      });
+      await user.click(await screen.findByRole("button", { name: /Add a description/ }));
+      await user.type(screen.getByRole("textbox"), "Shelf rig.");
+
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(await screen.findByText("Shelf rig.")).toBeInTheDocument();
+      expect(readmeReads(requestsWithMethod, 5)).toHaveLength(0);
     });
 
     it("removes the description when it is emptied", async () => {
@@ -173,6 +243,7 @@ describe("CollectionReadme", () => {
       // A folder whose description 500s is still a folder full of models; an
       // error banner above the grid helps nobody.
       renderReadme({
+        hasReadme: true,
         routes: { "GET /api/v1/collections/5/readme": json({ detail: "boom" }, 500) },
       });
 

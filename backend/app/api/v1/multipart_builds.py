@@ -3,14 +3,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
-from app.bootstrap.dependencies import get_work_wakeup
 from app.core.security import require_auth, require_user
 from app.db.models import CollectionRole, MultipartBuild, User
 from app.db.session import get_session
 from app.modules.identity import rbac
 from app.modules.printing import fleet
 from app.modules.printing import multipart_builds as builds
-from app.runtime.work_wakeup import WorkNotice, WorkWakeup
+from app.modules.printing.jobs import wake_dispatch
 from app.schemas.multipart_builds import (
     BuildArchive,
     BuildConfirm,
@@ -104,7 +103,6 @@ async def enqueue_part(
     payload: BuildQueue,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    work_wakeup: WorkWakeup = Depends(get_work_wakeup),
 ):
     build = builds.require(session, user, build_id, CollectionRole.EDIT)
     try:
@@ -114,10 +112,8 @@ async def enqueue_part(
             409 if exc.code == "material_mismatch_confirmation_required" else 400,
             exc.code,
         ) from exc
-    for job in jobs:
-        await work_wakeup.notify(
-            WorkNotice(job_id=str(job.id), kind="fleet_dispatch", payload={})
-        )
+    if jobs:
+        wake_dispatch()
     return builds.read(session, user, build)
 
 

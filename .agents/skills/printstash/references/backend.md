@@ -24,9 +24,11 @@ library/trash/storage code.
     [providers.md](providers.md).
 - `db/scopes.py` — `live()` / `trashed()` predicates. Hand-written
   `deleted_at.is_(None)` is a bug.
-- `bootstrap/` constructs and closes dependencies; `runtime/` owns local
-  scheduling hints, maintenance and event delivery. `WorkWakeup` is not a
-  durable Cloud queue. Event publication accepts message sinks, not WebSockets.
+- `bootstrap/` constructs and closes dependencies; `runtime/` owns maintenance
+  admission, the job engines and event transports. Background work is a Job of
+  a definition declared by its owner; see
+  [background-work.md](background-work.md). Event publication accepts message
+  sinks, not WebSockets.
 - Shared business lives in `printstash-core` behind operation-specific ports;
   product adapters own authorization and SQL transactions. Core has no ORM,
   framework or external-service dependencies.
@@ -37,7 +39,14 @@ library/trash/storage code.
 `backend/app/core/config.py` `Settings` is the source of truth for every env
 var; prefix is `VAULT_` (e.g. `VAULT_DB_URL`, `VAULT_DATA_DIR`). Add new
 settings there with a safe local-first default; document user-facing ones in
-the in-repository README/docs. If the public site also needs an update, identify
+the in-repository README/docs.
+
+Every app-owned path is a child of `VAULT_DATA_ROOT` (`/data`, one volume):
+a new directory setting joins `DATA_ROOT_LAYOUT` rather than taking its own
+absolute default. A file that will be published into storage is written under
+`settings.staging_dir` (never `tempfile`'s system temp dir) and handed over with
+`move_in` / `publish_file(move=True)`: on the library's mount that is a hard
+link, not a copy. If the public site also needs an update, identify
 the separate `printstash-landing` change without widening scope implicitly.
 Compose files: `docker-compose.yml` (default, minimal, single-container unified image),
 `docker-compose.advanced.yml` (every setting wired, postgres/s3 profiles,

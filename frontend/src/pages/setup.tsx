@@ -21,6 +21,8 @@ import { Input } from "@/components/ui/input";
 import { storeLogin } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { SetupFrame } from "@/components/setup-frame";
+import { SetupUnavailable } from "@/components/setup-unavailable";
+import { setupErrorMessage, setupStorageBody } from "@/lib/setup-storage";
 import { providerFormError } from "@/lib/storage-provider-form";
 import { formatBytes } from "@/lib/format";
 import type { SetupStatus, SetupStorageCheck, StorageProvider } from "@/types";
@@ -69,15 +71,7 @@ export default function SetupPage({ deps = LIVE_DEPS }: { deps?: SetupPageDeps }
   }, [step]);
 
   function describeError(error: Error): string {
-    const raw = error.message;
-    if (/already_configured|users_already_exist/.test(raw)) return t("setup.exists");
-    if (/not_empty/.test(raw)) return t("setup.populated");
-    if (/setup_session/.test(raw)) return t("setup.session");
-    if (/setup_origin/.test(raw)) return t("setup.origin");
-    if (/setup_disabled/.test(raw)) return t("setup.disabled");
-    if (/setup_remote_storage/.test(raw)) return t("setup.remoteFailure");
-    if (/dir|path|writable|readable/.test(raw)) return t("setup.paths");
-    return t("setup.failed");
+    return setupErrorMessage(error, t);
   }
 
   useEffect(() => {
@@ -138,17 +132,7 @@ export default function SetupPage({ deps = LIVE_DEPS }: { deps?: SetupPageDeps }
     }
   }
   function storageBody() {
-    return {
-      storage_provider: providerId,
-      storage_provider_config: {
-        provider: providerId,
-        ...Object.fromEntries(
-          Object.entries(values).filter(
-            ([key, value]) => key !== "secret_fields_set" && value !== "",
-          ),
-        ),
-      },
-    };
+    return setupStorageBody(providerId, values);
   }
   async function checkStorage() {
     const provider = providers.find((item) => item.id === providerId);
@@ -237,7 +221,12 @@ export default function SetupPage({ deps = LIVE_DEPS }: { deps?: SetupPageDeps }
           )}
         </div>
       ) : !status.setup_available ? (
-        <p role="alert">{t("setup.disabled")}</p>
+        <SetupUnavailable
+          reason={status.unavailable_reason ?? "disabled"}
+          host={status.observed_host ?? window.location.hostname}
+          variables={status.unavailable_variables ?? []}
+          onRetry={() => setBootAttempt((n) => n + 1)}
+        />
       ) : (
         <form
           ref={form}

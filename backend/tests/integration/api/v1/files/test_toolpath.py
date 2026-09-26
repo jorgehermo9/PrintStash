@@ -1,5 +1,16 @@
-"""Toolpaths require original-download access and never mutate Artifact bytes."""
+"""Toolpaths require original-download access and never mutate Artifact bytes.
 
+An ASCII G-code Artifact is its own toolpath. A binary one is served from its
+toolpath derivative: while that is still being derived the answer is 202 with
+the derivative's state (never a converted body produced inside the request),
+a failed conversion is 422 with its recorded reason, and a derivative larger
+than the configured limit is refused rather than streamed.
+"""
+
+import pytest
+
+from app.core.config import _overlay
+from app.db.models import DerivativeKind, DerivativeState, FileType
 from app.modules.storage.storage_backend.runtime import get_backend
 
 
@@ -17,6 +28,16 @@ class TestToolpath:
         assert response.status_code == 200
         assert response.content == content
         assert get_backend().read_bytes(key) == content
+
+    def test_a_mesh_has_no_toolpath(self, client, auth_headers, make_model, make_file):
+        row = make_file(make_model("mesh-toolpath"), filename="part.stl")
+
+        response = client.get(f"/api/v1/files/{row.id}/toolpath", headers=auth_headers)
+
+        assert (response.status_code, response.json()["detail"]) == (
+            404,
+            "toolpath_not_gcode",
+        )
 
     def test_toolpath_requires_authentication(self, client, make_model, make_file):
         row = make_file(make_model("private-toolpath"), ftype="gcode")
@@ -76,3 +97,99 @@ class TestToolpath:
         )
         assert response.status_code == 200
         assert response.content == content
+
+
+@pytest.fixture
+def bgcode(make_model, make_file):
+    return make_file(
+        make_model("binary-toolpath"), filename="plate.bgcode", ftype=FileType.GCODE
+    )
+
+
+class TestBinaryToolpath:
+    def test_serves_the_derived_toolpath(
+        self, client, auth_headers, bgcode, make_derivative
+    ) -> None:
+        get_backend().write_bytes(b"G1 X1 E1\n", "_derivatives/plate-toolpath.gcode")
+        make_derivative(
+            bgcode,
+            DerivativeKind.TOOLPATH,
+            storage_key="_derivatives/plate-toolpath.gcode",
+        )
+
+        response = client.get(
+            f"/api/v1/files/{bgcode.id}/toolpath", headers=auth_headers
+        )
+
+        assert (response.status_code, response.content) == (200, b"G1 X1 E1\n")
+        assert response.headers["cache-control"] == "private, no-store"
+
+    def test_a_toolpath_never_derived_is_pending(
+        self, client, auth_headers, bgcode
+    ) -> None:
+        response = client.get(
+            f"/api/v1/files/{bgcode.id}/toolpath", headers=auth_headers
+        )
+
+        assert (response.status_code, response.json()) == (202, {"state": "pending"})
+
+    def test_a_toolpath_being_derived_reports_its_state(
+        self, client, auth_headers, bgcode, make_derivative
+    ) -> None:
+        make_derivative(bgcode, DerivativeKind.TOOLPATH, state=DerivativeState.RUNNING)
+
+        response = client.get(
+            f"/api/v1/files/{bgcode.id}/toolpath", headers=auth_headers
+        )
+
+        assert (response.status_code, response.json()) == (202, {"state": "running"})
+
+    def test_a_failed_conversion_reports_its_reason(
+        self, client, auth_headers, bgcode, make_derivative
+    ) -> None:
+        make_derivative(
+            bgcode,
+            DerivativeKind.TOOLPATH,
+            state=DerivativeState.FAILED,
+            failure_reason="toolpath_invalid_bgcode",
+            exhausted=True,
+        )
+
+        response = client.get(
+            f"/api/v1/files/{bgcode.id}/toolpath", headers=auth_headers
+        )
+
+        assert (response.status_code, response.json()["detail"]) == (
+            422,
+            "toolpath_invalid_bgcode",
+        )
+
+    def test_a_derived_toolpath_over_the_limit_is_refused(
+        self, client, auth_headers, bgcode, make_derivative
+    ) -> None:
+        _overlay["toolpath_output_max_mb"] = 1
+        get_backend().write_bytes(b"G1\n" * 400_000, "_derivatives/huge.gcode")
+        make_derivative(
+            bgcode, DerivativeKind.TOOLPATH, storage_key="_derivatives/huge.gcode"
+        )
+
+        response = client.get(
+            f"/api/v1/files/{bgcode.id}/toolpath", headers=auth_headers
+        )
+
+        assert response.status_code == 413
+
+    def test_a_download_share_serves_the_pending_state(
+        self, client, auth_headers, bgcode
+    ) -> None:
+        shared = client.post(
+            f"/api/v1/models/{bgcode.model_id}/shares",
+            headers=auth_headers,
+            json={"allow_download": True},
+        )
+
+        response = client.get(
+            f"/api/v1/share/{shared.json()['token']}/files/{bgcode.id}/toolpath"
+        )
+
+        assert (response.status_code, response.json()) == (202, {"state": "pending"})

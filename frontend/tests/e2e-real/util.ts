@@ -1,26 +1,85 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type APIResponse, type Page, type Response } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
+
+/** The new backup, as the finished `backups.create` Job reports it. */
+export interface CreatedBackup {
+  backup_id: string;
+  source_ref: string;
+  location: string;
+  outcome: string | null;
+  run_id: string | null;
+  archive_sha256: string | null;
+  destination_results: Array<{
+    id: string;
+    name: string;
+    outcome: string;
+    key: string | null;
+  }> | null;
+}
+
+/**
+ * Follow an accepted `POST /api/v1/backups` to the backup it produced.
+ *
+ * A manual backup is a Job: the POST answers 202 with its id, and the
+ * completed Job's result is the backup.
+ */
+export async function backupFromAccepted(
+  page: Page,
+  accepted: Response | APIResponse,
+): Promise<CreatedBackup> {
+  const backup = await completedJob<CreatedBackup>(page, accepted);
+  expect(backup).not.toBeNull();
+  return backup!;
+}
+
+/** Follow an accepted (202) request to its completed Job; returns the Job's result. */
+export async function completedJob<T>(
+  page: Page,
+  accepted: Response | APIResponse,
+): Promise<T | null> {
+  expect(accepted.status()).toBe(202);
+  const { job_id }: { job_id: string } = await accepted.json();
+  let result: T | null = null;
+  await expect
+    .poll(
+      async () => {
+        const job: { state: string; error: string | null; result: T | null } = await (
+          await page.request.get(`/api/v1/jobs/${job_id}`)
+        ).json();
+        if (job.state === "completed") result = job.result;
+        return job.state === "failed" ? `failed: ${job.error}` : job.state;
+      },
+      { timeout: 120_000 },
+    )
+    .toBe("completed");
+  return result;
+}
+
+/** Take a manual backup through the API and wait for it to exist. */
+export async function createBackupViaApi(page: Page): Promise<CreatedBackup> {
+  return backupFromAccepted(page, await page.request.post("/api/v1/backups"));
+}
 
 /** Seed time-expired bytes in this suite's disposable database, never the live library. */
 export async function seedExpiredStaging(): Promise<{ itemId: number; path: string }> {
   const backend = resolve("../backend");
   const root = resolve(process.env.PLAYWRIGHT_REAL_DATA_DIR ?? "tests/e2e-real/.data");
+  // The same single root the backend launcher uses, so the seed reaches its
+  // database and staging; per-directory overrides would point elsewhere.
+  const {
+    VAULT_DB_URL: _db,
+    VAULT_DATA_DIR: _files,
+    VAULT_THUMB_DIR: _thumbs,
+    VAULT_STAGING_DIR: _staging,
+    VAULT_BACKUP_DIR: _backups,
+    ...inherited
+  } = process.env;
   const { stdout } = await promisify(execFile)(
     resolve(backend, ".venv/bin/python"),
     ["-m", "tests.fakes.storage_cleanup_seed"],
-    {
-      cwd: backend,
-      env: {
-        ...process.env,
-        VAULT_DB_URL: `sqlite:///${root}/test.sqlite`,
-        VAULT_DATA_DIR: resolve(root, "files"),
-        VAULT_THUMB_DIR: resolve(root, "thumbs"),
-        VAULT_STAGING_DIR: resolve(root, "staging"),
-        VAULT_BACKUP_DIR: resolve(root, "backups"),
-      },
-    },
+    { cwd: backend, env: { ...inherited, VAULT_DATA_ROOT: root } },
   );
   return JSON.parse(stdout);
 }

@@ -50,7 +50,6 @@ class ThumbnailFailureReason(str, Enum):
     TIMEOUT = "timeout"
     RENDERER_NO_OUTPUT = "renderer_no_output"
     STORAGE = "storage"
-    LEASE_LOST = "lease_lost"
 
 
 @dataclass(frozen=True)

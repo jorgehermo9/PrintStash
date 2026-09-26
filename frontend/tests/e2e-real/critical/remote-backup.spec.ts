@@ -1,7 +1,14 @@
 /** A browser-created remote-only backup restores a purged Model and its bytes. */
 import { expect, test } from "@playwright/test";
 
-import { clickModelAction, gcodeFor, modelCard, uploadGcodeModel } from "../util";
+import {
+  backupFromAccepted,
+  clickModelAction,
+  completedJob,
+  gcodeFor,
+  modelCard,
+  uploadGcodeModel,
+} from "../util";
 
 const webdavPort = Number(process.env.PLAYWRIGHT_CRITICAL_BACKUP_WEBDAV_PORT ?? 8776);
 
@@ -19,14 +26,20 @@ test.describe("remote-only backup recovery", () => {
 
     const destinationName = `WebDAV backup ${Date.now()}`;
     await page.goto("/settings?section=remote-storage");
+    const remote = page.getByRole("region", { name: "Remote storage" });
+    await remote
+      .getByRole("group", { name: "Storage category" })
+      .getByRole("button", { name: "Nextcloud and WebDAV" })
+      .click();
+    await remote
+      .getByRole("group", { name: "Provider" })
+      .getByRole("button", { name: "WebDAV", exact: true })
+      .click();
     await page.getByLabel("Connection name").fill(destinationName);
-    await page.getByLabel("Provider").selectOption("webdav");
-    await page
-      .locator("label")
-      .filter({ hasText: "Use for" })
-      .last()
-      .locator("select")
-      .selectOption("backup");
+    await remote
+      .getByRole("group", { name: "Use for" })
+      .getByRole("button", { name: "Backup replicas" })
+      .click();
     await page.getByLabel("Base folder").fill(`backup-data-${Date.now()}`);
     await page.getByLabel("Server URL").fill(`http://127.0.0.1:${webdavPort}`);
     await page.getByLabel("Username").fill("backup-user");
@@ -51,8 +64,19 @@ test.describe("remote-only backup recovery", () => {
         response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
     );
     await page.getByRole("button", { name: "Backup now" }).click();
-    const metadata = await (await created).json();
+    const metadata = await backupFromAccepted(page, await created);
     expect(metadata.location).toBe("opendal:webdav");
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get("/api/v1/backups/runs");
+          const runs = await response.json();
+          return runs.find((run: { backup_id: string }) => run.backup_id === metadata.backup_id)
+            ?.outcome;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe("completed");
 
     await page.goto("/");
     await modelCard(page, modelName).click();
@@ -71,12 +95,11 @@ test.describe("remote-only backup recovery", () => {
         response.url().includes(`/api/v1/backups/${metadata.backup_id}/restore`) &&
         response.request().method() === "POST",
     );
-    await page
+    const backupRow = page
       .locator("div.grid")
-      .filter({ hasText: metadata.backup_id })
-      .last()
-      .getByRole("button", { name: "Restore", exact: true })
-      .click();
+      .filter({ has: page.getByText(metadata.backup_id, { exact: true }) })
+      .last();
+    await backupRow.getByRole("button", { name: "Restore", exact: true }).click();
     await page
       .getByRole("dialog", { name: "Restore backup?" })
       .getByRole("button", { name: "Restore", exact: true })
@@ -133,13 +156,10 @@ test.describe("partial backup recovery", () => {
           response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
       );
       await page.getByRole("button", { name: "Backup now" }).click();
-      const response = await created;
-      expect(response.status()).toBe(202);
-      const meta = await response.json();
+      const meta = await backupFromAccepted(page, await created);
       expect(meta.outcome).toBe("partial");
-      const failed = meta.destination_results.find(
-        (result: { name: string }) => result.name === root,
-      );
+      const failed = (meta.destination_results ?? []).find((result) => result.name === root);
+      if (!failed) throw new Error(`no destination result for ${root}`);
       expect(failed.outcome).toBe("failed");
       const article = page.getByRole("article", { name: `${meta.backup_id}: Partially completed` });
       await expect(article.getByText(`${root} · Failed`)).toBeVisible();
@@ -152,12 +172,14 @@ test.describe("partial backup recovery", () => {
           candidate.request().method() === "POST",
       );
       await article.getByRole("button", { name: "Retry this destination" }).click();
-      expect((await retried).status()).toBe(200);
+      // The retry is a Job: the POST queues it, and the copy is published
+      // when that Job completes.
+      await completedJob(page, await retried);
       const completed = page.getByRole("article", { name: `${meta.backup_id}: Completed` });
       await expect(completed.getByText(`${root} · Published`)).toBeVisible();
       await expect(completed.getByText(/Last verified:/)).toBeVisible();
       const remote = await page.request.get(
-        `http://127.0.0.1:${webdavPort}/${failed.key.replace(/^webdav\//, "")}`,
+        `http://127.0.0.1:${webdavPort}/${(failed.key ?? "").replace(/^webdav\//, "")}`,
       );
       expect(remote.ok()).toBeTruthy();
       expect(
@@ -224,7 +246,15 @@ test.describe("shared provider connection forms", () => {
       const vaultEndpoint = await page.getByLabel("Server URL").inputValue();
       const vaultAccount = await page.getByLabel("Username", { exact: true }).inputValue();
       await page.goto("/settings?section=remote-storage");
-      await page.getByLabel("Provider").selectOption("nextcloud");
+      const remote = page.getByRole("region", { name: "Remote storage" });
+      await remote
+        .getByRole("group", { name: "Storage category" })
+        .getByRole("button", { name: "Nextcloud and WebDAV" })
+        .click();
+      await remote
+        .getByRole("group", { name: "Provider" })
+        .getByRole("button", { name: "Nextcloud" })
+        .click();
       await page.getByLabel("Connection name").fill(name);
       await page.getByLabel("Server URL").fill(vaultEndpoint);
       await page.getByLabel("Username", { exact: true }).fill(vaultAccount);

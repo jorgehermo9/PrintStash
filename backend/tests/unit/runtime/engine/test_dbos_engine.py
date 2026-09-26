@@ -1,0 +1,238 @@
+"""The DBOS adapter's translations, without launching DBOS.
+
+How a lane becomes a queue (which concurrency bound, which limiter), where the
+system database lives for each application database, how the tick interval
+becomes a cron, and how a step that exhausted its retries reports the step's
+own error rather than DBOS's wrapper. The engine running for real is the port
+contract suite in ``tests/contract/modules/work``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from dbos import DBOS
+from dbos import error as dbos_error
+
+from app.db.models import LaneName
+from app.modules.work.catalog import WorkCatalog, default_lanes
+from app.modules.work.contracts import Lane, RetryPolicy
+from app.runtime.engine import dbos_engine
+from app.runtime.engine.dbos_engine import DbosJobEngine, system_database_url
+
+
+def _engine(*lanes: Lane, schema: str | None = None) -> DbosJobEngine:
+    return DbosJobEngine(
+        WorkCatalog(lanes={**default_lanes(), **{lane.name: lane for lane in lanes}}),
+        system_database_url="sqlite:////data/db/printstash-dbos.sqlite",
+        schema=schema,
+        executor_id="api-test",
+        app_version="9.9.9",
+    )
+
+
+class TestSystemDatabase:
+    def test_sqlite_uses_a_sibling_file(self) -> None:
+        assert system_database_url("sqlite:////data/db/printstash.db") == (
+            "sqlite:////data/db/printstash-dbos.db",
+            None,
+        )
+
+    def test_a_sqlite_file_without_a_suffix_gets_one(self) -> None:
+        url, _ = system_database_url("sqlite:////data/db/vault")
+
+        assert url == "sqlite:////data/db/vault-dbos.sqlite"
+
+    @pytest.mark.parametrize("url", ["sqlite://", "sqlite:///:memory:"])
+    def test_an_in_memory_database_is_refused(self, url: str) -> None:
+        with pytest.raises(ValueError, match="file_backed_sqlite"):
+            system_database_url(url)
+
+    def test_postgres_uses_the_dbos_schema_of_the_same_database(self) -> None:
+        url, schema = system_database_url("postgresql://vault:pw@db:5432/vault")
+
+        assert (url, schema) == (
+            "postgresql+psycopg://vault:pw@db:5432/vault",
+            "dbos",
+        )
+
+
+class TestConfig:
+    def test_sqlite_waits_out_a_locked_file(self) -> None:
+        config = _engine()._config()
+
+        assert config["db_engine_kwargs"] == {"connect_args": {"timeout": 30}}
+        assert "dbos_system_schema" not in config
+
+    def test_postgres_names_its_schema(self) -> None:
+        config = _engine(schema="dbos")._config()
+
+        assert config["dbos_system_schema"] == "dbos"
+        assert "db_engine_kwargs" not in config
+
+    def test_identifies_this_build_to_the_engine(self) -> None:
+        config = _engine()._config()
+
+        assert (config["application_version"], config["executor_id"]) == (
+            "9.9.9",
+            "api-test",
+        )
+        assert config["run_admin_server"] is False
+
+
+@pytest.fixture
+def registered(monkeypatch) -> dict[str, dict]:
+    queues: dict[str, dict] = {}
+
+    def register_queue(name: str, **options):
+        queues[name] = options
+        return name
+
+    monkeypatch.setattr(DBOS, "register_queue", register_queue)
+    return queues
+
+
+class TestQueues:
+    def test_a_worker_lane_bounds_each_process(self, registered) -> None:
+        _engine()._register_queue(Lane(LaneName.INGEST, 2))
+
+        assert registered["ingest"]["worker_concurrency"] == 2
+        assert registered["ingest"]["priority_enabled"] is True
+
+    def test_a_global_lane_bounds_the_deployment(self, registered) -> None:
+        _engine()._register_queue(Lane(LaneName.SIMILARITY, 1, scope="global"))
+
+        assert registered["similarity"]["global_concurrency"] == 1
+
+    def test_a_partitioned_lane_limits_each_partition(self, registered) -> None:
+        _engine()._register_queue(
+            Lane(LaneName.NOTIFY, 1, partitioned=True, rate_limit=(30, 60.0))
+        )
+
+        options = registered["notify"]
+        assert (options["partition_concurrency"], options["partition_limiter"]) == (
+            1,
+            {"limit": 30, "period": 60.0},
+        )
+        assert "limiter" not in options
+
+    def test_a_rate_limited_lane_is_limited_as_a_whole(self, registered) -> None:
+        _engine()._register_queue(Lane(LaneName.NETWORK, 4, rate_limit=(10, 1.0)))
+
+        assert registered["network"]["limiter"] == {"limit": 10, "period": 1.0}
+
+
+class _Queue:
+    def __init__(self) -> None:
+        self.set: list[tuple[str, int]] = []
+
+    def set_partition_concurrency(self, value: int) -> None:
+        self.set.append(("partition", value))
+
+    def set_global_concurrency(self, value: int) -> None:
+        self.set.append(("global", value))
+
+    def set_worker_concurrency(self, value: int) -> None:
+        self.set.append(("worker", value))
+
+
+class TestLaneConcurrency:
+    @pytest.mark.parametrize(
+        ("lane", "bound"),
+        [
+            (Lane(LaneName.INGEST, 2), "worker"),
+            (Lane(LaneName.SIMILARITY, 1, scope="global"), "global"),
+            (Lane(LaneName.PRINTING, 1, partitioned=True), "partition"),
+        ],
+    )
+    def test_an_override_moves_the_lanes_own_bound(
+        self, lane: Lane, bound: str
+    ) -> None:
+        engine = _engine(lane)
+        queue = _Queue()
+        engine._queues[lane.name] = queue  # type: ignore[assignment]
+
+        engine.set_lane_concurrency(lane.name, 5)
+
+        assert queue.set == [(bound, 5)]
+
+    def test_a_lane_without_a_queue_is_a_bug(self) -> None:
+        # Every lane is registered at launch; an unlaunched engine has none.
+        with pytest.raises(KeyError):
+            _engine().set_lane_concurrency(LaneName.INGEST, 5)
+
+
+class TestTickCron:
+    def test_whole_minutes_use_a_minute_cron(self) -> None:
+        assert dbos_engine._tick_cron(300) == "*/5 * * * *"
+
+    def test_seconds_use_a_seconds_cron(self) -> None:
+        assert dbos_engine._tick_cron(15) == "*/15 * * * * *"
+
+    def test_an_odd_interval_is_capped_at_a_minute(self) -> None:
+        assert dbos_engine._tick_cron(90) == "*/59 * * * * *"
+
+
+class TestRunner:
+    def test_exhausted_retries_raise_the_steps_own_error(self, monkeypatch) -> None:
+        cause = ConnectionError("printer offline")
+
+        def run_step(_options, _fn):
+            raise dbos_error.DBOSMaxStepRetriesExceeded("step", 3, [cause])
+
+        monkeypatch.setattr(DBOS, "run_step", run_step)
+
+        with pytest.raises(ConnectionError) as raised:
+            dbos_engine._DbosRunner().run(
+                "step", lambda: None, RetryPolicy(max_attempts=3)
+            )
+
+        assert raised.value is cause
+
+    def test_exhausted_retries_without_errors_raise_the_wrapper(
+        self, monkeypatch
+    ) -> None:
+        def run_step(_options, _fn):
+            raise dbos_error.DBOSMaxStepRetriesExceeded("step", 3, [])
+
+        monkeypatch.setattr(DBOS, "run_step", run_step)
+
+        with pytest.raises(dbos_error.DBOSMaxStepRetriesExceeded):
+            dbos_engine._DbosRunner().run(
+                "step", lambda: None, RetryPolicy(max_attempts=3)
+            )
+
+    def test_a_single_attempt_step_asks_for_no_retries(self, monkeypatch) -> None:
+        seen: list[dict] = []
+        monkeypatch.setattr(
+            DBOS, "run_step", lambda options, fn: seen.append(options) or fn()
+        )
+
+        assert dbos_engine._DbosRunner().run("step", lambda: 7, RetryPolicy()) == 7
+        assert seen == [{"name": "step"}]
+
+    def test_recognises_a_cancelled_workflow(self) -> None:
+        runner = dbos_engine._DbosRunner()
+
+        assert runner.is_cancellation(
+            dbos_error.DBOSWorkflowCancelledError("workflow-1")
+        )
+        assert not runner.is_cancellation(RuntimeError("boom"))
+
+
+class TestDetached:
+    def test_a_call_from_the_event_loop_runs_on_another_thread(self) -> None:
+        import threading
+
+        async def from_loop() -> tuple[int, int]:
+            return threading.get_ident(), dbos_engine._detached(threading.get_ident)
+
+        loop_thread, called_on = asyncio.run(from_loop())
+
+        assert loop_thread != called_on
+
+    def test_a_call_outside_any_workflow_runs_in_place(self) -> None:
+        import threading
+
+        assert dbos_engine._detached(threading.get_ident) == threading.get_ident()

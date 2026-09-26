@@ -1,0 +1,127 @@
+# App-store catalogues
+
+Source manifests for the stores that list PrintStash. Each one runs the
+single-container image described by the root [`docker-compose.yml`](../docker-compose.yml)
+and is submitted to that store's own repository. The Unraid template lives in
+[`templates/printstash.xml`](../templates/printstash.xml), which Community
+Applications reads directly.
+
+| Store | Files | First administrator |
+| --- | --- | --- |
+| Unraid | `templates/printstash.xml` | **First-run setup** dropdown: `trusted_network` (default; register in the browser, fields blank) or `environment` (fields required) |
+| Runtipi | `runtipi/printstash/` | `environment`, with required install-form fields, so the owner exists before the app serves a request |
+| Umbrel | `umbrel/printstash/` | `environment`, with Umbrel's per-app credentials (`defaultUsername`, `deterministicPassword`) shown on the app's page |
+| CasaOS / ZimaOS | `casaos/PrintStash/` | `trusted_network` by default; set `VAULT_SETUP_MODE=environment` and fill the fields to provision instead |
+
+All of them map the store's form or credentials to `VAULT_SETUP_ADMIN_*`, which
+creates the administrator once at first start (see
+[first use](../docs/first-run.md#an-administrator-from-the-deployment)). The
+administrator then signs in and chooses storage in the browser.
+
+`VAULT_SETUP_MODE` names which door each store uses, and PrintStash checks the mode
+and the credentials together (see
+[first use](../docs/first-run.md#an-administrator-from-the-deployment)). Where
+the store always supplies the credentials (Runtipi, Umbrel) the mode is
+`environment`: the owner exists before the first request and the browser has no
+door. Where the fields may be blank (CasaOS, Unraid) the default is
+`trusted_network`, browser registration from the local network; switching to
+`environment` makes the fields required. A combination that doesn't fit keeps
+setup closed and the setup page names what to change.
+
+`backend/tests/repo/test_catalogue_manifests.py` checks that every manifest runs
+the unified image at the current app version, persists `/data`, uses the setup
+mode above, never passes `VAULT_JWT_SECRET`, and wires the administrator
+settings.
+
+## Releasing: submitting and updating each store
+
+The release commit bumps every manifest to the new version; the version test fails
+until it does. Once the tag is published and the image
+`ghcr.io/xiao-villamor/printstash:X.Y.Z` exists for `amd64` and `arm64`, each store
+is updated as below. The release procedure in
+`.agents/skills/printstash/references/release.md` runs these steps. Opening a pull
+request in another project's repository is public, so the release confirms the list
+with the maintainer first.
+
+Check the image before touching any store:
+
+```bash
+docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z
+```
+
+The digest it prints (`sha256:…`) is what Umbrel pins.
+
+### Unraid
+
+Nothing to submit. Community Applications re-reads `templates/printstash.xml` from
+`main`, and the template deliberately tracks `:latest`, the Community Applications
+convention, so it is the one manifest the version test does not pin.
+
+### Umbrel: pull request to `getumbrel/umbrel-apps`
+
+That repository ships agent skills for exactly this: `umbrel-package-app` (first
+submission), `umbrel-update-app` (every release) and `umbrel-test-app`. Follow them
+in a checkout of the fork; they are the store's own contract.
+
+1. Fork and branch: `gh repo fork getumbrel/umbrel-apps --clone`, then
+   `git switch -c printstash-X.Y.Z`.
+2. Copy `catalogues/umbrel/printstash/` to `printstash/`.
+3. Pin the image by digest: `image: ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:…`.
+4. **First submission only:** leave `gallery: []` and omit `icon` (the Umbrel team
+   adds the official assets before merge), set `submitter`, and after opening the PR
+   set `submission` to its URL. Mention in the description that the service uses
+   `restart: unless-stopped` where Umbrel apps usually use `on-failure`: a restart
+   requested from Settings is a graceful exit that can return status 0, which
+   `on-failure` would not relaunch.
+5. **Every release:** bump `version`, update the image and digest, and write
+   `releaseNotes` from the CHANGELOG entry.
+6. Test with `umbrel-test-app` (install on umbrelOS; sign in with the credentials
+   Umbrel shows; choose storage; upload a model), then open the PR.
+
+### CasaOS / ZimaOS: pull request to `IceWhaleTech/CasaOS-AppStore`
+
+1. Fork and branch: `gh repo fork IceWhaleTech/CasaOS-AppStore --clone`, then
+   `git switch -c printstash-X.Y.Z`.
+2. Copy `catalogues/casaos/PrintStash/docker-compose.yml` to
+   `Apps/PrintStash/docker-compose.yml`.
+3. **First submission only:** add `icon.png`, `thumbnail.png` and `screenshot-1.png`
+   next to it, and point `x-casaos.icon`, `thumbnail` and `screenshot_link` at the
+   store's copies (see an existing app such as `Apps/Jellyfin`).
+4. **Every release:** bump the image tag and `x-casaos.version`, and add release
+   notes.
+5. Validate with the store's own build, `./scripts/build_dist.sh`, which must finish
+   without errors and write `dist/apps/PrintStash/`. Then open the PR, saying
+   whether it is a new app or an update and how it was validated. The store's CI
+   validates compose files too.
+
+### Runtipi: the PrintStash app store
+
+Runtipi's official store no longer accepts new applications, so PrintStash
+publishes its own Runtipi app store. Users add the store's repository URL once in
+Runtipi's app-store settings and then install and update PrintStash like any other
+app.
+
+- **Repository:** `xiao-villamor/printstash-runtipi` (to be created), with
+  `apps/printstash/` at the root: `config.json`, `docker-compose.yml`,
+  `metadata/description.md` and `metadata/logo.jpg` exported from
+  [`icon.svg`](../icon.svg). Structure it following
+  <https://runtipi.io/docs/guides/create-your-own-app-store>.
+- **Every release:** copy `catalogues/runtipi/printstash/` into `apps/printstash/`,
+  increment `tipi_version` (Runtipi offers the update when it changes), and set
+  `updated_at` to the release time in milliseconds. Commit and push to the store's
+  default branch.
+- **Once:** list the store in Runtipi's community app stores discussion
+  (<https://github.com/runtipi/runtipi/discussions/categories/app-stores>) and
+  link it from the PrintStash documentation.
+
+### Before a first submission
+
+Install each manifest on a real host from your own fork or store first: Runtipi
+custom app stores, Umbrel community app stores and CasaOS custom store URLs all
+accept one. Confirm the whole first run: the owner signs in, is sent to the storage
+step, chooses storage and uploads a model. Behind each store's proxy is where
+`Host` handling is decided, and CI cannot see it.
+
+The ports in `config.json` (Runtipi), `umbrel-app.yml` (Umbrel) and the published
+port in the CasaOS compose file are host ports that must be unique within each
+store; a store reviewer may assign different ones.

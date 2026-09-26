@@ -2,14 +2,22 @@
 
 Create-only publication protects concurrent uploads, while replacement and
 rollback preserve bytes when a destination changes during the operation.
+
+A staged import becomes its library object by hard link whenever staging shares
+the library's mount, so publishing a large file costs no copy and no second
+allocation. Anything that cannot be linked safely still arrives, by copy.
 """
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import stat
 from io import BytesIO
 from pathlib import Path
 from threading import Barrier, Thread
+from typing import Iterator
 
 import pytest
 
@@ -19,6 +27,37 @@ from app.modules.storage.storage_backend.contracts import (
     StorageConfigurationError,
 )
 from app.modules.storage.storage_backend.local import LocalStorageBackend
+
+STAGED_BYTES = b"solid staged-part"
+
+
+def _staged(tmp_path: Path, name: str = "part.stl") -> Path:
+    staged = tmp_path / "staging" / name
+    staged.write_bytes(STAGED_BYTES)
+    return staged
+
+
+@pytest.fixture
+def cross_mount_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """link(2) out of staging fails the way it does across two mounts."""
+    staging = tmp_path / "staging"
+    real_link = os.link
+
+    def link(src, dst, *args, **kwargs):
+        if Path(os.fsdecode(src)).parent == staging:
+            raise OSError(errno.EXDEV, os.strerror(errno.EXDEV), os.fsdecode(src))
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(storage_local.os, "link", link)
+
+
+@pytest.fixture
+def unreleasable_staged(tmp_path: Path) -> Iterator[Path]:
+    """A staged file that can be linked from but not removed: a real fault."""
+    staged = _staged(tmp_path)
+    staged.parent.chmod(0o500)
+    yield staged
+    staged.parent.chmod(0o700)
 
 
 class TestReplaceStream:
@@ -314,3 +353,248 @@ class TestCreateStream:
             configured_backend.create_stream(FailingStream(), str(destination))
 
         assert not destination.exists()
+
+
+class TestMoveIn:
+    def test_publishes_a_staged_file_by_hard_link(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        staged = _staged(tmp_path)
+        staged_inode = staged.stat().st_ino
+        destination = tmp_path / "files" / "model" / "v1" / "part.stl"
+
+        configured_backend.move_in(staged, str(destination))
+
+        assert destination.stat().st_ino == staged_inode
+
+    def test_releases_the_staged_name(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        staged = _staged(tmp_path)
+
+        configured_backend.move_in(staged, str(tmp_path / "files" / "part.stl"))
+
+        assert not staged.exists()
+
+    def test_returns_a_receipt_that_proves_the_linked_inode(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        # Taken after the staged name is gone: releasing it changes the ctime.
+        staged = _staged(tmp_path)
+
+        receipt = configured_backend.move_in(
+            staged, str(tmp_path / "files" / "part.stl")
+        )
+
+        assert configured_backend.creation_matches(receipt)
+
+    def test_publishes_a_linked_object_private_to_the_app(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        # A link keeps its inode's mode; a created object is 0600, so a staged
+        # file written world-readable must not widen what the library exposes.
+        staged = _staged(tmp_path)
+        staged.chmod(0o644)
+        destination = tmp_path / "files" / "part.stl"
+
+        configured_backend.move_in(staged, str(destination))
+
+        assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+    def test_reports_the_staged_size(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        staged = _staged(tmp_path)
+
+        receipt = configured_backend.move_in(
+            staged, str(tmp_path / "files" / "part.stl")
+        )
+
+        assert receipt.size == len(STAGED_BYTES)
+
+    def test_hard_links_into_an_unmanaged_directory(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        # Backup archives have no enrolled root, and gain the same zero-copy
+        # publication from a temp file built beside them.
+        staged = _staged(tmp_path)
+        staged_inode = staged.stat().st_ino
+        destination = tmp_path / "backups" / "printstash-backup.tar.gz"
+
+        configured_backend.move_in(staged, str(destination))
+
+        assert destination.stat().st_ino == staged_inode
+
+    def test_copies_a_staged_file_from_another_mount(
+        self,
+        configured_backend: LocalStorageBackend,
+        tmp_path: Path,
+        cross_mount_staging: None,
+    ) -> None:
+        staged = _staged(tmp_path)
+        destination = tmp_path / "files" / "part.stl"
+
+        configured_backend.move_in(staged, str(destination))
+
+        assert destination.read_bytes() == STAGED_BYTES
+
+    def test_consumes_a_staged_file_it_copied(
+        self,
+        configured_backend: LocalStorageBackend,
+        tmp_path: Path,
+        cross_mount_staging: None,
+    ) -> None:
+        staged = _staged(tmp_path)
+
+        configured_backend.move_in(staged, str(tmp_path / "files" / "part.stl"))
+
+        assert not staged.exists()
+
+    def test_never_aliases_a_staged_file_it_cannot_release(
+        self,
+        configured_backend: LocalStorageBackend,
+        tmp_path: Path,
+        unreleasable_staged: Path,
+    ) -> None:
+        # A surviving second name would let a write through staging change
+        # library bytes, and its later removal would break the receipt's ctime.
+        destination = tmp_path / "files" / "part.stl"
+
+        configured_backend.move_in(unreleasable_staged, str(destination))
+
+        assert destination.stat().st_ino != unreleasable_staged.stat().st_ino
+
+    def test_keeps_a_staged_file_it_cannot_release(
+        self,
+        configured_backend: LocalStorageBackend,
+        tmp_path: Path,
+        unreleasable_staged: Path,
+    ) -> None:
+        configured_backend.move_in(
+            unreleasable_staged, str(tmp_path / "files" / "part.stl")
+        )
+
+        assert unreleasable_staged.read_bytes() == STAGED_BYTES
+
+    def test_returns_creation_proof_for_a_staged_file_it_cannot_release(
+        self,
+        configured_backend: LocalStorageBackend,
+        tmp_path: Path,
+        unreleasable_staged: Path,
+    ) -> None:
+        receipt = configured_backend.move_in(
+            unreleasable_staged, str(tmp_path / "files" / "part.stl")
+        )
+
+        assert configured_backend.creation_matches(receipt)
+
+    def test_publishes_the_bytes_behind_a_staged_symlink(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        target = _staged(tmp_path, name="real.stl")
+        staged = tmp_path / "staging" / "part.stl"
+        staged.symlink_to(target)
+        destination = tmp_path / "files" / "part.stl"
+
+        configured_backend.move_in(staged, str(destination))
+
+        assert (destination.is_symlink(), destination.read_bytes()) == (
+            False,
+            STAGED_BYTES,
+        )
+
+    def test_never_publishes_a_symlink_swapped_in_for_the_staged_file(
+        self,
+        configured_backend: LocalStorageBackend,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        staged = _staged(tmp_path)
+        outside = tmp_path / "outside.txt"
+        outside.write_bytes(b"not a staged upload")
+        real_link = os.link
+
+        def swap_then_link(src, dst, *args, **kwargs):
+            if Path(os.fsdecode(src)) == staged:
+                staged.unlink()
+                staged.symlink_to(outside)
+            return real_link(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(storage_local.os, "link", swap_then_link)
+        destination = tmp_path / "files" / "part.stl"
+
+        configured_backend.move_in(staged, str(destination))
+
+        assert not destination.is_symlink()
+
+    def test_refuses_to_replace_an_existing_object(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        destination = tmp_path / "files" / "part.stl"
+        destination.write_bytes(b"owned")
+
+        with pytest.raises(StorageCollisionError):
+            configured_backend.move_in(_staged(tmp_path), str(destination))
+
+        assert destination.read_bytes() == b"owned"
+
+    def test_keeps_the_staged_file_after_a_collision(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        staged = _staged(tmp_path)
+        destination = tmp_path / "files" / "part.stl"
+        destination.write_bytes(b"owned")
+
+        with pytest.raises(StorageCollisionError):
+            configured_backend.move_in(staged, str(destination))
+
+        assert staged.read_bytes() == STAGED_BYTES
+
+    def test_refuses_a_library_root_that_lost_its_enrollment(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        staged = _staged(tmp_path)
+        (tmp_path / "files" / ".printstash-storage-root.json").unlink()
+
+        with pytest.raises(StorageConfigurationError, match="storage_root_unavailable"):
+            configured_backend.move_in(staged, str(tmp_path / "files" / "part.stl"))
+
+        assert staged.read_bytes() == STAGED_BYTES
+
+
+class TestEnsureSetup:
+    def test_reports_zero_copy_imports_when_staging_shares_the_library_mount(
+        self, configured_backend: LocalStorageBackend
+    ) -> None:
+        configured_backend.ensure_setup()
+
+        assert configured_backend.probe_diagnostics["staged_hardlink"] is True
+
+    def test_reports_copying_imports_when_staging_is_on_another_mount(
+        self, configured_backend: LocalStorageBackend, cross_mount_staging: None
+    ) -> None:
+        configured_backend.ensure_setup()
+
+        assert configured_backend.probe_diagnostics["staged_hardlink"] is False
+
+    def test_warns_that_imports_will_copy_every_file(
+        self,
+        configured_backend: LocalStorageBackend,
+        cross_mount_staging: None,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        configured_backend.ensure_setup()
+
+        assert "imports copy every staged file" in caplog.text
+
+    def test_leaves_no_probe_behind(
+        self, configured_backend: LocalStorageBackend, tmp_path: Path
+    ) -> None:
+        configured_backend.ensure_setup()
+
+        assert [
+            path.name
+            for root in ("staging", "files")
+            for path in (tmp_path / root).iterdir()
+            if "probe" in path.name
+        ] == []

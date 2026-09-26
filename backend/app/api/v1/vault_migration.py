@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from app.core.security import require_superuser
-from app.db.models import User
+from app.db.models import JobKind, User
 from app.db.session import get_session, get_session_factory
 from app.modules.storage.vault_migration import VaultMigrations
 from app.schemas.vault_migration import MigrationPolicy, MigrationRunRead
@@ -70,14 +70,17 @@ def status(run_id: str, _user: User = Depends(require_superuser)):
     return invoke(lambda: owner().get(run_id))
 
 
+def _copying(result):
+    """The run is copying: its ``storage.migrate`` Job does the copy."""
+    from app.modules.work import nudge
+
+    nudge(JobKind.STORAGE_MIGRATE)
+    return result
+
+
 @router.post("/{run_id}/start", response_model=MigrationRunRead)
 def start(run_id: str, body: PlanRequest, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().start(run_id, body.plan_digest))
-
-
-@router.post("/{run_id}/advance", response_model=MigrationRunRead)
-def advance(run_id: str, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().advance(run_id))
+    return _copying(invoke(lambda: owner().start(run_id, body.plan_digest)))
 
 
 @router.post("/{run_id}/cutover", response_model=MigrationRunRead)
@@ -97,7 +100,13 @@ def recover(
     session: Session = Depends(get_session),
 ):
     session.close()
-    return invoke(lambda: owner().recover(run_id))
+    result = invoke(lambda: owner().recover(run_id))
+    # A process that started under this migration's interrupted cutover held
+    # its background work; recovery resolved it, so that work starts now.
+    from app.bootstrap.work import release_held
+
+    release_held()
+    return result
 
 
 @router.post("/{run_id}/cleanup", response_model=MigrationRunRead)
@@ -122,12 +131,12 @@ def pause(run_id: str, _user: User = Depends(require_superuser)):
 
 @router.post("/{run_id}/resume", response_model=MigrationRunRead)
 def resume(run_id: str, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().resume(run_id))
+    return _copying(invoke(lambda: owner().resume(run_id)))
 
 
 @router.post("/{run_id}/retry", response_model=MigrationRunRead)
 def retry(run_id: str, _user: User = Depends(require_superuser)):
-    return invoke(lambda: owner().resume(run_id, failed_only=True))
+    return _copying(invoke(lambda: owner().resume(run_id, failed_only=True)))
 
 
 @router.post("/{run_id}/full-audit", response_model=MigrationRunRead)

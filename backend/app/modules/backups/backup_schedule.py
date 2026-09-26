@@ -6,12 +6,9 @@ from datetime import datetime, time
 
 from sqlmodel import Session
 
-import app.modules.backups.backup.creation as backup_creation
 from app.core.time import ensure_utc, utcnow
 from app.db.models import SystemConfig
-from app.db.session import get_session_factory
 from app.modules.administration.config_repository import get_or_create
-from app.modules.backups.backup_destination import BackupTrigger
 
 DEFAULT_BACKUP_TIME_UTC = "02:00"
 
@@ -46,15 +43,6 @@ def claim_due_backup(session: Session, *, now: datetime | None = None) -> bool:
     config.automatic_backup_last_attempt_at = attempted_at
     session.add(config)
     session.commit()
-    return True
-
-
-def run_due_backup(*, now: datetime | None = None) -> bool:
-    attempted_at = ensure_utc(now or utcnow())
-    with get_session_factory().scoped_session() as session:
-        if not claim_due_backup(session, now=attempted_at):
-            return False
-    backup_creation.create_backup(trigger=BackupTrigger.AUTOMATIC)
     return True
 
 

@@ -127,7 +127,8 @@ class TestFileAsStl:
         row = make_file(model, filename="model.3mf", ftype="3mf", path=key, sha256=sha)
         remove_blob(get_backend().stl_cache_key(sha))
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes", lambda _path, *, file_type=None: CONVERTED
+            "app.modules.media.mesh_processing.to_stl_bytes",
+            lambda _path, *, file_type=None: CONVERTED,
         )
 
         response = client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)
@@ -215,7 +216,8 @@ class TestFileAsStl:
         row = make_file(model, filename="race.3mf", ftype="3mf", path=key, sha256=sha)
         remove_blob(get_backend().stl_cache_key(sha))
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes", lambda _path, *, file_type=None: CONVERTED
+            "app.modules.media.mesh_processing.to_stl_bytes",
+            lambda _path, *, file_type=None: CONVERTED,
         )
 
         def already_published(*_args: object, **_kwargs: object):
@@ -249,7 +251,8 @@ class TestFileAsStl:
         )
         remove_blob(get_backend().stl_cache_key(sha))
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes", lambda _path, *, file_type=None: CONVERTED
+            "app.modules.media.mesh_processing.to_stl_bytes",
+            lambda _path, *, file_type=None: CONVERTED,
         )
 
         def failing_receipt(*_args: object, **_kwargs: object):
@@ -278,7 +281,8 @@ class TestFileAsStl:
             model, filename="broken.obj", ftype="obj", path=key, sha256="c2" * 32
         )
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes", lambda _path, *, file_type=None: None
+            "app.modules.media.mesh_processing.to_stl_bytes",
+            lambda _path, *, file_type=None: None,
         )
 
         response = client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)

@@ -60,7 +60,9 @@ class _NativeBackend:
 
     def __init__(self, payload: bytes = b"abcdefgh") -> None:
         self.payload = payload
-        self.handle = NativeMultipartHandle("private/staging/upload", "provider-id", "token")
+        self.handle = NativeMultipartHandle(
+            "private/staging/upload", "provider-id", "token"
+        )
         self.remote_parts: list[NativeMultipartPart] = []
         self.receipt = CreationReceipt(
             key="private/staging/upload",
@@ -156,11 +158,18 @@ class TestNativeMultipartUploadAdapter:
         upload.protected_native_id = adapter.begin(upload)
         parts = [_part(1, b"abcd"), _part(2, b"efgh")]
         backend.remote_parts = [
-            NativeMultipartPart(part.part_number, part.size_bytes, part.sha256, f'"part-{part.part_number}"')
+            NativeMultipartPart(
+                part.part_number,
+                part.size_bytes,
+                part.sha256,
+                f'"part-{part.part_number}"',
+            )
             for part in parts
         ]
 
-        verified = adapter.complete(upload, parts, persist_completion=lambda _value: None)
+        verified = adapter.complete(
+            upload, parts, persist_completion=lambda _value: None
+        )
 
         assert verified.sha256 == upload.client_sha256
 
@@ -209,7 +218,10 @@ class TestNativeMultipartUploadAdapter:
             )
 
     def test_rejects_unprotected_or_invalid_provider_identity(
-        self, tmp_path: Path, cleartext_protection: None, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        cleartext_protection: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         adapter = NativeMultipartUploadAdapter(_NativeBackend(), tmp_path)  # type: ignore[arg-type]
         upload = _upload()
@@ -236,7 +248,9 @@ class TestNativeMultipartUploadAdapter:
         directory.mkdir()
         (directory / "assembled.upload").write_bytes(b"payload")
         (directory / ".native-stale").write_bytes(b"partial")
-        protected = asdict(backend.handle) | {"completion_receipt": asdict(backend.receipt)}
+        protected = asdict(backend.handle) | {
+            "completion_receipt": asdict(backend.receipt)
+        }
         upload.protected_native_id = json.dumps(protected)
         adapter.abort_owned(upload)
         assert not directory.exists()

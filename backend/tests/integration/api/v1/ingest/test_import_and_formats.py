@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.db.models import Collection, File, FileType, Model
 from tests._env import use_local_storage
+from tests.integration.api.v1._ingest_assertions import drain_work
 
 
 def _mesh_bytes(ext: str, size: tuple[float, float, float] = (10, 10, 10)) -> bytes:
@@ -33,7 +34,8 @@ def _mesh_bytes(ext: str, size: tuple[float, float, float] = (10, 10, 10)) -> by
 def _completed(client: TestClient, resp, headers: dict[str, str]) -> dict:
     assert resp.status_code == 202, resp.text
     job_id = resp.json()["job_id"]
-    job = client.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
+    drain_work()
+    job = client.get(f"/api/v1/jobs/{job_id}", headers=headers)
     assert job.status_code == 200, job.text
     return job.json()
 
@@ -98,7 +100,10 @@ class TestIngestModel:
 
 class TestIngestArchive:
     def test_archive_import_retains_dxf_bytes(
-        self, tmp_path: Path, client: TestClient, db_session: Session,
+        self,
+        tmp_path: Path,
+        client: TestClient,
+        db_session: Session,
         auth_headers: dict[str, str],
     ) -> None:
         use_local_storage(tmp_path)
@@ -106,13 +111,17 @@ class TestIngestArchive:
         bundle = io.BytesIO()
         with zipfile.ZipFile(bundle, "w") as archive:
             archive.writestr("drawings/plate.dxf", original)
-        manifest = client.post(
-            "/api/v1/ingest/archive",
-            headers=auth_headers,
-            files={"file": ("drawings.zip", bundle.getvalue(), "application/zip")},
+        inspected = _completed(
+            client,
+            client.post(
+                "/api/v1/ingest/archive/inspect",
+                headers=auth_headers,
+                files={"file": ("drawings.zip", bundle.getvalue(), "application/zip")},
+            ),
+            auth_headers,
         )
-        assert manifest.status_code == 200, manifest.text
-        body = manifest.json()
+        assert inspected["state"] == "completed", inspected
+        body = inspected["result"]
         assert [(entry["name"], entry["file_type"]) for entry in body["entries"]] == [
             ("drawings/plate.dxf", "dxf")
         ]
@@ -126,7 +135,9 @@ class TestIngestArchive:
             auth_headers,
         )
         assert result["state"] == "completed", result
-        file_row = db_session.exec(select(File).where(File.file_type == FileType.DXF)).one()
+        file_row = db_session.exec(
+            select(File).where(File.file_type == FileType.DXF)
+        ).one()
         downloaded = client.get(
             f"/api/v1/files/{file_row.id}/download", headers=auth_headers
         )
@@ -146,13 +157,16 @@ class TestIngestArchive:
             zf.writestr("parts/part_b.stl", _mesh_bytes("stl", (20, 10, 10)))
             zf.writestr("readme.txt", b"not a 3d file")
 
-        manifest = client.post(
-            "/api/v1/ingest/archive",
-            headers=auth_headers,
-            files={"file": ("bundle.zip", buf.getvalue(), "application/zip")},
+        inspected = _completed(
+            client,
+            client.post(
+                "/api/v1/ingest/archive/inspect",
+                headers=auth_headers,
+                files={"file": ("bundle.zip", buf.getvalue(), "application/zip")},
+            ),
+            auth_headers,
         )
-        assert manifest.status_code == 200, manifest.text
-        body = manifest.json()
+        body = inspected["result"]
         archive_id = body["archive_id"]
         importable = [e["name"] for e in body["entries"] if e["file_type"]]
         assert sorted(importable) == ["parts/part_a.stl", "parts/part_b.stl"]

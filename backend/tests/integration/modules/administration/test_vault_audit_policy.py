@@ -202,7 +202,7 @@ class TestVaultAuditPolicy:
         self, db_session, make_user, make_audit_run
     ):
         run = make_audit_run(make_user(), active_slot="audit")
-        vault_audit.reconcile_interrupted_runs()
+        vault_audit.fail_interrupted_run(run.id)
         db_session.refresh(run)
         assert run.state == VaultAuditRunState.COMPLETED
         assert run.active_slot is None

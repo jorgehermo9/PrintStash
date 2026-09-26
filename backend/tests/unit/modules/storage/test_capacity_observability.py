@@ -43,7 +43,9 @@ class TestCapacityObservability:
         [
             (
                 "capacity_decisions",
-                lambda: record_decision("artifact:private", "allow", "capacity_available"),
+                lambda: record_decision(
+                    "artifact:private", "allow", "capacity_available"
+                ),
             ),
             (
                 "active_capacity_reservations",
@@ -71,7 +73,9 @@ class TestCapacityObservability:
         self, monkeypatch, metric_name, record
     ) -> None:
         metric = getattr(capacity_observability, metric_name)
-        failing_method = "observe" if metric_name == "forecast_prediction_error" else "labels"
+        failing_method = (
+            "observe" if metric_name == "forecast_prediction_error" else "labels"
+        )
         monkeypatch.setattr(
             metric,
             failing_method,

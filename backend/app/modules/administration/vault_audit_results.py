@@ -115,7 +115,7 @@ def record_event(
     eligible = threshold != "off" and (not regression or regression_rank >= rank)
     # Durable evidence is never rate-limited. Delay deliveries to preserve every
     # new regression while spacing external sends across policy runs.
-    before_ids = {id(row) for row in session.new}
+    deliveries = []
     if eligible:
         categories = sorted(
             {
@@ -125,7 +125,7 @@ def record_event(
                 ).all()
             }
         )
-        enqueue_storage_event(
+        deliveries = enqueue_storage_event(
             session,
             event_type,
             run_id=run.id,
@@ -143,13 +143,6 @@ def record_event(
             ),
             categories=categories,
         )
-        from app.db.models import NotificationDelivery
-
-        deliveries = [
-            row
-            for row in session.new
-            if id(row) not in before_ids and isinstance(row, NotificationDelivery)
-        ]
         if policy and deliveries:
             due = (
                 max(
@@ -294,10 +287,9 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
     """Only derived outputs with live, verified, managed source identity qualify."""
     from PIL import Image
 
+    from app.db.models import DerivativeKind, DerivativeState
     from app.modules.administration import audit
-    from app.modules.ingestion.ingestion import strategy_for_artifact
-    from app.modules.media.thumbnail_engine import ThumbnailEngine
-    from app.modules.media.thumbnail_generations import ensure_thumbnail
+    from app.modules.derivatives.repair import now as rederive_now
 
     assert run.id is not None
     allowed = set(json.loads(run.repair_actions_json)) & SAFE_REPAIR_ACTIONS
@@ -343,47 +335,28 @@ def repair_safe_findings(session: Session, run: VaultAuditRun) -> None:
                 finding.repair_action == "reparse_metadata"
                 and finding.code == "metadata_missing"
             ):
-                if (
-                    session.exec(
-                        select(Metadata).where(Metadata.file_id == file.id)
-                    ).first()
-                    is None
-                ):
-                    with get_backend().local_path(file.path) as path:
-                        values, _ = strategy_for_artifact(file.file_type).process(
-                            path, lambda _label: None
-                        )
-                    session.add(
-                        Metadata(
-                            file_id=file.id,
-                            **{
-                                key: value
-                                for key, value in values.items()
-                                if key in Metadata.model_fields
-                            },
-                        )
-                    )
-                    session.commit()
+                present = session.exec(
+                    select(Metadata).where(Metadata.file_id == file.id)
+                ).first()
+                # Verified by the derivation itself: a metadata row alone proves
+                # nothing, since the producer is what fills it.
                 ok = (
-                    session.exec(
-                        select(Metadata).where(Metadata.file_id == file.id)
-                    ).first()
-                    is not None
+                    present is not None
+                    or rederive_now(file.id, [DerivativeKind.METADATA]).get(
+                        DerivativeKind.METADATA
+                    )
+                    == DerivativeState.READY
                 )
             elif finding.repair_action == "regenerate_thumbnail" and finding.code in {
                 "thumbnail_missing",
                 "thumbnail_unreadable",
             }:
-                result = ensure_thumbnail(
-                    session,
-                    file,
-                    force=True,
-                    promote=True,
-                    backend=get_backend(),
-                    engine=ThumbnailEngine(),
-                )
+                outcome = rederive_now(file.id, [DerivativeKind.THUMBNAIL])
                 session.refresh(file)
-                if result.available and file.thumbnail_path:
+                if (
+                    outcome.get(DerivativeKind.THUMBNAIL) == DerivativeState.READY
+                    and file.thumbnail_path
+                ):
                     with (
                         get_backend().local_path(file.thumbnail_path) as path,
                         Image.open(path) as image,

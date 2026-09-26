@@ -1,7 +1,6 @@
 """Persisted evidence retains independent lineage and human decisions across reruns."""
 
 from dataclasses import replace
-from datetime import timedelta
 
 import pytest
 from printstash_core.mesh.similarity.verification import verify_meshes
@@ -220,7 +219,7 @@ class TestPublication:
         ):
             candidates.publish(db_session, *reversed(fingerprints), exact_proof)
 
-    @pytest.mark.parametrize("fence", ["expired", "cancelled", "reclaimed"])
+    @pytest.mark.parametrize("fence", ["cancelled", "superseded"])
     def test_fences_worker_publication(
         self,
         db_session,
@@ -231,17 +230,12 @@ class TestPublication:
         fence,
     ):
         row, _, fingerprints = published_pair
-        run = make_similarity_run(
-            make_user(superuser=True),
-            lease_token="owner",
-            lease_expires_at=utcnow() + timedelta(minutes=5),
-        )
-        if fence == "expired":
-            run.lease_expires_at = utcnow() - timedelta(seconds=1)
-        elif fence == "cancelled":
+        run = make_similarity_run(make_user(superuser=True), writer="owner")
+        if fence == "cancelled":
             run.cancel_requested = True
         else:
-            run.lease_token = "new-owner"
+            # The engine started a later attempt, which took the fence.
+            run.writer = "successor"
         db_session.add(run)
         db_session.commit()
         assert (

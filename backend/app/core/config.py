@@ -7,11 +7,18 @@ runtime overrides (DB-backed) on top. See ADR-0002.
 from __future__ import annotations
 
 import asyncio
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
 from printstash_core.mesh.similarity.budgets import MAX_ANALYSIS_FACES
-from pydantic import Field, SecretStr, model_validator
+from pydantic import (
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine.url import make_url
 
@@ -43,6 +50,33 @@ DEFAULT_JWT_SECRET = "changeme_jwt_secret_please_change"
 # make the process buffer.
 MULTIPART_OVERHEAD_BYTES = 16 * 1024 * 1024
 
+# Every app-owned path defaults to a fixed child of ``data_root``, so a
+# deployment mounts one volume. That single mount is also what lets an import
+# publish its staged file into the library by hard link: link(2) fails across
+# mount points even on the same disk, and the import then copies every byte.
+DATA_ROOT_LAYOUT: dict[str, str] = {
+    "data_dir": "files",
+    "thumb_dir": "thumbs",
+    "staging_dir": "staging",
+    "backup_dir": "backups",
+    "artifact_cache_root": "artifact-cache",
+    "embedding_cache_dir": "ai-models",
+    "secrets_key_file": "db/.printstash-secrets-key",
+}
+SQLITE_DATABASE_PATH = "db/printstash.sqlite"
+
+
+class ProcessRole(StrEnum):
+    """What one process of a deployment does (``VAULT_PROCESS_ROLE``).
+
+    ``all`` serves HTTP and runs every Job; ``api`` is the HTTP process of a
+    deployment with workers; ``worker`` runs Jobs and serves nothing.
+    """
+
+    ALL = "all"
+    API = "api"
+    WORKER = "worker"
+
 
 class Settings(BaseSettings):
     """Frozen env-only settings. Never mutated after import.
@@ -57,6 +91,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    # Declared first: the paths in ``DATA_ROOT_LAYOUT`` and ``db_url`` default
+    # under it, and a field validator only sees fields declared before it.
+    data_root: Path = Path("/data")
 
     storage_backend: str = "local"
     storage_provider: str = ""
@@ -76,15 +114,15 @@ class Settings(BaseSettings):
     sftp_private_key_path: str = ""
     sftp_passphrase: str = ""
     storage_allow_unverified: bool = False
-    data_dir: Path = Path("/data/files")
-    thumb_dir: Path = Path("/data/thumbs")
+    data_dir: Path = Field(default=None, validate_default=True)
+    thumb_dir: Path = Field(default=None, validate_default=True)
     storage_min_free_bytes: int = Field(default=1024**3, ge=0)
     storage_min_free_percent: float = Field(
         default=0, ge=0, le=100, allow_inf_nan=False
     )
-    staging_dir: Path = Path("/data/staging")
+    staging_dir: Path = Field(default=None, validate_default=True)
     artifact_cache_enabled: bool = False
-    artifact_cache_root: Path = Path("/data/artifact-cache")
+    artifact_cache_root: Path = Field(default=None, validate_default=True)
     artifact_cache_max_bytes: int = Field(default=10 * 1024**3, ge=0)
     artifact_cache_max_entries: int = Field(default=10000, ge=0)
     artifact_cache_max_fills: int = Field(default=2, ge=1, le=64)
@@ -104,18 +142,29 @@ class Settings(BaseSettings):
     s3_presigned_url_expire_seconds: int = Field(default=900, gt=0)
     s3_multipart_threshold_mb: int = Field(default=50, gt=0)
 
-    db_url: str = "sqlite:////data/db/printstash.sqlite"
+    db_url: str = Field(default=None, validate_default=True)
     sqlite_synchronous: str = "NORMAL"
     sqlite_busy_timeout_ms: int = Field(default=30_000, ge=1)
 
     jwt_secret: str = DEFAULT_JWT_SECRET
-    # Initial registration is explicitly enabled only on a trusted network.
-    setup_mode: Literal["trusted_network", "disabled"] = "disabled"
+    # How a fresh installation gets its first owner (resolved and validated
+    # together with setup_admin_* by modules.administration.setup_policy):
+    # trusted_network — a browser on the local network registers it;
+    # environment — setup_admin_* creates it at startup, the browser never can;
+    # disabled — no first-run path.
+    setup_mode: Literal["trusted_network", "environment", "disabled"] = "disabled"
     setup_allowed_hosts: str = ""
+    # The first administrator for setup_mode=environment (app-store forms,
+    # unattended deployments). Consumed once while the installation has no
+    # owner; it never changes an existing account. Empty values are unset:
+    # install forms emit empty variables for blanks.
+    setup_admin_username: str = ""
+    setup_admin_password: SecretStr = SecretStr("")
+    setup_admin_email: str = ""
     # Credentials persisted in the database are encrypted with this external
     # key. Empty uses a generated 0600 key file beside the SQLite database.
     secrets_key: str = ""
-    secrets_key_file: Path = Path("/data/db/.printstash-secrets-key")
+    secrets_key_file: Path = Field(default=None, validate_default=True)
     session_cookie_secure: bool = False
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = Field(default=60, gt=0)
@@ -158,7 +207,49 @@ class Settings(BaseSettings):
     staging_review_lease_days: int = Field(default=30, gt=0)
     staging_import_lease_hours: int = Field(default=24, gt=0)
     fleet_batch_max_quantity: int = Field(default=100, gt=0)
-    ingest_worker_count: int = Field(default=2, gt=0)
+
+    # Background work (see docs/architecture/background-work.md). The reconciler
+    # tick is a safety net: hot paths and job completions nudge the one source
+    # that has new work, so the interval only bounds how long a lost nudge waits.
+    process_role: ProcessRole = ProcessRole.ALL
+    api_runs_jobs: bool = True
+    executor_id: str | None = Field(default=None, min_length=1, max_length=128)
+    shared_storage: bool = False
+    jobs_reconcile_interval_seconds: int = Field(default=300, ge=10, le=86400)
+    jobs_reconcile_batch: int = Field(default=500, ge=1, le=10000)
+    jobs_lane_headroom_factor: int = Field(default=2, ge=1, le=100)
+    jobs_max_resubmits: int = Field(default=3, ge=0, le=100)
+    # A subject whose Jobs of one definition already finished this many times
+    # within the cooldown window waits the window out: a source that keeps
+    # reporting work its Job already handled must not turn into a busy loop,
+    # while a genuine re-run (a retry, a content change) still starts at once.
+    jobs_resubmit_cooldown_seconds: int = Field(default=30, ge=0, le=3600)
+    jobs_resubmit_burst: int = Field(default=3, ge=1, le=100)
+    jobs_submit_grace_seconds: int = Field(default=60, ge=1, le=3600)
+    jobs_executor_stale_seconds: int = Field(default=120, ge=10, le=86400)
+    jobs_retention_days: int = Field(default=7, ge=1, le=365)
+    jobs_system_retention_hours: int = Field(default=24, ge=1, le=8760)
+    jobs_retention_per_user: int = Field(default=500, ge=10, le=100000)
+    engine_history_retention_days: int = Field(default=7, ge=1, le=365)
+    derivative_max_attempts: int = Field(default=5, ge=1, le=100)
+    derivative_backoff_seconds: int = Field(default=30, ge=1, le=86400)
+    fence_heartbeat_seconds: int = Field(default=15, ge=1, le=3600)
+    fence_ttl_seconds: int = Field(default=60, ge=3, le=86400)
+    # Lane concurrency. Unset ``derive_native`` follows ``max_render_jobs``.
+    jobs_ingest_concurrency: int = Field(default=2, ge=1, le=64)
+    jobs_derive_native_concurrency: int | None = Field(default=None, ge=1, le=64)
+    jobs_derive_light_concurrency: int = Field(default=4, ge=1, le=64)
+    jobs_similarity_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_network_concurrency: int = Field(default=4, ge=1, le=64)
+    jobs_notify_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_notify_rate_per_minute: int = Field(default=30, ge=1, le=6000)
+    jobs_printing_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_maintenance_concurrency: int = Field(default=1, ge=1, le=16)
+    # AI Search: projection and indexing, captions, and sparse expansion each
+    # have their own lane, so a slow caption never holds indexing back.
+    jobs_search_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_captions_concurrency: int = Field(default=1, ge=1, le=16)
+    jobs_expansion_concurrency: int = Field(default=1, ge=1, le=16)
     media_worker_timeout_seconds: int = Field(default=180, gt=0)
     # Best-effort archive ceiling for files recovered from a Bambu printer's
     # short-lived FTPS cache. Zero disables automatic external-job capture.
@@ -208,14 +299,14 @@ class Settings(BaseSettings):
     # setups that run other workloads alongside the scan.
     mesh_memory_budget_fraction: float = Field(default=0.5, ge=0, le=1)
 
-    # Maximum number of mesh load+render jobs allowed to run at once. Ingestion
-    # runs in FastAPI's background-task threadpool, so a bulk/folder upload (#26)
-    # can otherwise fire dozens of concurrent renders that each peak hundreds of
-    # MB and collectively OOM the box. This bounds concurrency two ways: a
-    # semaphore caps how many renders run simultaneously, and the RAM-aware
-    # triangle cap divides its budget by this count so each concurrent job stays
-    # within its share. 1 (serialised) is the safe default; raise it on hosts with
-    # RAM headroom. Zero is the supported sentinel for serial execution.
+    # Maximum number of mesh load+render jobs allowed to run at once in one
+    # process. A bulk/folder upload (#26) can otherwise fire dozens of concurrent
+    # renders that each peak hundreds of MB and collectively OOM the box. This is
+    # the default concurrency of the derive.native lane, the process's local
+    # inference admission, and the divisor of the RAM-aware triangle cap, so each
+    # concurrent job stays within its share. 1 (serialised) is the safe default;
+    # raise it on hosts with RAM headroom. Zero is the supported sentinel for
+    # serial execution.
     max_render_jobs: int = Field(default=1, ge=0)
 
     # Number of faces processed per chunk in the software rasteriser. The renderer
@@ -250,7 +341,7 @@ class Settings(BaseSettings):
     embedding_model_key: str = ""
     embedding_onnx_threads: int = Field(default=1, ge=1, le=4)
     embedding_batch_size: int = Field(default=8, ge=1, le=8)
-    embedding_cache_dir: Path = Path("/data/ai-models")
+    embedding_cache_dir: Path = Field(default=None, validate_default=True)
     embedding_cache_max_bytes: int = Field(
         default=4294967296, ge=1048576, le=1099511627776
     )
@@ -314,7 +405,6 @@ class Settings(BaseSettings):
     toolpath_output_max_mb: int = Field(default=32, ge=1)
     toolpath_timeout_seconds: int = Field(default=30, ge=1)
     toolpath_memory_max_mb: int = Field(default=512, ge=64)
-    toolpath_max_jobs: int = Field(default=2, ge=1, le=32)
 
     mesh_step_timeout_seconds: int = Field(default=90, gt=0)
 
@@ -340,7 +430,7 @@ class Settings(BaseSettings):
     # browser extension and this value is never used for network requests.
     makerworld_cookie: str = ""
 
-    backup_dir: Path = Path("/data/backups")
+    backup_dir: Path = Field(default=None, validate_default=True)
     # Zero means eligible for cleanup immediately; negative retention is invalid.
     backup_retention_days: int = Field(default=30, ge=0)
     trash_retention_days: int = Field(default=30, ge=0)
@@ -356,6 +446,21 @@ class Settings(BaseSettings):
 
     app_name: str = "PrintStash"
     app_version: str = "0.13.0"
+
+    @field_validator(*DATA_ROOT_LAYOUT, "db_url", mode="before")
+    @classmethod
+    def default_under_data_root(cls, value: object, info: ValidationInfo) -> object:
+        # An empty override (``VAULT_DATA_DIR=``, as an unset Compose variable
+        # renders) means "use the layout", never ``Path("")``, the working dir.
+        if value is not None and value != "":
+            return value
+        root = info.data.get("data_root")
+        if not isinstance(root, Path):
+            # data_root failed its own validation, which already reports it.
+            return value
+        if info.field_name == "db_url":
+            return f"sqlite:///{root / SQLITE_DATABASE_PATH}"
+        return root / DATA_ROOT_LAYOUT[str(info.field_name)]
 
     @model_validator(mode="after")
     def validate_numeric_relationships(self) -> Settings:
@@ -402,6 +507,11 @@ class ConfigResolver:
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise TypeError("ConfigResolver is read-only — use overlay dict for mutations")
+
+    @property
+    def frozen(self) -> Settings:
+        """The environment-time settings, before any runtime override."""
+        return self._frozen
 
     @property
     def incoming_dir(self) -> Path:

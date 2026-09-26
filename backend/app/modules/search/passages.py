@@ -193,4 +193,12 @@ def sync_subject(session: Session, subject: SearchSubject) -> PassageChanges:
         lexical_index.replace(session, row, lexical_index.snapshot(row), deleted=True)
         session.delete(row)
     session.flush()
+    if inserted or updated:
+        # New or changed text owes embeddings. The passage rows are the intent
+        # the index source finds; this only makes it prompt, whether the
+        # caller is a request (a caption edit) or the projection Job.
+        from app.db.models import JobKind
+        from app.modules.work.submission import nudge_after_commit
+
+        nudge_after_commit(session, JobKind.SEARCH_INDEX)
     return PassageChanges(inserted=inserted, updated=updated, removed=len(existing))

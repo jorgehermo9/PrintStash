@@ -21,6 +21,7 @@ import {
   adoptLocalBackup,
   adoptRemoteBackup,
   adoptS3Backup,
+  backupFromJob,
   createBackup,
   downloadBackup,
   deleteBackup,
@@ -33,6 +34,7 @@ import {
   uploadBackup,
 } from "@/lib/api/backup";
 import { invalidateApiCache } from "@/lib/api/request";
+import { aJob } from "@/test-support/factories";
 
 import { expectRequest, fetchMock, respondWith } from "./_wire";
 
@@ -75,12 +77,53 @@ afterEach(() => {
 });
 
 describe("createBackup", () => {
-  it("asks the server for a new archive", async () => {
-    respondWith({ backup_id: "b1" });
+  it("queues a new archive as a Job", async () => {
+    respondWith({ job_id: "backup-job", state: "queued", message: "queued" });
 
-    await createBackup();
+    await expect(createBackup()).resolves.toMatchObject({ job_id: "backup-job" });
 
     expectRequest("/api/v1/backups", "POST");
+  });
+
+  it("surfaces a backup already in progress", async () => {
+    respondWith({ detail: "backup_in_progress" }, 409);
+
+    await expect(createBackup()).rejects.toMatchObject({
+      status: 409,
+      code: "backup_in_progress",
+    });
+  });
+});
+
+describe("backupFromJob", () => {
+  const RESULT = {
+    backup_id: "2026-01-01T000000Z",
+    created_at: "2026-01-01T00:00:00Z",
+    size_bytes: 1024,
+    file_count: 3,
+    storage_backend: "local",
+    app_version: "0.13.0",
+    location: "local",
+    source_ref: "local-source",
+    outcome: "completed" as const,
+  };
+
+  it("reads the new backup from a completed Job", () => {
+    expect(backupFromJob(aJob({ kind: "backups.create", result: RESULT }))).toMatchObject({
+      backup_id: RESULT.backup_id,
+      file_count: 3,
+      source_ref: "local-source",
+      outcome: "completed",
+    });
+  });
+
+  it("has no backup for a Job that failed", () => {
+    expect(backupFromJob(aJob({ state: "failed", result: RESULT }))).toBeNull();
+  });
+
+  it("has no backup for a result that is not one", () => {
+    // A scheduled occurrence that was not due completes with `skipped`.
+    expect(backupFromJob(aJob({ result: { name: "not a backup" } }))).toBeNull();
   });
 });
 

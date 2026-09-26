@@ -88,8 +88,6 @@ export const preflightVaultMigration = (body: VaultMigrationPreflight) =>
   sendJson<VaultMigrationRun>(`${base}/preflight`, "POST", body);
 export const startVaultMigration = (id: string, planDigest: string) =>
   sendJson<VaultMigrationRun>(`${path(id)}/start`, "POST", { plan_digest: planDigest });
-export const advanceVaultMigration = (id: string) =>
-  sendJson<VaultMigrationRun>(`${path(id)}/advance`, "POST", {});
 export const cutoverVaultMigration = (id: string) =>
   sendJson<VaultMigrationRun>(`${path(id)}/cutover`, "POST", {});
 export const recoverVaultMigration = (id: string) =>

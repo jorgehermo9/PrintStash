@@ -330,6 +330,54 @@ class TestPatchModelProvenance:
         assert response.status_code == 422, response.text
         assert response.json()["detail"] == "provenance_override_conflict"
 
+    @pytest.mark.parametrize(
+        ("body", "reason"),
+        [
+            pytest.param(
+                {"overrides": {"owner_id": "1"}},
+                "unsupported_provenance_field",
+                id="unknown-override",
+            ),
+            pytest.param(
+                {"overrides": {"title": "x" * 100_000}},
+                "provenance_override_too_large",
+                id="oversized-override",
+            ),
+            pytest.param(
+                {"overrides": {"title": "line\nbreak"}},
+                "invalid_provenance_override",
+                id="control-character",
+            ),
+            pytest.param(
+                {"clear_overrides": ["title", "title"]},
+                "unsupported_provenance_field",
+                id="duplicate-clear",
+            ),
+            pytest.param(
+                {"clear_overrides": ["owner_id"]},
+                "unsupported_provenance_field",
+                id="unknown-clear",
+            ),
+        ],
+    )
+    def test_refuses_an_override_outside_the_allowlist(
+        self,
+        client: TestClient,
+        model: Model,
+        source: ModelProvenanceSource,
+        auth_headers,
+        body: dict,
+        reason: str,
+    ) -> None:
+        response = client.patch(
+            f"/api/v1/models/{model.id}/provenance/{source.id}",
+            headers=auth_headers,
+            json=body,
+        )
+
+        assert response.status_code == 422
+        assert reason in response.text
+
     def test_writes_nothing_when_it_refuses_a_conflicting_patch(
         self,
         client: TestClient,

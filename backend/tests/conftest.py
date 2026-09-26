@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 from fastapi import FastAPI
@@ -17,12 +17,11 @@ from sqlalchemy.pool import NullPool, StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 # Settings() (app.core.config) reads VAULT_* env vars once at import time, so
-# these must land before that import. Local dev shells export their own
-# VAULT_DATA_DIR/VAULT_DB_URL (relative, resolve fine anywhere) — setdefault
-# leaves those alone. Without them (CI, a bare shell) the frozen defaults are
-# absolute container paths (/data/...), which a non-root process can't create,
-# breaking real-storage and real-lifespan tests. `_data/` and `*.sqlite` are
-# gitignored, so this needs no cleanup.
+# the suite's data root must land before that import. Every app path derives
+# from it, so the suite owns its whole layout: a developer shell's own root or
+# per-directory override would otherwise point tests at real data. Without it
+# the frozen default is the container path /data, which a non-root process
+# can't create. `_data/` is gitignored, so this needs no cleanup.
 _xdist_worker = os.environ.get("PYTEST_XDIST_WORKER")
 _xdist_run_uid = os.environ.get("PYTEST_XDIST_TESTRUNUID")
 _TEST_STORAGE_ROOT = Path(__file__).parent / "_data"
@@ -32,29 +31,20 @@ if _xdist_worker:
     # two concurrent pytest sessions both have a gw0, gw1, etc.
     _xdist_namespace = f"{_xdist_run_uid or 'xdist'}-{_xdist_worker}"
     _TEST_STORAGE_ROOT /= _xdist_namespace
-for _var, _path in (
-    ("VAULT_DATA_DIR", _TEST_STORAGE_ROOT / "files"),
-    ("VAULT_THUMB_DIR", _TEST_STORAGE_ROOT / "thumbs"),
-    ("VAULT_STAGING_DIR", _TEST_STORAGE_ROOT / "staging"),
-    ("VAULT_BACKUP_DIR", _TEST_STORAGE_ROOT / "backups"),
+os.environ["VAULT_DATA_ROOT"] = str(_TEST_STORAGE_ROOT)
+for _override in (
+    "VAULT_DATA_DIR",
+    "VAULT_THUMB_DIR",
+    "VAULT_STAGING_DIR",
+    "VAULT_BACKUP_DIR",
+    "VAULT_ARTIFACT_CACHE_ROOT",
+    "VAULT_EMBEDDING_CACHE_DIR",
+    "VAULT_SECRETS_KEY_FILE",
+    "VAULT_DB_URL",
 ):
-    if _xdist_worker:
-        # The xdist controller imports this conftest first, so workers inherit
-        # its serial path. Worker processes must replace that test-owned value.
-        os.environ[_var] = str(_path)
-    else:
-        os.environ.setdefault(_var, str(_path))
-    _path.mkdir(parents=True, exist_ok=True)
-_db_dir = _TEST_STORAGE_ROOT / "db"
-_db_dir.mkdir(parents=True, exist_ok=True)
-_test_db_url = f"sqlite:///{_db_dir / 'printstash.sqlite'}"
-_test_secrets_key_file = str(_db_dir / ".printstash-secrets-key")
-if _xdist_worker:
-    os.environ["VAULT_DB_URL"] = _test_db_url
-    os.environ["VAULT_SECRETS_KEY_FILE"] = _test_secrets_key_file
-else:
-    os.environ.setdefault("VAULT_DB_URL", _test_db_url)
-    os.environ.setdefault("VAULT_SECRETS_KEY_FILE", _test_secrets_key_file)
+    os.environ.pop(_override, None)
+for _directory in ("files", "thumbs", "staging", "backups", "db"):
+    (_TEST_STORAGE_ROOT / _directory).mkdir(parents=True, exist_ok=True)
 
 from app.core.config import _overlay, settings  # noqa: E402
 from app.db.session import (  # noqa: E402
@@ -385,9 +375,66 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     # flip. Dropping the ref (not aclose) avoids touching the dead loop.
     import app.core.http_client as _http_client_mod
 
-    _http_client_mod._http_client = None
+    _http_client_mod.reset_for_tests()
+
+    from app.runtime import maintenance
+
+    maintenance.reset_for_tests()
 
     _reset_every_rate_limiter()
+
+
+@pytest.fixture(scope="session")
+def work_catalog():
+    """Every job definition, built once: the catalog is immutable per process."""
+    from app.bootstrap.work import definitions
+    from app.modules.work.catalog import WorkCatalog
+
+    return WorkCatalog(definitions())
+
+
+@pytest.fixture(autouse=True)
+def work_engine(work_catalog, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """Bind a fresh deterministic engine for every test, and unbind it after.
+
+    Production code only records intent and nudges; nothing runs until a test
+    calls ``work_engine.drain()``. That keeps "a route accepted the work" and
+    "the work happened" separate assertions, and makes every run of a job an
+    explicit step of the test rather than a race with it. The engine is the
+    same port the durable engine implements (``tests/contract/modules/work/test_contracts.py``
+    holds both to one contract), so what drains here is what DBOS runs.
+
+    A test that boots the real lifespan gets this engine too: composition asks
+    ``build_engine`` for the process's engine. Real DBOS runs in the engine
+    contract suite and in the e2e tests that boot the app in a subprocess.
+    """
+    import app.bootstrap.work as work_bootstrap
+    from app.modules.work import catalog as catalog_module
+    from app.modules.work import events
+    from app.modules.work.executors import reset_executor_id
+    from app.modules.work.jobs import jobs
+    from app.runtime.engine.inline import InlineJobEngine
+
+    # The catalog is built once, but a lane override replaces its lanes: each
+    # test gets its own copy so one test's override never reaches the next.
+    monkeypatch.setattr(work_catalog, "lanes", dict(work_catalog.lanes))
+    engine = InlineJobEngine(work_catalog)
+    engine.launch(listen_lanes=None)
+    monkeypatch.setattr(work_bootstrap, "build_engine", lambda _catalog: engine)
+    jobs.clear_listeners()
+    events.bind(None)
+    reset_executor_id()
+    catalog_module.bind(engine, work_catalog)
+    try:
+        yield engine
+    finally:
+        # A lifespan the test left running (it raised inside the client block)
+        # must not leave its heartbeat thread or binding to the next test.
+        if work_bootstrap.current() is not None:
+            work_bootstrap.stop()
+        catalog_module.bind(None, None)
+        jobs.clear_listeners()
+        events.bind(None)
 
 
 @pytest.fixture(autouse=True)
@@ -427,6 +474,30 @@ def backup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from tests.integration._backup_harness import build_backup_env
 
     yield from build_backup_env(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def environment_admin(monkeypatch: pytest.MonkeyPatch):
+    """Set ``VAULT_SETUP_ADMIN_*`` the way an install form or environment would.
+
+    In the root conftest because module, startup and e2e tests all need it. It
+    patches the environment-time settings rather than the overlay: startup clears
+    the overlay before it provisions, exactly as a real restart would.
+    """
+    from pydantic import SecretStr
+
+    def configure(
+        username: str, password: str, email: str = "", mode: str = "environment"
+    ) -> None:
+        frozen = settings.frozen
+        monkeypatch.setattr(frozen, "setup_mode", mode)
+        # The overlay wins over frozen settings; clear a mode another fixture set.
+        monkeypatch.delitem(_overlay, "setup_mode", raising=False)
+        monkeypatch.setattr(frozen, "setup_admin_username", username)
+        monkeypatch.setattr(frozen, "setup_admin_password", SecretStr(password))
+        monkeypatch.setattr(frozen, "setup_admin_email", email)
+
+    return configure
 
 
 @pytest.fixture(autouse=True)
@@ -493,19 +564,19 @@ def app() -> FastAPI:
         get_provider_client,
     )
     from app.runtime.realtime import InProcessBus
-    from app.runtime.work_wakeup import LocalWorkWakeup
 
     registry = build_provider_registry()
     _app.state.printer_provider_registry = registry
+    bus = InProcessBus()
+    _app.state.event_bus = bus
     hub = PrinterHub(
-        InProcessBus(),
+        bus,
         session_factory=get_session_factory(),
         provider_builder=lambda printer: get_provider_client(
             printer, registry=registry
         ),
     )
     _app.state.printer_hub = hub
-    _app.state.work_wakeup = LocalWorkWakeup()
     return _app
 
 

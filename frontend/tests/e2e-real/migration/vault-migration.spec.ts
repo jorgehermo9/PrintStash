@@ -2,7 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { test, expect } from "../helpers";
-import { gcodeFor, uploadGcodeModel, modelCard } from "../util";
+import { createBackupViaApi, gcodeFor, uploadGcodeModel, modelCard } from "../util";
 
 test.describe("Vault migration", () => {
   test("verified migration resumes after restart with online delta Artifacts", async ({ page }) => {
@@ -19,9 +19,7 @@ test.describe("Vault migration", () => {
 
     // Persist a real baseline Artifact and its verified-backup prerequisite.
     await uploadGcodeModel(page, baselineName);
-    const backupResponse = await page.request.post("/api/v1/backups");
-    expect(backupResponse.ok()).toBeTruthy();
-    const backup = await backupResponse.json();
+    const backup = await createBackupViaApi(page);
     await page.goto("/settings?section=storage");
     await expect(page.getByRole("region", { name: "Move Vault storage" })).toBeVisible();
     const panel = page.getByRole("region", { name: "Move Vault storage" });

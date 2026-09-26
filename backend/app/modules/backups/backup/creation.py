@@ -38,8 +38,13 @@ logger = get_logger(__name__)
 def create_backup(
     *,
     trigger: _backup_destination_module.BackupTrigger = _backup_destination_module.BackupTrigger.MANUAL,
+    job_id: str | None = None,
 ) -> _contracts_module.BackupMeta:
-    """Build one archive and durably account for every selected destination."""
+    """Build one archive and durably account for every selected destination.
+
+    ``job_id`` is the Job building it, recorded on the run so that Job alone
+    settles the run if its attempt is lost.
+    """
     from app.modules.backups import backup_runs
 
     _snapshot_module._require_database_backup_support()
@@ -51,6 +56,7 @@ def create_backup(
         archive_name=archive_name,
         trigger=trigger,
         created_at=timestamp,
+        job_id=job_id,
     )
     if not selected.selected:
         backup_runs.finish_run(

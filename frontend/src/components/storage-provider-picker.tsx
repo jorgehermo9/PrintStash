@@ -5,7 +5,6 @@ import { useUiLocale } from "@/lib/i18n";
 import { useState } from "react";
 import { Cloud, HardDrive, Network, Server } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { inputClasses } from "@/components/ui/input";
 import { StorageProviderFields } from "@/components/storage-provider-fields";
@@ -81,9 +80,11 @@ function providerConsequences(
 export function StorageProviderSummary({
   provider,
   activeTier,
+  context = "selection",
 }: {
   provider: StorageProvider;
   activeTier?: string;
+  context?: "current" | "selection";
 }) {
   useUiLocale();
   const i18n = useOptionalI18n();
@@ -93,28 +94,45 @@ export function StorageProviderSummary({
     i18n?.t("storage.guardedRetention") ?? uiText("storage.guardedRetention"),
   );
 
+  if (context === "current") {
+    if (provider.expected_tier !== "guarded") return null;
+    return (
+      <div className="mt-3 space-y-2 text-xs">
+        <p className="text-foreground">{knownUiText(provider.expected_tier_note)}</p>
+        <p className="font-medium text-foreground">{uiText("Guarded storage consequences")}</p>
+        {consequences.length > 0 && (
+          <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+            {consequences.map((consequence) => (
+              <li key={consequence}>{knownUiText(consequence)}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">
+    <div className="space-y-3">
+      <div className="grid gap-2 border-y border-border py-3 text-xs sm:grid-cols-3 sm:gap-4">
+        <p className="text-on-surface-variant">
           {i18n?.t("settings.storageSupport", {
             level: supportLabel(provider.support_level),
           }) ??
             uiText("Support: {value1}", {
               value1: String(supportLabel(provider.support_level)),
             })}
-        </Badge>
-        <Badge variant="secondary">
+        </p>
+        <p className="text-on-surface-variant">
           {uiText("Expected: {value1}", {
             value1: String(tierLabel(provider.expected_tier) ?? ""),
           })}
-        </Badge>
+        </p>
         {activeTier && (
-          <Badge variant="outline">
+          <p className="font-medium text-on-surface">
             {uiText("Active: {value1}", {
               value1: String(tierLabel(activeTier) ?? ""),
             })}
-          </Badge>
+          </p>
         )}
       </div>
       <p className="text-sm text-on-surface">{knownUiText(provider.expected_tier_note)}</p>

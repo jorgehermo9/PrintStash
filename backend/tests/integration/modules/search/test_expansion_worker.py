@@ -24,6 +24,70 @@ from app.modules.search.passages import sync_subject
 from app.modules.search.retrieval import search
 
 
+class TestExpansionSource:
+    """The ``search.expand`` source reads the same owed-passage query as the unit."""
+
+    def test_a_passage_without_an_expansion_is_pending(
+        self, db_session, sparse_setup, make_model
+    ):
+        from app.modules.search.jobs import ExpansionSource
+
+        subject = make_model("bicycle")
+        sync_subject(db_session, SearchSubject(SubjectType.MODEL, subject.id))
+        db_session.commit()
+
+        items = ExpansionSource().pending(db_session, now=utcnow(), limit=10)
+
+        assert [item.subject_key for item in items] == ["search/expand"]
+
+    def test_expanded_passages_leave_nothing_pending(
+        self, db_session, sparse_setup, make_model
+    ):
+        from app.modules.search.jobs import ExpansionSource
+
+        subject = make_model("bicycle")
+        sync_subject(db_session, SearchSubject(SubjectType.MODEL, subject.id))
+        db_session.commit()
+        assert ExpansionProcessor(get_session_factory()).work_one()
+
+        items = ExpansionSource().pending(db_session, now=utcnow(), limit=10)
+
+        assert items == []
+
+    def test_a_failed_expansion_asks_to_be_woken_at_its_retry(
+        self, db_session, sparse_setup, make_model
+    ):
+        from app.modules.search.expansion_worker import next_retry
+
+        subject = make_model("bicycle")
+        sync_subject(db_session, SearchSubject(SubjectType.MODEL, subject.id))
+        db_session.commit()
+        assert ExpansionProcessor(get_session_factory()).work_one()
+        later = utcnow() + timedelta(minutes=2)
+        db_session.exec(
+            update(SearchExpansion).values(
+                phase="failed", attempts=1, retry_at=later, token=None
+            )
+        )
+        db_session.commit()
+
+        due = next_retry(db_session, now=utcnow())
+
+        assert due is not None and abs((due - ensure_utc(later)).total_seconds()) < 1
+
+    def test_nothing_is_owed_without_an_opt_in(self, db_session, make_model):
+        from app.modules.search.expansion_worker import next_passage, next_retry
+
+        subject = make_model("bicycle")
+        sync_subject(db_session, SearchSubject(SubjectType.MODEL, subject.id))
+        db_session.commit()
+
+        assert (next_passage(db_session), next_retry(db_session, now=utcnow())) == (
+            False,
+            None,
+        )
+
+
 class TestExpansionProcessor:
     def test_materializes_opted_in_passages(self, db_session, sparse_setup, make_model):
         actor, model = sparse_setup

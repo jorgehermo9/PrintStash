@@ -8,6 +8,8 @@ test.describe("storage presets", () => {
   for (const preset of [
     {
       id: "garage",
+      category: "S3-compatible object storage",
+      label: "Garage",
       fields: {
         Bucket: "models",
         Endpoint: "https://s3.example.test",
@@ -18,11 +20,15 @@ test.describe("storage presets", () => {
     },
     {
       id: "koofr",
+      category: "Nextcloud and WebDAV",
+      label: "Koofr — WebDAV",
       fields: { Username: "owner@example.test", Password: "app-password" },
       kind: "webdav",
     },
     {
       id: "hetzner_storage_box",
+      category: "NAS over SFTP",
+      label: "Hetzner Storage Box — SFTP",
       fields: {
         Host: "box.example.test",
         Username: "owner",
@@ -46,9 +52,20 @@ test.describe("storage presets", () => {
         }),
       );
       await page.goto("/settings?section=remote-storage");
-      await page.getByLabel("Provider").selectOption(preset.id);
+      const remote = page.getByRole("region", { name: "Remote storage" });
+      await remote
+        .getByRole("group", { name: "Storage category" })
+        .getByRole("button", { name: preset.category })
+        .click();
+      await remote
+        .getByRole("group", { name: "Provider" })
+        .getByRole("button", { name: preset.label })
+        .click();
       await page.getByLabel("Connection name").fill("Preset backup");
-      await page.getByRole("combobox", { name: /Use for/ }).selectOption("backup");
+      await remote
+        .getByRole("group", { name: "Use for" })
+        .getByRole("button", { name: "Backup replicas" })
+        .click();
       for (const [name, value] of Object.entries(preset.fields))
         await page.getByLabel(new RegExp(`^${name}(?:\\s*Optional)?$`)).fill(value);
       const saved = page.waitForRequest(

@@ -29,13 +29,8 @@ from tests.paths import REPO_ROOT
 ADVANCED = REPO_ROOT / "docker-compose.advanced.yml"
 MANUAL = REPO_ROOT / "deploy/manual-testing/compose.yml"
 MINIO = REPO_ROOT / "deploy/minio-migration/compose.yml"
-LOCAL_VOLUMES = {
-    "printstash_data",
-    "printstash_thumbs",
-    "printstash_db",
-    "printstash_staging",
-    "printstash_backups",
-}
+# The one volume both files mount at /data, so switching files keeps the data.
+LOCAL_VOLUMES = {"printstash"}
 
 
 def _render(*args: str, **environment: str) -> dict[str, Any]:
@@ -125,6 +120,25 @@ class TestAdvancedCompose:
         ]
 
         assert _documented_api_settings() - set(environment) == set()
+
+    def test_wires_only_settings_the_api_reads(self) -> None:
+        # A knob nothing reads still looks like documentation, and one did.
+        from app.core.config import Settings
+
+        environment = yaml.safe_load(ADVANCED.read_text())["services"]["api"][
+            "environment"
+        ]
+        read = {f"VAULT_{name.upper()}" for name in Settings.model_fields}
+        wired = {name for name in environment if name.startswith("VAULT_")}
+
+        assert (wired | _documented_api_settings()) - read == set()
+
+    def test_mounts_one_data_volume_for_the_api(self) -> None:
+        mounts = _render("-f", str(ADVANCED))["services"]["api"]["volumes"]
+
+        assert [(m["type"], m["source"], m["target"]) for m in mounts] == [
+            ("volume", "printstash", "/data")
+        ]
 
     def test_runs_only_the_app_without_profiles(self) -> None:
         config = _render("-f", str(ADVANCED))

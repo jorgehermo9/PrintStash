@@ -161,11 +161,11 @@ def phase(directory: Path, model: Path, *, count: int, uploads: int, loaded: boo
             assert response.status_code == 202, response.text
             deadline = time.monotonic() + 120
             while time.monotonic() < deadline:
-                state = client.get(f"/api/v1/ingest/jobs/{response.json()['job_id']}")
+                state = client.get(f"/api/v1/jobs/{response.json()['job_id']}")
                 assert state.status_code == 200, state.text
                 job = state.json()
                 sample_processes(metrics)
-                if job["state"] in {"completed", "failed", "duplicate"}:
+                if job["state"] in {"completed", "failed", "cancelled"}:
                     break
                 time.sleep(0.05)
             else:

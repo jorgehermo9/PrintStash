@@ -18,7 +18,6 @@ import app.modules.backups.backup.targets as backup_targets
 import app.modules.backups.backup.verification as backup_verification
 from app.core.time import utcnow
 from app.db.models import (
-    BackgroundJob,
     Collection,
     Document,
     DocumentKind,
@@ -27,6 +26,8 @@ from app.db.models import (
     FileType,
     InboxItem,
     InboxItemState,
+    JobKind,
+    JobState,
     Model,
     MultipartModel,
     User,
@@ -47,6 +48,7 @@ from app.modules.storage.storage_utils import (
 )
 from tests.factories import (
     build_collection,
+    build_job,
     build_model,
     build_owned_storage_object,
     build_user,
@@ -759,8 +761,8 @@ class TestRequestCancel:
         assert vault_audit.request_cancel(db_session, 999999) is None
 
 
-class TestReconcileInterruptedRuns:
-    def test_reconcile_interrupted_runs_marks_running_as_failed(
+class TestFailInterruptedRun:
+    def test_fails_a_run_its_lost_execution_left_running(
         self,
         db_session: Session,
     ) -> None:
@@ -769,17 +771,31 @@ class TestReconcileInterruptedRuns:
         run.state = VaultAuditRunState.RUNNING
         db_session.add(run)
         db_session.commit()
-        run_id = run.id
 
-        count = vault_audit.reconcile_interrupted_runs()
+        vault_audit.fail_interrupted_run(run.id)
 
-        assert count >= 1
-        result = db_session.get(VaultAuditRun, run_id)
-        db_session.refresh(result)
-        assert result.state == VaultAuditRunState.FAILED
-        assert result.error_code == "audit_interrupted"
+        db_session.refresh(run)
+        assert (run.state, run.error_code) == (
+            VaultAuditRunState.FAILED,
+            "audit_interrupted",
+        )
 
-    def test_reconcile_finalizes_interrupted_auto_repair_claim(
+    def test_releases_the_audit_slot_of_an_interrupted_run(
+        self, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, "reconcile-slot")
+        run = _make_run(db_session, user)
+        run.state = VaultAuditRunState.RUNNING
+        run.active_slot = "audit"
+        db_session.add(run)
+        db_session.commit()
+
+        vault_audit.fail_interrupted_run(run.id)
+
+        db_session.refresh(run)
+        assert run.active_slot is None
+
+    def test_finalizes_an_interrupted_auto_repair_claim(
         self, db_session: Session
     ) -> None:
         user = _make_user(db_session, "reconcile-auto-repair")
@@ -790,12 +806,24 @@ class TestReconcileInterruptedRuns:
         db_session.add(run)
         db_session.commit()
 
-        vault_audit.reconcile_interrupted_runs()
+        vault_audit.fail_interrupted_run(run.id)
 
         db_session.refresh(run)
-        assert run.state == VaultAuditRunState.COMPLETED
-        assert run.current_phase == "completed"
-        assert run.active_slot is None
+        assert (run.state, run.current_phase, run.active_slot) == (
+            VaultAuditRunState.COMPLETED,
+            "completed",
+            None,
+        )
+
+    def test_leaves_a_settled_run_alone(self, db_session: Session) -> None:
+        user = _make_user(db_session, "reconcile-settled")
+        run = _make_run(db_session, user)
+        run.state = VaultAuditRunState.COMPLETED
+        run.active_slot = None
+        db_session.add(run)
+        db_session.commit()
+
+        assert vault_audit.fail_interrupted_run(run.id) is False
 
 
 class TestBlobIsLive:
@@ -1296,11 +1324,12 @@ class TestCheckBackgroundJobs:
     ) -> None:
         user = _make_user(db_session, "jobs-owner")
         run = _make_run(db_session, user)
-        stuck_job = BackgroundJob(
-            id="stuck-job-1", kind="thumbnail_rebuild", state="running"
+        build_job(
+            db_session,
+            kind=JobKind.DERIVATIVES_MESH,
+            state=JobState.RUNNING,
+            updated_at=utcnow() - timedelta(hours=2),
         )
-        stuck_job.updated_at = utcnow() - timedelta(hours=2)
-        db_session.add(stuck_job)
         stuck_import = InboxItem(
             owner_user_id=user.id,
             source_url="https://example.com/x",
@@ -1560,8 +1589,8 @@ class TestReparseMetadata:
         assert result is not None
         assert result.state == VaultAuditFindingState.RESOLVED
 
-    def test_reparse_metadata_success_writes_metadata_row(
-        self, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    def test_reparse_metadata_rederives_the_metadata_in_the_background(
+        self, db_session: Session, work_engine
     ) -> None:
         model = _make_model(db_session, "reparse-ok")
         file_row = _make_file(
@@ -1569,18 +1598,18 @@ class TestReparseMetadata:
         )
         get_backend().write_bytes(b"; filament_type = PLA\nG28\n", file_row.path)
 
-        result = vault_audit._reparse_metadata(db_session, file_row.id)
+        vault_audit._reparse_metadata(db_session, file_row.id)
+        work_engine.drain()
 
-        assert result is True
         from sqlmodel import select
 
         from app.db.models import Metadata
 
+        db_session.expire_all()
         meta = db_session.exec(
             select(Metadata).where(Metadata.file_id == file_row.id)
         ).first()
-        assert meta is not None
-        assert meta.material_type == "PLA"
+        assert meta is not None and meta.material_type == "PLA"
 
     def test_reparse_metadata_reads_an_external_source_without_the_vault(
         self,
@@ -1693,11 +1722,7 @@ class TestRepairFinding:
         db_session.commit()
         db_session.refresh(finding)
 
-        monkeypatch.setattr(
-            vault_audit.thumbnail_repair,
-            "regenerate_model_thumbnail",
-            lambda _s, _id: True,
-        )
+        monkeypatch.setattr(vault_audit, "_regenerate_thumbnail", lambda _s, _id: True)
 
         result = vault_audit.repair_finding(db_session, finding.id, user.id)
 

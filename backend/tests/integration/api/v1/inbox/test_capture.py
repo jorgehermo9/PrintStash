@@ -35,14 +35,15 @@ class TestCapture:
         assert response.status_code == 202, response.text
         assert response.json()["state"] == "captured"
 
-    def test_schedules_the_source_to_be_resolved(
-        self, client: TestClient, user_headers, no_egress
+    def test_resolves_the_source_in_the_background(
+        self, client: TestClient, user_headers, no_egress, work_engine
     ) -> None:
         created = client.post(
             "/api/v1/inbox",
             headers=user_headers("capture-schedules"),
             json={"url": "https://example.com/model"},
         )
+        work_engine.drain()
 
         assert no_egress == [created.json()["id"]]
 

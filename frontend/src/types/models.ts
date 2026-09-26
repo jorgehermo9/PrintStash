@@ -380,52 +380,190 @@ export interface ImportedPrintJobRead {
   imported: boolean;
 }
 
-export interface IngestResponse {
+/**
+ * Where a background Job is. `interrupted` is transient: the process running it
+ * stopped and the reconciler is about to run it again.
+ */
+export type JobState = "queued" | "running" | "interrupted" | "completed" | "failed" | "cancelled";
+
+/** Returned by every endpoint that accepts background work (HTTP 202). */
+export interface JobAccepted {
   job_id: string;
-  state: "pending" | "running" | "completed" | "failed";
+  state: JobState;
   message: string;
 }
 
-export interface IngestJobStatus {
+/**
+ * Every Job Definition, named `<owner>.<verb>`: the backend's `JobKind`, and
+ * nothing else (`tests/repo/test_frontend_enums.py` keeps the two in step).
+ */
+export type JobKind =
+  | "administration.audit"
+  | "backups.automatic"
+  | "backups.create"
+  | "backups.retry_destination"
+  | "backups.trash_gc"
+  | "derivatives.gcode"
+  | "derivatives.mesh"
+  | "derivatives.toolpath"
+  | "identity.retention"
+  | "inference.model_download"
+  | "ingestion.archive_inspect"
+  | "ingestion.archive_selection"
+  | "ingestion.artifact_upload"
+  | "ingestion.collection"
+  | "ingestion.inbox_import"
+  | "ingestion.inbox_resolve"
+  | "ingestion.inbox_retention"
+  | "ingestion.library_import"
+  | "ingestion.upload"
+  | "ingestion.upload_recovery"
+  | "ingestion.url"
+  | "ingestion.url_selection"
+  | "notifications.deliver"
+  | "notifications.retention"
+  | "printing.dispatch"
+  | "search.caption"
+  | "search.caption_queue"
+  | "search.expand"
+  | "search.generation"
+  | "search.index"
+  | "search.project"
+  | "search.repair"
+  | "similarity.analyze"
+  | "sources.scan"
+  | "storage.inventory"
+  | "storage.migrate"
+  | "work.housekeeping";
+
+/** A concurrency class of background work: the backend's `LaneName`. */
+export type LaneName =
+  | "captions"
+  | "derive.light"
+  | "derive.native"
+  | "expansion"
+  | "ingest"
+  | "maintenance"
+  | "network"
+  | "notify"
+  | "printing"
+  | "reconcile"
+  | "search"
+  | "similarity";
+
+/** An output derived from an Artifact's bytes: the backend's `DerivativeKind`. */
+export type DerivativeKind = "metadata" | "thumbnail" | "toolpath";
+
+export type WorkPriority = "interactive" | "backfill";
+
+/** One background Job, from `/api/v1/jobs`. */
+export interface JobStatus {
   job_id: string;
-  kind?: string;
-  state: "pending" | "running" | "completed" | "failed";
+  kind: JobKind;
+  state: JobState;
+  priority: WorkPriority;
+  attempts: number;
+  resubmits: number;
   model_id: number | null;
   file_id: number | null;
   error: string | null;
+  retryable: boolean;
+  created_at: string;
+  updated_at: string;
   started_at: string | null;
   finished_at: string | null;
-  committed_at?: string | null;
-  updated_at?: string | null;
-  // Progress hints (additive; absent on older backends)
-  step?: number | null;
-  total_steps?: number | null;
-  label?: string | null;
-  progress?: number | null;
-  result?: IngestJobResult | null;
-  stage?:
+  committed_at: string | null;
+  step: number | null;
+  total_steps: number | null;
+  label: string | null;
+  progress: number | null;
+  result: IngestJobResult | null;
+  stage:
     | "resolving"
     | "downloading"
     | "inspecting"
     | "extracting"
     | "hashing"
     | "ingesting"
-    | "thumbnailing"
     | "completed"
     | null;
-  current_item?: string | null;
-  processed?: number;
-  total?: number | null;
-  succeeded?: number;
-  deduplicated?: number;
-  skipped?: number;
-  failed?: number;
-  completion?: "complete" | "partial" | null;
-  thumbnail_status?: "generated" | "fallback_generated" | "skipped" | "failed" | null;
-  thumbnail_reason?: string | null;
-  fingerprint_status?: "ready" | "partial" | "unsupported" | "failed" | "pending" | null;
-  retryable?: boolean;
-  failed_items?: Array<{ name: string; reason: string; retryable: boolean }>;
+  current_item: string | null;
+  processed: number;
+  total: number | null;
+  succeeded: number;
+  deduplicated: number;
+  skipped: number;
+  failed: number;
+  completion: "complete" | "partial" | null;
+  failed_items: Array<{ name: string; reason: string; retryable: boolean }>;
+}
+
+/**
+ * Where one derivative of an Artifact is. `pending` means nothing has been
+ * attempted at the current recipe: every value it would supply is unknown.
+ */
+export type DerivativeState =
+  | "pending"
+  | "queued"
+  | "running"
+  | "ready"
+  | "skipped"
+  | "failed"
+  | "cancelled";
+
+export interface DerivativeRead {
+  kind: DerivativeKind;
+  recipe_version: number;
+  state: DerivativeState;
+  attempts: number;
+  failure_reason: string | null;
+  updated_at: string | null;
+  retryable: boolean;
+}
+
+export interface WorkLane {
+  name: LaneName;
+  concurrency: number;
+  default_concurrency: number;
+  overridden: boolean;
+  scope: "worker" | "global";
+  partitioned: boolean;
+  queued: number;
+  running: number;
+}
+
+export interface WorkDefinition {
+  name: JobKind;
+  label: string;
+  lane: LaneName;
+  queued: number;
+  running: number;
+  interrupted: number;
+  failed: number;
+  completed: number;
+  derivative_kinds: DerivativeKind[];
+  next_due_at: string | null;
+  last_finished_at: string | null;
+}
+
+export interface WorkExecutor {
+  executor_id: string;
+  role: "all" | "api" | "worker";
+  hostname: string;
+  app_version: string;
+  lanes: LaneName[];
+  started_at: string;
+  heartbeat_at: string;
+  stale: boolean;
+}
+
+/** `GET /api/v1/admin/work`: the Background work settings page. */
+export interface WorkOverview {
+  lanes: WorkLane[];
+  definitions: WorkDefinition[];
+  executors: WorkExecutor[];
+  failed_jobs: JobStatus[];
+  failed_derivatives: number;
 }
 
 /** One member/file outcome inside a multi-item import result. */
@@ -468,6 +606,19 @@ export interface IngestJobResult {
   created?: boolean;
   resumed?: boolean;
   name?: string;
+  // `backups.create`: the new backup as `GET /api/v1/backups` lists it.
+  backup_id?: string;
+  created_at?: string;
+  size_bytes?: number;
+  file_count?: number;
+  storage_backend?: string;
+  app_version?: string;
+  location?: string;
+  source_ref?: string | null;
+  provider_ref?: string | null;
+  namespace?: string | null;
+  run_id?: string | null;
+  outcome?: "running" | "completed" | "partial" | "failed" | null;
 }
 
 export interface ArchiveEntry {
@@ -706,6 +857,8 @@ export interface CollectionRead {
   model_count: number;
   effective_role: CollectionRole | null;
   tags: string[];
+  /** False lets a folder view skip the readme request entirely. */
+  has_readme: boolean;
 }
 
 export interface CollectionPermissionRead {

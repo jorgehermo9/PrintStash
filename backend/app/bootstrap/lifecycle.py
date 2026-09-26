@@ -1,4 +1,11 @@
-"""Lifecycle."""
+"""Process lifecycle: prepare state, then serve (the API) or execute (a worker).
+
+``prepare_process`` is everything a process needs before it may touch the
+vault, and it is shared by the API lifespan and the worker entrypoint. What
+only the API does is serve HTTP and supervise live connections (the printer
+hub, the library watcher). Background work is composed in ``bootstrap.work``
+and is the same in every process; nothing here starts a loop.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +13,14 @@ import asyncio
 import json
 import sqlite3
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
 from fastapi import FastAPI
 from sqlalchemy.engine.url import make_url
 
-from app.core.config import settings
+from app.core.config import ProcessRole, settings
 from app.core.logging import get_logger
 from app.core.metrics import app_info as _app_info
 from app.core.topology import acquire_process_lock, release_process_lock
@@ -27,14 +35,7 @@ from app.modules.administration.runtime_config import (
     is_configured,
 )
 from app.modules.backups.backup.recovery import inspect_restore_recovery
-from app.modules.backups.backup_schedule import run_due_backup
-from app.modules.backups.gc_planner import run_scheduled_gc
-from app.modules.notifications.notifications import run_dispatcher_loop
 from app.modules.printing.printer_hub import PrinterHub
-from app.modules.printing.printer_jobs import (
-    reconcile_stranded_dispatches,
-    run_fleet_scheduler,
-)
 from app.modules.printing.printer_provider import (
     build_provider_registry,
     get_provider_client,
@@ -48,22 +49,8 @@ from app.modules.storage.storage_backend.contracts import (
 from app.modules.storage.storage_backend.local import LocalStorageBackend
 from app.modules.storage.storage_backend.runtime import bind_backend
 from app.modules.storage.storage_backend.s3 import S3StorageBackend
-from app.runtime.maintenance import (
-    begin_mutating_operation,
-    end_mutating_operation,
-)
-from app.runtime.realtime import InProcessBus
-from app.runtime.work_wakeup import LocalWorkWakeup
 
 logger = get_logger(__name__)
-
-
-async def _cancel_tasks(*tasks: asyncio.Task | None) -> None:
-    active = [task for task in tasks if task is not None]
-    for task in active:
-        task.cancel()
-    if active:
-        await asyncio.gather(*active, return_exceptions=True)
 
 
 async def _close_outbound_clients() -> None:
@@ -79,20 +66,7 @@ async def _close_outbound_clients() -> None:
         await close_http_client()
     finally:
         try:
-            from app.bootstrap.optional_features import inference_available
-
-            if inference_available():
-                from app.modules.inference.query import close_queries
-                from app.modules.inference.transport import (
-                    close_client as close_inference_client,
-                )
-                from app.modules.inference.worker_pool import pool as model_workers
-                from app.runtime.model_acquisition import close as close_model_downloads
-
-                await asyncio.to_thread(close_model_downloads)
-                await asyncio.to_thread(close_queries)
-                await asyncio.to_thread(model_workers.close)
-                await asyncio.to_thread(close_inference_client)
+            await asyncio.to_thread(close_inference)
         except Exception:
             logger.error("failed to close inference transport")
         try:
@@ -117,7 +91,7 @@ def _safe_db_url(value: str) -> str:
 def _compose_storage_backend(
     *, recover_publications: bool = True, recovery_only: bool = False
 ) -> StorageBackend:
-    """Bind the configured backend before serving requests.
+    """Bind the configured backend before serving requests or running jobs.
 
     Restore maintenance is entered before startup repair.  In that state the
     adapter is still useful for reads and for the explicitly journaled restore,
@@ -212,27 +186,33 @@ def _prepare_storage_for_startup(
     return backend
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+@dataclass(frozen=True)
+class PreparedProcess:
+    backend: StorageBackend
+    configured: bool
+    restore_maintenance: bool
+
+
+def prepare_process(*, owner: bool) -> PreparedProcess:
+    """Bring this process to the point where it may touch the vault.
+
+    ``owner`` is the process that holds the vault's single API lock. Only the
+    owner migrates the schema and runs startup repairs (identity, legacy
+    roots, the JWT secret) and publication recovery; a worker binds the same
+    configuration and storage without mutating any of it, so two processes
+    never race on a repair.
+    """
+    from app.modules.storage.migration_journal import inspect_before_writes
     from app.modules.storage.storage_paths import validate_runtime_storage_paths
 
-    # Validate environment-time paths before even creating the process-lock
-    # rendezvous beside the database.
-    validate_runtime_storage_paths()
-    process_lock = acquire_process_lock()
-    app.state.process_lock = process_lock
-    logger.info("starting %s v%s", settings.app_name, settings.app_version)
-    _app_info.info({"version": settings.app_version, "name": settings.app_name})
     # Inspect the filesystem journal before opening or migrating the database.
     # A crash marker is the recovery authority; startup must not run normal
     # schema/identity/storage repairs before deciding whether it is present.
-    from app.modules.storage.migration_journal import inspect_before_writes
-
-    migration_maintenance = inspect_before_writes()
-    restore_maintenance = inspect_restore_recovery() or migration_maintenance
-    # DB must still exist before we can read the runtime overlay. The journal
-    # decision above gates every application-owned repair after initialization.
-    if not migration_maintenance:
+    migration_maintenance = inspect_before_writes() if owner else False
+    restore_maintenance = (
+        inspect_restore_recovery() or migration_maintenance if owner else False
+    )
+    if owner and not migration_maintenance:
         init_db()
     with get_session_factory().scoped_session() as session:
         apply_overlay(session)
@@ -242,7 +222,7 @@ async def lifespan(app: FastAPI):
             ensure_storage_identity,
         )
 
-        if not restore_maintenance:
+        if owner and not restore_maintenance:
             ensure_storage_identity(session)
             # Migration covers normal upgrades; this bounded repair also
             # handles stamped/create_all legacy databases.  ``apply_overlay``
@@ -257,25 +237,24 @@ async def lifespan(app: FastAPI):
             validate_runtime_storage_paths()
             # Must run after apply_overlay: that call clears the overlay dict.
             ensure_jwt_secret(session)
-            # Clear any NAS scans stranded RUNNING by a previous unclean
-            # shutdown, otherwise the scheduler would skip them forever.
-            from app.modules.sources.external_library import reset_orphaned_scans
-
-            reset_count = reset_orphaned_scans(session)
-            if reset_count:
-                logger.warning(
-                    "reset %d external library scan(s) stranded by restart",
-                    reset_count,
-                )
         configured = is_configured(session)
+    if not restore_maintenance and not configured:
+        # Its own session: first ownership opens a write-locking transaction,
+        # which must not start inside the repairs above.
+        from app.modules.administration.setup_bootstrap import (
+            provision_from_environment,
+        )
+
+        with get_session_factory().scoped_session() as session:
+            configured = provision_from_environment(session) is not None
     if restore_maintenance:
         logger.critical(
             "interrupted restore detected; application remains in restore maintenance"
         )
     # Storage must be configured and bound before either publication recovery
     # or Inbox recovery can inspect durable capture-slot receipts.
-    _backend = _prepare_storage_for_startup(
-        recover_publications=not restore_maintenance,
+    backend = _prepare_storage_for_startup(
+        recover_publications=owner and not restore_maintenance,
         recovery_only=restore_maintenance,
     )
     from app.modules.administration.artifact_cache_config import (
@@ -315,106 +294,160 @@ async def lifespan(app: FastAPI):
         generation = session.get(VaultGeneration, 1)
         if generation is not None:
             with generations.activation():
-                generations.publish(_backend, generation.epoch)
+                generations.publish(backend, generation.epoch)
     from app.modules.storage.vault_migration import record_first_destination_write
     from app.runtime.maintenance import observe_mutations
 
     observe_mutations(record_first_destination_write)
-    from app.runtime.jobs import reconcile_interrupted_jobs
+    if restore_maintenance:
+        from app.runtime.maintenance import hold_restore_maintenance
 
-    interrupted_jobs = reconcile_interrupted_jobs() if not restore_maintenance else 0
-    if interrupted_jobs:
-        logger.warning("reconciled %d interrupted background job(s)", interrupted_jobs)
-    if not restore_maintenance:
-        from app.modules.ingestion.artifact_uploads import reconcile_artifact_uploads
-
-        upload_recovery = reconcile_artifact_uploads()
-        if upload_recovery.reconciled or upload_recovery.expired:
-            logger.warning(
-                "reconciled %d and expired %d artifact upload session(s)",
-                upload_recovery.reconciled,
-                upload_recovery.expired,
-            )
-    from app.modules.administration.vault_audit import reconcile_interrupted_runs
-
-    interrupted_audits = reconcile_interrupted_runs() if not restore_maintenance else 0
-    if interrupted_audits:
-        logger.warning("reconciled %d interrupted vault audit(s)", interrupted_audits)
-    stranded_dispatches = (
-        reconcile_stranded_dispatches() if not restore_maintenance else 0
-    )
-    if stranded_dispatches:
-        logger.warning("reconciled %d stranded fleet dispatch(es)", stranded_dispatches)
+        hold_restore_maintenance()
     if not configured:
-        logger.info("vault is unconfigured; browser setup mode=%s", settings.setup_mode)
+        from app.modules.administration import setup_policy
+
+        # The resolved policy, not VAULT_SETUP_MODE: a misconfigured mode keeps
+        # every door shut whatever it says.
+        logger.info(
+            "vault is unconfigured; first-run setup=%s",
+            setup_policy.label(setup_policy.current()),
+        )
     logger.info(
-        "backend=%s data_dir=%s thumb_dir=%s db=%s",
+        "role=%s backend=%s data_dir=%s thumb_dir=%s db=%s",
+        settings.process_role,
         settings.storage_backend,
         settings.data_dir,
         settings.thumb_dir,
         _safe_db_url(settings.db_url),
     )
     install_audit_listeners()
+    return PreparedProcess(
+        backend=backend,
+        configured=configured,
+        restore_maintenance=restore_maintenance,
+    )
+
+
+SearchBindings = tuple[object, object]
+
+
+def bind_search() -> SearchBindings:
+    """Bind library search and its projection when inference is installed.
+
+    Every process that changes the library binds the projection, so each
+    change records what search must re-project; the ``search.*`` Jobs do the
+    projecting and indexing. Returns what was bound before, for
+    ``restore_search``.
+    """
     from app.bootstrap.optional_features import inference_available
     from app.db.content_search import bind_content_search
     from app.db.projections import bind_content_projection
 
-    app.state.search_task = app.state.captions_task = app.state.expansion_task = None
-    app.state.model_warmup_task = None
-    previous_search = bind_content_search(None)
-    previous_projection = bind_content_projection(None)
+    previous = (bind_content_search(None), bind_content_projection(None))
     if inference_available():
         from app.modules.search.lexical_query import LibrarySearch
         from app.modules.search.projection import LibraryProjection
-        from app.runtime.captions import run_captions
-        from app.runtime.expansion import run_expansion
-        from app.runtime.model_warmup import run_model_warmup
-        from app.runtime.search import run_search
 
         bind_content_search(LibrarySearch())
         bind_content_projection(LibraryProjection())
-        app.state.search_task = asyncio.create_task(run_search())
-        app.state.captions_task = asyncio.create_task(run_captions())
-        app.state.expansion_task = asyncio.create_task(run_expansion())
-        app.state.model_warmup_task = asyncio.create_task(run_model_warmup())
+    return previous
+
+
+def start_model_warmup():
+    """Warm the API's query models when local inference is installed."""
+    from app.bootstrap.optional_features import inference_available
+
+    if not inference_available():
+        return None
+    from app.modules.search.model_warmup import WarmupSupervisor
+
+    supervisor = WarmupSupervisor(get_session_factory())
+    supervisor.start()
+    return supervisor
+
+
+def close_inference() -> None:
+    """Stop this process's query and model workers and its inference client.
+
+    Blocking; every process that ran inference (the API, a worker) calls it
+    on shutdown. Model downloads are Jobs, which the engine's shutdown ends.
+    """
+    from app.bootstrap.optional_features import inference_available
+
+    if not inference_available():
+        return
+    from app.modules.inference.query import close_queries
+    from app.modules.inference.transport import close_client
+    from app.modules.inference.worker_pool import pool as model_workers
+
+    close_queries()
+    model_workers.close()
+    close_client()
+
+
+def restore_search(previous: SearchBindings) -> None:
+    from app.db.content_search import bind_content_search
+    from app.db.projections import bind_content_projection
+
+    search, projection = previous
+    bind_content_search(search)  # type: ignore[arg-type]
+    bind_content_projection(projection)  # type: ignore[arg-type]
+
+
+def _start_work(prepared: PreparedProcess, *, publisher) -> None:
+    """Start background work unless an interrupted restore still governs.
+
+    Held work starts when recovery resolves that restore (``release_held``).
+    """
+    from app.bootstrap.work import hold, start
+
+    # Only the lifespan runs this, after it took the vault's API lock.
+    if prepared.restore_maintenance:
+        logger.warning("background work held: restore maintenance is active")
+        hold(publisher=publisher, sole_api=True)
+        return
+    start(publisher=publisher, sole_api=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.modules.storage.storage_paths import validate_runtime_storage_paths
+
+    if settings.process_role is ProcessRole.WORKER:
+        raise RuntimeError(
+            "VAULT_PROCESS_ROLE=worker runs `python -m app.worker`, not the HTTP app"
+        )
+    # Validate environment-time paths before even creating the process-lock
+    # rendezvous beside the database.
+    validate_runtime_storage_paths()
+    process_lock = acquire_process_lock()
+    app.state.process_lock = process_lock
+    logger.info("starting %s v%s", settings.app_name, settings.app_version)
+    _app_info.info({"version": settings.app_version, "name": settings.app_name})
+    prepared = prepare_process(owner=True)
+    previous_search = bind_search()
     printer_provider_registry = build_provider_registry()
     app.state.printer_provider_registry = printer_provider_registry
     provider_builder = partial(get_provider_client, registry=printer_provider_registry)
+    from app.modules.printing.jobs import bind_provider_builder
+    from app.runtime.realtime import build_event_bus
+
+    bind_provider_builder(provider_builder)
+    bus = build_event_bus()
+    app.state.event_bus = bus
+    await bus.start()
     hub = PrinterHub(
-        InProcessBus(),
+        bus,
         session_factory=get_session_factory(),
         provider_builder=provider_builder,
     )
     app.state.printer_hub = hub
     watcher = LibraryWatcher()
     app.state.library_watcher = watcher
-    work_wakeup = LocalWorkWakeup()
-    app.state.work_wakeup = work_wakeup
-    app.state.gc_task = asyncio.create_task(
-        _gc_loop(storage_maintenance_enabled=configured)
-    )
-    app.state.external_scan_task = asyncio.create_task(_external_scan_loop())
-    app.state.automatic_backup_task = asyncio.create_task(_automatic_backup_loop())
-    from app.runtime.audit_scheduler import run_audit_scheduler
-
-    app.state.audit_scheduler_task = asyncio.create_task(run_audit_scheduler())
-    app.state.notification_task = asyncio.create_task(run_dispatcher_loop())
-    from app.runtime.vault_migrations import run_migrations as run_vault_migrations
-
-    app.state.vault_migration_task = asyncio.create_task(run_vault_migrations())
-    from app.bootstrap.optional_features import similarity_available
-
-    app.state.similarity_wakeup = LocalWorkWakeup()
-    app.state.similarity_task = None
-    if similarity_available():
-        from app.runtime.similarity import run_similarity
-
-        app.state.similarity_task = asyncio.create_task(
-            run_similarity(app.state.similarity_wakeup)
-        )
-    app.state.fleet_scheduler_task = asyncio.create_task(
-        run_fleet_scheduler(work_wakeup, provider_builder)
-    )
+    # Off the event loop: the engine refuses to register its queues from a
+    # running loop, and the startup reconcile is blocking database work.
+    await asyncio.to_thread(_start_work, prepared, publisher=bus)
+    warmup = start_model_warmup()
     await hub.start_all()
     # Real-time folder watching is best-effort: never let it block startup.
     try:
@@ -422,136 +455,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("library watcher failed to start; scheduled scans still run")
     yield
-    bind_content_projection(previous_projection)
-    bind_content_search(previous_search)
+    from app.bootstrap.work import stop as stop_work
+    from app.modules.storage.materializer_runtime import bind_materializer
+
+    restore_search(previous_search)
     bind_materializer(None)
     logger.info("shutting down printer hub")
-    await _cancel_tasks(
-        app.state.search_task,
-        app.state.captions_task,
-        app.state.expansion_task,
-        app.state.model_warmup_task,
-        app.state.gc_task,
-        app.state.external_scan_task,
-        app.state.automatic_backup_task,
-        app.state.audit_scheduler_task,
-        app.state.notification_task,
-        app.state.vault_migration_task,
-        app.state.similarity_task,
-        app.state.fleet_scheduler_task,
-    )
     await watcher.stop_all()
     await hub.stop_all()
+    if warmup is not None:
+        await asyncio.to_thread(warmup.stop)
+    await asyncio.to_thread(stop_work)
+    await bus.stop()
     try:
         await _close_outbound_clients()
     finally:
         release_process_lock(process_lock)
     logger.info("shutting down")
-
-
-async def _gc_loop(*, storage_maintenance_enabled: bool = True) -> None:
-    # Run once at startup (not sleep-first): a container that lives less than
-    # an hour — frequent redeploys, dev — would otherwise never GC expired
-    # trash or prune old notification deliveries.
-    while True:
-        if not storage_maintenance_enabled:
-            await asyncio.sleep(3600)
-            continue
-        if not begin_mutating_operation():
-            await asyncio.sleep(1)
-            continue
-        try:
-            try:
-                # Sync DB + storage I/O — keep it off the event loop.
-                await asyncio.to_thread(run_scheduled_gc)
-            except Exception:
-                logger.exception("scheduled GC failed")
-            try:
-                from app.modules.storage.storage_inventory import (
-                    refresh_inventory_sample,
-                )
-
-                await asyncio.to_thread(refresh_inventory_sample, get_session_factory())
-            except Exception:
-                logger.exception("storage inventory sampling failed")
-            try:
-                from app.modules.notifications.notifications import prune_deliveries
-
-                await asyncio.to_thread(prune_deliveries)
-            except Exception:
-                logger.exception("notification delivery pruning failed")
-            try:
-                from app.modules.ingestion.inbox import (
-                    prune_expired_browser_leases,
-                    prune_history,
-                )
-
-                await asyncio.to_thread(prune_history)
-                await asyncio.to_thread(prune_expired_browser_leases)
-            except Exception:
-                logger.exception("pending import history pruning failed")
-            try:
-                from app.modules.identity.auth import prune_expired_refresh_tokens
-
-                await asyncio.to_thread(prune_expired_refresh_tokens)
-            except Exception:
-                logger.exception("expired refresh-token pruning failed")
-            try:
-                from app.modules.ingestion.artifact_uploads import (
-                    reconcile_artifact_uploads,
-                )
-
-                await asyncio.to_thread(reconcile_artifact_uploads)
-            except Exception:
-                logger.exception("artifact upload reconciliation failed")
-        finally:
-            end_mutating_operation()
-        await asyncio.sleep(3600)
-
-
-async def _external_scan_loop() -> None:
-    """Poll enabled external (NAS) libraries and scan those whose interval elapsed.
-
-    No-op while the ``external_libraries_enabled`` opt-in is off. All blocking DB
-    and filesystem work runs in a worker thread to keep the event loop free.
-    """
-    while True:
-        await asyncio.sleep(60)
-        if not begin_mutating_operation():
-            continue
-        try:
-            await asyncio.to_thread(_run_due_external_scans)
-        except Exception:
-            logger.exception("external library scan tick failed")
-        finally:
-            end_mutating_operation()
-
-
-async def _automatic_backup_loop() -> None:
-    """Create at most one configured automatic backup for each UTC day."""
-    while True:
-        await asyncio.sleep(60)
-        if not begin_mutating_operation():
-            continue
-        try:
-            try:
-                await asyncio.to_thread(run_due_backup)
-            except Exception:
-                logger.exception("automatic backup failed")
-        finally:
-            end_mutating_operation()
-
-
-def _run_due_external_scans() -> None:
-    from app.modules.administration.runtime_config import external_libraries_enabled
-    from app.modules.sources import external_library
-
-    with get_session_factory().scoped_session() as session:
-        if not external_libraries_enabled(session):
-            return
-        due = external_library.libraries_due_for_scan(session)
-    for library_id in due:
-        try:
-            external_library.scan_library(library_id)
-        except Exception:
-            logger.exception("scheduled scan failed for library %s", library_id)

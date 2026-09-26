@@ -4,7 +4,6 @@ move_in) and the live/trashed query scopes."""
 from __future__ import annotations
 
 import hashlib
-import json
 from io import BytesIO
 from pathlib import Path
 
@@ -12,7 +11,6 @@ import pytest
 from sqlmodel import Session, select
 
 import app.modules.storage.storage_backend.runtime as storage_runtime
-from app.core.config import _overlay
 from app.db.models import Model
 from app.db.scopes import live, trashed
 from app.modules.library.trash import restore_model, soft_delete_model
@@ -25,6 +23,22 @@ from app.modules.storage.storage_backend.contracts import (
 from app.modules.storage.storage_backend.local import LocalStorageBackend
 from app.modules.storage.storage_backend.s3 import S3StorageBackend
 from tests.factories import build_model
+
+
+@pytest.fixture
+def stuck_staged_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A staged file whose removal fails once its bytes are published."""
+    staged = tmp_path / "staged.bin"
+    staged.write_bytes(b"data")
+    original_unlink = Path.unlink
+
+    def fail_only_source(self: Path, *args, **kwargs):
+        if self == staged:
+            raise PermissionError("staged source became read-only")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_only_source)
+    return staged
 
 
 class _FakeRemoteBackend(LocalStorageBackend):
@@ -447,48 +461,25 @@ class TestMoveIn:
         assert not staged.exists()
         assert (tmp_path / "store" / "blobs" / "staged.bin").read_bytes() == b"data"
 
-    def test_move_in_returns_creation_proof_when_staged_cleanup_fails(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_remote_backend_move_in_returns_creation_proof_when_staged_cleanup_fails(
+        self, tmp_path: Path, stuck_staged_file: Path
     ) -> None:
-        monkeypatch.setitem(_overlay, "data_dir", tmp_path / "vault")
-        monkeypatch.setitem(_overlay, "thumb_dir", tmp_path / "thumbs")
-        monkeypatch.setitem(_overlay, "backup_dir", tmp_path / "backups")
-        for role, root in (
-            ("data", tmp_path / "vault"),
-            ("thumb", tmp_path / "thumbs"),
-        ):
-            root.mkdir(parents=True, exist_ok=True)
-            (root / ".printstash-storage-root.json").write_text(
-                json.dumps(
-                    {
-                        "format": 1,
-                        "installation": str(
-                            _overlay.get("storage_identity") or "a" * 64
-                        ),
-                        "role": role,
-                    }
-                ),
-                encoding="utf-8",
-            )
-        backend = LocalStorageBackend()
-        staged = tmp_path / "staged.bin"
-        staged.write_bytes(b"data")
-        destination = tmp_path / "vault" / "staged.bin"
-        original_unlink = Path.unlink
+        # The generic upload-then-remove path. Local publication hard-links and
+        # has its own rows in unit/modules/storage/storage_backend/test_local_writes.py.
+        backend = _FakeRemoteBackend(tmp_path / "store")
 
-        def fail_only_source(self: Path, *args, **kwargs):
-            if self == staged:
-                raise PermissionError("staged source became read-only")
-            return original_unlink(self, *args, **kwargs)
+        receipt = backend.move_in(stuck_staged_file, "blobs/staged.bin")
 
-        monkeypatch.setattr(Path, "unlink", fail_only_source)
+        assert receipt.key == str(tmp_path / "store" / "blobs" / "staged.bin")
 
-        receipt = backend.move_in(staged, str(destination))
+    def test_remote_backend_move_in_keeps_a_staged_file_it_cannot_remove(
+        self, tmp_path: Path, stuck_staged_file: Path
+    ) -> None:
+        backend = _FakeRemoteBackend(tmp_path / "store")
 
-        assert receipt.key == str(destination)
-        assert backend.creation_matches(receipt)
-        assert staged.read_bytes() == b"data"
-        assert destination.read_bytes() == b"data"
+        backend.move_in(stuck_staged_file, "blobs/staged.bin")
+
+        assert stuck_staged_file.read_bytes() == b"data"
 
 
 class TestEnsureBucket:

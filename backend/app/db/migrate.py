@@ -28,7 +28,7 @@ from sqlalchemy import CheckConstraint, UniqueConstraint, create_engine, inspect
 from sqlmodel import SQLModel
 
 from alembic import command
-from app.core.config import settings
+from app.core.config import ensure_dirs, settings
 from app.core.logging import get_logger
 from app.db.url import normalize_database_url
 
@@ -58,6 +58,25 @@ def _alembic_config(url: str) -> Config:
         "sqlalchemy.url", normalize_database_url(url).replace("%", "%%")
     )
     return cfg
+
+
+def schema_is_current(database_url: str) -> bool:
+    """Whether the database is at every migration head this build ships.
+
+    A worker process never migrates; it waits for this to hold, so it cannot
+    run against a schema older (or newer) than the code it executes.
+    """
+    from alembic.script import ScriptDirectory
+
+    url = normalize_database_url(database_url)
+    heads = set(ScriptDirectory.from_config(_alembic_config(url)).get_heads())
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            current = set(MigrationContext.configure(connection).get_current_heads())
+    finally:
+        engine.dispose()
+    return bool(current) and current == heads
 
 
 def _current_revision(engine) -> str | None:
@@ -319,6 +338,10 @@ def run_migrations(database_url: str | None = None) -> None:
 
 
 def main() -> None:  # pragma: no cover - thin CLI wrapper, exercised via entrypoint
+    # This is the first step of every boot (the container entrypoint runs it
+    # before the server), so it prepares the VAULT_DATA_ROOT layout the way the
+    # server would: a fresh root has no db/ for the default SQLite file yet.
+    ensure_dirs()
     run_migrations()
 
 

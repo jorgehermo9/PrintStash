@@ -10,7 +10,6 @@ the service call succeeded.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -18,6 +17,7 @@ from sqlmodel import delete
 
 from app.db.models import File, Metadata, Model
 from tests.e2e._backup_helpers import setup_and_login as _setup_and_login
+from tests.e2e._jobs import completed_job, create_backup
 from tests.paths import FIXTURES_DIR
 
 FIXTURE = FIXTURES_DIR / "real_orca_ender3_benchy.gcode"
@@ -30,16 +30,7 @@ async def _upload_and_wait(api, headers, *, model_name: str) -> dict:
         data={"model_name": model_name},
         headers=headers,
     )
-    assert up.status_code == 202, up.text
-    job_id = up.json()["job_id"]
-    for _ in range(50):
-        status = (
-            await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-        ).json()
-        if status["state"] in ("completed", "failed", "duplicate"):
-            break
-        await asyncio.sleep(0.05)
-    assert status["state"] == "completed", status
+    await completed_job(api, up, headers)
     models = (await api.get("/api/v1/models", headers=headers)).json()
     return next(m for m in models if m["name"] == model_name)
 
@@ -55,21 +46,10 @@ class TestBackupRestore:
             data={"model_name": "Backup Drawing"},
             headers=headers,
         )
-        assert uploaded.status_code == 202, uploaded.text
-        for _ in range(50):
-            job = (
-                await api.get(
-                    f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=headers
-                )
-            ).json()
-            if job["state"] in ("completed", "failed", "duplicate"):
-                break
-            await asyncio.sleep(0.05)
-        assert job["state"] == "completed", job
+        job = await completed_job(api, uploaded, headers)
         file_id = job["file_id"]
         model_id = job["model_id"]
-        backup = await api.post("/api/v1/backups", headers=headers)
-        assert backup.status_code == 202, backup.text
+        backup = await create_backup(api, headers)
 
         artifact = e2e_db.get(File, file_id)
         assert artifact is not None
@@ -81,12 +61,10 @@ class TestBackupRestore:
         blob_path.unlink()
 
         restored = await api.post(
-            f"/api/v1/backups/{backup.json()['backup_id']}/restore", headers=headers
+            f"/api/v1/backups/{backup['backup_id']}/restore", headers=headers
         )
         assert restored.status_code == 200, restored.text
-        downloaded = await api.get(
-            f"/api/v1/files/{file_id}/download", headers=headers
-        )
+        downloaded = await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
         assert downloaded.status_code == 200, downloaded.text
         assert downloaded.content == original
 
@@ -106,10 +84,9 @@ class TestBackupRestore:
         ).content
         assert original_blob == FIXTURE.read_bytes()
 
-        created = await api.post("/api/v1/backups", headers=headers)
-        assert created.status_code == 202, created.text
-        backup_id = created.json()["backup_id"]
-        assert created.json()["file_count"] >= 1
+        created = await create_backup(api, headers)
+        backup_id = created["backup_id"]
+        assert created["file_count"] >= 1
 
         listed = await api.get("/api/v1/backups", headers=headers)
         assert any(b["backup_id"] == backup_id for b in listed.json())
@@ -150,6 +127,35 @@ class TestBackupRestore:
         assert restored_blob == FIXTURE.read_bytes()
 
     @pytest.mark.asyncio
+    async def test_a_backup_can_be_taken_after_restoring_one(
+        self, api, tmp_path, e2e_db
+    ):
+        # The archive's database was captured while its own backup Job was
+        # running. Restoring it must not bring that Job back as a backup that
+        # is forever in progress.
+        headers = await _setup_and_login(api, tmp_path)
+        model = await _upload_and_wait(api, headers, model_name="Restored Benchy")
+        created = await create_backup(api, headers)
+        detail = (
+            await api.get(f"/api/v1/models/{model['id']}", headers=headers)
+        ).json()
+        artifact = e2e_db.get(File, detail["files"][0]["id"])
+        assert artifact is not None
+        Path(artifact.path).unlink()
+        e2e_db.exec(delete(Metadata).where(Metadata.file_id == artifact.id))
+        e2e_db.exec(delete(File).where(File.id == artifact.id))
+        e2e_db.exec(delete(Model).where(Model.id == model["id"]))
+        e2e_db.commit()
+        restored = await api.post(
+            f"/api/v1/backups/{created['backup_id']}/restore", headers=headers
+        )
+        assert restored.status_code == 200, restored.text
+
+        again = await create_backup(api, headers)
+
+        assert again["backup_id"] != created["backup_id"]
+
+    @pytest.mark.asyncio
     async def test_restore_of_unknown_backup_id_is_404(self, api, tmp_path, e2e_db):
         headers = await _setup_and_login(api, tmp_path)
         resp = await api.post(
@@ -165,8 +171,7 @@ class TestDelete:
         headers = await _setup_and_login(api, tmp_path)
         await _upload_and_wait(api, headers, model_name="Deletable Backup Benchy")
 
-        created = await api.post("/api/v1/backups", headers=headers)
-        backup_id = created.json()["backup_id"]
+        backup_id = (await create_backup(api, headers))["backup_id"]
 
         deleted = await api.delete(f"/api/v1/backups/{backup_id}", headers=headers)
         assert deleted.status_code == 200, deleted.text

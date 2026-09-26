@@ -6,7 +6,7 @@ import pytest
 from sqlmodel import select
 
 from app.core.errors import OperationError
-from app.db.models import AuditLog, VaultAuditMode
+from app.db.models import AuditLog, FileType, VaultAuditMode
 from app.modules.administration.vault_audit_policy import update_policy
 
 NOW = datetime(2026, 9, 6, 2, 30, tzinfo=UTC)
@@ -147,6 +147,63 @@ class TestVaultAuditPolicyControls:
             in delivery.context_json
         )
 
+    def test_the_cooldown_spaces_deliveries_the_session_already_flushed(
+        self,
+        db_session,
+        monkeypatch,
+        make_user,
+        make_audit_policy,
+        make_audit_run,
+        make_audit_finding,
+        make_system_config,
+        make_notification_channel,
+    ):
+        # Regression: the cooldown found its deliveries by what was still
+        # pending in the session (and by object id), so a flush, or a flushed
+        # object's address reused by a new delivery, skipped it silently.
+        import json
+
+        from app.core.time import utcnow
+        from app.db.models import NotificationDelivery, VaultAuditSeverity
+        from app.modules.administration import vault_audit_results
+        from app.modules.administration.vault_audit_results import record_success
+
+        enqueue = vault_audit_results.enqueue_storage_event
+
+        def enqueue_then_flush(session, *args, **kwargs):
+            created = enqueue(session, *args, **kwargs)
+            session.flush()
+            return created
+
+        monkeypatch.setattr(
+            vault_audit_results, "enqueue_storage_event", enqueue_then_flush
+        )
+        make_system_config(notifications_enabled=True)
+        channel = make_notification_channel(events=["storage_regression"])
+        user = make_user()
+        make_audit_policy(
+            user,
+            notification_threshold="critical",
+            notification_channels_json=json.dumps([channel.id]),
+            notification_cooldown_minutes=60,
+        )
+        for identifier in ("one", "two"):
+            run = make_audit_run(user, finished_at=utcnow())
+            make_audit_finding(
+                run,
+                code="blob_missing",
+                resource_identifier=identifier,
+                severity=VaultAuditSeverity.CRITICAL,
+            )
+            record_success(db_session, run)
+            db_session.commit()
+
+        rows = db_session.exec(
+            select(NotificationDelivery).order_by(NotificationDelivery.id)
+        ).all()
+        assert len(rows) == 2
+        assert rows[1].next_retry_at - rows[0].next_retry_at >= timedelta(minutes=60)
+
     def test_notification_policy_filters_regressions(
         self,
         db_session,
@@ -257,6 +314,74 @@ class TestVaultAuditPolicyControls:
             == 3
         )
 
+    def test_retention_never_touches_an_active_run(
+        self, db_session, make_user, make_audit_run, make_audit_finding
+    ):
+        from app.db.models import VaultAuditFinding, VaultAuditRunState
+        from app.modules.administration.vault_audit_observability import (
+            prune_details,
+        )
+
+        run = make_audit_run(
+            make_user(),
+            state=VaultAuditRunState.RUNNING,
+            finished_at=NOW - timedelta(days=200),
+        )
+        make_audit_finding(run, code="thumbnail_missing")
+
+        assert prune_details(db_session, now=NOW) == 0
+        assert len(db_session.exec(select(VaultAuditFinding)).all()) == 1
+
+    def test_metrics_export_only_bounded_labels(
+        self,
+        db_session,
+        make_user,
+        make_audit_run,
+        make_audit_policy,
+        make_audit_event,
+    ):
+        import json
+
+        from app.core.metrics import registry
+        from app.db.models import AuditLog
+        from app.modules.administration.vault_audit_observability import (
+            refresh_metrics,
+        )
+
+        user = make_user()
+        run = make_audit_run(user)
+        make_audit_policy(user, mode="quick", deferred_reason="maintenance")
+        # A reason outside the bounded set is reported as ``other``, never as a
+        # new label value.
+        make_audit_policy(user, mode="full", deferred_reason="novel_reason")
+        make_audit_event(run, event_type="storage_regression")
+        make_audit_event(run, event_type="not_a_storage_event")
+        for verified in (True, False, True):
+            db_session.add(
+                AuditLog(
+                    action="audit.auto_repair",
+                    resource_type="vault_audit",
+                    diff_json=json.dumps({"verified": verified}),
+                )
+            )
+        db_session.commit()
+
+        refresh_metrics(db_session)
+
+        def sample(name: str, **labels: str) -> float | None:
+            return registry.get_sample_value(name, labels)
+
+        assert sample("printstash_audit_deferred", reason="maintenance") == 1
+        assert sample("printstash_audit_deferred", reason="other") == 1
+        assert sample("printstash_audit_deferred", reason="novel_reason") is None
+        assert sample("printstash_audit_notifications", event="storage_regression") == 1
+        assert (
+            sample("printstash_audit_notifications", event="not_a_storage_event")
+            is None
+        )
+        assert sample("printstash_audit_repairs", result="verified") == 2
+        assert sample("printstash_audit_repairs", result="failed") == 1
+
     def test_failed_repair_is_recorded_safely(
         self,
         db_session,
@@ -273,14 +398,17 @@ class TestVaultAuditPolicyControls:
         from app.core.time import utcnow
         from app.db.models import VaultAuditEvent, VaultAuditFindingState
         from app.modules.administration.vault_audit_results import repair_safe_findings
-        from app.modules.ingestion import ingestion
+        from app.modules.derivatives import producers
 
         path = local_storage / "safe-derived-source.stl"
         path.parent.mkdir(parents=True, exist_ok=True)
         content = b"source remains intact"
         path.write_bytes(content)
         file = make_file(
-            make_model(), path=str(path), sha256=hashlib.sha256(content).hexdigest()
+            make_model(),
+            file_type=FileType.STL,
+            path=str(path),
+            sha256=hashlib.sha256(content).hexdigest(),
         )
         run = make_audit_run(
             make_user(),
@@ -294,13 +422,11 @@ class TestVaultAuditPolicyControls:
             details_json=f'{{"file_id":{file.id}}}',
         )
 
-        class BrokenParser:
-            def process(self, *args):
+        class BrokenRenderer:
+            def generate(self, *args):
                 raise ValueError("private-path-token-must-not-leak")
 
-        monkeypatch.setattr(
-            ingestion, "strategy_for_artifact", lambda _kind: BrokenParser()
-        )
+        monkeypatch.setattr(producers, "ThumbnailEngine", BrokenRenderer)
         repair_safe_findings(db_session, run)
         assert path.read_bytes() == content
         db_session.refresh(finding)

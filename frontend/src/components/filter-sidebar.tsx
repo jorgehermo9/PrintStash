@@ -34,6 +34,11 @@ interface CollectionNode {
   children: CollectionNode[];
 }
 
+interface BranchCounts {
+  models: number;
+  multipart: number;
+}
+
 export type LibraryViewMode = "organized" | "all" | "multipart" | "components";
 
 const LIBRARY_VIEWS: LibraryViewMode[] = ["organized", "all", "multipart", "components"];
@@ -150,6 +155,39 @@ function buildTree(cats: CollectionRead[]): CollectionNode[] {
   return roots;
 }
 
+/** Count a collection's whole branch, using API totals when outliner leaves are capped. */
+function collectionBadgeCounts(
+  roots: CollectionNode[],
+  modelsByCollection: ReadonlyMap<string, OutlinerModelRead[]>,
+  multipartByCollection: ReadonlyMap<string, MultipartModelListItem[]>,
+  visibleCollectionIds: ReadonlySet<number> | null,
+  visibleModelIds: ReadonlySet<number> | null,
+  visibleMultipartIds: ReadonlySet<number> | null,
+  useCatalogModelCounts: boolean,
+): Map<number, number> {
+  const counts = new Map<number, number>();
+  function countBranch(node: CollectionNode): BranchCounts {
+    let models = (modelsByCollection.get(node.cat.path) ?? []).filter(
+      (model) => !visibleModelIds || visibleModelIds.has(model.id),
+    ).length;
+    let multipart = (multipartByCollection.get(node.cat.path) ?? []).filter(
+      (item) => !visibleMultipartIds || visibleMultipartIds.has(item.id),
+    ).length;
+    for (const child of node.children) {
+      if (visibleCollectionIds && !visibleCollectionIds.has(child.cat.id)) continue;
+      const childCounts = countBranch(child);
+      models += childCounts.models;
+      multipart += childCounts.multipart;
+    }
+    counts.set(node.cat.id, (useCatalogModelCounts ? node.cat.model_count : models) + multipart);
+    return { models, multipart };
+  }
+  for (const root of roots) {
+    if (!visibleCollectionIds || visibleCollectionIds.has(root.cat.id)) countBranch(root);
+  }
+  return counts;
+}
+
 function DraggableModelLeaf({
   model,
   isDraggingThisModel,
@@ -247,8 +285,10 @@ function countDescendants(node: CollectionNode): number {
 
 function CollectionTreeRow({
   node,
+  badgeCounts,
   selected,
   onSelect,
+  onIntent,
   expanded,
   toggle,
   modelsByCollection,
@@ -260,8 +300,10 @@ function CollectionTreeRow({
   onDelete,
 }: {
   node: CollectionNode;
+  badgeCounts: ReadonlyMap<number, number>;
   selected: string | null;
   onSelect: (path: string | null) => void;
+  onIntent?: (path: string) => void;
   expanded: Set<string>;
   toggle: (path: string) => void;
   modelsByCollection: Map<string, OutlinerModelRead[]>;
@@ -419,6 +461,8 @@ function CollectionTreeRow({
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
+              onPointerEnter={() => onIntent?.(node.cat.path)}
+              onFocus={() => onIntent?.(node.cat.path)}
               onClick={() => onSelect(node.cat.path)}
               className="flex flex-1 min-w-0 items-center gap-1.5 text-left text-sm font-medium truncate"
               title={node.cat.name}
@@ -461,7 +505,7 @@ function CollectionTreeRow({
               </button>
             )}
             <span className="flex-shrink-0 min-w-[18px] rounded bg-muted px-1 py-0.5 text-center text-2xs font-medium text-muted-foreground">
-              {allModelLeaves.length + allMultipartLeaves.length}
+              {badgeCounts.get(node.cat.id) ?? 0}
             </span>
           </div>
         )}
@@ -471,8 +515,10 @@ function CollectionTreeRow({
               <CollectionTreeRow
                 key={child.cat.id}
                 node={child}
+                badgeCounts={badgeCounts}
                 selected={selected}
                 onSelect={onSelect}
+                onIntent={onIntent}
                 expanded={expanded}
                 toggle={toggle}
                 modelsByCollection={modelsByCollection}
@@ -599,6 +645,7 @@ export function FilterSidebarContent({
   selectedPrinterId,
   selectedPrinterPresence,
   onCollectionChange,
+  onCollectionIntent,
   onTagsChange,
   onPrinterChange,
   onPrinterPresenceChange,
@@ -735,6 +782,29 @@ export function FilterSidebarContent({
     }
     return grouped;
   }, [treeMultipartModels]);
+
+  const badgeCounts = useMemo(
+    () =>
+      collectionBadgeCounts(
+        tree,
+        modelsByCollection,
+        multipartByCollection,
+        visibleCollectionIds,
+        visibleModelIds,
+        visibleMultipartIds,
+        !treeFiltered && (libraryView === "organized" || libraryView === "all"),
+      ),
+    [
+      tree,
+      modelsByCollection,
+      multipartByCollection,
+      visibleCollectionIds,
+      visibleModelIds,
+      visibleMultipartIds,
+      treeFiltered,
+      libraryView,
+    ],
+  );
 
   const rootModels = useMemo(
     () => treeModels.filter((m) => !m.collection).sort((a, b) => a.name.localeCompare(b.name)),
@@ -945,7 +1015,7 @@ export function FilterSidebarContent({
               </button>
             </div>
             <div className="overflow-x-auto -mx-3 px-3">
-              <div className="min-w-max space-y-0.5 pr-2">
+              <div className="min-w-0 space-y-0.5 pr-2">
                 <DroppableAllModels
                   selected={selectedCollection === null}
                   onClick={() => onCollectionChange(null)}
@@ -970,8 +1040,10 @@ export function FilterSidebarContent({
                       <CollectionTreeRow
                         key={node.cat.id}
                         node={node}
+                        badgeCounts={badgeCounts}
                         selected={selectedCollection}
                         onSelect={onCollectionChange}
+                        onIntent={onCollectionIntent}
                         expanded={expanded}
                         toggle={toggleExpanded}
                         modelsByCollection={modelsByCollection}
@@ -1202,6 +1274,8 @@ export interface FilterSidebarProps {
   selectedPrinterId: number | null;
   selectedPrinterPresence: "any" | "none" | null;
   onCollectionChange: (path: string | null) => void;
+  /** Hover/focus on a folder: the parent may warm that folder's data. */
+  onCollectionIntent?: (path: string) => void;
   onTagsChange: (tags: string[]) => void;
   onPrinterChange: (printerId: number | null) => void;
   onPrinterPresenceChange: (presence: "any" | "none" | null) => void;

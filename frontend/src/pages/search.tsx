@@ -11,13 +11,10 @@ import {
   hasSearchFilters,
   searchSorts,
 } from "@/lib/search-filters";
-import { SearchModelPreview } from "@/components/search-evidence";
+import { SearchSubjectPreview } from "@/components/search-evidence";
 import { SearchImageInput } from "@/components/search-image-input";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { PageContainer } from "@/components/ui/page-container";
 import { PageHeader } from "@/components/ui/page-header";
 import {
   getSearchStatus,
@@ -166,27 +163,32 @@ function SearchContent() {
       (leg) => leg === "thumbnail" || leg === "multiview" || leg === "point_cloud",
     ) ?? false;
   return (
-    <PageContainer>
-      <PageHeader
-        actions={
-          <Button variant="outline" onClick={() => router.push("/")}>
-            <ArrowLeft className="h-4 w-4" aria-hidden />
-            {t("aiSearch.backToLibrary")}
-          </Button>
-        }
-        title={t("aiSearch.resultsTitle")}
-        description={
-          modelId
-            ? t("aiSearch.relatedModels")
-            : imageMode
-              ? t("aiSearch.searchByImage")
-              : q
-                ? t("aiSearch.resultsFor", { query: q })
-                : t("aiSearch.startSearch")
-        }
-      />
+    <div className="h-full overflow-y-auto bg-background pb-24 md:pb-0">
+      <div className="border-b border-border px-4 py-5 sm:px-6">
+        <PageHeader
+          actions={
+            <Button variant="outline" onClick={() => router.push("/")}>
+              <ArrowLeft className="h-4 w-4" aria-hidden />
+              {t("aiSearch.backToLibrary")}
+            </Button>
+          }
+          title={t("aiSearch.resultsTitle")}
+          description={
+            modelId
+              ? t("aiSearch.relatedModels")
+              : imageMode
+                ? t("aiSearch.searchByImage")
+                : q
+                  ? t("aiSearch.resultsFor", { query: q })
+                  : t("aiSearch.startSearch")
+          }
+        />
+      </div>
       {!imageMode && !modelId && (
-        <>
+        <section
+          aria-label={t("aiSearch.searchOptions")}
+          className="border-b border-border bg-muted/20 px-4 py-2 sm:px-6 sm:py-3"
+        >
           <SearchFilterControls
             key={q}
             filters={filters}
@@ -200,253 +202,242 @@ function SearchContent() {
               router.push(`/search?${updated}`);
             }}
           />
-          {wantsParse && (
-            <p role="status" className="mb-3 text-sm text-muted-foreground">
-              {t("aiSearch.parsing")}
-            </p>
-          )}
-          {parseFailed && (
-            <p role="status" className="mb-3 text-sm text-muted-foreground">
-              {t("aiSearch.parseFailed")}
-            </p>
-          )}
-        </>
-      )}
-      {imageMode && (
-        <SearchImageInput
-          image={image}
-          enabled={visualReady}
-          onChange={(file) => {
-            setImage(file);
-            setImageVersion((value) => value + 1);
-          }}
-        />
-      )}
-      {imageMode ? (
-        <Button variant="ghost" className="mb-4" onClick={() => router.push("/search")}>
-          {t("aiSearch.searchWithWords")}
-        </Button>
-      ) : (
-        visualReady && (
-          <Button variant="outline" className="mb-4" onClick={() => router.push("/search?image=1")}>
-            {t("aiSearch.searchByImage")}
-          </Button>
-        )
-      )}
-      {!imageMode && !modelId && (
-        <>
-          <details className="mb-4 rounded-lg border border-border">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              {t("aiSearch.searchOptions")}
-            </summary>
-            <div className="space-y-3 border-t border-border p-4">
-              {user && (
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  <SearchSavedViews
-                    userId={user.id}
-                    filters={{ ...filters, q, sort }}
-                    onSelect={(value) => router.push(`/search?${writeSearchFilters(value)}`)}
-                  />
-                  {preference.data && (
-                    <SearchPreferences userId={user.id} value={preference.data} />
-                  )}
-                </div>
-              )}
-              <div
-                className="mb-4 flex flex-wrap items-center gap-2"
-                aria-label={t("aiSearch.resultTypes")}
-              >
-                {subjectTypes.map((type) => (
-                  <Button
-                    key={type}
-                    size="sm"
-                    variant={types.includes(type) ? "secondary" : "outline"}
-                    aria-pressed={types.includes(type)}
-                    onClick={() => changeType(type)}
-                  >
-                    {t(`aiSearch.type.${type}`)}
-                  </Button>
-                ))}
-                <label className="ml-auto flex items-center gap-2 text-sm">
-                  {t("aiSearch.searchMode")}
-                  <select
-                    aria-label={t("aiSearch.searchMode")}
-                    value={mode}
-                    className="rounded-md border border-input bg-background p-2 text-sm"
-                    onChange={(event) => {
-                      const next = new URLSearchParams(params);
-                      next.set("mode", event.target.value);
-                      router.push(`/search?${next}`);
-                    }}
-                  >
-                    <option value="hybrid">{t("aiSearch.hybrid")}</option>
-                    <option value="lexical">{t("aiSearch.keywordOnly")}</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-          </details>
-        </>
-      )}
-      {status.data?.remote_hosts.length ? (
-        <p className="mb-3 text-sm text-muted-foreground">
-          {t("aiSearch.remoteDisclosure", { hosts: status.data.remote_hosts.join(", ") })}
-        </p>
-      ) : null}
-      {status.data?.backlog && (
-        <p role="status" className="mb-3 text-sm text-muted-foreground">
-          {t("aiSearch.backlog")}
-        </p>
-      )}
-      {pages.some((page) => page.degraded.length) && (
-        <p role="status" className="mb-3 rounded-md bg-warning/10 p-3 text-sm text-foreground">
-          {t("aiSearch.degraded")}
-        </p>
-      )}
-      {modelPending && (
-        <p role="status" className="mb-3 text-sm text-muted-foreground">
-          {t("aiSearch.modelPending")}
-        </p>
-      )}
-      {modelId ? null : imageMode ? (
-        !image && <EmptyState icon={Search} title={t("aiSearch.imagePrompt")} />
-      ) : !q.trim() && !filtered ? (
-        <EmptyState icon={Search} title={t("aiSearch.startSearch")} />
-      ) : null}
-      {(!!modelId || (imageMode ? !!image : !!q.trim() || filtered)) &&
-        (wantsParse ? null : results.isLoading ? (
-          <p role="status" className="py-8 text-sm text-muted-foreground">
-            {t("aiSearch.searching")}
-          </p>
-        ) : results.isError && !items.length ? (
-          <EmptyState
-            title={t(
-              results.error instanceof ApiError && results.error.code === "search_timeout"
-                ? "aiSearch.timeout"
-                : "aiSearch.loadError",
-            )}
-            action={<Button onClick={() => void results.refetch()}>{t("aiSearch.retry")}</Button>}
-          />
-        ) : items.length ? (
-          <Card className="overflow-hidden">
-            <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground sm:px-5">
-              <span role="status">{t("aiSearch.resultsShown", { count: items.length })}</span>
-              <div className="flex gap-1" role="group" aria-label={t("aiSearch.resultView")}>
-                <Button
-                  variant="ghost"
-                  className={view === "grid" ? "bg-accent text-accent-foreground" : undefined}
-                  size="icon"
-                  aria-label={t("aiSearch.gridView")}
-                  aria-pressed={view === "grid"}
-                  onClick={() => setView("grid")}
-                >
-                  <LayoutGrid className="h-4 w-4" aria-hidden />
-                </Button>
-                <Button
-                  variant="ghost"
-                  className={view === "list" ? "bg-accent text-accent-foreground" : undefined}
-                  size="icon"
-                  aria-label={t("aiSearch.listView")}
-                  aria-pressed={view === "list"}
-                  onClick={() => setView("list")}
-                >
-                  <List className="h-4 w-4" aria-hidden />
-                </Button>
-              </div>
-            </div>
-            <ul
-              className={
-                view === "grid"
-                  ? "grid grid-cols-2 gap-x-4 gap-y-6 p-4 lg:grid-cols-3 xl:grid-cols-4 sm:p-5"
-                  : "divide-y divide-border"
-              }
+          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 sm:mt-3">
+            <div
+              className="flex flex-wrap items-center gap-1"
+              role="group"
+              aria-label={t("aiSearch.resultTypes")}
             >
-              {items.map((item) => (
-                <li
-                  key={`${item.subject_type}:${item.subject_id}`}
-                  className={view === "grid" ? "min-w-0" : "flex gap-3 px-4 py-4 sm:px-5"}
+              <span className="sr-only mr-2 text-xs font-medium text-muted-foreground sm:not-sr-only">
+                {t("aiSearch.resultTypes")}
+              </span>
+              {subjectTypes.map((type) => (
+                <Button
+                  key={type}
+                  size="sm"
+                  variant="ghost"
+                  className={`px-2 text-xs sm:px-3 sm:text-sm ${types.includes(type) ? "bg-accent text-accent-foreground" : ""}`}
+                  aria-pressed={types.includes(type)}
+                  onClick={() => changeType(type)}
                 >
-                  {view === "list" && <SearchModelPreview path={item.model?.thumbnail_url} />}
-                  <div className="min-w-0 flex-1">
-                    <div
+                  {t(`aiSearch.type.${type}`)}
+                </Button>
+              ))}
+            </div>
+            {user && (
+              <div className="flex flex-wrap items-center gap-1 lg:ml-auto">
+                <SearchSavedViews
+                  userId={user.id}
+                  filters={{ ...filters, q, sort }}
+                  onSelect={(value) => router.push(`/search?${writeSearchFilters(value)}`)}
+                />
+                {preference.data && <SearchPreferences userId={user.id} value={preference.data} />}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+      <div className="px-4 py-4 sm:px-6">
+        {imageMode && (
+          <SearchImageInput
+            image={image}
+            enabled={visualReady}
+            onChange={(file) => {
+              setImage(file);
+              setImageVersion((value) => value + 1);
+            }}
+          />
+        )}
+        {imageMode ? (
+          <Button variant="ghost" className="mb-4" onClick={() => router.push("/search")}>
+            {t("aiSearch.searchWithWords")}
+          </Button>
+        ) : (
+          visualReady && (
+            <Button
+              variant="outline"
+              className="mb-4"
+              onClick={() => router.push("/search?image=1")}
+            >
+              {t("aiSearch.searchByImage")}
+            </Button>
+          )
+        )}
+        {wantsParse && (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            {t("aiSearch.parsing")}
+          </p>
+        )}
+        {parseFailed && (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            {t("aiSearch.parseFailed")}
+          </p>
+        )}
+        {status.data?.remote_hosts.length ? (
+          <p className="mb-3 text-sm text-muted-foreground">
+            {t("aiSearch.remoteDisclosure", { hosts: status.data.remote_hosts.join(", ") })}
+          </p>
+        ) : null}
+        {status.data?.backlog && (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            {t("aiSearch.backlog")}
+          </p>
+        )}
+        {pages.some((page) => page.degraded.length) && (
+          <p role="status" className="mb-3 rounded-md bg-warning/10 p-3 text-sm text-foreground">
+            {t("aiSearch.degraded")}
+          </p>
+        )}
+        {modelPending && (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            {t("aiSearch.modelPending")}
+          </p>
+        )}
+        {modelId ? null : imageMode ? (
+          !image && <EmptyState icon={Search} title={t("aiSearch.imagePrompt")} />
+        ) : !q.trim() && !filtered ? (
+          <EmptyState icon={Search} title={t("aiSearch.startSearch")} />
+        ) : null}
+        {(!!modelId || (imageMode ? !!image : !!q.trim() || filtered)) &&
+          (wantsParse ? null : results.isLoading ? (
+            <p role="status" className="py-8 text-sm text-muted-foreground">
+              {t("aiSearch.searching")}
+            </p>
+          ) : results.isError && !items.length ? (
+            <EmptyState
+              title={t(
+                results.error instanceof ApiError && results.error.code === "search_timeout"
+                  ? "aiSearch.timeout"
+                  : "aiSearch.loadError",
+              )}
+              action={<Button onClick={() => void results.refetch()}>{t("aiSearch.retry")}</Button>}
+            />
+          ) : items.length ? (
+            <section aria-label={t("aiSearch.resultsTitle")}>
+              <div className="mb-4 flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                <span role="status">{t("aiSearch.resultsShown", { count: items.length })}</span>
+                <div className="flex gap-1" role="group" aria-label={t("aiSearch.resultView")}>
+                  <Button
+                    variant="ghost"
+                    className={view === "grid" ? "bg-accent text-accent-foreground" : undefined}
+                    size="icon-sm"
+                    aria-label={t("aiSearch.gridView")}
+                    aria-pressed={view === "grid"}
+                    onClick={() => setView("grid")}
+                  >
+                    <LayoutGrid className="h-4 w-4" aria-hidden />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className={view === "list" ? "bg-accent text-accent-foreground" : undefined}
+                    size="icon-sm"
+                    aria-label={t("aiSearch.listView")}
+                    aria-pressed={view === "list"}
+                    onClick={() => setView("list")}
+                  >
+                    <List className="h-4 w-4" aria-hidden />
+                  </Button>
+                </div>
+              </div>
+              <ul
+                aria-label={t("aiSearch.resultsTitle")}
+                className={
+                  view === "grid"
+                    ? "grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(280px,1fr))]"
+                    : "divide-y divide-border border-y border-border"
+                }
+              >
+                {items.map((item) => (
+                  <li
+                    key={`${item.subject_type}:${item.subject_id}`}
+                    className={
+                      view === "grid"
+                        ? "min-w-0 overflow-hidden rounded-md border border-border bg-card transition-colors duration-press hover:border-primary"
+                        : "min-w-0"
+                    }
+                  >
+                    <Link
+                      href={item.href}
+                      aria-label={item.name}
+                      aria-describedby={`search-result-type-${item.subject_type}-${item.subject_id}`}
                       className={
-                        view === "grid" ? "space-y-2" : "flex flex-wrap items-center gap-2"
+                        view === "grid"
+                          ? "group block h-full p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                          : "group flex min-w-0 items-center gap-3 px-2 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       }
                     >
-                      <Link
-                        href={item.href}
-                        className="block rounded-md hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        {view === "grid" && (
-                          <SearchModelPreview path={item.model?.thumbnail_url} large />
-                        )}
-                        <h2
-                          className={
-                            view === "grid"
-                              ? "mt-3 break-words text-sm font-semibold"
-                              : "break-words text-base font-semibold"
-                          }
-                        >
+                      <SearchSubjectPreview
+                        path={item.model?.thumbnail_url}
+                        subjectType={item.subject_type}
+                        large={view === "grid"}
+                      />
+                      <div className={view === "grid" ? "min-w-0 px-1 pb-1 pt-3" : "min-w-0"}>
+                        <h2 className="break-words text-sm font-semibold leading-snug text-foreground group-hover:text-primary sm:text-base">
                           {item.name}
                         </h2>
-                      </Link>
-                      <Badge variant="outline">{t(`aiSearch.type.${item.subject_type}`)}</Badge>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Card>
-        ) : (
-          <EmptyState
-            icon={Search}
-            title={t(
-              first?.outcome === "no_strong_matches"
-                ? "aiSearch.noStrongMatches"
-                : "aiSearch.noResults",
-            )}
-            description={t(
-              modelId
-                ? "aiSearch.tryRelatedAgain"
-                : imageMode
-                  ? "aiSearch.tryAnotherImage"
-                  : "aiSearch.tryAnotherQuery",
-            )}
-            action={
-              modelId ? (
-                <Button onClick={() => void results.refetch()}>{t("aiSearch.retry")}</Button>
-              ) : undefined
-            }
-          />
-        ))}
-      {results.isFetchNextPageError && (
-        <p role="alert" className="mt-4 text-sm text-destructive">
-          {t(cursorExpired ? "aiSearch.cursorExpired" : "aiSearch.loadError")}
-        </p>
-      )}
-      {cursorExpired ? (
-        <Button
-          className="mt-4"
-          variant="outline"
-          onClick={() => void queryClient.resetQueries({ queryKey, exact: true })}
-        >
-          {t("aiSearch.restartSearch")}
-        </Button>
-      ) : (
-        results.hasNextPage && (
+                        <p
+                          id={`search-result-type-${item.subject_type}-${item.subject_id}`}
+                          className="mt-1 text-xs text-muted-foreground"
+                        >
+                          {t(`aiSearch.type.${item.subject_type}`)}
+                        </p>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : (
+            <EmptyState
+              icon={Search}
+              title={t(
+                first?.outcome === "no_strong_matches"
+                  ? "aiSearch.noStrongMatches"
+                  : "aiSearch.noResults",
+              )}
+              description={t(
+                modelId
+                  ? "aiSearch.tryRelatedAgain"
+                  : imageMode
+                    ? "aiSearch.tryAnotherImage"
+                    : "aiSearch.tryAnotherQuery",
+              )}
+              action={
+                modelId ? (
+                  <Button onClick={() => void results.refetch()}>{t("aiSearch.retry")}</Button>
+                ) : undefined
+              }
+            />
+          ))}
+        {results.isFetchNextPageError && (
+          <p role="alert" className="mt-4 text-sm text-destructive">
+            {t(cursorExpired ? "aiSearch.cursorExpired" : "aiSearch.loadError")}
+          </p>
+        )}
+        {cursorExpired ? (
           <Button
             className="mt-4"
             variant="outline"
-            loading={results.isFetchingNextPage}
-            onClick={() => void results.fetchNextPage()}
+            onClick={() => void queryClient.resetQueries({ queryKey, exact: true })}
           >
-            {t("aiSearch.loadMore")}
+            {t("aiSearch.restartSearch")}
           </Button>
-        )
-      )}
-      {pages.some((page) => page.truncated) && (
-        <p className="mt-4 text-xs text-muted-foreground">{t("aiSearch.boundedResults")}</p>
-      )}
-    </PageContainer>
+        ) : (
+          results.hasNextPage && (
+            <Button
+              className="mt-4"
+              variant="outline"
+              loading={results.isFetchingNextPage}
+              onClick={() => void results.fetchNextPage()}
+            >
+              {t("aiSearch.loadMore")}
+            </Button>
+          )
+        )}
+        {pages.some((page) => page.truncated) && (
+          <p className="mt-4 text-xs text-muted-foreground">{t("aiSearch.boundedResults")}</p>
+        )}
+      </div>
+    </div>
   );
 }

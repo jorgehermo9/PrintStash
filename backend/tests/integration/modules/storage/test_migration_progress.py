@@ -59,7 +59,9 @@ class TestTransition:
             transition(db_session, run, "active")
 
         assert run.state == "planned"
-        assert [row.model_dump() for row in db_session.exec(audit_query).all()] == before
+        assert [
+            row.model_dump() for row in db_session.exec(audit_query).all()
+        ] == before
 
 
 class TestProject:

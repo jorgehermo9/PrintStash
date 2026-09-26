@@ -6,6 +6,7 @@ import { Input, inputClasses } from "@/components/ui/input";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { Localized } from "@/components/ui/localized";
 import { StorageProviderPicker, defaultProviderValues } from "@/components/storage-provider-picker";
+import { Skeleton } from "@/components/ui/skeleton";
 import { getStorageProviders } from "@/lib/api/config";
 import { listBackupSources, type BackupMeta } from "@/lib/api/backup";
 import {
@@ -418,9 +419,21 @@ export function VaultMigrationPanel() {
           </Button>
         </div>
         {loading ? (
-          <p role="status" className="p-4 text-sm text-muted-foreground">
-            {t("migration.loading")}
-          </p>
+          <div role="status" aria-label={t("migration.loading")} className="space-y-4 p-4 sm:p-5">
+            <Skeleton className="h-5 w-40" />
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[0, 1, 2, 3].map((item) => (
+                <Skeleton key={item} className="h-12 w-full" />
+              ))}
+            </div>
+            <Skeleton className="h-5 w-28" />
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[0, 1].map((item) => (
+                <Skeleton key={item} className="h-16 w-full" />
+              ))}
+            </div>
+            <span className="sr-only">{t("migration.loading")}</span>
+          </div>
         ) : (
           <>
             {error && (

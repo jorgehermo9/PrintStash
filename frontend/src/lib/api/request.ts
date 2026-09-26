@@ -1,6 +1,7 @@
 import { emitUnauthorized, getStoredToken } from "@/lib/auth";
 import { ApiError } from "@/lib/errors";
 import { queryClient, invalidateQueriesForPath } from "@/lib/query-client";
+import type { DerivativeState } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const WS_BASE = import.meta.env.VITE_WS_URL || "";
@@ -64,6 +65,36 @@ export async function getAuthenticatedText(path: string, signal?: AbortSignal): 
   const res = await fetchArtifact(path, signal);
   if (!res.ok) throw await parseError(res);
   return res.text();
+}
+
+/**
+ * A resource served from a derivative: its text once derived, or the
+ * derivative's state while it is not (the server answers 202, never a body
+ * that could be mistaken for the resource).
+ */
+export type DerivedText = { ready: true; text: string } | { ready: false; state: DerivativeState };
+
+const DERIVATIVE_STATES: readonly DerivativeState[] = [
+  "pending",
+  "queued",
+  "running",
+  "ready",
+  "skipped",
+  "failed",
+  "cancelled",
+];
+
+export async function getDerivedText(path: string, signal?: AbortSignal): Promise<DerivedText> {
+  const res = await fetchArtifact(path, signal);
+  if (!res.ok) throw await parseError(res);
+  if (res.status === 202) {
+    // The 202 body is `{"state": "<derivative state>"}`, written by the server.
+    const body: { state?: unknown } = await res.json();
+    const state = DERIVATIVE_STATES.find((known) => known === body.state);
+    if (state === undefined) throw new Error("derivative_state_invalid");
+    return { ready: false, state };
+  }
+  return { ready: true, text: await res.text() };
 }
 
 const SAFE_DOWNLOAD_FALLBACK = "download";

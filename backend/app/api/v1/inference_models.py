@@ -10,8 +10,9 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.core.errors import ErrorKind, OperationError
 from app.core.security import get_current_user, require_auth, require_superuser
-from app.db.models import User
+from app.db.models import JobKind, User
 from app.db.session import get_session, get_session_factory
+from app.modules.inference import jobs as inference_jobs
 from app.modules.inference import model_cache, model_registry
 from app.modules.inference.local import LocalEmbeddingProvider
 from app.modules.inference.manifest import (
@@ -20,7 +21,6 @@ from app.modules.inference.manifest import (
     TextModelManifest,
 )
 from app.modules.inference.sparse import LocalSparseProvider
-from app.runtime import model_acquisition
 from app.schemas.inference_models import (
     DownloadRead,
     InferenceModelRead,
@@ -105,17 +105,37 @@ def download_model(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    from app.modules.work import nudge
+
     try:
-        return DownloadRead(job_id=model_acquisition.start(session, user, key))
+        job_id = inference_jobs.request(session, user, key)
     except EmbeddingError as exc:
+        session.rollback()
         raise OperationError(exc.code, kind=ErrorKind.INVALID) from None
+    except OperationError:
+        session.rollback()
+        raise
+    session.commit()
+    nudge(JobKind.INFERENCE_MODEL_DOWNLOAD)
+    return DownloadRead(job_id=job_id)
 
 
 @router.post(
     "/downloads/{job_id}/cancel", status_code=204, dependencies=[Depends(require_auth)]
 )
-def cancel_download(job_id: str):
-    model_acquisition.cancel(job_id)
+def cancel_download(job_id: str, user: User = Depends(get_current_user)):
+    from app.modules.work import service as work_service
+    from app.modules.work.jobs import jobs
+
+    status = jobs.get(job_id)
+    if (
+        status is None
+        or not work_service.visible_to(status, user)
+        or status.kind != JobKind.INFERENCE_MODEL_DOWNLOAD
+        or status.terminal
+    ):
+        raise OperationError("embedding_download_not_running", kind=ErrorKind.NOT_FOUND)
+    work_service.cancel(job_id, actor=user)
     return Response(status_code=204)
 
 

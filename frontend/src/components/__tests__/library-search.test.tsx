@@ -116,7 +116,7 @@ describe("LibrarySearch", () => {
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
-  it("opens AI results only through the labeled action", async () => {
+  it("opens AI results from the search bar", async () => {
     const user = userEvent.setup();
     searchBox({
       routes: {
@@ -124,27 +124,85 @@ describe("LibrarySearch", () => {
       },
     });
     await user.type(screen.getByRole("searchbox"), "small boat");
-    await user.click(screen.getByRole("button", { name: "Search with AI" }));
+    const ai = await screen.findByRole("button", { name: "Search with AI" });
+    expect(ai).toHaveAttribute("aria-pressed", "false");
+    expect(ai.textContent).toBe("");
+    await user.click(ai);
     expect(screen.getByTestId("location")).toHaveTextContent("/search?q=small+boat&parse=1");
+    expect(screen.getByRole("button", { name: "Turn off AI search" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
-  it("shows AI only when the active capability is usable", async () => {
+  it("shows the AI control when search is enabled before a query", async () => {
     searchBox({
       routes: {
         "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: true })),
       },
     });
-    await userEvent.setup().type(screen.getByRole("searchbox"), "bracket");
-    expect(await screen.findByRole("button", { name: "Search with AI" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Enter a search to use AI" })).toBeDisabled();
+    expect(screen.getByRole("searchbox")).toHaveValue("");
   });
-  it("hides AI while an index is unavailable", async () => {
-    const app = searchBox({
+  it("shows unavailable AI without allowing an AI search", async () => {
+    searchBox({
       routes: {
         "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: false })),
       },
     });
-    await waitFor(() => expect(app.requests()).toHaveLength(1));
     await userEvent.setup().type(screen.getByRole("searchbox"), "bracket");
+    expect(
+      await screen.findByRole("button", { name: "AI search is getting ready" }),
+    ).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Search with AI" })).toBeNull();
+  });
+  it("hides the AI control when AI search is disabled", async () => {
+    searchBox();
+    await userEvent.setup().type(screen.getByRole("searchbox"), "bracket");
+    expect(screen.queryByRole("button", { name: /AI search|Search with AI/ })).toBeNull();
+  });
+  it("switches active AI results to keyword results", async () => {
+    const user = userEvent.setup();
+    searchBox({
+      at: "/search?q=bracket",
+      routes: {
+        "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: true })),
+      },
+    });
+    const ai = await screen.findByRole("button", { name: "Turn off AI search" });
+    expect(ai).toHaveAttribute("aria-pressed", "true");
+    await user.click(ai);
+    expect(screen.getByTestId("location")).toHaveTextContent("/search?q=bracket&mode=lexical");
+    expect(screen.getByRole("button", { name: "Search with AI" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+  it("switches keyword results back to AI", async () => {
+    const user = userEvent.setup();
+    searchBox({
+      at: "/search?q=bracket&mode=lexical",
+      routes: {
+        "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: true })),
+      },
+    });
+    await user.click(await screen.findByRole("button", { name: "Search with AI" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("/search?q=bracket&parse=1");
+    expect(screen.getByRole("button", { name: "Turn off AI search" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+  it("preserves keyword mode when submitting another query", async () => {
+    const user = userEvent.setup();
+    searchBox({
+      at: "/search?q=bracket&mode=lexical",
+      routes: {
+        "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: true })),
+      },
+    });
+    const input = screen.getByRole("searchbox");
+    await user.type(input, " boat{Enter}");
+    expect(screen.getByTestId("location")).toHaveTextContent("/search?q=bracket+boat&mode=lexical");
   });
   it("keeps keyboard focus through suggestions", async () => {
     const user = userEvent.setup();
@@ -192,9 +250,18 @@ describe("LibrarySearch", () => {
   });
   it("supports Spanish search controls", async () => {
     const user = userEvent.setup();
-    searchBox({ locale: "es" });
+    searchBox({
+      locale: "es",
+      routes: {
+        "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: true })),
+      },
+    });
     await user.type(screen.getByRole("searchbox", { name: "Buscar en la biblioteca" }), "soporte");
     expect(await screen.findByText("Coincidencias por palabras")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Buscar con IA" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
     expect(screen.getByRole("button", { name: "Ver todos los resultados" })).toBeVisible();
   });
   it("reports unavailable suggestions with a recovery action", async () => {

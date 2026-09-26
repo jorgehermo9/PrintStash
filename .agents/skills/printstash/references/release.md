@@ -24,6 +24,9 @@ sweep). This file is the ordered checklist that ties it together.
       `CHANGELOG[0]` entry to `frontend/src/lib/changelog.ts` (its own test,
       `changelog.test.ts`, checks this against `package.json` and fails CI on
       its own if skipped) — one commit: `chore(release): bump to X.Y.Z`.
+- [ ] Bump the app-store manifests under `catalogues/` to the new version in
+      the same commit (`tests/repo/test_catalogue_manifests.py` fails until
+      they match). The stores themselves are updated after publishing (below).
 - [ ] Promote the accumulated `CHANGELOG.md` `## Unreleased` contents to
       `## X.Y.Z`, restore an empty `## Unreleased`, and verify the entry matches
       the condensed in-app changelog (format in
@@ -54,6 +57,25 @@ sweep). This file is the ordered checklist that ties it together.
       `git tag vX.Y.Z && git push origin vX.Y.Z`. CI publishes the GHCR image
       and the tag guard checks the version triple.
 - [ ] `gh release create vX.Y.Z` with the format below.
+- [ ] Update the app stores, following each store's section of
+      `catalogues/README.md` (it is the source of truth for paths, pinning and
+      per-store checks):
+      - Wait for the image: `docker buildx imagetools inspect
+        ghcr.io/xiao-villamor/printstash:X.Y.Z` lists `linux/amd64` and
+        `linux/arm64`; note the digest for Umbrel.
+      - **Confirm with the maintainer before opening any store PR or pushing to
+        the Runtipi store.** They are public actions in other projects'
+        repositories.
+      - Umbrel: a PR to `getumbrel/umbrel-apps`, run through that repository's
+        own `umbrel-update-app` and `umbrel-test-app` skills.
+      - CasaOS / ZimaOS: a PR to `IceWhaleTech/CasaOS-AppStore`, validated with
+        its `./scripts/build_dist.sh`.
+      - Runtipi: push the updated app to the PrintStash Runtipi app store
+        (`xiao-villamor/printstash-runtipi`) with `tipi_version` incremented.
+      - Unraid: nothing to do; Community Applications re-reads the template.
+      - Link each store PR from the GitHub release notes, and record anything a
+        store reviewer changed (for example a reassigned port) back in
+        `catalogues/`.
 - [ ] Announce in the public roadmap discussion. Changelog says what's
       protected; never quotes private `reports/` analysis.
 - [ ] Update the "Where we are" block in `SKILL.md` (this skill).

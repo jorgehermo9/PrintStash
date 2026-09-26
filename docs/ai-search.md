@@ -310,8 +310,9 @@ libraries and atomically publish the complete model. The cancellation endpoint
 is `POST /api/v1/inference/models/downloads/{job_id}/cancel`. Startup never
 fetches weights. Failed/cancelled installs leave existing versions intact.
 
-Mount a writable model volume at `VAULT_EMBEDDING_CACHE_DIR` (default
-`/data/ai-models`). `VAULT_EMBEDDING_CACHE_MAX_BYTES` defaults to 4 GiB;
+Models are stored in `/data/ai-models`, on the same `/data` volume as the rest of
+PrintStash, so they survive image updates; set `VAULT_EMBEDDING_CACHE_DIR` to
+keep them elsewhere. `VAULT_EMBEDDING_CACHE_MAX_BYTES` defaults to 4 GiB;
 `VAULT_EMBEDDING_DOWNLOAD_ENABLED` is off by default. An explicitly configured
 HTTPS mirror uses `VAULT_EMBEDDING_MIRROR_URL`; all redirect origins must remain
 within the registry/CDN/mirror policy. Model acquisition reserves physical disk

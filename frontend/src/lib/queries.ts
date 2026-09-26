@@ -1,8 +1,16 @@
-import { createContext, useContext } from "react";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { createContext, useContext, useMemo } from "react";
+import {
+  infiniteQueryOptions,
+  keepPreviousData,
+  queryOptions,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { InfiniteData, QueryKey } from "@tanstack/react-query";
 
 import {
+  getCollectionReadme,
   getPrintStatistics,
   getDashboard,
   getFleetSummary,
@@ -71,6 +79,7 @@ import type {
  * implementation instead of intercepting this module's imports.
  */
 export const defaultQueryApi = {
+  getCollectionReadme,
   getDashboard,
   getFleetSummary,
   getModelFacets,
@@ -108,6 +117,25 @@ export function useCollections() {
   return useQuery<CollectionRead[]>({
     queryKey: queryKeys.collections,
     queryFn: () => api.listCollections({ fresh: true }),
+  });
+}
+
+function collectionReadmeOptions(api: QueryApi, collectionId: number) {
+  return queryOptions<string | null>({
+    queryKey: queryKeys.collectionReadme(collectionId),
+    queryFn: async () => (await api.getCollectionReadme(collectionId)).readme,
+  });
+}
+
+/**
+ * A folder's readme, cached per folder so revisiting one costs no request.
+ * Disable it for a folder whose `has_readme` is false — most have none.
+ */
+export function useCollectionReadme(collectionId: number, options?: { enabled?: boolean }) {
+  const api = useQueryApi();
+  return useQuery({
+    ...collectionReadmeOptions(api, collectionId),
+    enabled: options?.enabled ?? true,
   });
 }
 
@@ -201,15 +229,27 @@ export interface MultipartModelListFilters {
   offset?: number;
 }
 
+function multipartModelsOptions(api: QueryApi, filters?: MultipartModelListFilters) {
+  return queryOptions<MultipartModelListItem[]>({
+    queryKey: [...queryKeys.multipartModels, "list", filters ?? {}],
+    queryFn: () => api.listMultipartModels(filters),
+  });
+}
+
+/**
+ * Multipart list keyed by its filters. Like `useModelList`, it keeps the
+ * previous result on screen while a new folder or search loads, so switching
+ * folders never drops the grid back to its first-load skeleton.
+ */
 export function useMultipartModels(
   filters?: MultipartModelListFilters,
   options?: { enabled?: boolean },
 ) {
   const api = useQueryApi();
-  return useQuery<MultipartModelListItem[]>({
-    queryKey: [...queryKeys.multipartModels, "list", filters ?? {}],
-    queryFn: () => api.listMultipartModels(filters),
+  return useQuery({
+    ...multipartModelsOptions(api, filters),
     enabled: options?.enabled,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -299,13 +339,16 @@ export function useSpools(options?: { enabled?: boolean }) {
 export type ModelListFilters = Omit<ListModelsParams, "limit" | "offset">;
 
 /** Facet counts stay mounted while a changed filter set is recomputed. */
-export function useModelFacets(filters: ModelListFilters) {
-  const api = useQueryApi();
-  return useQuery<ModelFacetsRead>({
+function modelFacetsOptions(api: QueryApi, filters: ModelListFilters) {
+  return queryOptions<ModelFacetsRead>({
     queryKey: [...queryKeys.models, "facets", filters],
     queryFn: () => api.getModelFacets(filters),
-    placeholderData: keepPreviousData,
   });
+}
+
+export function useModelFacets(filters: ModelListFilters) {
+  const api = useQueryApi();
+  return useQuery({ ...modelFacetsOptions(api, filters), placeholderData: keepPreviousData });
 }
 
 /**
@@ -325,21 +368,19 @@ export function useModelFacets(filters: ModelListFilters) {
 /** Opaque page cursor as issued by the API; `null` requests the first page. */
 type ModelPageCursor = ModelPageRead["next_cursor"];
 
-export function useModelList(
+function modelListOptions(
+  api: QueryApi,
   filters: ModelListFilters,
   pageSize: number,
   sort: ModelSort,
-  enabled = true,
 ) {
-  const api = useQueryApi();
-  return useInfiniteQuery<
+  return infiniteQueryOptions<
     ModelPageRead,
     Error,
     InfiniteData<ModelPageRead>,
     QueryKey,
     ModelPageCursor
   >({
-    enabled,
     queryKey: [...queryKeys.models, "list", filters, sort],
     queryFn: ({ pageParam }) =>
       api.listModelPage({
@@ -350,8 +391,45 @@ export function useModelList(
       }),
     initialPageParam: null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+}
+
+export function useModelList(
+  filters: ModelListFilters,
+  pageSize: number,
+  sort: ModelSort,
+  enabled = true,
+) {
+  const api = useQueryApi();
+  return useInfiniteQuery({
+    ...modelListOptions(api, filters, pageSize, sort),
+    enabled,
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * Warms the cache for a view the user is about to open (a folder under the
+ * pointer), so the click lands on data that is already there. Each warmer takes
+ * the same arguments as its hook and so fills exactly the entry the hook reads;
+ * data still fresh under `staleTime` is not refetched.
+ */
+export function useLibraryPrefetch() {
+  const api = useQueryApi();
+  const client = useQueryClient();
+  return useMemo(
+    () => ({
+      modelList: (filters: ModelListFilters, pageSize: number, sort: ModelSort) =>
+        client.prefetchInfiniteQuery(modelListOptions(api, filters, pageSize, sort)),
+      multipartModels: (filters?: MultipartModelListFilters) =>
+        client.prefetchQuery(multipartModelsOptions(api, filters)),
+      modelFacets: (filters: ModelListFilters) =>
+        client.prefetchQuery(modelFacetsOptions(api, filters)),
+      collectionReadme: (collectionId: number) =>
+        client.prefetchQuery(collectionReadmeOptions(api, collectionId)),
+    }),
+    [api, client],
+  );
 }
 
 /**

@@ -235,6 +235,27 @@ def postgres_url() -> str:
     return _resolve("postgres", POSTGRES_RESOURCE, _start_postgres)
 
 
+def fresh_postgres_database(prefix: str) -> str:
+    """Create an empty database on the run's server and return its URL.
+
+    For a test that needs a whole vault of its own (every table, every
+    process), not the shared server's default database.
+    """
+    from uuid import uuid4
+
+    from sqlalchemy import create_engine, make_url
+
+    from app.db.url import normalize_database_url
+
+    server = make_url(normalize_database_url(postgres_url()))
+    name = f"{prefix}_{uuid4().hex[:12]}"
+    admin = create_engine(server, isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        connection.exec_driver_sql(f'CREATE DATABASE "{name}"')
+    admin.dispose()
+    return server.set(database=name).render_as_string(hide_password=False)
+
+
 def pgvector_url() -> str:
     """Real optional pgvector capability, independent of plain PostgreSQL tests."""
 

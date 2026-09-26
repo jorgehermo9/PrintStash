@@ -366,7 +366,9 @@ class TestApproveGcPlan:
             namespace="backups",
         )
         monkeypatch.setattr(gc_planner, "_active_provider_ref", lambda: "1" * 64)
-        monkeypatch.setattr(backup_catalogue, "list_backup_sources", lambda: [candidate])
+        monkeypatch.setattr(
+            backup_catalogue, "list_backup_sources", lambda: [candidate]
+        )
         target = (
             backup_targets._BackupS3Target(None, "backups", "signature", "2" * 64)
             if configured
@@ -439,7 +441,9 @@ class TestApproveGcPlan:
         monkeypatch.setattr(
             backup_targets,
             "_get_backup_s3_target",
-            lambda: backup_targets._BackupS3Target(None, "backups", "signature", valid_ref, ""),
+            lambda: backup_targets._BackupS3Target(
+                None, "backups", "signature", valid_ref, ""
+            ),
         )
         monkeypatch.setattr(
             backup_verification,
@@ -478,7 +482,9 @@ class TestApproveGcPlan:
             namespace="backups",
         )
         monkeypatch.setattr(gc_planner, "_active_provider_ref", lambda: "1" * 64)
-        monkeypatch.setattr(backup_catalogue, "list_backup_sources", lambda: [candidate])
+        monkeypatch.setattr(
+            backup_catalogue, "list_backup_sources", lambda: [candidate]
+        )
         monkeypatch.setattr(
             backup_verification,
             "verify_backup",
@@ -704,7 +710,9 @@ class TestFinalizeGcPlan:
             source_ref="source-ref",
             namespace="backups",
         )
-        verification = backup_contracts.BackupVerification("backup", True, True, "3", 1, [])
+        verification = backup_contracts.BackupVerification(
+            "backup", True, True, "3", 1, []
+        )
         monkeypatch.setattr(backup_targets, "_get_backup_s3_target", lambda: target)
         monkeypatch.setattr(backup_catalogue, "list_backup_sources", lambda: [meta])
         monkeypatch.setattr(
@@ -1012,7 +1020,9 @@ class TestBackupReverification:
         monkeypatch.setattr(
             backup_targets,
             "_get_backup_s3_target",
-            lambda: backup_targets._BackupS3Target(None, "backups", "signature", "e" * 64, ""),
+            lambda: backup_targets._BackupS3Target(
+                None, "backups", "signature", "e" * 64, ""
+            ),
         )
         monkeypatch.setattr(
             backup_verification,
@@ -1260,7 +1270,9 @@ class TestOpenDalS3Witness:
             backup_destination, "destination_for_ownership", lambda _: destination
         )
         monkeypatch.setattr(backup_catalogue, "list_backup_sources", lambda: [meta])
-        verification = backup_contracts.BackupVerification("archive", True, True, "3", 1, [])
+        verification = backup_contracts.BackupVerification(
+            "archive", True, True, "3", 1, []
+        )
         calls = []
 
         def verify(backup_id, *, source_ref):

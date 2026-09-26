@@ -307,7 +307,7 @@ async function pollScanJob(
   while (Date.now() < deadline) {
     const job = await jobStatus(jobId);
     if (job.state === "completed") return;
-    if (job.state === "failed") {
+    if (job.state === "failed" || job.state === "cancelled") {
       throw new Error(job.error || "scan_failed");
     }
     await new Promise((r) => setTimeout(r, 1000));

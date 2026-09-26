@@ -80,7 +80,8 @@ class TestExtractEmbedded3mfThumbnail:
             "app.modules.media.mesh_processing._MAX_3MF_THUMBNAIL_BYTES", 1_000
         )
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing._MAX_3MF_THUMBNAIL_AGGREGATE_BYTES", 1_100
+            "app.modules.media.mesh_processing._MAX_3MF_THUMBNAIL_AGGREGATE_BYTES",
+            1_100,
         )
         path = _make_3mf(
             tmp_path,
@@ -121,7 +122,9 @@ class TestExtractEmbedded3mfThumbnail:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         p = _make_3mf(tmp_path, {"Metadata/thumbnail.png": _PNG_BIG})
-        monkeypatch.setattr("app.modules.media.mesh_processing._MAX_3MF_THUMBNAIL_BYTES", 64)
+        monkeypatch.setattr(
+            "app.modules.media.mesh_processing._MAX_3MF_THUMBNAIL_BYTES", 64
+        )
 
         original_read = zipfile.ZipFile.read
 

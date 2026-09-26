@@ -21,6 +21,19 @@ function setup(runs: VaultMigrationRun[] = [], routes: RouteTable = {}) {
   });
 }
 describe("VaultMigrationPanel", () => {
+  it("reserves the destination layout while migrations load", async () => {
+    let finish: (response: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+    setup([], { "GET /api/v1/storage/migrations": () => pending });
+
+    expect(screen.getByRole("status", { name: "Loading migrations…" })).toBeVisible();
+    finish(json([]));
+    expect(await screen.findByRole("heading", { name: "Destination storage" })).toBeVisible();
+    expect(screen.queryByRole("status", { name: "Loading migrations…" })).toBeNull();
+  });
+
   it("requires a backup before preflight", async () => {
     setup();
     expect(await screen.findByRole("button", { name: "Check migration plan" })).toBeDisabled();

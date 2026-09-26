@@ -46,6 +46,10 @@ function thrownMessage(cause: unknown): string {
   return "Unknown error";
 }
 
+/** `fetch` rejection messages: Chromium, Firefox, WebKit, then Node/undici. */
+const FETCH_FAILURE =
+  /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed)$/;
+
 /**
  * Parse a caught error value into an ApiError.
  * Handles the message format produced by ``handleResponse`` and ``expectOk``:
@@ -54,8 +58,16 @@ function thrownMessage(cause: unknown): string {
 export function parseApiError(cause: unknown): ApiError {
   if (cause instanceof ApiError) return cause;
 
-  if (cause instanceof TypeError || (cause instanceof Error && cause.name === "AbortError")) {
+  if (
+    (cause instanceof TypeError && FETCH_FAILURE.test(cause.message)) ||
+    (cause instanceof Error && cause.name === "AbortError")
+  ) {
     return new ApiError(0, "network_unreachable", cause.message);
+  }
+  // Any other TypeError is a fault in this page, not the network: calling it
+  // "Couldn't reach the server" sends people to restart a healthy container.
+  if (cause instanceof TypeError) {
+    return new ApiError(0, "browser_error", cause.message);
   }
 
   const message = thrownMessage(cause);
@@ -222,11 +234,15 @@ const ERROR_MESSAGES = {
     "The backup copy could not be published. Check the destination and try again.",
   backup_retry_not_failed: "This destination no longer needs a retry. Refresh the backup runs.",
   backup_retry_in_progress: "A retry is already in progress for this destination.",
+  backup_retry_backup_running:
+    "This backup is still publishing its other destinations. Retry once it finishes.",
+  backup_retry_cancelled: "The retry was cancelled before it published a copy.",
   backup_remote_delete_unverified:
     "This remote backup changed or couldn't be verified, so it was not deleted.",
   // General
   duplicate_slug: "An item with that name already exists.",
   network_unreachable: "Couldn't reach the server. Check that PrintStash is running and try again.",
+  browser_error: "Something went wrong in this browser tab. Reload the page and try again.",
   unknown:
     "Something went wrong reaching the server. Check that PrintStash is running and try again.",
 } satisfies Record<string, string>;

@@ -35,7 +35,6 @@ from app.modules.search.reconciliation import reconcile_partition
 from app.modules.search.text_inputs import document_input
 from app.modules.storage.capacity import CapacityManager, CapacityReservationHandle
 from app.runtime import maintenance
-from app.runtime.jobs import registry
 
 MAX_ATTEMPTS = 3
 
@@ -607,28 +606,5 @@ class IndexProcessor:
                         )
                     except OperationError:
                         session.rollback()
-                elif (
-                    generation and generation.job_id and generation.state == "building"
-                ):
-                    total, indexed, quarantine = generations.counts(session, generation)
-                    registry.update(
-                        generation.job_id,
-                        state="running",
-                        processed=indexed,
-                        total=total,
-                        failed=quarantine,
-                        progress=min(99, 100 * indexed / max(1, total)),
-                        label=generation.phase,
-                        result={
-                            "generation_id": generation_id,
-                            "error_code": generation.error_code,
-                        },
-                    )
-                elif generation and generation.job_id and generation.state == "active":
-                    registry.update(
-                        generation.job_id,
-                        state="completed",
-                        processed=generation.processed,
-                        progress=100,
-                        result={"generation_id": generation.id},
-                    )
+                # A building generation's own ``search.generation`` Job reports
+                # its progress and its end.

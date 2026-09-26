@@ -131,7 +131,8 @@ class TestBackupOperations:
         self, db_session, monkeypatch, location
     ):
         monkeypatch.setattr(
-            "app.modules.backups.gc_planner._source_identity_evidence", lambda _: ({}, {})
+            "app.modules.backups.gc_planner._source_identity_evidence",
+            lambda _: ({}, {}),
         )
         result = backup_capabilities.backup_operations(_meta(location))
         assert result["gc_witness"] == {

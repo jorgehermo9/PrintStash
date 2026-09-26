@@ -73,7 +73,13 @@ class TestBatchItems:
         assert len(response.json()) == 1
 
     def test_retries_every_named_item(
-        self, client: TestClient, make_user, headers_for, make_item, no_egress
+        self,
+        client: TestClient,
+        make_user,
+        headers_for,
+        make_item,
+        no_egress,
+        work_engine,
     ) -> None:
         owner = make_user("batch-retry")
         row = make_item(
@@ -87,12 +93,13 @@ class TestBatchItems:
         )
 
         assert response.json()[0]["state"] == "captured"
+        work_engine.drain()
         assert no_egress == [row.id]
 
     def test_imports_every_item_that_is_ready(
-        self, client: TestClient, make_user, headers_for, make_item, imports_run
+        self, client: TestClient, make_user, headers_for, make_item, queued_imports
     ) -> None:
-        owner = make_user("batch-import")
+        owner = make_user("batch-import", superuser=True)
         row = make_item(
             owner,
             state=InboxItemState.REVIEW,
@@ -106,12 +113,12 @@ class TestBatchItems:
         )
 
         assert response.status_code == 200, response.text
-        assert imports_run == [(row.id, [])]
+        assert queued_imports() == [(row.id, [])]
 
     def test_drops_an_item_that_is_not_ready_to_import(
-        self, client: TestClient, make_user, headers_for, make_item, imports_run
+        self, client: TestClient, make_user, headers_for, make_item, queued_imports
     ) -> None:
-        owner = make_user("batch-import-mixed")
+        owner = make_user("batch-import-mixed", superuser=True)
         ready = make_item(
             owner,
             state=InboxItemState.REVIEW,

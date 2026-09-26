@@ -79,9 +79,14 @@ with automatic scanning. Screenshots include the Spanish chooser and dialogs at
 mobile and desktop sizes. Dismissing the guide reminder is checked across reloads
 and navigation between Settings and the empty library.
 
+An environment-provisioned owner (`playwright.environment-admin.config.ts`) starts
+with `VAULT_SETUP_MODE=environment` and `VAULT_SETUP_ADMIN_*` set, as an app-store
+install form leaves it: sign in with the provisioned credentials, get redirected to
+the storage step from any page, choose storage, then upload a first Model.
+
 auth (UI login, wrong-password, username + API-key login then revoke) ·
 vault (search, tag filter, list/grid toggle, empty state, narrow responsive toolbar) · collections
-(create / nest / delete / recursive-delete non-empty from the sidebar) ·
+(create / nest / subtree count / delete / recursive-delete non-empty from the sidebar) ·
 documents (markdown editor, collection README, GFM tables) · tags (quick create/assign from a card,
 global delete) ·
 uploads (mesh-only source, BGCODE metadata, into a collection) · full backup recovery
@@ -97,6 +102,7 @@ collections, view vs edit role gates editing + deleting) · user management
 and vault stats) · supervised API restart · display currency · auto-mark-known-good toggle · metadata
 export (JSON/CSV) · manual and uploaded backups · reusable remote storage
 connection for backups and Library sources · notification channels (add webhook + delete) ·
+remote storage loading layout and provider choice at desktop and mobile widths ·
 About (running version + changelog) · design customization (metadata visibility,
 card-metric slots + reset) · printer add/remove · cross-cutting (theme
 persistence, health version, routes free of uncaught errors).

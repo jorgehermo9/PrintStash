@@ -18,6 +18,7 @@ export function PrintHistoryFields({
       {historyKeys.map((key) => (
         <label key={key} className="min-w-0 space-y-1 text-xs text-muted-foreground">
           {t(`aiSearch.filter.${key}`)}
+          {key.includes("duration") && ` (${t("aiSearch.seconds")})`}
           <Input
             type={key.includes("duration") ? "number" : "text"}
             min={key === "print_duration_max_s" ? 1 : 0}

@@ -19,6 +19,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   cleanupStorageCache,
   cleanupStorageStaging,
@@ -46,6 +47,12 @@ const MOBILE_MODEL_PAGE_SIZE = 5;
 function bytes(value: number | null, locale: string): string {
   if (value === null) return knownUiText("Unknown");
   return formatBytes(value, locale);
+}
+
+function capacityBytes(value: number | null, locale: string): string {
+  if (value === 0) return "0 MB";
+  if (value !== null && value < 1024 ** 2) return "<1 MB";
+  return bytes(value, locale);
 }
 
 export function StorageInventoryPanel() {
@@ -322,9 +329,22 @@ export function StorageInventoryPanel() {
         </div>
       )}
       {!current && !error && (
-        <p role="status" className="p-4 text-sm text-muted-foreground">
-          {t("Loading storage insights…")}
-        </p>
+        <div
+          role="status"
+          aria-label={t("Loading storage insights…")}
+          className="space-y-5 p-4 sm:p-5"
+        >
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+            {[0, 1, 2].map((item) => (
+              <div key={item} className="space-y-3">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-28 max-w-full" />
+              </div>
+            ))}
+          </div>
+          <Skeleton className="h-24 w-full" />
+          <span className="sr-only">{t("Loading storage insights…")}</span>
+        </div>
       )}
       {current && (
         <>
@@ -335,7 +355,7 @@ export function StorageInventoryPanel() {
                 {t("Files stored here")}
               </dt>
               <dd className="mt-2 text-2xl font-semibold tracking-tight tabular-nums">
-                {bytes(current.unique_owned_bytes, locale)}
+                {capacityBytes(current.unique_owned_bytes, locale)}
               </dd>
             </div>
             <div className="border-r px-4 py-4">
@@ -344,7 +364,7 @@ export function StorageInventoryPanel() {
                 {t("Free space")}
               </dt>
               <dd className="mt-2 text-xl font-semibold tracking-tight tabular-nums">
-                {bytes(availableBytes, locale)}
+                {capacityBytes(availableBytes, locale)}
               </dd>
               <p
                 className={`mt-1 text-xs ${capacityStatus === "blocked" ? "text-destructive" : capacityStatus === "available" ? "text-success" : "text-muted-foreground"}`}
@@ -362,7 +382,7 @@ export function StorageInventoryPanel() {
                 {t("Temporary files")}
               </dt>
               <dd className="mt-2 text-xl font-semibold tracking-tight tabular-nums">
-                {bytes(current.temporary_bytes, locale)}
+                {capacityBytes(current.temporary_bytes, locale)}
               </dd>
             </div>
           </dl>

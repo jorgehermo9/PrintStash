@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import { test, expect } from "../helpers";
 import { modelCard, uploadModel } from "../util";
-import type { SearchSettingsRead } from "../../../src/types/search";
+import type { SearchResponse, SearchSettingsRead } from "../../../src/types/search";
 
 const API = `http://127.0.0.1:${process.env.PLAYWRIGHT_REAL_API_PORT ?? 8410}`;
 
@@ -69,6 +69,23 @@ test.describe("AI Search", () => {
       await uploadModel(page, name, { mesh: true, gcode: false });
       const href = await modelCard(page, name).getAttribute("href");
       modelId = Number(href?.split("/").at(-1));
+      // Upload completion precedes the search projection Job. Wait for the
+      // indexed Model before testing the one-shot suggestion request.
+      await expect
+        .poll(
+          async () => {
+            const response = await page.request.get(`${API}/api/v1/search`, {
+              params: { q: name, mode: "lexical", instant: true, limit: 5 },
+            });
+            expect(response.ok()).toBe(true);
+            const result: SearchResponse = await response.json();
+            return result.items.some(
+              (item) => item.subject_type === "model" && item.subject_id === modelId,
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
       const immediate = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return url.pathname === "/api/v1/search" && url.searchParams.get("instant") === "true";
@@ -100,7 +117,6 @@ test.describe("AI Search", () => {
       });
       expect(configured.ok()).toBe(true);
       await page.goto("/search");
-      await page.getByText("Search options", { exact: true }).click();
       await page.getByRole("button", { name: "Natural-language search", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText(
         "submitted searches and available filter choices are sent to 127.0.0.1",
@@ -127,10 +143,10 @@ test.describe("AI Search", () => {
       expect(calls).toBe(1);
       // Dates/durations can also be added explicitly after parsing.
       await page.getByRole("button", { name: "Print history filters", exact: true }).click();
-      await page.getByRole("spinbutton", { name: "Actual duration < seconds" }).fill("10800");
+      await page.getByRole("spinbutton", { name: "Actual duration < (Seconds)" }).fill("10800");
       await page.getByRole("button", { name: "Apply filters", exact: true }).click();
       await expect(
-        page.getByRole("button", { name: "Remove Actual duration < seconds: 10800" }),
+        page.getByRole("button", { name: "Remove Actual duration < 3h 0m" }),
       ).toBeVisible();
       await page.getByRole("button", { name: /^Saved views(?: \d+)?$/ }).click();
       await page.getByRole("button", { name: "Save current view", exact: true }).click();
@@ -157,16 +173,15 @@ test.describe("AI Search", () => {
           fullPage: true,
         });
       }
-      await page.getByRole("button", { name: "Remove Actual duration < seconds: 10800" }).click();
+      await page.getByRole("button", { name: "Remove Actual duration < 3h 0m" }).click();
       await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
       expect(calls).toBe(1);
       // A persisted normalized view restores without another language-model call.
       await page.goto("/search");
-      await page.getByText("Search options", { exact: true }).click();
       await page.getByRole("button", { name: /^Saved views(?: \d+)?$/ }).click();
       await page.getByRole("button", { name, exact: true }).click();
       await expect(
-        page.getByRole("button", { name: "Remove Actual duration < seconds: 10800" }),
+        page.getByRole("button", { name: "Remove Actual duration < 3h 0m" }),
       ).toBeVisible();
       expect(calls).toBe(1);
     } finally {

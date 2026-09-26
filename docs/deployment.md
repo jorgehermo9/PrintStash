@@ -63,9 +63,10 @@ as private even for public repositories; see
 ### Unraid, CasaOS and other container dashboards
 
 For Unraid, use the [single-container template](../templates/printstash.xml)
-and its [installation and migration guide](../unraid/README.md). On other
-container dashboards, add the published image as a custom container with these
-settings:
+and its [installation and migration guide](../unraid/README.md). Manifests for
+Runtipi, Umbrel and CasaOS/ZimaOS are kept in [`catalogues/`](../catalogues/README.md)
+and published to those stores with each release. On other container dashboards,
+add the published image as a custom container with these settings:
 
 | Setting | Value |
 | --- | --- |
@@ -74,7 +75,7 @@ settings:
 | Network | Bridge |
 | Web port | Host port of your choice → container TCP port `3000` |
 | Persistent folder | A dedicated host folder → `/data` (read/write) |
-| Environment | `VAULT_SETUP_MODE=trusted_network`, `VAULT_RESTART_ENABLED=true` |
+| Environment | `VAULT_RESTART_ENABLED=true`, and either `VAULT_SETUP_MODE=trusted_network` (register in the browser from the LAN) or `VAULT_SETUP_MODE=environment` with `VAULT_SETUP_ADMIN_USERNAME` and `VAULT_SETUP_ADMIN_PASSWORD` (create the administrator at first start) |
 | Restart policy | `unless-stopped` |
 | Stop timeout | `60` seconds |
 
@@ -166,22 +167,29 @@ deliberately when upgrading.
 
 ## Data and host folders
 
-The default `docker-compose.yml` persists all application state in named Docker volumes:
+PrintStash keeps everything under one directory in the container, `/data`, and
+the default `docker-compose.yml` mounts one named volume, `printstash`, there:
 
-| Volume | Container path | Contents |
-| --- | --- | --- |
-| `printstash_data` | `/data/files` | Uploaded files |
-| `printstash_thumbs` | `/data/thumbs` | Thumbnails |
-| `printstash_db` | `/data/db` | SQLite database and generated credentials key |
-| `printstash_staging` | `/data/staging` | Pending uploads and imports |
-| `printstash_backups` | `/data/backups` | Local backup archives |
+| Container path | Contents |
+| --- | --- |
+| `/data/db` | SQLite database and generated credentials key |
+| `/data/files` | Uploaded files: the library |
+| `/data/thumbs` | Thumbnails |
+| `/data/staging` | Uploads and imports in progress |
+| `/data/backups` | Local backup archives |
+| `/data/artifact-cache` | Optional local cache for remote storage |
+| `/data/ai-models` | Downloaded AI search models |
 
-Docker prefixes these names with the Compose project name, normally the directory
-name. Keep that directory/project name when updating so the app finds its data.
-`docker compose down` preserves volumes; **`docker compose down -v` deletes them**.
+**Keep `/data` one mount**, so imports are hard-linked rather than copied. See
+[Hard-linked imports](#hard-linked-imports) for which layouts keep that.
 
-For host folders, replace the service's `volumes` list with bind mounts and add
-the host owner's numeric IDs to its existing `environment` mapping:
+Docker prefixes the volume name with the Compose project name, normally the
+directory name. Keep that directory/project name when updating so the app finds
+its data. `docker compose down` preserves volumes; **`docker compose down -v`
+deletes them**.
+
+For a host folder, replace the volume with one bind mount and add the host
+owner's numeric IDs to the existing `environment` mapping:
 
 ```yaml
 services:
@@ -191,17 +199,95 @@ services:
       PUID: "1000"
       PGID: "1000"
     volumes:
-      - ./data/files:/data/files
-      - ./data/thumbs:/data/thumbs
-      - ./data/db:/data/db
-      - ./data/staging:/data/staging
-      - ./data/backups:/data/backups
+      - ./data:/data
 ```
 
 Use `id -u` and `id -g` on the host to find the intended owner. Both IDs must be
 positive; omitted IDs default to `10001:10001`. The entrypoint repairs ownership
-before running migrations as the unprivileged user. Replacing named volumes with
-empty host folders does not move existing data: back up and migrate it first.
+before running migrations as the unprivileged user. Replacing the named volume
+with an empty host folder does not move existing data: back up and migrate it
+first.
+
+### Moving one directory to another disk
+
+Every path above is a child of `VAULT_DATA_ROOT`, and each can be moved on its
+own, for example library files onto a large HDD while the database stays on an
+SSD. Mount the other disk inside the container and point the matching variable
+at it; `docker-compose.advanced.yml` shows each one, commented out.
+
+| Variable | Default |
+| --- | --- |
+| `VAULT_DATA_ROOT` | `/data`. The parent of every path below; leave it alone in the container. |
+| `VAULT_DATA_DIR` | `/data/files` |
+| `VAULT_THUMB_DIR` | `/data/thumbs` |
+| `VAULT_STAGING_DIR` | `/data/staging` |
+| `VAULT_BACKUP_DIR` | `/data/backups` |
+| `VAULT_ARTIFACT_CACHE_ROOT` | `/data/artifact-cache` |
+| `VAULT_EMBEDDING_CACHE_DIR` | `/data/ai-models` |
+| `VAULT_DB_URL` | `sqlite:////data/db/printstash.sqlite`, or a PostgreSQL URL |
+| `VAULT_SECRETS_KEY_FILE` | `/data/db/.printstash-secrets-key` |
+
+An empty value means the default. **Move `VAULT_DATA_DIR` and
+`VAULT_STAGING_DIR` together**, onto the same mount; see below for why.
+
+### Hard-linked imports
+
+Every upload, URL import, library-transfer archive and printer capture is first
+written to the staging directory, then published into the library by **hard
+link**: the staged file *becomes* the library file. Publishing takes the same
+fraction of a millisecond at any size (a 2 GiB file that took about 7 s to copy
+publishes in under 1 ms), and the file never occupies disk twice, not even
+briefly.
+
+A hard link works only **within one mount**. Linux refuses one between two
+mounts even when both sit on the same disk. PrintStash then copies the file
+instead. Nothing breaks, but every import gets slower as files grow and briefly
+needs twice its size in free space.
+
+| Layout | Imports |
+| --- | --- |
+| One named volume or one host folder at `/data` (both Compose files) | Hard link |
+| `VAULT_DATA_DIR` and `VAULT_STAGING_DIR` moved together to one other mount, e.g. both under `/mnt/hdd` | Hard link |
+| **A second volume or host folder mapped onto a subfolder of `/data`**, e.g. `- hdd:/data/files` next to `- printstash:/data` | **Copy.** The subfolder is its own mount, even though no variable changed |
+| `VAULT_DATA_DIR` on another mount while `VAULT_STAGING_DIR` stays on `/data`, or the reverse | **Copy** |
+| One volume per subfolder (the layout of earlier releases) | **Copy** |
+| A filesystem without hard links, such as some SMB/CIFS or FUSE mounts | **Copy** |
+| S3, WebDAV or SFTP primary storage | Upload. There is no local file to link; this is not a misconfiguration |
+
+Two more cases always copy by design: write-back into a mounted Library source
+(that folder is its own mount), and thumbnails (they are generated, not
+staged).
+
+**How you are told.** PrintStash checks this at every start. When imports will
+copy:
+
+- Settings shows **"Imports are copied, not hard-linked"**, both on the overview
+  and on the Storage section.
+- The log says `imports copy every staged file: staging (…) cannot hard-link
+  into the library (…)`.
+- `GET /api/v1/health/details` reports
+  `components.storage.diagnostics.staged_hardlink: false`.
+
+**Fixing it** means giving staging and the library the same mount, then
+restarting:
+
+- Remove a volume mapped onto a subfolder of `/data`, after copying its contents
+  into the main volume the way [UPGRADE.md](../UPGRADE.md#unreleased-one-data-volume)
+  moves the old volumes.
+- Or, when files must live on another disk, point **both** `VAULT_DATA_DIR` and
+  `VAULT_STAGING_DIR` at that disk's mount.
+
+Also good to know:
+
+- **Unraid:** keep the appdata share on one pool, as the template does by
+  default. A share spread across array disks can put staging and files on
+  different disks, and a link between disks falls back to a copy.
+- **Nothing is left behind.** The staged name is removed once the link exists,
+  so backups, `du` and file browsers see each file once.
+- **Permissions:** a linked file is narrowed to `0600`, the same as a file
+  PrintStash creates itself.
+- **Free-space checks** still reserve room for a copy, so a nearly full disk is
+  refused cleanly even when the link would have needed no space.
 
 To index an existing library folder, add a mount such as
 `/path/to/library:/library:ro` to the service's existing volume list, then add
@@ -238,8 +324,11 @@ These defaults apply when the setting is omitted.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VAULT_SETUP_MODE` | `disabled` in the API; `trusted_network` in Compose | Enables browser registration only for an unconfigured installation. Set `disabled` for an internet-facing installation. |
-| `VAULT_SETUP_ALLOWED_HOSTS` | Empty | Extra comma-separated hostnames allowed for initial registration. Localhost, private addresses, `.local`, `.localhost`, and `.home.arpa` are already allowed. |
+| `VAULT_SETUP_MODE` | `disabled` in the API; `trusted_network` in Compose | How an unconfigured installation gets its first administrator. `trusted_network`: browser registration from the local network. `environment`: created at startup from `VAULT_SETUP_ADMIN_*`; the browser cannot register. `disabled`: no first-run path; use it for an internet-facing installation once set up. Contradicting combinations (credentials without `environment`, or `environment` without valid credentials) keep setup closed and the setup page names the variables to fix. |
+| `VAULT_SETUP_ALLOWED_HOSTS` | Empty | Extra comma-separated hostnames allowed for initial registration. Localhost, private addresses, `.local`, `.localhost`, and `.home.arpa` are already allowed. Tailscale names (`*.ts.net`) and `100.x` addresses must be listed here. |
+| `VAULT_SETUP_ADMIN_USERNAME` | Empty | With `VAULT_SETUP_MODE=environment`, creates the first administrator at startup when the installation has no owner. The administrator then signs in and chooses storage. Used once: it never changes an existing account. See [first use](first-run.md#an-administrator-from-the-deployment). |
+| `VAULT_SETUP_ADMIN_PASSWORD` | Empty | Password for that administrator, at least 8 characters. Required in `environment` mode. Changing it later does not change the account's password. |
+| `VAULT_SETUP_ADMIN_EMAIL` | Empty | Optional email for that administrator. |
 | `VAULT_JWT_SECRET` | Generated and stored in the database | Manage your own signing secret; generate with `openssl rand -hex 32`. |
 | `VAULT_SECRETS_KEY` | Generated key file in `/data/db` | External key for stored credentials. Preserve it with backups; changing it requires a planned key migration. |
 | `VAULT_SESSION_COOKIE_SECURE` | `false` | Set `true` when accessed through HTTPS. |
@@ -275,17 +364,29 @@ on the API for your provider:
 | `VAULT_STAGING_MAX_ACTIVE_PER_USER` | `4` | Concurrent active staging operations per user. |
 | `VAULT_STAGING_MAX_GB` | `4` | Staging disk budget. |
 | `VAULT_STAGING_MIN_FREE_GB` | `1` | Minimum free disk space for staging. |
-| `VAULT_INGEST_WORKER_COUNT` | `2` | Ingestion worker count. |
 | `VAULT_MEDIA_WORKER_TIMEOUT_SECONDS` | `180` | Media worker timeout. |
 | `VAULT_SQLITE_SYNCHRONOUS` | `NORMAL` | SQLite durability mode. |
 | `VAULT_LOG_LEVEL` | `INFO` | API logging level. |
 | `VAULT_BACKUP_RETENTION_DAYS` | `30` | Local backup retention in days. |
 | `VAULT_RESTART_ENABLED` | `true` in Compose | Enables supervised restart from Settings; the app default outside Compose is `false`. |
 
-Storage paths already match the persistent mounts. Leave `VAULT_DATA_DIR`,
-`VAULT_THUMB_DIR`, `VAULT_DB_URL`, `VAULT_STAGING_DIR`, and `VAULT_BACKUP_DIR` at
-their defaults unless you also adjust the mounts. A database path outside the
-persistent volume can lose state on container replacement.
+Storage paths all default under the `/data` volume; see
+[Data and host folders](#data-and-host-folders) before moving one. A database
+path outside a persistent mount loses state on container replacement.
+
+### Background work
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VAULT_PROCESS_ROLE` | `all` | `all` runs HTTP and every background Job; `api` is the one HTTP process of a deployment with [workers](#background-work-and-workers). |
+| `VAULT_API_RUNS_JOBS` | `true` | With `api`, whether the API also runs Jobs; `false` leaves them to the workers. |
+| `VAULT_SHARED_STORAGE` | `false` | Declares that every process mounts the same volumes; required with workers. |
+| `VAULT_MAX_RENDER_JOBS` | `1` | Mesh renders and local AI inference at once, per process; raise it on hosts with spare RAM. |
+| `VAULT_JOBS_INGEST_CONCURRENCY` | `2` | Uploads and imports committed at once. |
+
+Settings → Background work overrides each kind of work's concurrency at runtime,
+for every process. The other `VAULT_JOBS_*` defaults are in
+[Background work](architecture/background-work.md#configuration).
 
 For remote storage, see [Storage providers](./storage-providers.md).
 The full image includes the optional storage dependencies. PostgreSQL/S3 services
@@ -357,17 +458,63 @@ it as `docker-compose.yml` in its own install directory. To build from a checkou
 instead of pulling images, uncomment its two `build:` blocks and add `--build`.
 
 Existing installations keep their data when switching between
-`docker-compose.yml` and `docker-compose.advanced.yml`: both use the same five
-local volume keys. Back up first, stop the old stack without removing volumes,
+`docker-compose.yml` and `docker-compose.advanced.yml`: both mount the same
+`printstash` volume at `/data`. Back up first, stop the old stack without removing volumes,
 keep the same Compose project name, and carry over custom settings and mounts.
 Do not run two stacks against the same data. Moving from PostgreSQL or remote
 primary storage requires a separate data migration; switching files is not one.
+
+## Background work and workers
+
+Imports, previews, metadata, backups, scans, search indexing and notifications
+run as background Jobs. By default the API process runs them itself
+(`VAULT_PROCESS_ROLE=all`), which is right for almost every installation, and
+what both Compose files do without any setting. Settings → Background work
+shows what is running and lets an administrator change how many Jobs of each
+kind run at once.
+
+| Topology | How | Requires |
+| --- | --- | --- |
+| One process (default) | Either Compose file, unchanged | SQLite or PostgreSQL |
+| API plus workers | Advanced file, `--profile workers` | PostgreSQL and shared volumes |
+| API without jobs | The same, with `VAULT_API_RUNS_JOBS=false` | PostgreSQL and shared volumes |
+
+To add workers, uncomment the PostgreSQL `VAULT_DB_URL` in
+`docker-compose.advanced.yml` (the API and the workers share its settings),
+then set in `.env`:
+
+```bash
+VAULT_PROCESS_ROLE=api
+VAULT_SHARED_STORAGE=true
+# Optional: leave all background work to the workers.
+VAULT_API_RUNS_JOBS=false
+# How many worker containers to run (default 2).
+PRINTSTASH_WORKERS=2
+```
+
+```bash
+docker compose -f docker-compose.advanced.yml --profile postgres --profile workers up -d
+```
+
+A worker runs the API image with `VAULT_PROCESS_ROLE=worker` and the command
+`/app/.venv/bin/python -m app.worker`. It serves no HTTP, never migrates (it
+waits for the API to), and stops cleanly on `SIGTERM`. Every process mounts the
+same `/data` volume, so the worker that commits an upload reads what the API
+staged, and local AI Search models (`/data/ai-models`) are there for workers
+embedding while indexing and for a download wherever its Job runs. A worker
+refuses to start on SQLite or without `VAULT_SHARED_STORAGE=true`, saying why.
+Keep exactly one API container per vault.
+
+The engine keeps its own state beside the vault database (SQLite) or in the
+`dbos` schema (PostgreSQL). It is disposable, not part of a backup, and rebuilt
+after a restore. Tuning settings are listed in
+[Background work](architecture/background-work.md#configuration).
 
 ## Other Compose files
 
 | File | Purpose |
 | --- | --- |
 | **`docker-compose.yml`** | **Recommended.** One container with web UI and full API, SQLite, no configuration. |
-| `docker-compose.advanced.yml` | Every setting wired; separate web UI and API containers; opt-in PostgreSQL and S3. |
+| `docker-compose.advanced.yml` | Every setting wired; separate web UI and API containers; opt-in PostgreSQL, S3 and [workers](#background-work-and-workers). |
 | `deploy/manual-testing/compose.yml` | Maintainer release-testing stack. |
 | `deploy/minio-migration/compose.yml` | One-release helper for old bundled MinIO data; see [MinIO migration](./minio-migration.md). |

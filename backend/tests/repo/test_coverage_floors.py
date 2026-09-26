@@ -51,14 +51,12 @@ MODULE_FLOOR = 90.0
 PINNED_BELOW_FLOOR = {
     "app/modules/library/source_covers.py": 76.5,
     "app/modules/ingestion/staging_leases.py": 79.0,
-    "app/modules/ingestion/inbox.py": 81.0,
+    "app/modules/ingestion/inbox.py": 84.0,
     "app/modules/library/provenance.py": 81.5,
     "app/modules/ingestion/library_transfer.py": 84.0,
     "app/modules/ingestion/ingestion.py": 85.5,
     "app/modules/ingestion/capture_provider_connections.py": 86.5,
     "app/modules/identity/ws_tickets.py": 87.0,
-    "app/modules/sources/library_watcher.py": 87.5,
-    "app/schemas/provenance.py": 89.0,
 }
 
 # How far a pinned module may rise above its pin before the pin has to move. Wide
@@ -68,7 +66,7 @@ PIN_SLACK = 3.0
 
 # Two-sided, the same shape as the other ratchets in this directory: the list may
 # not grow, and when it shrinks this has to come down with it.
-MAX_PINNED = 10
+MAX_PINNED = 8
 
 
 def _report() -> dict:

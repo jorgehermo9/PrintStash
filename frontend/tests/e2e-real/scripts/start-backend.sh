@@ -13,11 +13,10 @@ PORT="${PLAYWRIGHT_REAL_API_PORT:-8410}"
 rm -rf "$DATA_ROOT"
 mkdir -p "$DATA_ROOT/files" "$DATA_ROOT/thumbs" "$DATA_ROOT/staging" "$DATA_ROOT/backups"
 
-export VAULT_DB_URL="sqlite:///$DATA_ROOT/test.sqlite"
-export VAULT_DATA_DIR="$DATA_ROOT/files"
-export VAULT_THUMB_DIR="$DATA_ROOT/thumbs"
-export VAULT_STAGING_DIR="$DATA_ROOT/staging"
-export VAULT_BACKUP_DIR="$DATA_ROOT/backups"
+# Every app path, the SQLite database included, derives from this one root;
+# drop any per-directory override a developer shell exports.
+unset VAULT_DB_URL VAULT_DATA_DIR VAULT_THUMB_DIR VAULT_STAGING_DIR VAULT_BACKUP_DIR
+export VAULT_DATA_ROOT="$DATA_ROOT"
 export VAULT_JWT_SECRET="e2e-real-secret-at-least-32-bytes"
 export VAULT_SECRETS_KEY="e2e-real-secrets-key"
 export VAULT_RESTART_ENABLED="true"
@@ -25,10 +24,8 @@ export VAULT_RESTART_ENABLED="true"
 cd "$BACKEND_DIR"
 if [ -x .venv/bin/python ]; then
   PY=(.venv/bin/python)
-  ALEMBIC=(.venv/bin/alembic)
 else
   PY=(uv run python)
-  ALEMBIC=(uv run alembic)
 fi
 
 if [ -z "${VAULT_BGCODE_EXECUTABLE:-}" ]; then
@@ -36,7 +33,8 @@ if [ -z "${VAULT_BGCODE_EXECUTABLE:-}" ]; then
   export VAULT_BGCODE_EXECUTABLE
 fi
 
-"${ALEMBIC[@]}" upgrade head
+# The container's own first boot step: prepare the data root, then migrate.
+"${PY[@]}" -m app.db.migrate
 
 # Mirror the official container's restart policy so the real-browser suite can
 # exercise the Settings restart flow without weakening production behaviour.

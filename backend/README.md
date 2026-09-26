@@ -21,11 +21,8 @@ cd backend
 # First time — create venv and install deps
 uv sync --extra dev
 
-# Run the server
-VAULT_DB_URL=sqlite:///./dev.sqlite \
-VAULT_DATA_DIR=./_data/files \
-VAULT_THUMB_DIR=./_data/thumbs \
-uv run uvicorn app.main:app --reload
+# Run the server; every app path, SQLite included, lives under ./_data
+VAULT_DATA_ROOT=./_data uv run uvicorn app.main:app --reload
 ```
 
 Open <http://localhost:8000/docs> for the Swagger UI.
@@ -38,8 +35,8 @@ predictable upgrade path.
 ```bash
 cd backend
 
-# Apply the latest schema to your configured database
-uv run alembic upgrade head
+# Prepare the data root and apply the latest schema (what the container runs)
+uv run python -m app.db.migrate
 
 # Stamp an existing database that already matches the baseline
 uv run alembic stamp head
@@ -50,7 +47,7 @@ uv run alembic stamp head
 ```bash
 cd backend
 uv sync --extra dev
-uv run alembic upgrade head
+uv run python -m app.db.migrate
 uv run uvicorn app.main:app --reload
 ```
 
@@ -101,9 +98,9 @@ shared business contracts and dependency rules.
 
 | Variable | What it does | Example |
 |---|---|---|
-| `VAULT_DB_URL` | Database connection string | `sqlite:///./dev.sqlite` |
-| `VAULT_DATA_DIR` | Where ingested files live | `./_data/files` |
-| `VAULT_THUMB_DIR` | Where rendered thumbnails go | `./_data/thumbs` |
+| `VAULT_DATA_ROOT` | Parent of every app path: `db/`, `files/`, `thumbs/`, `staging/`, `backups/`, caches | `./_data` |
+| `VAULT_DB_URL` | Database connection string; SQLite under the data root by default | `postgresql://…` |
+| `VAULT_DATA_DIR`, `VAULT_THUMB_DIR`, `VAULT_STAGING_DIR`, `VAULT_BACKUP_DIR` | Move one directory off the data root; keep staging on the library's mount | `/mnt/hdd/files` |
 | `VAULT_JWT_SECRET` | Signing key for auth tokens | anything random |
 | `VAULT_ACCESS_TOKEN_EXPIRE_MINUTES` | Token lifetime | `60` |
 | `VAULT_MAX_UPLOAD_MB` | Upload size limit | `512` |

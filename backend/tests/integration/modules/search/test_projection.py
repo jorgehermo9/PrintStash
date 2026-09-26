@@ -29,7 +29,6 @@ def _drain(session):
 
 
 class TestContentProjection:
-
     def test_coalesces_repeated_source_notifications(
         self, projection, db_session, make_model
     ):

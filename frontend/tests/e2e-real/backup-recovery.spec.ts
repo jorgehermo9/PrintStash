@@ -5,7 +5,13 @@
  * the operator UI, and reads the recovered bytes through the public download endpoint.
  */
 import { test, expect } from "./helpers";
-import { clickModelAction, gcodeFor, modelCard, uploadGcodeModel } from "./util";
+import {
+  backupFromAccepted,
+  clickModelAction,
+  gcodeFor,
+  modelCard,
+  uploadGcodeModel,
+} from "./util";
 
 test.describe("backup recovery", () => {
   test(
@@ -30,7 +36,7 @@ test.describe("backup recovery", () => {
           response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
       );
       await page.getByRole("button", { name: "Backup now" }).click();
-      const metadata = await (await created).json();
+      const metadata = await backupFromAccepted(page, await created);
       const backupRow = page.locator("div.grid").filter({ hasText: metadata.backup_id }).last();
       await expect(backupRow.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
 

@@ -5,7 +5,7 @@ from printstash_core.inference import EmbeddingError, EmbeddingSpace
 from printstash_core.inference.context import InferenceContext
 from printstash_core.search.visual_inputs import VisualRecipe
 
-from app.modules.media import compute_slots, visual_render
+from app.modules.media import mesh_processing, visual_render
 from tests.factories.geometry import tetrahedron
 
 
@@ -77,9 +77,9 @@ class TestVisualRender:
     ):
         source, recipe, processes = render_case
         monkeypatch.setattr(
-            compute_slots,
-            "native_process_rss_bytes",
-            lambda _pid: compute_slots.native_memory_budget_bytes() + 1,
+            mesh_processing,
+            "process_rss_bytes",
+            lambda _pid: mesh_processing.native_memory_budget_bytes() + 1,
         )
         with pytest.raises(EmbeddingError, match="embedding_worker_oom"):
             visual_render.render(

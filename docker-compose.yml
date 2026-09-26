@@ -14,15 +14,10 @@ services:
       VAULT_SETUP_MODE: trusted_network
       VAULT_RESTART_ENABLED: "true"
     volumes:
-      - printstash_data:/data/files
-      - printstash_thumbs:/data/thumbs
-      - printstash_db:/data/db
-      - printstash_staging:/data/staging
-      - printstash_backups:/data/backups
+      # Everything PrintStash keeps: database, files, thumbnails, staging,
+      # backups and caches. Keep it one mount, so imports hard-link into the
+      # library instead of copying every file.
+      - printstash:/data
 
 volumes:
-  printstash_data:
-  printstash_thumbs:
-  printstash_db:
-  printstash_staging:
-  printstash_backups:
+  printstash:

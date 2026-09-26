@@ -18,11 +18,12 @@ from app.db.models import IndexGeneration, PassageVector
 from app.db.session import _set_sqlite_pragmas, get_session_factory
 from app.modules.inference.query import close_queries
 from app.modules.inference.transport import close_client
-from app.runtime.jobs import JobRegistry
-from app.runtime.search import run_search
+from app.modules.work.jobs import jobs
+from tests.e2e._jobs import create_backup, settle
 from tests.fakes.inference import InferenceFake
 from tests.fakes.server import start_server
 from tests.paths import BACKEND_DIR
+from tests.search_projection import run_search_units
 
 
 @pytest.fixture
@@ -94,7 +95,7 @@ async def indexing_server(api, superuser_headers, e2e_db):
     event.listen(engine, "connect", _set_sqlite_pragmas)
     fake = InferenceFake()
     server = start_server(fake.app())
-    worker = asyncio.create_task(run_search())
+    worker = asyncio.create_task(run_search_units())
     try:
         response = await api.post(
             "/api/v1/config/ai-search/endpoints",
@@ -171,8 +172,7 @@ class TestSearchGenerationLifecycle:
         vector_id, original = vector.id, vector.vector_blob
         subject_id = vector.subject_id
         e2e_db.rollback()
-        created = await api.post("/api/v1/backups", headers=superuser_headers)
-        assert created.status_code == 202, created.text
+        created = await create_backup(api, superuser_headers)
         deleted = await api.delete(
             f"/api/v1/documents/{subject_id}", headers=superuser_headers
         )
@@ -181,7 +181,7 @@ class TestSearchGenerationLifecycle:
         e2e_db.close()
         close_queries()
         restored = await api.post(
-            f"/api/v1/backups/{created.json()['backup_id']}/restore",
+            f"/api/v1/backups/{created['backup_id']}/restore",
             headers=superuser_headers,
         )
         assert restored.status_code == 200, restored.text
@@ -412,7 +412,11 @@ class TestSearchGenerationLifecycle:
                 len([call for call in fake.calls if len(call["body"]["input"]) == 8])
                 == 1
             )
-            assert JobRegistry().get(proposal.json()["job_id"]).state == "completed"
+            # Another process built it; the generation's own Job, run now,
+            # finds it active and completes rather than building it again.
+            await asyncio.to_thread(settle)
+            build = jobs.get(proposal.json()["job_id"])
+            assert build is not None and build.state == "completed"
         finally:
             fake.hold_embedding_call = None
             close_client()

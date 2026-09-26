@@ -29,6 +29,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import os
+import subprocess
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -46,7 +49,7 @@ from app.db import migrate as migrate_mod
 from app.db.session import _is_alembic_managed, init_db
 from tests.factories import build_user
 from tests.factories.migration_rows import seed_released_v0121_rows, seed_schema_row
-from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
+from tests.paths import ALEMBIC_DIR, ALEMBIC_INI, BACKEND_DIR
 
 
 def _seeded_duplicate_defaults(tmp_path: Path) -> str:
@@ -378,7 +381,8 @@ class TestDataMigrations:
         finally:
             engine.dispose()
 
-        command.upgrade(cfg, "head")
+        # The revision before the job engine renamed these columns.
+        command.upgrade(cfg, "0118bda3e719")
         engine = create_engine(url)
         try:
             inbox_fks = {
@@ -842,6 +846,31 @@ def _rewrite_sqlite_table_definition(
         engine.dispose()
 
 
+class TestMain:
+    """`python -m app.db.migrate` is every installation's first boot step.
+
+    The container entrypoint runs it before the server, so it meets a data root
+    nothing has prepared yet: <VAULT_DATA_ROOT>/db does not exist.
+    """
+
+    def test_migrates_a_fresh_data_root_to_head(self, tmp_path: Path) -> None:
+        root = tmp_path / "data"
+
+        result = subprocess.run(
+            [sys.executable, "-m", "app.db.migrate"],
+            cwd=BACKEND_DIR,
+            env={**os.environ, "VAULT_DATA_ROOT": str(root)},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert _current(f"sqlite:///{root / 'db' / 'printstash.sqlite'}") == (
+            _head_revision()
+        )
+
+
 # --------------------------------------------------------------------------- #
 # State dispatch: a fresh DB must NOT replay the historical migration chain
 # (its baseline is SQLite-only and fails on Postgres) — it bootstraps via
@@ -1093,7 +1122,9 @@ class TestUpgrade:
             index["name"]: index for index in inspector.get_indexes("files")
         }
         assert bool(file_indexes["uq_files_model_version"]["unique"]) is True
-        assert bool(file_indexes["uq_files_live_recommended_gcode_text"]["unique"]) is True
+        assert (
+            bool(file_indexes["uq_files_live_recommended_gcode_text"]["unique"]) is True
+        )
         assert file_indexes["ix_files_model_deleted_type"]["column_names"] == [
             "model_id",
             "deleted_at",
@@ -1107,12 +1138,13 @@ class TestUpgrade:
             "updated_at",
             "id",
         ]
-        background_job_indexes = {
-            index["name"]: index for index in inspector.get_indexes("background_jobs")
-        }
-        assert background_job_indexes["ix_background_jobs_visible_state_owner_updated"][
-            "column_names"
-        ] == ["visible", "state", "owner_user_id", "updated_at"]
+        job_indexes = {index["name"]: index for index in inspector.get_indexes("jobs")}
+        assert job_indexes["ix_jobs_owner_state_updated"]["column_names"] == [
+            "owner_user_id",
+            "state",
+            "updated_at",
+        ]
+        assert bool(job_indexes["uq_jobs_active_subject"]["unique"]) is True
         printer_indexes = {
             index["name"]: index for index in inspector.get_indexes("printers")
         }
@@ -1147,7 +1179,7 @@ class TestUpgrade:
             fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
             for fk in inspector.get_foreign_keys("inbox_items")
         }
-        assert inbox_fks["background_job_id"] == "SET NULL"
+        assert inbox_fks["job_id"] == "SET NULL"
         provenance_source_indexes = {
             index["name"]: index
             for index in inspector.get_indexes("model_provenance_sources")

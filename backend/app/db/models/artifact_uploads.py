@@ -78,11 +78,11 @@ class ArtifactUploadSession(SQLModel, table=True):
     retryable: bool = Field(default=False, index=True)
     verified_size: Optional[int] = Field(default=None, sa_column=Column(BigInteger))
     verified_sha256: Optional[str] = Field(default=None, max_length=64, index=True)
-    background_job_id: Optional[str] = Field(
+    job_id: Optional[str] = Field(
         default=None,
         sa_column=Column(
             String(64),
-            ForeignKey("background_jobs.id", ondelete="SET NULL"),
+            ForeignKey("jobs.id", ondelete="SET NULL"),
             nullable=True,
             index=True,
         ),

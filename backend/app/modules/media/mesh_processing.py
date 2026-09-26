@@ -4,10 +4,10 @@ Trimesh is heavy, so it is lazy-imported inside each function that needs it.
 Callers pass a `Path` and receive plain dicts / bytes — they never touch a
 trimesh object directly.
 
-The software thumbnail rasteriser lives in `mesh_render` and is re-exposed
-here as `render_thumbnail` for backwards compatibility. Ingestion uses
-`analyze_mesh`, which loads the mesh once for both geometry and thumbnail when
-safe; oversized STL files use the isolated streaming renderer instead.
+The software thumbnail rasteriser lives in `mesh_render`. The mesh derivative
+runs both through `thumbnail_engine`, which loads the mesh once for geometry
+and thumbnail when safe; oversized STL files use the isolated streaming
+renderer instead.
 """
 
 from __future__ import annotations
@@ -45,22 +45,6 @@ _MAX_3MF_ENTRIES = 4096
 _MAX_3MF_TOTAL_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 _MAX_3MF_COMPRESSION_RATIO = 200
 _MAX_3MF_ENTRY_NAME_BYTES = 1024
-
-
-class FallbackThumbnail(bytes):
-    """PNG bytes produced by the bounded STL fallback.
-
-    ``complete`` records whether the fallback consumed a complete, valid source
-    representation. Callers may persist the image when it is false, but must not
-    treat sampled geometry statistics as exact metadata.
-    """
-
-    complete: bool
-
-    def __new__(cls, value: bytes, *, complete: bool = True):
-        instance = super().__new__(cls, value)
-        instance.complete = complete
-        return instance
 
 
 # Resolved once: the glibc handle used by _reclaim_memory, or False on a libc
@@ -426,6 +410,26 @@ def _step_memory_budget_bytes() -> int | None:
     if limit is None or fraction <= 0:
         return None
     return max(int(limit * fraction / _render_jobs_limit()), 1)
+
+
+def process_rss_bytes(pid: int) -> int | None:
+    """A child process's resident set, for owners that police their own children."""
+    return _process_rss_bytes(pid)
+
+
+def step_memory_budget_bytes() -> int | None:
+    """The RSS one native render step may use; ``None`` when undetectable."""
+    return _step_memory_budget_bytes()
+
+
+def native_memory_budget_bytes() -> int:
+    """The render-step RSS policy, applied to one native worker process.
+
+    Bounded even when automatic geometry RAM caps are disabled on a platform
+    where cgroup or host memory cannot be detected. Embedding and search-view
+    workers are killed past it.
+    """
+    return min(step_memory_budget_bytes() or 1024**3, 2 * 1024**3)
 
 
 def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):

@@ -7,14 +7,15 @@ audit again.  It deliberately never mutates the primary Artifact bytes.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.db.models import Model
 from app.modules.storage.storage_backend.runtime import get_backend, init_backend
+from tests.e2e._jobs import create_backup, settle
 
 _STL = b"""solid audit_fixture
 facet normal 0 0 1
@@ -45,14 +46,26 @@ async def _setup_and_login(api, tmp_path) -> dict[str, str]:
 
 
 async def _await_job(api, headers: dict[str, str], job_id: str) -> dict:
-    for _ in range(100):
-        response = await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-        assert response.status_code == 200, response.text
-        job = response.json()
-        if job["state"] in ("completed", "failed"):
-            return job
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"ingest job did not finish: {job}")
+    settle()
+    response = await api.get(f"/api/v1/jobs/{job_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _run_due_audit(session) -> int:
+    """Let the ``administration.audit`` source admit the due policy, and run it.
+
+    Returns the id of the newest run: the one the due policy just admitted.
+    """
+    from app.db.models import JobKind, VaultAuditRun
+    from app.modules.work import nudge
+
+    nudge(JobKind.ADMINISTRATION_AUDIT)
+    settle()
+    session.expire_all()
+    run_id = session.exec(select(func.max(VaultAuditRun.id))).one()
+    assert run_id is not None
+    return run_id
 
 
 class TestVaultAudit:
@@ -84,6 +97,7 @@ class TestVaultAudit:
             "/api/v1/maintenance/audits", json={"mode": "quick"}, headers=headers
         )
         assert started.status_code == 202, started.text
+        settle()
         audited = await api.get(
             f"/api/v1/maintenance/audits/{started.json()['id']}", headers=headers
         )
@@ -100,12 +114,17 @@ class TestVaultAudit:
         )
         assert repaired.status_code == 200, repaired.text
         assert repaired.json()["state"] == "resolved"
+        # The repair re-queued the thumbnail derivative; it lands once it runs.
+        settle()
+        e2e_db.refresh(model)
+        assert model.thumbnail_path is not None
         assert backend.exists(model.thumbnail_path)
 
         rerun = await api.post(
             "/api/v1/maintenance/audits", json={"mode": "quick"}, headers=headers
         )
         assert rerun.status_code == 202, rerun.text
+        settle()
         healthy = await api.get(
             f"/api/v1/maintenance/audits/{rerun.json()['id']}", headers=headers
         )
@@ -129,10 +148,8 @@ class TestScheduledVaultAudit:
     ):
         from app.core.time import utcnow
         from app.db.models import Metadata, VaultAuditEvent, VaultAuditPolicy
-        from app.runtime.audit_scheduler import run_due_audit
 
         headers = await _setup_and_login(api, tmp_path)
-        from app.modules.notifications import notifications
 
         assert (
             await api.put(
@@ -184,22 +201,20 @@ class TestScheduledVaultAudit:
         policy.next_due_at = now
         e2e_db.add(policy)
         e2e_db.commit()
-        run_id = await asyncio.to_thread(run_due_audit, now=now)
-        assert run_id is not None
-        assert await notifications.dispatch_due() == 1
-        assert (
-            fakes.recorder.for_target("webhook")[0].json["event"]
-            == "storage_regression"
-        )
+        # Settling runs the audit and the notification Job its event enqueued.
+        run_id = _run_due_audit(e2e_db)
+        assert [row.json["event"] for row in fakes.recorder.for_target("webhook")] == [
+            "storage_regression"
+        ]
         # The unchanged next successful run is quiet, then explicitly enable repair.
         e2e_db.expire_all()
         policy = e2e_db.get(VaultAuditPolicy, "quick")
         policy.next_due_at = utcnow()
         e2e_db.add(policy)
         e2e_db.commit()
-        unchanged_id = await asyncio.to_thread(run_due_audit, now=utcnow())
+        unchanged_id = _run_due_audit(e2e_db)
         assert unchanged_id != run_id
-        assert await notifications.dispatch_due() == 0
+        assert len(fakes.recorder.for_target("webhook")) == 1
         enabled = await api.put(
             "/api/v1/maintenance/audit-policies/quick",
             headers=headers,
@@ -215,7 +230,7 @@ class TestScheduledVaultAudit:
         policy.next_due_at = utcnow()
         e2e_db.add(policy)
         e2e_db.commit()
-        run_id = await asyncio.to_thread(run_due_audit, now=utcnow())
+        run_id = _run_due_audit(e2e_db)
         audited = await api.get(f"/api/v1/maintenance/audits/{run_id}", headers=headers)
         assert audited.json()["state"] == "completed", audited.text
         finding = next(row for row in audited.json()["findings"] if row["code"] == code)
@@ -225,7 +240,7 @@ class TestScheduledVaultAudit:
         ).all()
         assert {row.event_type for row in events} == {"storage_recovery"}
         assert e2e_db.exec(select(Metadata)).first() is not None
-        assert await notifications.dispatch_due() == 1
+        assert len(fakes.recorder.for_target("webhook")) == 2
         received = fakes.recorder.for_target("webhook")
         assert {row.json["event"] for row in received} == {
             "storage_regression",
@@ -248,7 +263,6 @@ class TestScheduledVaultAudit:
     ):
         from app.core.time import utcnow
         from app.db.models import File, VaultAuditEvent, VaultAuditPolicy
-        from app.runtime.audit_scheduler import run_due_audit
 
         headers = await _setup_and_login(api, tmp_path)
         upload = await api.post(
@@ -279,7 +293,7 @@ class TestScheduledVaultAudit:
         policy.next_due_at = now
         e2e_db.add(policy)
         e2e_db.commit()
-        run_id = await asyncio.to_thread(run_due_audit, now=now)
+        run_id = _run_due_audit(e2e_db)
         audited = await api.get(f"/api/v1/maintenance/audits/{run_id}", headers=headers)
         assert "owned_blob_hash_mismatch" in {
             row["code"] for row in audited.json()["findings"]
@@ -298,11 +312,9 @@ class TestScheduledVaultAudit:
     ):
         from app.core.time import utcnow
         from app.db.models import CapacityReservation, VaultAuditPolicy
-        from app.runtime.audit_scheduler import run_due_audit
 
         headers = await _setup_and_login(api, tmp_path)
-        backup = await api.post("/api/v1/backups", headers=headers)
-        assert backup.status_code == 202, backup.text
+        await create_backup(api, headers)
         now = utcnow()
         configured = await api.put(
             "/api/v1/maintenance/audit-policies/full",
@@ -319,7 +331,7 @@ class TestScheduledVaultAudit:
         e2e_db.add(policy)
         e2e_db.commit()
 
-        run_id = await asyncio.to_thread(run_due_audit, now=now)
+        run_id = _run_due_audit(e2e_db)
         audited = await api.get(f"/api/v1/maintenance/audits/{run_id}", headers=headers)
         assert audited.status_code == 200, audited.text
         body = audited.json()

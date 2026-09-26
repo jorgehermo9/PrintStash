@@ -72,9 +72,14 @@ retain their outcome and the result supplying their verified bytes.
 Administrator APIs are `GET /api/v1/backups/runs`,
 `GET /api/v1/backups/runs/{run_id}` and
 `POST /api/v1/backups/runs/destinations/{result_id}/retry`.
-Create retains its successful response fields and HTTP 202, adding `run_id`,
-`outcome` and `destination_results`. An all-destinations-failed HTTP 502 response
-retains its error detail and includes `run_id` for inspection.
+Creating a backup and retrying a destination both answer HTTP 202 with a
+`job_id`; follow it at `GET /api/v1/jobs/{job_id}`. A completed create Job's
+result is the backup, with `run_id`, `outcome` and `destination_results`; a
+completed retry Job's result is the destination as it now stands. A refused or
+failed retry ends its Job failed with the reason, and a second retry of the same
+destination while one is queued or running answers 409
+`backup_retry_in_progress`. An interrupted Job's next attempt settles the run it
+left open.
 
 ## Create A Backup Before Risky Work
 
