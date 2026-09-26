@@ -109,6 +109,19 @@ describe("BulkFiles", () => {
     expect(onAddItems).toHaveBeenCalledTimes(1);
   });
 
+  it("opens only the folder picker from the folder-select action", async () => {
+    const { container } = renderBulk();
+    const [fileInput, folderInput] =
+      container.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const fileClick = vi.spyOn(fileInput, "click");
+    const folderClick = vi.spyOn(folderInput, "click");
+
+    await userEvent.click(screen.getByRole("button", { name: /select a folder/i }));
+
+    expect(folderClick).toHaveBeenCalledOnce();
+    expect(fileClick).not.toHaveBeenCalled();
+  });
+
   it("recurses a dropped entry tree into the queue", async () => {
     const { onAddItems } = renderBulk();
 
