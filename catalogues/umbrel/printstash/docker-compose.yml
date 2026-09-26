@@ -1,0 +1,29 @@
+# Umbrel app definition, derived from the root docker-compose.yml. Umbrel pins
+# images by digest; the release that submits this appends @sha256:… to `image`.
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: printstash_web_1
+      APP_PORT: 3000
+      # PrintStash has its own accounts.
+      PROXY_AUTH_ADD: "false"
+
+  web:
+    image: ghcr.io/xiao-villamor/printstash:0.13.0
+    # Not on-failure: a restart requested from Settings is a graceful SIGTERM,
+    # which can exit with status 0 and would not be relaunched.
+    restart: unless-stopped
+    stop_grace_period: 60s
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    environment:
+      # environment mode: the credentials are always set, and browser
+      # registration never opens. If they are ever invalid, the installation
+      # stays closed and the setup page names what to fix.
+      VAULT_SETUP_MODE: environment
+      VAULT_RESTART_ENABLED: "true"
+      # The credentials Umbrel shows on the app's page (umbrel-app.yml).
+      VAULT_SETUP_ADMIN_USERNAME: admin
+      VAULT_SETUP_ADMIN_PASSWORD: ${APP_PASSWORD}

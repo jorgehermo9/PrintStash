@@ -60,9 +60,24 @@ secret, or command override is needed.
    the share on one pool, as appdata is by default: a share spread across
    array disks can split staging and files the same way. See
    [Hard-linked imports](../docs/deployment.md#hard-linked-imports).
-4. Open the WebUI on a trusted local network and create the administrator
-   account. The first person to register becomes the administrator; registration
-   closes once an account exists. Do not expose first-run setup to the internet.
+4. Choose **First-run setup**, which decides how the first administrator is
+   created:
+   - `trusted_network` (the default): leave the administrator fields blank. The
+     administrator registers in the browser, **only from your local network**:
+     open the WebUI at `http://tower.local:3000` or the server's LAN IP.
+     Registration through Tailscale, a VPN, a reverse proxy, Unraid Connect or a
+     domain is refused. The first person to register becomes the administrator,
+     and registration closes once an account exists. Do not expose first-run
+     setup to the internet.
+   - `environment`: fill in **Administrator username** (3 to 128 characters) and
+     **Administrator password** (8 to 256 characters). PrintStash creates that
+     administrator at first start; sign in with it and choose where files are
+     stored. Choose this if you will first reach PrintStash through Tailscale, a
+     VPN, a reverse proxy or Unraid Connect.
+5. The mode and the fields must agree: `environment` needs both credentials, and
+   `trusted_network` needs them blank. If they don't, setup stays closed and the
+   WebUI names what to change. The fields are used once: editing them later does
+   not change the account (reset a password under **Settings → Users**).
 
 The template sets `VAULT_SETUP_MODE=trusted_network` for the initial registration
 and `VAULT_RESTART_ENABLED=true` for Settings → Restart. The template uses
@@ -70,7 +85,7 @@ and `VAULT_RESTART_ENABLED=true` for Settings → Restart. The template uses
 Settings restart exits the supervised app; a manual stop remains stopped.
 It uses `PUID=99` and `PGID=100` for Unraid's usual `nobody:users` file
 ownership. Set the numeric owner and group of your shares in the template's
-advanced fields if they differ.
+**User ID** and **Group ID** fields if they differ.
 The image's entrypoint creates and repairs managed data directories, runs
 migrations, and generates a persistent signing secret when none was supplied.
 
@@ -112,7 +127,7 @@ not visible unless it is also mounted inside the container.
    the corresponding subfolder of the new dedicated appdata parent first.
    Preserve the database's hidden signing-key file. Keep the backup until the
    library and files work through the new container.
-5. In the new template's advanced fields, set `PUID` and `PGID` to the old
+5. In the new template's **User ID** and **Group ID** fields, set `PUID` and `PGID` to the old
    API's numeric data owner from step 1. Keeping that identity also keeps
    existing Library-source ownership markers readable. If the old API had a
    nonempty `VAULT_JWT_SECRET`, add it to the new template as a Variable with

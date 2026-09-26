@@ -1,0 +1,84 @@
+# CasaOS / ZimaOS app definition, derived from the root docker-compose.yml.
+# The administrator fields are blank by default: fill them in the install dialog
+# to create the administrator at first start, or leave them blank and register
+# in the browser from your local network.
+name: printstash
+services:
+  printstash:
+    image: ghcr.io/xiao-villamor/printstash:0.13.0
+    restart: unless-stopped
+    stop_grace_period: 60s
+    network_mode: bridge
+    environment:
+      PUID: $PUID
+      PGID: $PGID
+      VAULT_SETUP_MODE: trusted_network
+      VAULT_RESTART_ENABLED: "true"
+      VAULT_SETUP_ADMIN_USERNAME: ""
+      VAULT_SETUP_ADMIN_PASSWORD: ""
+      VAULT_SETUP_ADMIN_EMAIL: ""
+    ports:
+      # 3000 is taken by many dashboard apps; the store remaps to a quieter port.
+      - target: 3000
+        published: "3378"
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: /DATA/AppData/$AppID/data
+        target: /data
+    x-casaos:
+      envs:
+        - container: PUID
+          description:
+            en_US: Numeric owner of the data folder and mounted Library sources.
+        - container: PGID
+          description:
+            en_US: Numeric group of the data folder and mounted Library sources.
+        - container: VAULT_SETUP_ADMIN_USERNAME
+          description:
+            en_US: With VAULT_SETUP_MODE set to environment, creates this administrator at first start. Use it if you will first open PrintStash through Tailscale, a VPN, a reverse proxy or a domain. Leave it blank with trusted_network to create the administrator in the browser from your local network (casaos.local or the device's LAN IP).
+        - container: VAULT_SETUP_ADMIN_PASSWORD
+          description:
+            en_US: Optional, at least 8 characters. Used once; reset it later under Settings → Users.
+        - container: VAULT_SETUP_ADMIN_EMAIL
+          description:
+            en_US: Optional administrator email.
+        - container: VAULT_SETUP_MODE
+          description:
+            en_US: trusted_network registers the first administrator in the browser from your local network, with the administrator fields blank. environment creates it at first start from the administrator fields, which are then required.
+      ports:
+        - container: "3000"
+          description:
+            en_US: Web UI port
+      volumes:
+        - container: /data
+          description:
+            en_US: Database, managed files, thumbnails, staging and backups. Do not point this at an existing model library.
+    container_name: printstash
+
+x-casaos:
+  id: org.printstash.printstash
+  architectures:
+    - amd64
+    - arm64
+  main: printstash
+  author: PrintStash contributors
+  developer: PrintStash
+  category: Utilities
+  title:
+    en_US: PrintStash
+  tagline:
+    en_US: A self-hosted library for 3D models and the G-code that prints them
+  description:
+    en_US: |
+      PrintStash keeps your 3D models, sliced G-code revisions and print history in one searchable library on your own server. Preview STL, 3MF, OBJ, STEP and G-code in the browser, keep the revisions that printed well, index existing folders in place, and send prints to Klipper/Moonraker, OctoPrint, PrusaLink, Bambu Lab and Elegoo printers.
+  tips:
+    before_install:
+      en_US: |
+        By default (VAULT_SETUP_MODE trusted_network) you create the first administrator in the browser from your local network (casaos.local or the device's LAN IP); registration through Tailscale, a VPN, a reverse proxy or a domain is refused. To create it at first start instead, set VAULT_SETUP_MODE to environment and fill in the administrator username and password. Either way, PrintStash then asks where to store your files.
+  icon: https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/icon.svg
+  thumbnail: https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/icon.svg
+  screenshot_link: []
+  index: /
+  port_map: "3378"
+  version: "0.13.0"

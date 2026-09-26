@@ -16032,6 +16032,17 @@
             ],
             "title": "Default Thumb Dir"
           },
+          "observed_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Host"
+          },
           "recovery_required": {
             "default": false,
             "title": "Recovery Required",
@@ -16041,6 +16052,44 @@
             "default": false,
             "title": "Setup Available",
             "type": "boolean"
+          },
+          "storage_choice_required": {
+            "default": false,
+            "title": "Storage Choice Required",
+            "type": "boolean"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "disabled",
+                  "untrusted_host",
+                  "environment",
+                  "admin_credentials_missing",
+                  "admin_credentials_invalid",
+                  "admin_credentials_without_environment_mode"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "unavailable_variables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Variables"
           },
           "user_count": {
             "default": 0,
@@ -36828,7 +36877,25 @@
     },
     "/api/v1/setup/prepare-storage": {
       "post": {
+        "description": "Finish pending storage, or choose it when nobody has yet.\n\nWithout a body this retries an activation that failed after the choice was\npersisted. An owner provisioned from ``VAULT_SETUP_ADMIN_*`` has no choice to\nretry, so its first call carries one. An empty body counts as no body.\nDeliberately not origin-gated: a signed-in owner is already trusted, and this\nis the path that works behind a proxy that rewrites ``Host``.",
         "operationId": "prepare_storage_api_v1_setup_prepare_storage_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SetupStorageRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -36839,6 +36906,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [

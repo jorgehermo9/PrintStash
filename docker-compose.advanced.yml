@@ -126,10 +126,17 @@ services:
       # for any internet-facing install. Do not set it to an empty string; that is
       # taken as a deliberate choice and skips the generated secret.
       VAULT_JWT_SECRET: ${VAULT_JWT_SECRET:-changeme_jwt_secret_please_change}
-      # trusted_network enables browser registration of the first administrator
-      # from private addresses. Use `disabled` once setup is done, or when exposed.
+      # How the first administrator is created: trusted_network (browser
+      # registration from private addresses), environment (from the
+      # VAULT_SETUP_ADMIN_* variables below, at startup), or disabled. Use
+      # `disabled` once setup is done, or when exposed.
       VAULT_SETUP_MODE: ${VAULT_SETUP_MODE:-trusted_network}
       VAULT_SETUP_ALLOWED_HOSTS: ${VAULT_SETUP_ALLOWED_HOSTS:-}
+      # Only with VAULT_SETUP_MODE=environment; set in any other mode they are
+      # a misconfiguration the setup page explains. Used once; blank is unset.
+      VAULT_SETUP_ADMIN_USERNAME: ${VAULT_SETUP_ADMIN_USERNAME:-}
+      VAULT_SETUP_ADMIN_PASSWORD: ${VAULT_SETUP_ADMIN_PASSWORD:-}
+      VAULT_SETUP_ADMIN_EMAIL: ${VAULT_SETUP_ADMIN_EMAIL:-}
       VAULT_SECRETS_KEY: ${VAULT_SECRETS_KEY:-}
       # Set true when PrintStash is served over HTTPS.
       VAULT_SESSION_COOKIE_SECURE: ${VAULT_SESSION_COOKIE_SECURE:-false}

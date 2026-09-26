@@ -26,6 +26,7 @@ import { usePathname, useRouter } from "@/lib/navigation";
 import { Loader2 } from "lucide-react";
 
 import { getSetupStatus } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 
 interface Props {
   children: React.ReactNode;
@@ -35,9 +36,16 @@ export function SetupGate({ children }: Props) {
   useUiLocale();
   const router = useRouter();
   const pathname = usePathname();
+  const auth = useAuth();
+  const isSuperuser = auth.user?.is_superuser === true;
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The path whose probe found an owner who has not chosen storage yet.
+  const [choicePendingAt, setChoicePendingAt] = useState<string | null>(null);
 
+  // The probe runs per navigation, never on sign-in: finishing the wizard signs
+  // the owner in while still on /setup, and re-probing there would race the
+  // wizard's own redirect and send them to /login.
   useEffect(() => {
     let cancelled = false;
     getSetupStatus()
@@ -51,6 +59,11 @@ export function SetupGate({ children }: Props) {
           router.replace("/login");
           return;
         }
+        if (status.storage_choice_required) {
+          setChoicePendingAt(pathname); // decided below, once auth is known
+          return;
+        }
+        setChoicePendingAt(null);
         setReady(true);
       })
       .catch((err) => {
@@ -69,7 +82,17 @@ export function SetupGate({ children }: Props) {
     // to / after completion re-validates immediately.
   }, [pathname, router]);
 
-  if (!ready) {
+  // An owner provisioned from VAULT_SETUP_ADMIN_* signs in before any storage
+  // exists. Only a superuser can choose it, so only a superuser is sent there:
+  // anyone else would bounce back and forth. A full page load learns the user
+  // after the probe answers, so this waits for auth instead of reading it early.
+  const choiceDecided = choicePendingAt === pathname && !auth.loading;
+  const toStorageStep = choiceDecided && isSuperuser && pathname !== "/getting-started";
+  useEffect(() => {
+    if (toStorageStep) router.replace("/getting-started");
+  }, [toStorageStep, router]);
+
+  if (!ready && !(choiceDecided && !toStorageStep)) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-surface-container-lowest">
         <Loader2 className="h-6 w-6 animate-spin text-on-surface-variant" />

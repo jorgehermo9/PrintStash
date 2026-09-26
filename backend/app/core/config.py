@@ -147,9 +147,20 @@ class Settings(BaseSettings):
     sqlite_busy_timeout_ms: int = Field(default=30_000, ge=1)
 
     jwt_secret: str = DEFAULT_JWT_SECRET
-    # Initial registration is explicitly enabled only on a trusted network.
-    setup_mode: Literal["trusted_network", "disabled"] = "disabled"
+    # How a fresh installation gets its first owner (resolved and validated
+    # together with setup_admin_* by modules.administration.setup_policy):
+    # trusted_network — a browser on the local network registers it;
+    # environment — setup_admin_* creates it at startup, the browser never can;
+    # disabled — no first-run path.
+    setup_mode: Literal["trusted_network", "environment", "disabled"] = "disabled"
     setup_allowed_hosts: str = ""
+    # The first administrator for setup_mode=environment (app-store forms,
+    # unattended deployments). Consumed once while the installation has no
+    # owner; it never changes an existing account. Empty values are unset:
+    # install forms emit empty variables for blanks.
+    setup_admin_username: str = ""
+    setup_admin_password: SecretStr = SecretStr("")
+    setup_admin_email: str = ""
     # Credentials persisted in the database are encrypted with this external
     # key. Empty uses a generated 0600 key file beside the SQLite database.
     secrets_key: str = ""

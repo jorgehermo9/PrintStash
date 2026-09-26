@@ -22,17 +22,29 @@ import { screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SetupGate } from "@/components/setup-gate";
-import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
+import { usePathname } from "@/lib/navigation";
+import {
+  adminSession,
+  json,
+  memberSession,
+  renderApp,
+  type RenderAppOptions,
+} from "@/test-support/render";
 import type { SetupStatus } from "@/types";
 
 const CONFIGURED: SetupStatus = { configured: true, user_count: 1 };
 const UNCONFIGURED: SetupStatus = { configured: false, user_count: 0 };
+
+function Path() {
+  return <span data-testid="path">{usePathname()}</span>;
+}
 
 function renderGate(options: RenderAppOptions & { status?: SetupStatus } = {}) {
   const { status = CONFIGURED, routes = {}, ...rest } = options;
   return renderApp(
     <SetupGate>
       <p>the vault</p>
+      <Path />
     </SetupGate>,
     {
       routes: { "GET /api/v1/setup/status": json(status), ...routes },
@@ -88,6 +100,43 @@ describe("SetupGate", () => {
 
     it("serves the wizard itself", async () => {
       renderGate({ status: UNCONFIGURED, at: "/setup" });
+
+      expect(await screen.findByText("the vault")).toBeInTheDocument();
+    });
+  });
+
+  describe("an environment-provisioned owner who has not chosen storage", () => {
+    // VAULT_SETUP_ADMIN_* creates the account before anyone chose where files
+    // live; every page but the storage step would write to storage nobody chose.
+    const CHOOSING: SetupStatus = { ...CONFIGURED, storage_choice_required: true };
+
+    it("sends a superuser to the storage step", async () => {
+      renderGate({ status: CHOOSING, at: "/models" });
+
+      expect(await screen.findByTestId("path")).toHaveTextContent("/getting-started");
+    });
+
+    it("keeps anyone else where they are", async () => {
+      // Only a superuser can choose; redirecting anyone else would bounce forever.
+      renderGate({ status: CHOOSING, at: "/models", auth: memberSession() });
+
+      expect(await screen.findByTestId("path")).toHaveTextContent("/models");
+    });
+
+    it("holds the app back until it knows who signed in", async () => {
+      // A full page load learns the user after the probe answers; rendering first
+      // would show a page the owner is about to be redirected away from.
+      renderGate({
+        status: CHOOSING,
+        at: "/models",
+        auth: adminSession({ user: null, loading: true }),
+      });
+
+      await waitFor(() => expect(screen.queryByText("the vault")).toBeNull());
+    });
+
+    it("serves the storage step itself", async () => {
+      renderGate({ status: CHOOSING, at: "/getting-started" });
 
       expect(await screen.findByText("the vault")).toBeInTheDocument();
     });

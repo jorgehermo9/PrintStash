@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GettingStartedPage from "@/pages/getting-started";
 import { usePathname } from "@/lib/navigation";
 import type { ArtifactUploadCreate, ArtifactUploadStatus } from "@/lib/api/artifact-uploads";
-import { aModelListItem, anExternalLibrary, aJob } from "@/test-support/factories";
+import { aModelListItem, anExternalLibrary, aJob, aVaultConfig } from "@/test-support/factories";
+import { storageProviderCatalogue } from "@/test-support/storage-provider-catalogue";
 import {
   adminSession,
   json,
@@ -99,6 +100,14 @@ function renderGuide(routes: RouteTable = {}, auth = adminSession()) {
     },
   );
 }
+/** An owner provisioned from VAULT_SETUP_ADMIN_* who has not chosen storage yet. */
+function choosingStorage(): RouteTable {
+  return {
+    "POST /api/v1/setup/prepare-storage": json({ detail: "setup_storage_choice_required" }, 409),
+    "GET /api/v1/storage/providers": json(storageProviderCatalogue),
+    "GET /api/v1/config": json(aVaultConfig()),
+  };
+}
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -110,14 +119,14 @@ afterEach(() => {
 describe("Getting started", () => {
   it("keeps uploads unavailable while storage needs preparation", async () => {
     renderGuide({
-      "POST /api/v1/setup/prepare-storage": json({ detail: "storage_root_enrollment_failed" }, 500),
+      "POST /api/v1/setup/prepare-storage": json({ detail: "storage_root_enrollment_failed" }, 503),
     });
     expect(await screen.findByText(/Account created; storage preparation pending/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Upload my first files" })).not.toBeInTheDocument();
   });
   it("recovers preparation without creating another account", async () => {
     const guide = renderGuide({
-      "POST /api/v1/setup/prepare-storage": json({ detail: "storage_root_enrollment_failed" }, 500),
+      "POST /api/v1/setup/prepare-storage": json({ detail: "storage_root_enrollment_failed" }, 503),
     });
     const retry = await screen.findByRole("button", { name: "Retry" });
     guide.route({
@@ -130,6 +139,29 @@ describe("Getting started", () => {
     await userEvent.click(retry);
     expect(await screen.findByRole("button", { name: "Upload my first files" })).toBeVisible();
     expect(guide.requests().some((request) => request.url === "/api/v1/setup")).toBe(false);
+  });
+  it("asks an environment-provisioned owner to choose storage", async () => {
+    renderGuide(choosingStorage());
+    expect(await screen.findByRole("button", { name: "Use this storage" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Upload my first files" })).not.toBeInTheDocument();
+  });
+  it("does not offer deferring the storage choice", async () => {
+    // Every other page leads back here until storage exists.
+    renderGuide(choosingStorage());
+    await screen.findByRole("button", { name: "Use this storage" });
+    expect(screen.queryByRole("button", { name: "I'll do this later" })).not.toBeInTheDocument();
+  });
+  it("reaches the first upload once the owner chooses storage", async () => {
+    renderGuide({
+      ...choosingStorage(),
+      // Only a request carrying a choice prepares storage; the bare retry asks for one.
+      "POST /api/v1/setup/prepare-storage": (_url, init) =>
+        String(init?.body ?? "{}") === "{}"
+          ? json({ detail: "setup_storage_choice_required" }, 409)
+          : json({ ready: true, storage_provider: "local", checks: [] }),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Use this storage" }));
+    expect(await screen.findByRole("button", { name: "Upload my first files" })).toBeVisible();
   });
   it("lets an administrator postpone the guide", async () => {
     renderGuide();

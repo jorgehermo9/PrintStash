@@ -36,6 +36,7 @@ from app.db.models import (
     PrinterStatus,
     StagingLease,
     SystemConfig,
+    User,
 )
 from app.modules.identity.auth import create_access_token
 from app.modules.storage.storage_backend.contracts import (
@@ -481,6 +482,36 @@ class TestSafeDbUrl:
         assert lifecycle._safe_db_url("sqlite:///tmp/x.db").endswith("x.db")
 
 
+@pytest.fixture
+def startup_until_storage_binding(monkeypatch: pytest.MonkeyPatch):
+    """Run startup up to storage binding and report the accounts it left behind."""
+    from app.modules.storage import storage_paths
+
+    class StopAtStorageBinding(Exception):
+        pass
+
+    observed: dict[str, list[str]] = {}
+
+    def stop(*, recover_publications=True, recovery_only=False):
+        with lifecycle.get_session_factory().scoped_session() as session:
+            observed["users"] = [user.username for user in session.exec(select(User))]
+        raise StopAtStorageBinding
+
+    monkeypatch.setattr(storage_paths, "validate_runtime_storage_paths", lambda: None)
+    monkeypatch.setattr(lifecycle, "acquire_process_lock", lambda: object())
+    monkeypatch.setattr(lifecycle, "init_db", lambda: None)
+    monkeypatch.setattr(lifecycle, "_prepare_storage_for_startup", stop)
+
+    async def run(*, restore: bool) -> list[str]:
+        monkeypatch.setattr(lifecycle, "inspect_restore_recovery", lambda: restore)
+        with pytest.raises(StopAtStorageBinding):
+            async with lifecycle.lifespan(app_main.app):
+                pass
+        return observed["users"]
+
+    return run
+
+
 class TestLifespan:
     @pytest.mark.asyncio
     async def test_normal_startup_persists_missing_legacy_s3_root_before_composition(
@@ -573,6 +604,27 @@ class TestLifespan:
             "overlay_root": "vault-data",
             "recovery_only": True,
         }
+
+    @pytest.mark.asyncio
+    async def test_provisions_the_environment_administrator_before_binding_storage(
+        self, db_session, environment_admin, startup_until_storage_binding
+    ) -> None:
+        environment_admin("store-owner", "StoreFormPassword123")
+
+        users = await startup_until_storage_binding(restore=False)
+
+        assert users == ["store-owner"]
+
+    @pytest.mark.asyncio
+    async def test_never_provisions_during_restore_maintenance(
+        self, db_session, environment_admin, startup_until_storage_binding
+    ) -> None:
+        # A restore is rebuilding the database the owner would be written to.
+        environment_admin("store-owner", "StoreFormPassword123")
+
+        users = await startup_until_storage_binding(restore=True)
+
+        assert users == []
 
     def test_lifespan_keeps_admin_surface_when_sftp_probe_fails(
         self, _local_storage: None, db_session, monkeypatch: pytest.MonkeyPatch

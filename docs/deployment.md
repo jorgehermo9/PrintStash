@@ -63,9 +63,10 @@ as private even for public repositories; see
 ### Unraid, CasaOS and other container dashboards
 
 For Unraid, use the [single-container template](../templates/printstash.xml)
-and its [installation and migration guide](../unraid/README.md). On other
-container dashboards, add the published image as a custom container with these
-settings:
+and its [installation and migration guide](../unraid/README.md). Manifests for
+Runtipi, Umbrel and CasaOS/ZimaOS are kept in [`catalogues/`](../catalogues/README.md)
+and published to those stores with each release. On other container dashboards,
+add the published image as a custom container with these settings:
 
 | Setting | Value |
 | --- | --- |
@@ -74,7 +75,7 @@ settings:
 | Network | Bridge |
 | Web port | Host port of your choice → container TCP port `3000` |
 | Persistent folder | A dedicated host folder → `/data` (read/write) |
-| Environment | `VAULT_SETUP_MODE=trusted_network`, `VAULT_RESTART_ENABLED=true` |
+| Environment | `VAULT_RESTART_ENABLED=true`, and either `VAULT_SETUP_MODE=trusted_network` (register in the browser from the LAN) or `VAULT_SETUP_MODE=environment` with `VAULT_SETUP_ADMIN_USERNAME` and `VAULT_SETUP_ADMIN_PASSWORD` (create the administrator at first start) |
 | Restart policy | `unless-stopped` |
 | Stop timeout | `60` seconds |
 
@@ -323,8 +324,11 @@ These defaults apply when the setting is omitted.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VAULT_SETUP_MODE` | `disabled` in the API; `trusted_network` in Compose | Enables browser registration only for an unconfigured installation. Set `disabled` for an internet-facing installation. |
-| `VAULT_SETUP_ALLOWED_HOSTS` | Empty | Extra comma-separated hostnames allowed for initial registration. Localhost, private addresses, `.local`, `.localhost`, and `.home.arpa` are already allowed. |
+| `VAULT_SETUP_MODE` | `disabled` in the API; `trusted_network` in Compose | How an unconfigured installation gets its first administrator. `trusted_network`: browser registration from the local network. `environment`: created at startup from `VAULT_SETUP_ADMIN_*`; the browser cannot register. `disabled`: no first-run path; use it for an internet-facing installation once set up. Contradicting combinations (credentials without `environment`, or `environment` without valid credentials) keep setup closed and the setup page names the variables to fix. |
+| `VAULT_SETUP_ALLOWED_HOSTS` | Empty | Extra comma-separated hostnames allowed for initial registration. Localhost, private addresses, `.local`, `.localhost`, and `.home.arpa` are already allowed. Tailscale names (`*.ts.net`) and `100.x` addresses must be listed here. |
+| `VAULT_SETUP_ADMIN_USERNAME` | Empty | With `VAULT_SETUP_MODE=environment`, creates the first administrator at startup when the installation has no owner. The administrator then signs in and chooses storage. Used once: it never changes an existing account. See [first use](first-run.md#an-administrator-from-the-deployment). |
+| `VAULT_SETUP_ADMIN_PASSWORD` | Empty | Password for that administrator, at least 8 characters. Required in `environment` mode. Changing it later does not change the account's password. |
+| `VAULT_SETUP_ADMIN_EMAIL` | Empty | Optional email for that administrator. |
 | `VAULT_JWT_SECRET` | Generated and stored in the database | Manage your own signing secret; generate with `openssl rand -hex 32`. |
 | `VAULT_SECRETS_KEY` | Generated key file in `/data/db` | External key for stored credentials. Preserve it with backups; changing it requires a planned key migration. |
 | `VAULT_SESSION_COOKIE_SECURE` | `false` | Set `true` when accessed through HTTPS. |

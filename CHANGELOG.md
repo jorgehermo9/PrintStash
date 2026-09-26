@@ -117,6 +117,23 @@ image. See UPGRADE.md before pulling.**
   keyword results. Search results use the full browsing surface with visible
   filters and simpler result cards instead of a nested results panel. Print
   duration filters show readable time in the results toolbar.
+- **First administrator from the deployment.** `VAULT_SETUP_MODE=environment`
+  with `VAULT_SETUP_ADMIN_USERNAME` and `VAULT_SETUP_ADMIN_PASSWORD` (plus
+  optional `VAULT_SETUP_ADMIN_EMAIL`) creates the first administrator at
+  startup, for app-store install forms and unattended deployments that cannot
+  use browser registration. The administrator signs in and chooses storage in
+  the browser. The variables are used once and never change an existing
+  account. The mode and variables are checked together: a contradicting
+  combination keeps setup closed instead of silently falling back to browser
+  registration.
+- App-store manifests for Runtipi, Umbrel and CasaOS/ZimaOS live in
+  `catalogues/` and are published with each release. The Unraid template now
+  shows optional administrator username, password and email fields, and the
+  `PUID`/`PGID` fields, without opening Advanced.
+- When the browser cannot create the first administrator, the setup page now
+  says why and lists what to change: the address PrintStash saw, or the
+  first-run variables that don't fit together. It previously showed a single
+  "registration is disabled" message.
 - DXF files can be imported as source Artifacts, downloaded with their original
   bytes, and included in backups. Drawing previews are not yet available.
 - Managed source Artifacts can be moved to trash and restored individually from
@@ -172,9 +189,18 @@ image. See UPGRADE.md before pulling.**
 - Double-clicking a collection in the library sidebar keeps that collection open
   instead of returning to All Models.
 - Long nested collection paths stay within the upload dialog's collection selector.
+
+- "Or select a folder" in the Bulk upload tab opens the folder picker again. The
+  hidden inputs sat inside the clickable drop zone, so the folder input's click
+  bubbled to the zone and the file picker opened on top of it; only drag-and-drop
+  could queue a folder.
+
 - Browser Back now returns through the Vault's collection navigation before leaving for an earlier page.
 - Model cards show the collection name in their badge instead of its full hierarchy path.
 - Long collection paths no longer push the Create Family model picker beyond the dialog edge.
+- A fault inside the browser tab is no longer reported as "Couldn't reach the
+  server". Only real `fetch` rejections map to that message; any other `TypeError`
+  now says to reload the page, and keeps its original text for diagnostics.
 
 - The Unraid Community Applications catalog has one current PrintStash listing;
   the old API and frontend templates are marked deprecated for existing users.
@@ -186,6 +212,13 @@ image. See UPGRADE.md before pulling.**
   before downloading, avoiding repeated permission dialogs for multi-file imports.
 - Browser captures accept multi-file selections within the review limit, release
   unfinished upload slots after transfer failures, and explain capacity errors.
+
+- Uploads work again when PrintStash is opened over plain HTTP on a LAN address
+  (for example `http://192.168.1.10:3000`). Browsers hide `crypto.subtle` outside
+  secure contexts, so the new resumable upload failed while hashing the file and
+  reported "Couldn't reach the server" before sending anything. The browser now
+  falls back to a JavaScript SHA-256 there.
+
 - Provider connection errors now distinguish missing MyMiniFactory OAuth setup,
   rejected Cults credentials, provider outages, and invalid provider responses.
 - Routine HTTP client requests no longer fill INFO logs during PrusaLink polling;
@@ -260,6 +293,10 @@ image. See UPGRADE.md before pulling.**
 - Mounted Library source enrollment now rolls back known marker failures instead
   of leaving a conflicted source behind, reports read-only marker failures
   explicitly, and documents the one-time writable mount required for enrollment.
+
+- Removing a library source no longer fails with a server error when one of its
+  files was already in the trash. The failed attempt had also moved the source's
+  models to the trash while leaving the source itself in place.
 
 - PrusaLink now discovers the printer's advertised storage root, using `/usb`
   on Buddy/Core One firmware while retaining `/local` compatibility, so file

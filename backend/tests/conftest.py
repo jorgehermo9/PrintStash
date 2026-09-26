@@ -476,6 +476,30 @@ def backup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     yield from build_backup_env(tmp_path, monkeypatch)
 
 
+@pytest.fixture
+def environment_admin(monkeypatch: pytest.MonkeyPatch):
+    """Set ``VAULT_SETUP_ADMIN_*`` the way an install form or environment would.
+
+    In the root conftest because module, startup and e2e tests all need it. It
+    patches the environment-time settings rather than the overlay: startup clears
+    the overlay before it provisions, exactly as a real restart would.
+    """
+    from pydantic import SecretStr
+
+    def configure(
+        username: str, password: str, email: str = "", mode: str = "environment"
+    ) -> None:
+        frozen = settings.frozen
+        monkeypatch.setattr(frozen, "setup_mode", mode)
+        # The overlay wins over frozen settings; clear a mode another fixture set.
+        monkeypatch.delitem(_overlay, "setup_mode", raising=False)
+        monkeypatch.setattr(frozen, "setup_admin_username", username)
+        monkeypatch.setattr(frozen, "setup_admin_password", SecretStr(password))
+        monkeypatch.setattr(frozen, "setup_admin_email", email)
+
+    return configure
+
+
 @pytest.fixture(autouse=True)
 def _reset_factory_counters() -> None:
     """Rewind the `tests.factories` sequence counters between tests.

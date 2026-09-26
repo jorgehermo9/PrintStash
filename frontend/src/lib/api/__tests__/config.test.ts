@@ -152,4 +152,14 @@ describe("browser preparation contracts", () => {
     await prepareSetupStorage();
     expectRequest("/api/v1/setup/prepare-storage", "POST");
   });
+  it("retries preparation with an empty body", async () => {
+    respondWith({ ready: true, checks: [] });
+    await prepareSetupStorage();
+    expect(lastBody()).toEqual({});
+  });
+  it("sends a storage choice to the preparation endpoint", async () => {
+    respondWith({ ready: true, checks: [] });
+    await prepareSetupStorage({ storage_backend: "local" });
+    expect(lastBody()).toEqual({ storage_backend: "local" });
+  });
 });

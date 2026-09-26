@@ -2,6 +2,20 @@ export interface SetupStatus {
   configured: boolean;
   setup_available?: boolean;
   recovery_required?: boolean;
+  /** An owner was provisioned from VAULT_SETUP_ADMIN_* and must still choose storage. */
+  storage_choice_required?: boolean;
+  /** Why browser registration is refused on an unconfigured installation. */
+  unavailable_reason?:
+    | "disabled"
+    | "untrusted_host"
+    | "environment"
+    | "admin_credentials_missing"
+    | "admin_credentials_invalid"
+    | "admin_credentials_without_environment_mode";
+  /** Variables to fix when the first-run settings contradict each other (names only). */
+  unavailable_variables?: string[];
+  /** The host PrintStash saw, echoed so the explainer can name it. */
+  observed_host?: string;
   user_count: number;
   default_data_dir?: string;
   default_thumb_dir?: string;

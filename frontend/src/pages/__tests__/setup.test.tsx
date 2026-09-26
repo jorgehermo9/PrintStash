@@ -342,6 +342,32 @@ describe("SetupPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Initial registration is disabled");
     expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
   });
+  it("names the untrusted host instead of offering the form", async () => {
+    vi.mocked(deps.getSetupStatus).mockResolvedValue({
+      configured: false,
+      setup_available: false,
+      unavailable_reason: "untrusted_host",
+      observed_host: "printstash-web",
+      user_count: 0,
+    });
+    renderSetup();
+    expect(await screen.findByRole("alert")).toHaveTextContent("printstash-web");
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+  });
+  it("finds the environment administrator when checking again", async () => {
+    // The operator sets VAULT_SETUP_ADMIN_* and restarts; the page must notice.
+    vi.mocked(deps.getSetupStatus).mockResolvedValueOnce({
+      configured: false,
+      setup_available: false,
+      unavailable_reason: "untrusted_host",
+      observed_host: "printstash-web",
+      user_count: 0,
+    });
+    vi.mocked(deps.getSetupStatus).mockResolvedValueOnce({ configured: true, user_count: 1 });
+    renderSetup();
+    await userEvent.click(await screen.findByRole("button", { name: "Check again" }));
+    expect(await screen.findByText(/An account already exists/)).toBeVisible();
+  });
   it.each([
     { field: "Password", other: "Confirm password" },
     { field: "Confirm password", other: "Password" },

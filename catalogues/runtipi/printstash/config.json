@@ -1,0 +1,47 @@
+{
+  "$schema": "../app-info-schema.json",
+  "name": "PrintStash",
+  "id": "printstash",
+  "available": true,
+  "exposable": true,
+  "dynamic_config": true,
+  "port": 8577,
+  "tipi_version": 1,
+  "version": "0.13.0",
+  "categories": ["utilities"],
+  "short_desc": "Self-hosted library for 3D models and the G-code that prints them",
+  "description": "PrintStash keeps your 3D models, sliced G-code revisions and print history in one searchable library on your own server. Preview STL, 3MF, OBJ, STEP and G-code in the browser, keep the revisions that printed well, index existing NAS folders in place, and send prints to Klipper/Moonraker, OctoPrint, PrusaLink, Bambu Lab and Elegoo printers.",
+  "author": "PrintStash contributors",
+  "source": "https://github.com/xiao-villamor/PrintStash",
+  "website": "https://www.printstash.org",
+  "supported_architectures": ["amd64", "arm64"],
+  "min_tipi_version": "4.5.0",
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Administrator username",
+      "hint": "Created on first start. Sign in with it, then choose where PrintStash stores files.",
+      "placeholder": "admin",
+      "min": 3,
+      "max": 128,
+      "required": true,
+      "env_variable": "PRINTSTASH_ADMIN_USERNAME"
+    },
+    {
+      "type": "password",
+      "label": "Administrator password",
+      "hint": "At least 8 characters. Used once; to change it later, reset it under Settings → Users.",
+      "min": 8,
+      "max": 256,
+      "required": true,
+      "env_variable": "PRINTSTASH_ADMIN_PASSWORD"
+    },
+    {
+      "type": "email",
+      "label": "Administrator email",
+      "hint": "Optional account profile email.",
+      "required": false,
+      "env_variable": "PRINTSTASH_ADMIN_EMAIL"
+    }
+  ]
+}
