@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+
 import {
   abortArtifactUpload,
   createArtifactUpload,
@@ -48,12 +50,24 @@ export function rememberedArtifactUploads(): string[] {
   return readIds();
 }
 
-function toHex(bytes: ArrayBuffer): string {
+function toHex(bytes: ArrayBuffer | Uint8Array): string {
   return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+const FALLBACK_HASH_CHUNK_BYTES = 8 * 1024 * 1024;
+
+// `crypto.subtle` only exists in secure contexts, so a self-hosted Vault opened over
+// plain HTTP on a LAN address (http://192.168.x.x:3000) has none. Hash in JS there,
+// streaming the Blob so a large mesh is never held twice.
 export async function sha256Blob(blob: Blob): Promise<string> {
-  return toHex(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) return toHex(await subtle.digest("SHA-256", await blob.arrayBuffer()));
+  const hash = sha256.create();
+  for (let offset = 0; offset < blob.size; offset += FALLBACK_HASH_CHUNK_BYTES) {
+    const chunk = blob.slice(offset, offset + FALLBACK_HASH_CHUNK_BYTES);
+    hash.update(new Uint8Array(await chunk.arrayBuffer()));
+  }
+  return toHex(hash.digest());
 }
 
 export interface UploadOptions {

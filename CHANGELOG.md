@@ -164,6 +164,13 @@ image. See UPGRADE.md before pulling.**
   before downloading, avoiding repeated permission dialogs for multi-file imports.
 - Browser captures accept multi-file selections within the review limit, release
   unfinished upload slots after transfer failures, and explain capacity errors.
+
+- Uploads work again when PrintStash is opened over plain HTTP on a LAN address
+  (for example `http://192.168.1.10:3000`). Browsers hide `crypto.subtle` outside
+  secure contexts, so the new resumable upload failed while hashing the file and
+  reported "Couldn't reach the server" before sending anything. The browser now
+  falls back to a JavaScript SHA-256 there.
+
 - Provider connection errors now distinguish missing MyMiniFactory OAuth setup,
   rejected Cults credentials, provider outages, and invalid provider responses.
 - Routine HTTP client requests no longer fill INFO logs during PrusaLink polling;

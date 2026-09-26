@@ -10,6 +10,7 @@ import {
   pauseArtifactUpload,
   rememberedArtifactUploads,
   resumeArtifactUpload,
+  sha256Blob,
   uploadArtifact,
   type ArtifactUploadApi,
 } from "@/lib/artifact-upload";
@@ -227,5 +228,34 @@ describe("uploadArtifact", () => {
     await expect(transfer).rejects.toMatchObject({ name: "AbortError" });
     expect(api.abortArtifactUpload).not.toHaveBeenCalled();
     expect(rememberedArtifactUploads()).toEqual(["session-1"]);
+  });
+});
+
+describe("sha256Blob", () => {
+  // SHA-256("abc"), FIPS 180-2 appendix B.1.
+  const ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+  // What a plain-HTTP LAN origin sees: `crypto` exists, `crypto.subtle` does not.
+  const withoutSubtleCrypto = () =>
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+
+  it("hashes with SubtleCrypto when the page is a secure context", async () => {
+    await expect(sha256Blob(new Blob(["abc"]))).resolves.toBe(ABC);
+  });
+
+  it("hashes without SubtleCrypto on a plain-HTTP LAN origin", async () => {
+    withoutSubtleCrypto();
+    expect(globalThis.crypto.subtle).toBeUndefined();
+
+    await expect(sha256Blob(new Blob(["abc"]))).resolves.toBe(ABC);
+  });
+
+  it("streams a Blob larger than one fallback chunk to the same digest", async () => {
+    const bytes = new Uint8Array(8 * 1024 * 1024 + 3).map((_, index) => index % 251);
+    const blob = new Blob([bytes]);
+    const native = await sha256Blob(blob);
+    withoutSubtleCrypto();
+
+    await expect(sha256Blob(blob)).resolves.toBe(native);
   });
 });
