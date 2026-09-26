@@ -10,27 +10,15 @@ either stuck without storage or has storage no one chose.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from app.modules.administration.setup_bootstrap import provision_from_environment
+from tests.e2e._jobs import completed_job
 from tests.paths import FIXTURES_DIR
 
 USERNAME = "store-owner"
 PASSWORD = "StoreFormPassword123"
 FIXTURE = FIXTURES_DIR / "real_orca_ender3_benchy.gcode"
-
-
-async def _await_job(api, headers, job_id: str) -> dict:
-    for _ in range(50):
-        response = await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-        assert response.status_code == 200, response.text
-        job = response.json()
-        if job["state"] in ("completed", "failed", "duplicate"):
-            return job
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"job {job_id} did not finish: {job}")
 
 
 class TestEnvironmentAdministrator:
@@ -73,8 +61,6 @@ class TestEnvironmentAdministrator:
             data={"model_name": "First model"},
             headers=headers,
         )
-        assert uploaded.status_code == 202, uploaded.text
-        job = await _await_job(api, headers, uploaded.json()["job_id"])
-        assert job["state"] == "completed", job
+        await completed_job(api, uploaded, headers)
         models = (await api.get("/api/v1/models", headers=headers)).json()
         assert [model["name"] for model in models] == ["First model"]
