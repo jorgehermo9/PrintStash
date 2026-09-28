@@ -45,6 +45,7 @@ and changelog instead of reconstructing their contents.
 | Task | Read |
 | --- | --- |
 | Branch, commit, PR, changelog | [references/conventions.md](references/conventions.md) |
+| Screenshot or video of a UI change for a PR | [references/pr-evidence.md](references/pr-evidence.md) |
 | Cut / publish a release, version bump | [references/release.md](references/release.md) |
 | Any code change (types, errors, fallbacks) | [references/code-principles.md](references/code-principles.md) — invalid states unrepresentable, no free strings, no magic fallbacks |
 | Backend, config | [references/backend.md](references/backend.md) |

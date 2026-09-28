@@ -55,6 +55,8 @@ address from session context; GitHub attributes by verified email.
 - Fill `.github/PULL_REQUEST_TEMPLATE.md`: Summary bullets, the three Testing
   checkboxes (check them truthfully), and Notes for any schema, API, storage,
   or printer-provider behavior change.
+- A user-visible UI change carries visual evidence (a screenshot for a state, a
+  video for a flow) attached to the description: [pr-evidence.md](pr-evidence.md).
 - Title reads like a commit subject: `fix(backup): quiesce background loops
   during restore`.
 - Behavior changes, larger features, and data-model/API changes should have an

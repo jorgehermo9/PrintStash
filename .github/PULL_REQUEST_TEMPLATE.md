@@ -8,6 +8,14 @@
 - [ ] `cd frontend && pnpm lint && pnpm format:check && pnpm typecheck && pnpm test` green, or not needed
 - [ ] Manual test notes included, or not needed
 
+## Visual evidence
+
+<!-- A user-visible UI change shows it: a screenshot for a state, a video for a
+flow. Attach the files here; never commit them.
+How: .agents/skills/printstash/references/pr-evidence.md -->
+
+- [ ] Screenshot or video of the changed UI attached, or not needed: no user-visible UI change
+
 ## Coverage matrix
 
 <!-- Required whenever tests were added or changed — a one-line assertion edit

@@ -10,6 +10,9 @@ testing, parser fixtures, and small focused PRs.
 - Open an issue for behavior changes, larger features, or anything that touches
   the data model/API.
 - Keep changes small enough to review in one sitting.
+- For a UI change, attach a screenshot or a short video to the PR description
+  (`cd frontend && pnpm evidence` records one against a throwaway backend; see
+  `.agents/skills/printstash/references/pr-evidence.md`). Attach, never commit.
 - Do not include secrets, printer access codes, private URLs, or real API keys in
   issues, logs, screenshots, fixtures, or tests.
 

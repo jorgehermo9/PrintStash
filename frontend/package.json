@@ -32,6 +32,7 @@
     "i18n:add": "node scripts/scaffold-locale.mjs",
     "i18n:check": "vitest run tests/repo/i18n-coverage.test.ts tests/repo/locale-authoring.test.ts tests/repo/localization-assets.test.ts src/lib/__tests__/locale.test.ts",
     "media:readme": "node scripts/generate-readme-media.mjs",
+    "evidence": "playwright test --config=playwright.evidence.config.ts",
     "lint:fix": "oxlint --fix --deny-warnings",
     "format": "oxfmt .",
     "format:check": "oxfmt --check ."
