@@ -44,6 +44,9 @@ seeded data only: no real library, printer host, or token.
    PR_EVIDENCE_OUT=<scratchpad>/evidence pnpm evidence [screenshot.evidence.ts]
    ```
 
+   Each run empties `PR_EVIDENCE_OUT` first, so run every spec the PR needs in
+   one go, or copy out what you keep.
+
 ## Look before attaching
 
 Open every PNG, and sample every video with
