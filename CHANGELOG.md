@@ -90,6 +90,13 @@ image. See UPGRADE.md before pulling.**
 
 ### Performance
 
+- Bound each geometric similarity comparison to three minutes so a pathological
+  mesh pair cannot occupy the scan worker for hours; exhausted pairs are counted
+  as failed verifications and the scan continues.
+- Similar Model analysis now reuses triangle measurements during surface
+  comparisons and avoids Trimesh array tracking inside geometry calculations,
+  reducing CPU time without changing comparison evidence.
+
 - **Imports no longer copy files into local storage.** A staged upload, URL
   import, library-transfer archive entry or Bambu print capture
   becomes its library file by hard link when staging shares the library's
