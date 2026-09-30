@@ -29,6 +29,8 @@
   will be removed in 0.16.
 
 ### Fixed
+- Keep native STEP/STP conversion within small worker memory budgets by using serial tessellation, and classify B-rep allocation failures as resource refusals.
+
 
 - Removed the duplicate Wiki entry from the profile dropdown.
 - Rendering model views for learned similarity embeddings no longer happens in
