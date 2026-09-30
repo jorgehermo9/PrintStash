@@ -271,6 +271,7 @@ class Settings(BaseSettings):
     capture_provider_concurrency: int = Field(default=4, ge=1, le=4)
     capture_provider_retry_after_max_seconds: float = Field(default=10, ge=0, le=10)
     log_level: str = "INFO"
+    slow_request_ms: int = Field(default=1000, ge=1)
     # A restart request exits the API process gracefully. Enable this only when
     # Docker, systemd, Kubernetes, or another supervisor is configured to
     # relaunch it; source/dev launches stay safely disabled by default.
@@ -408,6 +409,11 @@ class Settings(BaseSettings):
 
     mesh_step_timeout_seconds: int = Field(default=90, gt=0)
 
+    # Every mesh derivative (geometry, thumbnail, fingerprint) runs in a
+    # disposable child so a file that outgrows its memory budget costs one
+    # process rather than the API. This is that child's wall-clock deadline.
+    mesh_worker_timeout_seconds: int = Field(default=300, ge=10, le=3600)
+
     # Oversized STL previews run in a disposable, streaming worker. The worker
     # deadline is intentionally capped by the service so an operator override
     # cannot leave an ingestion thread waiting indefinitely.
@@ -445,7 +451,7 @@ class Settings(BaseSettings):
     backup_s3_secret_key: str = ""
 
     app_name: str = "PrintStash"
-    app_version: str = "0.13.0"
+    app_version: str = "0.14.0"
 
     @field_validator(*DATA_ROOT_LAYOUT, "db_url", mode="before")
     @classmethod

@@ -35,9 +35,10 @@ from app.db.models import (
 )
 from app.db.scopes import live
 from app.db.session import get_session_factory
-from app.modules.media import gcode_parser, thumbnail
+from app.modules.media import gcode_parser, mesh_isolation, thumbnail
 from app.modules.media.thumbnail_engine import (
-    ThumbnailEngine,
+    GeometryReady,
+    GeometryRefused,
     ThumbnailFailureReason,
     ThumbnailRequest,
 )
@@ -154,11 +155,19 @@ def _fail(
     reason: str,
     *,
     deterministic: bool,
+    duration_ms: int | None = None,
+    peak_rss_bytes: int | None = None,
 ) -> None:
     with get_session_factory().scoped_session() as session:
         row = _row(session, file_id, kind, recipe)
         records.mark_failed(
-            session, row, reason, now=utcnow(), deterministic=deterministic
+            session,
+            row,
+            reason,
+            now=utcnow(),
+            deterministic=deterministic,
+            duration_ms=duration_ms,
+            peak_rss_bytes=peak_rss_bytes,
         )
         session.commit()
 
@@ -281,7 +290,7 @@ def _derive_mesh(file_id: int) -> Outcome:
             source = stack.enter_context(
                 resolve(file_row).materialize(capacity_claimed=True)
             )
-            result = ThumbnailEngine().generate(
+            result = mesh_isolation.generate(
                 ThumbnailRequest(
                     path=source,
                     file_type=file_row.file_type.value,
@@ -298,29 +307,63 @@ def _derive_mesh(file_id: int) -> Outcome:
             _fail(file_id, kind, kinds[kind], "invalid_source", deterministic=False)
             outcome[kind] = DerivativeState.FAILED
         return Outcome(outcome)
+    except mesh_isolation.MeshWorkerError as exc:
+        # The child died or was killed for this Artifact's bytes; the API did not.
+        # A file over the memory budget is terminal (retrying repeats the kill);
+        # other worker failures keep the bounded retry.
+        reason = exc.reason.value
+        logger.warning(
+            "mesh derivation failed in its worker",
+            extra={"file_id": file_id, "reason": reason},
+        )
+        for kind in needed:
+            _fail(
+                file_id,
+                kind,
+                kinds[kind],
+                reason,
+                deterministic=reason in _DETERMINISTIC,
+            )
+            outcome[kind] = DerivativeState.FAILED
+        return Outcome(outcome)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if DerivativeKind.METADATA in needed:
-        with get_session_factory().scoped_session() as session:
-            meta = _metadata_row(session, file_id)
-            for name in _GEOMETRY_FIELDS:
-                setattr(meta, name, result.geometry.get(name))
-            session.add(meta)
-            records.mark_ready(
-                session,
-                _row(
-                    session,
-                    file_id,
-                    DerivativeKind.METADATA,
-                    kinds[DerivativeKind.METADATA],
-                ),
-                now=utcnow(),
-                output={"triangle_count": result.geometry.get("triangle_count")},
-                duration_ms=duration_ms,
+        if isinstance(result.geometry_outcome, GeometryRefused):
+            reason = result.geometry_outcome.reason.value
+            _fail(
+                file_id,
+                DerivativeKind.METADATA,
+                kinds[DerivativeKind.METADATA],
+                reason,
+                deterministic=reason in _DETERMINISTIC,
+                duration_ms=result.duration_ms,
                 peak_rss_bytes=result.peak_rss_bytes,
             )
-            session.commit()
-        outcome[DerivativeKind.METADATA] = DerivativeState.READY
+            outcome[DerivativeKind.METADATA] = DerivativeState.FAILED
+        elif isinstance(result.geometry_outcome, GeometryReady):
+            with get_session_factory().scoped_session() as session:
+                meta = _metadata_row(session, file_id)
+                for name in _GEOMETRY_FIELDS:
+                    setattr(meta, name, result.geometry.get(name))
+                session.add(meta)
+                records.mark_ready(
+                    session,
+                    _row(
+                        session,
+                        file_id,
+                        DerivativeKind.METADATA,
+                        kinds[DerivativeKind.METADATA],
+                    ),
+                    now=utcnow(),
+                    output={"triangle_count": result.geometry.get("triangle_count")},
+                    duration_ms=duration_ms,
+                    peak_rss_bytes=result.peak_rss_bytes,
+                )
+                session.commit()
+            outcome[DerivativeKind.METADATA] = DerivativeState.READY
+        else:
+            raise RuntimeError("metadata requested without geometry outcome")
         if result.fingerprint_result is not None:
             try:
                 after_commit(

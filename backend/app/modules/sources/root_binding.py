@@ -9,6 +9,7 @@ import secrets
 import uuid
 from pathlib import Path
 
+from printstash_core.files import publish_staged_file
 from sqlmodel import Session
 
 from app.core.logging import get_logger
@@ -169,9 +170,14 @@ def _create_marker(root: Path, payload: dict[str, object]) -> bool:
             os.fsync(fd)
         finally:
             os.close(fd)
-        # link() is create-only, unlike replace(), so a concurrent valid marker
-        # can never be silently overwritten.
-        os.link(temporary, ROOT_MARKER_FILENAME, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+        # Publication is create-only even on hardlinkless mounts, so a
+        # concurrent valid marker can never be silently overwritten.
+        publish_staged_file(
+            Path(temporary),
+            Path(ROOT_MARKER_FILENAME),
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+        )
         os.fsync(root_fd)
         return True
     except FileExistsError:
@@ -218,8 +224,10 @@ def enroll_external_root(session: Session, library: ExternalLibrary) -> External
     root = Path(library.root_path).expanduser().resolve(strict=False)
     if not root.exists() or not root.is_dir():
         raise ExternalRootBindingError("missing", "root_path_missing")
-    if not os.access(root, os.R_OK | os.W_OK):
+    if not os.access(root, os.R_OK):
         raise ExternalRootBindingError("unreadable", "root_path_unreadable")
+    if not os.access(root, os.W_OK):
+        raise ExternalRootBindingError("unreadable", "root_marker_unwritable")
     identity = _installation_identity()
     if not identity:
         raise ExternalRootBindingError("invalid", "installation_identity_missing")

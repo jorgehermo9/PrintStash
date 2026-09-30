@@ -9,6 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TaskList } from "@/components/task-list";
+import { AuthContext, type AuthState } from "@/lib/auth-context";
 import { setLocale, uiMessage } from "@/lib/locale";
 import type { TaskItem } from "@/lib/task-center";
 
@@ -24,10 +25,20 @@ function task(overrides: Partial<TaskItem> = {}): TaskItem {
   };
 }
 
-function renderTaskList(tasks: TaskItem[]) {
+function renderTaskList(tasks: TaskItem[], user: AuthState["user"] = null) {
   render(
     <MemoryRouter>
-      <TaskList tasks={tasks} onClear={vi.fn<() => void>()} />
+      <AuthContext.Provider
+        value={{
+          user,
+          loading: false,
+          login: async () => {},
+          logout: async () => {},
+          refresh: async () => {},
+        }}
+      >
+        <TaskList tasks={tasks} onClear={vi.fn<() => void>()} />
+      </AuthContext.Provider>
     </MemoryRouter>,
   );
 }
@@ -35,6 +46,142 @@ function renderTaskList(tasks: TaskItem[]) {
 afterEach(() => act(() => setLocale("en")));
 
 describe("TaskList", () => {
+  it("links a similarity task to its analysis", () => {
+    renderTaskList([
+      task({
+        similarityRunId: 1,
+        title: "Similar model analysis",
+        detail: "2 Artifacts · 1 comparisons",
+        status: "running",
+      }),
+    ]);
+
+    expect(screen.getByRole("link", { name: "View analysis" })).toHaveAttribute(
+      "href",
+      "/library/similar",
+    );
+  });
+
+  it("omits the unknown-total hint from a similarity task", () => {
+    renderTaskList([task({ similarityRunId: 1, status: "running" })]);
+
+    expect(screen.queryByText("Discovering total… Safe to close this view.")).toBeNull();
+  });
+
+  it("omits a misleading percentage for an active similarity run", () => {
+    renderTaskList([task({ similarityRunId: 1, status: "running", progress: 0 })]);
+
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  it("shows backup stage details instead of the unknown-total hint", () => {
+    renderTaskList([
+      task({
+        title: "Backup",
+        status: "running",
+        jobKind: "backups.create",
+        jobId: "backup-1",
+        stage: "snapshotting",
+      }),
+    ]);
+
+    expect(screen.getByText("Snapshotting database · continues in background")).toBeVisible();
+    expect(screen.queryByText("Discovering total… Safe to close this view.")).toBeNull();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  it("exposes the ZIP import percentage on its progress bar", () => {
+    renderTaskList([
+      task({
+        title: "Import parts.zip",
+        status: "running",
+        jobKind: "ingestion.archive_selection",
+        progress: 50,
+      }),
+    ]);
+
+    expect(screen.getByRole("progressbar", { name: "Progress" })).toHaveAttribute(
+      "aria-valuenow",
+      "50",
+    );
+  });
+
+  it("shows ZIP upload metrics", () => {
+    renderTaskList([
+      task({
+        title: "Prepare large.zip",
+        status: "running",
+        progress: 45,
+        archiveUploading: true,
+        archiveSizeBytes: 1024,
+        archiveTransferredBytes: 512,
+        archiveSpeedBytesPerSecond: 256,
+        archiveEtaSeconds: 2,
+      }),
+    ]);
+
+    expect(screen.getByText("Uploaded 512 B of 1 KB (50%)")).toBeVisible();
+    expect(screen.getByText("256 B/s · about 2s remaining")).toBeVisible();
+    expect(screen.getByText("Keep this browser tab open during upload.")).toBeVisible();
+  });
+
+  it("does not invent a speed or ETA before transfer data arrives", () => {
+    renderTaskList([
+      task({
+        status: "running",
+        archiveUploading: true,
+        archiveSizeBytes: 1024,
+      }),
+    ]);
+
+    expect(screen.getByText("Uploading 1 KB. Keep this browser tab open.")).toBeVisible();
+    expect(screen.queryByText(/remaining/)).toBeNull();
+  });
+
+  it("labels completed browser transfer as awaiting server receipt", () => {
+    renderTaskList([
+      task({
+        title: "Prepare large.zip",
+        status: "running",
+        progress: 95,
+        archiveUploading: true,
+        archiveSizeBytes: 1024,
+        archiveTransferredBytes: 1024,
+        detail: "Finishing transfer to PrintStash. ZIP preparation starts next.",
+      }),
+    ]);
+
+    expect(screen.getByText("Sent 1 KB from this browser (100%)")).toBeVisible();
+    expect(
+      screen.getByText("Finishing transfer to PrintStash. ZIP preparation starts next."),
+    ).toBeVisible();
+  });
+
+  it("links an administrator from a completed library import to preview activity", () => {
+    renderTaskList([task({ status: "completed", jobKind: "ingestion.library_import" })], {
+      id: 1,
+      username: "admin",
+      email: null,
+      is_superuser: true,
+    });
+
+    expect(screen.getByRole("link", { name: "View preview activity" })).toHaveAttribute(
+      "href",
+      "/settings?section=work",
+    );
+  });
+
+  it("does not offer administrator job details to a member", () => {
+    renderTaskList([task({ status: "completed", jobKind: "ingestion.library_import" })], {
+      id: 2,
+      username: "member",
+      email: null,
+      is_superuser: false,
+    });
+
+    expect(screen.queryByRole("link", { name: "View preview activity" })).toBeNull();
+  });
+
   it("updates empty-state copy after a language change", () => {
     renderTaskList([]);
     expect(screen.getByText("No active tasks")).toBeVisible();

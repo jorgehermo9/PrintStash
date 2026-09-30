@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from typing import Optional
 
+from pydantic import ValidationError
 from sqlalchemy import case, func
 from sqlmodel import Session, select
 
@@ -27,6 +29,7 @@ from app.db.models import (
 )
 from app.db.scopes import live
 from app.modules.identity import rbac
+from app.modules.library import collection_tree
 from app.modules.printing.costing import (
     cost_profiles,
     match_cost_profile,
@@ -38,6 +41,7 @@ from app.schemas.models import (
     ModelPrinterPresenceRead,
     PrintSummaryRead,
 )
+from app.schemas.orca import OrcaNativeContext
 
 from .extensions import similarity_summaries
 from .thumbnails import thumb_url
@@ -58,6 +62,16 @@ def metadata_read(
     profiles: list[FilamentProfile] | None = None,
 ) -> MetadataRead:
     data = metadata.model_dump()
+    raw_context = data.pop("native_context_json", None)
+    if raw_context:
+        try:
+            parsed_context = json.loads(raw_context)
+        except (TypeError, ValueError):
+            parsed_context = None
+        try:
+            data["native_context"] = OrcaNativeContext.model_validate(parsed_context)
+        except ValidationError:
+            data["native_context"] = None
     if profiles is None:
         profiles = cost_profiles(session)
     profile = match_cost_profile(profiles, metadata)
@@ -263,6 +277,9 @@ def _hydrate_list_rows(
     roles = rbac.effective_roles_for_collections(
         session, user, (m.collection_id for m in rows)
     )
+    labels = collection_tree.collection_labels(
+        session, user, (collection_name_for(m) for m in rows)
+    )
     out: list[ModelListItem] = []
     for model in rows:
         assert model.id is not None
@@ -275,6 +292,7 @@ def _hydrate_list_rows(
                 slug=model.slug,
                 collection=collection_name_for(model),
                 collection_id=model.collection_id,
+                collection_label=labels.get(collection_name_for(model) or ""),
                 source_url=model.source_url,
                 effective_role=roles.get(model.collection_id),
                 tags=sorted(tag.name for tag in model.tags),

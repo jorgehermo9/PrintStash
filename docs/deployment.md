@@ -46,13 +46,24 @@ docker buildx bake -f docker-bake.hcl unified --load
 PRINTSTASH_IMAGE=printstash PRINTSTASH_VERSION=local docker compose up -d
 ```
 
-The existing **GHCR Release Images** workflow publishes native AMD64 and ARM64
-images on release tags after CI passes. Run **Manual Docker Images** on the
-default branch to publish `latest`. Both use the repository owner's GHCR namespace
+The **GHCR Release Images** workflow publishes native AMD64 and ARM64 images
+on release tags after the same commit passes `CI` and a manual or nightly
+`Deep CI` run. Run **Manual Docker Images** on `main` to publish `latest` after
+its `CI` run passes. Both use the repository owner's GHCR namespace
 and the built-in `GITHUB_TOKEN`; a separate registry password is unnecessary.
+Run **GHCR Nightly Images** manually on `main` after its `CI` run passes:
+
+```bash
+gh workflow run nightly.yml --ref main
+```
+
+It publishes `nightly` plus a `nightly-<commit>` tag for each image without
+changing `latest`.
+For the single-container deployment, set `PRINTSTASH_VERSION=nightly` in `.env`.
+Pin `nightly-<commit>` to test a specific build after later nightly runs.
 Pull-request CI validates the application without building container images.
-The release workflow builds both architectures and runs the unified-image smoke
-test before promoting their digests to shared tags.
+The publication workflow builds all four images once per native architecture,
+smokes each digest, then promotes only the tested digests to shared tags.
 
 On a fork, enable Actions before running the manual workflow. After the first
 publish, open the `printstash` package's settings and change visibility to
@@ -233,16 +244,21 @@ An empty value means the default. **Move `VAULT_DATA_DIR` and
 ### Hard-linked imports
 
 Every upload, URL import, library-transfer archive and printer capture is first
-written to the staging directory, then published into the library by **hard
-link**: the staged file *becomes* the library file. Publishing takes the same
-fraction of a millisecond at any size (a 2 GiB file that took about 7 s to copy
+written to the staging directory. When the filesystem supports it, publication
+into the local library uses a **hard link**: the staged file *becomes* the
+library file. Publishing takes the same fraction of a millisecond at any size (a 2 GiB file that took about 7 s to copy
 publishes in under 1 ms), and the file never occupies disk twice, not even
 briefly.
 
 A hard link works only **within one mount**. Linux refuses one between two
 mounts even when both sit on the same disk. PrintStash then copies the file
 instead. Nothing breaks, but every import gets slower as files grow and briefly
-needs twice its size in free space.
+needs twice its size in free space. Ordinary file-upload staging also falls
+back to an exclusive copy if its own filesystem refuses hard links (for example,
+Unraid SHFS with hard-link support disabled). Existing files are never overwritten.
+The fallback returns only after copying and syncing the bytes; interrupted copies
+can leave an unreferenced partial staging file. See the
+[Unraid upload and logging guide](../unraid/README.md#uploads-on-mntuser).
 
 | Layout | Imports |
 | --- | --- |
@@ -263,16 +279,23 @@ copy:
 
 - Settings shows **"Imports are copied, not hard-linked"**, both on the overview
   and on the Storage section.
-- The log says `imports copy every staged file: staging (…) cannot hard-link
-  into the library (…)`.
+- For separate mounts, the log says `imports copy every staged file: staging (…) cannot hard-link into the library (…)`.
+- For a filesystem without hard links, one startup warning names the affected
+  root and explains that publication uses extra temporary space for copying.
+  Staging is checked even when the Vault provider is remote.
 - `GET /api/v1/health/details` reports
-  `components.storage.diagnostics.staged_hardlink: false`.
+  `components.storage.diagnostics.staged_hardlink: false` for local imports.
+  `components.storage.diagnostics.staging` records staging's `hardlink`,
+  `exclusive_create`, `directory_fsync` and `fs_kind` capabilities for every
+  provider; its warnings also appear in the storage capability response.
 
-**Fixing it** means giving staging and the library the same mount, then
-restarting:
+**Avoiding the extra copies** requires staging and the library to share a mount
+that supports hard links, then restarting. A single SHFS/FUSE mount can still
+require copying; uploads continue to work without relocating it:
+
 
 - Remove a volume mapped onto a subfolder of `/data`, after copying its contents
-  into the main volume the way [UPGRADE.md](../UPGRADE.md#unreleased-one-data-volume)
+  into the main volume the way [UPGRADE.md](../UPGRADE.md#0140-one-data-volume)
   moves the old volumes.
 - Or, when files must live on another disk, point **both** `VAULT_DATA_DIR` and
   `VAULT_STAGING_DIR` at that disk's mount.
@@ -367,6 +390,7 @@ on the API for your provider:
 | `VAULT_MEDIA_WORKER_TIMEOUT_SECONDS` | `180` | Media worker timeout. |
 | `VAULT_SQLITE_SYNCHRONOUS` | `NORMAL` | SQLite durability mode. |
 | `VAULT_LOG_LEVEL` | `INFO` | API logging level. |
+| `VAULT_SLOW_REQUEST_MS` | `1000` | Log a warning for requests at or above this duration in milliseconds. Response `Server-Timing` reports total and SQL time plus SQL statement count; pair it with `X-Request-ID` when diagnosing latency. |
 | `VAULT_BACKUP_RETENTION_DAYS` | `30` | Local backup retention in days. |
 | `VAULT_RESTART_ENABLED` | `true` in Compose | Enables supervised restart from Settings; the app default outside Compose is `false`. |
 

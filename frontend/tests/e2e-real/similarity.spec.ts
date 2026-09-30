@@ -123,7 +123,16 @@ test.describe("Standalone similarity", () => {
         await views.click();
         await page.getByText("Save current view").click();
         await page.getByPlaceholder("Ready to print").fill(viewName);
-        await page.getByRole("button", { name: "Save view", exact: true }).click();
+        const [savedView] = await Promise.all([
+          page.waitForResponse(
+            (response) =>
+              response.url().endsWith("/api/v1/saved-views") &&
+              response.request().method() === "POST",
+          ),
+          page.getByRole("button", { name: "Save view", exact: true }).click(),
+        ]);
+        expect(savedView.ok(), await savedView.text()).toBe(true);
+        expect((await savedView.json()).name).toBe(viewName);
         await page.goto("/");
         await openLibraryTools(page);
         await views.click();

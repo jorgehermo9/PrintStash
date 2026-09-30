@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BackgroundWorkPanel, type BackgroundWorkApi } from "@/components/background-work-panel";
 import { setEventSocketFactory, type EventSocket } from "@/lib/events";
+import { setLocale } from "@/lib/locale";
 import { aJob, aWorkOverview } from "@/test-support/factories";
 import { renderApp } from "@/test-support/render";
 import type { JobStatus, WorkOverview } from "@/types";
@@ -32,6 +33,12 @@ let socket: FakeSocket;
 function stubApi(overview: WorkOverview = aWorkOverview(), over: Partial<BackgroundWorkApi> = {}) {
   return {
     overview: vi.fn<BackgroundWorkApi["overview"]>().mockResolvedValue(overview),
+    jobs: vi.fn<BackgroundWorkApi["jobs"]>().mockResolvedValue([]),
+    cancelJob: vi
+      .fn<BackgroundWorkApi["cancelJob"]>()
+      .mockImplementation(async (jobId): Promise<JobStatus> =>
+        aJob({ job_id: jobId, state: "cancelled" }),
+      ),
     setLane: vi.fn<BackgroundWorkApi["setLane"]>().mockResolvedValue(overview),
     cancelQueued: vi.fn<BackgroundWorkApi["cancelQueued"]>().mockResolvedValue({ cancelled: 2 }),
     regenerate: vi
@@ -46,6 +53,10 @@ function stubApi(overview: WorkOverview = aWorkOverview(), over: Partial<Backgro
 
 function renderPanel(api: BackgroundWorkApi) {
   return renderApp(<BackgroundWorkPanel api={api} />);
+}
+
+async function openAdvanced(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByText("Advanced controls"));
 }
 
 /** An overview with a queue to cancel and a failure to retry. */
@@ -75,26 +86,167 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  setLocale("en");
 });
 
 describe("BackgroundWorkPanel", () => {
-  it("shows the whole state of background work", async () => {
+  it("shows each active job's progress", async () => {
+    const job = aJob({
+      job_id: "preview-1",
+      label: "Model images",
+      state: "running",
+      stage: "inspecting",
+      progress: 45,
+      processed: 2,
+      total: 4,
+    });
+    renderPanel(
+      stubApi(aWorkOverview(), {
+        jobs: vi.fn<BackgroundWorkApi["jobs"]>().mockResolvedValue([job]),
+      }),
+    );
+
+    expect(await screen.findByRole("progressbar", { name: "Model images" })).toBeVisible();
+    expect(screen.getByText(/2 \/ 4 · 45%/)).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "Model images" })).toHaveAttribute(
+      "aria-valuenow",
+      "45",
+    );
+  });
+
+  it("shows the backup archive file count in background work", async () => {
+    renderPanel(
+      stubApi(aWorkOverview(), {
+        jobs: vi.fn<BackgroundWorkApi["jobs"]>().mockResolvedValue([
+          aJob({
+            job_id: "backup-archive",
+            kind: "backups.automatic",
+            state: "running",
+            stage: "archiving",
+            processed: 4,
+            total: 10,
+          }),
+        ]),
+      }),
+    );
+
+    expect(await screen.findByText("archiving files · 4 / 10")).toBeVisible();
+  });
+
+  it("links a preview job to its model", async () => {
+    renderPanel(
+      stubApi(aWorkOverview(), {
+        jobs: vi.fn<BackgroundWorkApi["jobs"]>().mockResolvedValue([
+          aJob({
+            job_id: "preview-model",
+            label: "Model images",
+            state: "running",
+            model_id: 17,
+          }),
+        ]),
+      }),
+    );
+
+    expect(await screen.findByRole("link", { name: "Open model" })).toHaveAttribute(
+      "href",
+      "/models/17",
+    );
+  });
+
+  it("cancels the selected active job after confirmation", async () => {
+    const user = userEvent.setup();
+    const job = aJob({ job_id: "preview-2", label: "Model images", state: "running" });
+    const api = stubApi(aWorkOverview(), {
+      jobs: vi.fn<BackgroundWorkApi["jobs"]>().mockResolvedValue([job]),
+    });
+    renderPanel(api);
+
+    await user.click(await screen.findByRole("button", { name: "Cancel job" }));
+    expect(api.cancelJob).not.toHaveBeenCalled();
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel job" }),
+    );
+    await waitFor(() => expect(api.cancelJob).toHaveBeenCalledWith("preview-2"));
+  });
+
+  it("leads to a model's preview status", async () => {
     renderPanel(stubApi());
 
-    expect(await screen.findByLabelText("Concurrency for derive.native")).toHaveValue(1);
-    expect(screen.getByText("Mesh derivatives")).toBeVisible();
-    expect(screen.getByText("host")).toBeVisible();
-    expect(screen.getByText("Healthy")).toBeVisible();
-    expect(screen.getByText("No recent failures.")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "What's happening now" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Checking a model's preview?" })).toBeVisible();
+    expect(screen.getByText(/Open the model and look in Files/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Browse models" })).toHaveAttribute("href", "/");
+  });
+
+  it("explains the preview path in Spanish", async () => {
+    renderApp(<BackgroundWorkPanel api={stubApi()} />, { locale: "es" });
+
+    expect(
+      await screen.findByRole("heading", { name: "¿Buscas la vista previa de un modelo?" }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Explorar modelos" })).toHaveAttribute("href", "/");
+  });
+
+  it("explains when nothing is in progress", async () => {
+    renderPanel(stubApi());
+
+    expect(await screen.findByText("Nothing is running or waiting right now.")).toBeVisible();
+  });
+
+  it("starts with advanced controls closed", async () => {
+    renderPanel(stubApi());
+
+    expect(await screen.findByText("Advanced controls")).toBeVisible();
+    expect(screen.queryByLabelText("Concurrency for derive.native")).not.toBeInTheDocument();
+    expect(screen.getByText("Advanced controls").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("explains when no work has failed", async () => {
+    renderPanel(stubApi());
+
+    expect(await screen.findByText("No recent failures.")).toBeVisible();
+  });
+
+  it("shows running work before the technical controls", async () => {
+    renderPanel(
+      stubApi(busyOverview(), {
+        jobs: vi
+          .fn<BackgroundWorkApi["jobs"]>()
+          .mockResolvedValue([
+            aJob({ job_id: "active-preview", label: "Preparing model image", state: "running" }),
+            aJob({ job_id: "waiting-scan", label: "Scanning library", state: "queued" }),
+          ]),
+      }),
+    );
+
+    expect(await screen.findByText("Preparing model image")).toBeVisible();
+    expect(screen.getByText("Scanning library")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "In progress" })).toBeVisible();
   });
 
   it("flags a process that stopped heartbeating", async () => {
+    const user = userEvent.setup();
     const overview = aWorkOverview();
     overview.executors = [{ ...overview.executors[0], stale: true }];
 
     renderPanel(stubApi(overview));
 
-    expect(await screen.findByText("Not responding")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Workers not responding: 1.");
+    await user.click(screen.getByRole("button", { name: "View workers" }));
+    expect(screen.getByText("Not responding")).toBeVisible();
+  });
+
+  it("keeps worker controls in their own view", async () => {
+    const user = userEvent.setup();
+    renderPanel(stubApi());
+
+    await openAdvanced(user);
+    await user.click(await screen.findByRole("tab", { name: "Worker settings" }));
+
+    expect(screen.getByLabelText("Concurrency for derive.native")).toHaveValue(1);
+    expect(screen.getByText("host")).toBeVisible();
+    expect(screen.getByText("Healthy")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Derive missing" })).not.toBeInTheDocument();
   });
 
   it("reports an overview it cannot load", async () => {
@@ -112,7 +264,9 @@ describe("BackgroundWorkPanel", () => {
       const user = userEvent.setup();
       const api = stubApi();
       renderPanel(api);
-      const input = await screen.findByLabelText("Concurrency for derive.native");
+      await openAdvanced(user);
+      await user.click(await screen.findByRole("tab", { name: "Worker settings" }));
+      const input = screen.getByLabelText("Concurrency for derive.native");
 
       await user.clear(input);
       await user.type(input, "3");
@@ -128,7 +282,9 @@ describe("BackgroundWorkPanel", () => {
       const api = stubApi(overview);
       renderPanel(api);
 
-      await user.click(await screen.findByRole("button", { name: "Reset" }));
+      await openAdvanced(user);
+      await user.click(await screen.findByRole("tab", { name: "Worker settings" }));
+      await user.click(screen.getByRole("button", { name: "Reset" }));
 
       await waitFor(() => expect(api.setLane).toHaveBeenCalledWith("derive.native", null));
     });
@@ -140,7 +296,9 @@ describe("BackgroundWorkPanel", () => {
     ])("refuses $label", async ({ value }) => {
       const user = userEvent.setup();
       renderPanel(stubApi());
-      const input = await screen.findByLabelText("Concurrency for derive.native");
+      await openAdvanced(user);
+      await user.click(await screen.findByRole("tab", { name: "Worker settings" }));
+      const input = screen.getByLabelText("Concurrency for derive.native");
 
       await user.clear(input);
       await user.type(input, value);
@@ -155,6 +313,7 @@ describe("BackgroundWorkPanel", () => {
       const api = stubApi(busyOverview());
       renderPanel(api);
 
+      await openAdvanced(user);
       await user.click(await screen.findByRole("button", { name: "Cancel queued" }));
       expect(api.cancelQueued).not.toHaveBeenCalled();
       const dialog = await screen.findByRole("dialog");
@@ -164,9 +323,10 @@ describe("BackgroundWorkPanel", () => {
     });
 
     it("offers no cancel for a definition with nothing queued", async () => {
+      const user = userEvent.setup();
       renderPanel(stubApi());
 
-      await screen.findByText("Mesh derivatives");
+      await openAdvanced(user);
 
       expect(screen.queryByRole("button", { name: "Cancel queued" })).not.toBeInTheDocument();
     });
@@ -178,6 +338,7 @@ describe("BackgroundWorkPanel", () => {
       const api = stubApi();
       renderPanel(api);
 
+      await openAdvanced(user);
       const row = (await screen.findAllByText("thumbnail"))[0].closest("li")!;
       await user.click(within(row).getByRole("button", { name: "Derive missing" }));
 
@@ -189,6 +350,7 @@ describe("BackgroundWorkPanel", () => {
       const api = stubApi();
       renderPanel(api);
 
+      await openAdvanced(user);
       const row = (await screen.findAllByText("thumbnail"))[0].closest("li")!;
       await user.click(within(row).getByRole("button", { name: "Regenerate all" }));
       expect(api.regenerate).not.toHaveBeenCalled();
@@ -224,7 +386,9 @@ describe("BackgroundWorkPanel", () => {
     it("counts failed derivatives across the library", async () => {
       renderPanel(stubApi(busyOverview()));
 
-      expect(await screen.findByText(/3 derivatives failed across the library/)).toBeVisible();
+      expect(
+        await screen.findByText(/Preview or metadata failures across the library: 3/),
+      ).toBeVisible();
     });
   });
 
@@ -232,7 +396,7 @@ describe("BackgroundWorkPanel", () => {
     it("refreshes when a Job changes on the server", async () => {
       const api = stubApi();
       renderPanel(api);
-      await screen.findByText("Mesh derivatives");
+      await screen.findByRole("heading", { name: "What's happening now" });
       await waitFor(() => expect(socket.onmessage).not.toBeNull());
 
       socket.onmessage?.({
@@ -249,7 +413,7 @@ describe("BackgroundWorkPanel", () => {
 
     it("stops listening when it leaves the page", async () => {
       const { unmount } = renderPanel(stubApi());
-      await screen.findByText("Mesh derivatives");
+      await screen.findByRole("heading", { name: "What's happening now" });
       await waitFor(() => expect(socket.onmessage).not.toBeNull());
 
       unmount();

@@ -118,6 +118,15 @@ manufacturing platform.
   either architecture. Native Raspberry Pi and representative 1 GB hardware
   validation are still outstanding, so the published architecture list is not
   a physical-device performance claim.
+- Mesh geometry, thumbnails, similarity fingerprints, pairwise similarity
+  verification, similarity embedding views and the 3D viewer's STL conversion
+  run in a disposable child process rather than the API. The parent kills the child's process group when its resident memory passes the
+  same cgroup-aware budget the triangle caps use
+  (`VAULT_MESH_MEMORY_BUDGET_FRACTION`) or after
+  `VAULT_MESH_WORKER_TIMEOUT_SECONDS` (default 300 s). A file that exceeds the
+  budget is stored without geometry or a generated preview, is not retried, and
+  does not affect other requests; other failures are retried a bounded number of
+  times.
 - STEP tessellation runs in a disposable child process. Its resident-memory
   ceiling uses the existing cgroup-aware mesh memory budget and it has a 90 s
   timeout; an over-budget or overly complex file is stored without geometry or
@@ -136,6 +145,10 @@ manufacturing platform.
 
 ## Data And Metadata
 
+- Libraries of up to 25,000 collections and 100,000 Models are supported and
+  tested nightly at that size. Larger libraries work, but the collection
+  sidebar still loads the whole tree at once; beyond this size it slows
+  roughly in proportion.
 - Metadata extraction is best for common G-code emitted by OrcaSlicer,
   PrusaSlicer, Bambu Studio, Cura, and Klipper/Orca-style profiles.
 - Slicer metadata comments vary by slicer and profile; missing fields are
@@ -150,6 +163,12 @@ manufacturing platform.
 - Full backups include the database and PrintStash-managed primary/thumbnail
   objects. Files referenced through a Library source remain at their external
   paths and must be backed up separately by the operator.
+- Temporary upload staging is not included in full backups. A completed ZIP
+  inspection waiting for selection does not block restore, and restore leaves
+  its staged bytes untouched. Selection remains usable when both its snapshot
+  record and its unexpired staged ZIP survive on the same installation;
+  recovering onto a fresh volume requires uploading that ZIP again. Unfinished
+  imports and other pending staging owners still block restore.
 - Backup manifests bind managed objects to the storage provider and namespace they
   came from. Restore does not silently retarget those objects to a different remote
   namespace. Valid pre-ledger local backups require explicit superuser adoption

@@ -34,8 +34,11 @@ import type { ReactNode } from "react";
 import {
   QueryApiProvider,
   defaultQueryApi,
+  useCollectionChildren,
+  useCollectionLookup,
+  useCollectionLookupById,
   useCollectionReadme,
-  useCollections,
+  useCollectionSearch,
   useFilamentProfiles,
   useLibraryPrefetch,
   useModelFacets,
@@ -49,7 +52,6 @@ import {
   type QueryApi,
 } from "@/lib/queries";
 import type {
-  CollectionRead,
   FilamentProfileRead,
   ModelFacetsRead,
   ModelListItem,
@@ -60,7 +62,7 @@ import type {
   TagRead,
   VaultStatsRead,
 } from "@/types";
-import { aPrinter } from "@/test-support/factories";
+import { aCollectionNode, aPrinter } from "@/test-support/factories";
 
 // The hooks are thin, but they encode two real contracts worth locking down:
 // (1) every shared read passes `{ fresh: true }` so TanStack Query — not the
@@ -73,9 +75,12 @@ import { aPrinter } from "@/test-support/factories";
 // real implementation and is never reached from here.
 const stubs = {
   getCollectionReadme: vi.fn<QueryApi["getCollectionReadme"]>(),
+  listCollectionChildren: vi.fn<QueryApi["listCollectionChildren"]>(),
+  lookupCollection: vi.fn<QueryApi["lookupCollection"]>(),
+  lookupCollectionById: vi.fn<QueryApi["lookupCollectionById"]>(),
+  searchCollections: vi.fn<QueryApi["searchCollections"]>(),
   getModelFacets: vi.fn<QueryApi["getModelFacets"]>(),
   getVaultStats: vi.fn<QueryApi["getVaultStats"]>(),
-  listCollections: vi.fn<QueryApi["listCollections"]>(),
   listFilamentProfiles: vi.fn<QueryApi["listFilamentProfiles"]>(),
   listModelPage: vi.fn<QueryApi["listModelPage"]>(),
   listMultipartModels: vi.fn<QueryApi["listMultipartModels"]>(),
@@ -88,18 +93,6 @@ const stubs = {
 const api: QueryApi = { ...defaultQueryApi, ...stubs };
 
 const TIMESTAMP = "2026-01-01T00:00:00Z";
-
-const collection: CollectionRead = {
-  id: 1,
-  name: "Brackets",
-  slug: "brackets",
-  path: "Brackets",
-  parent_id: null,
-  model_count: 1,
-  effective_role: null,
-  tags: [],
-  has_readme: false,
-};
 
 const tag: TagRead = { id: 1, name: "petg", slug: "petg", model_count: 1 };
 
@@ -161,6 +154,7 @@ function makeListItem(id: number, name: string): ModelListItem {
     slug: name.toLowerCase().replaceAll(" ", "-"),
     collection: null,
     collection_id: null,
+    collection_label: null,
     source_url: null,
     effective_role: null,
     tags: [],
@@ -175,7 +169,7 @@ function makeListItem(id: number, name: string): ModelListItem {
 }
 
 function makeOutlinerModel(id: number, name: string): OutlinerModelRead {
-  return { id, name, collection: null, collection_id: null };
+  return { id, name, collection: null, collection_id: null, collection_label: null };
 }
 
 function emptyFacets(): ModelFacetsRead {
@@ -204,7 +198,10 @@ function wrapper(options: { staleTime?: number } = {}) {
 }
 
 beforeEach(() => {
-  stubs.listCollections.mockResolvedValue([collection]);
+  stubs.listCollectionChildren.mockResolvedValue({ items: [aCollectionNode()], next_cursor: null });
+  stubs.lookupCollection.mockResolvedValue({ collection: aCollectionNode(), ancestors: [] });
+  stubs.lookupCollectionById.mockResolvedValue({ collection: aCollectionNode(), ancestors: [] });
+  stubs.searchCollections.mockResolvedValue({ items: [aCollectionNode()], next_cursor: null });
   stubs.listTags.mockResolvedValue([tag]);
   stubs.listPrinters.mockResolvedValue([printer]);
   stubs.listPrinterProfiles.mockResolvedValue([printerProfile]);
@@ -218,11 +215,67 @@ afterEach(() => {
 });
 
 describe("taxonomy hooks", () => {
-  it("useCollections fetches with fresh:true and exposes data", async () => {
-    const { result } = renderHook(() => useCollections(), { wrapper: wrapper() });
+  it("loads the next child page only when requested", async () => {
+    const first = aCollectionNode();
+    const second = aCollectionNode({ id: 2, name: "Tools", path: "tools" });
+    stubs.listCollectionChildren
+      .mockResolvedValueOnce({ items: [first], next_cursor: "next" })
+      .mockResolvedValueOnce({ items: [second], next_cursor: null });
+    const { result } = renderHook(() => useCollectionChildren(null), { wrapper: wrapper() });
+
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual([collection]);
-    expect(stubs.listCollections).toHaveBeenCalledWith({ fresh: true });
+    expect(stubs.listCollectionChildren).toHaveBeenCalledTimes(1);
+    expect(stubs.listCollectionChildren).toHaveBeenCalledWith(null, null);
+    expect(result.current.data?.pages[0].items).toEqual([first]);
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    expect(stubs.listCollectionChildren).toHaveBeenNthCalledWith(2, null, "next");
+    await waitFor(() => expect(result.current.data?.pages[1]?.items).toEqual([second]));
+  });
+
+  it("leaves a closed child level idle", async () => {
+    const { result } = renderHook(() => useCollectionChildren(3, { enabled: false }), {
+      wrapper: wrapper(),
+    });
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(stubs.listCollectionChildren).not.toHaveBeenCalled();
+  });
+
+  it("leaves collection lookup idle without a path", async () => {
+    const { result } = renderHook(() => useCollectionLookup(null), { wrapper: wrapper() });
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(stubs.lookupCollection).not.toHaveBeenCalled();
+  });
+
+  it("resolves a selected collection by path", async () => {
+    const { result } = renderHook(() => useCollectionLookup("parts"), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(stubs.lookupCollection).toHaveBeenCalledTimes(1);
+    expect(stubs.lookupCollection).toHaveBeenCalledWith("parts");
+    expect(result.current.data?.collection.path).toBe("parts");
+  });
+
+  it("searches collections at the caller's required role", async () => {
+    const { result } = renderHook(() => useCollectionSearch("bracket", "edit"), {
+      wrapper: wrapper(),
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(stubs.searchCollections).toHaveBeenCalledTimes(1);
+    expect(stubs.searchCollections).toHaveBeenCalledWith("bracket", "edit", null);
+  });
+
+  it("resolves a saved collection by id", async () => {
+    const { result } = renderHook(() => useCollectionLookupById(1), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.collection.id).toBe(1);
+    expect(stubs.lookupCollectionById).toHaveBeenCalledWith(1);
+  });
+
+  it("leaves id lookup idle without a collection", () => {
+    const { result } = renderHook(() => useCollectionLookupById(null), { wrapper: wrapper() });
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(stubs.lookupCollectionById).not.toHaveBeenCalled();
   });
 
   it("useTags fetches with fresh:true", async () => {
@@ -385,6 +438,7 @@ describe("folder navigation", () => {
       description: null,
       collection: "parts",
       collection_id: 1,
+      collection_label: "Parts",
       part_count: 1,
       model_count: 1,
       guide_count: 0,

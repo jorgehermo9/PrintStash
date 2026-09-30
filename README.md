@@ -111,9 +111,10 @@ You can use the library without connecting a printer.
   Remote sources are read-only; mounted folders can optionally accept new files
   without overwriting existing ones. Scan manually, on a schedule, or watch
   supported local folders. See [Library sources and NAS setup](./docs/library-sources.md).
-- **Send slices automatically:** the [OrcaSlicer post-processing hook](./scripts/printstash_orca_push.py)
-  uploads exported G-code using your account and API key. Content-hash
-  deduplication recognizes identical files.
+- **Send slices automatically:** the [OrcaSlicer native upload guide](./docs/orcaslicer.md)
+  configures the dependency-free post-processing hook. A single-object slice
+  attaches to its exact existing source Model as a `needs_test` Revision;
+  multi-object plates stay safely separate.
 
 ### Find and organize your Models
 

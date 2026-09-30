@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { ScanSearch } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { CollectionPicker } from "@/components/collection-picker";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,8 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { listModels } from "@/lib/api/models";
 import { listExternalLibraries } from "@/lib/api/libraries";
-import { listCollections } from "@/lib/api/taxonomy";
-import { collectionDisplayPath } from "@/lib/collection-display";
+import { uiText } from "@/lib/locale";
 import {
   cancelSimilarityRun,
   getSimilarityStatus,
@@ -21,9 +21,12 @@ import {
   startSimilarityRun,
 } from "@/lib/api/similarity";
 import { useI18n } from "@/lib/i18n";
+import { parseApiError } from "@/lib/errors";
 import { evidenceLabel, isSimilarityRunActive } from "@/lib/similarity";
+import { listTasks, trackSimilarityRun } from "@/lib/task-center";
 import { toast } from "@/lib/toast";
 import { EVIDENCE_CLASSES, type SimilaritySettings } from "@/types/similarity";
+import type { CollectionNodeRead } from "@/types";
 
 function SettingsForm({ initial, onSaved }: { initial: SimilaritySettings; onSaved: () => void }) {
   const { t } = useI18n();
@@ -237,11 +240,8 @@ export function SimilaritySettingsPanel() {
     refetchInterval: (query) =>
       query.state.data?.pages.some((page) => page.items.some(isSimilarityRunActive)) ? 1500 : false,
   });
-  const collections = useQuery({
-    queryKey: ["similarity", "collections"],
-    queryFn: () => listCollections(),
-  });
   const [scope, setScope] = useState("library");
+  const [scopeCollection, setScopeCollection] = useState<CollectionNodeRead | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const [modelOffset, setModelOffset] = useState(0);
   const [selectedModels, setSelectedModels] = useState<Record<number, string>>({});
@@ -263,17 +263,51 @@ export function SimilaritySettingsPanel() {
     void history.refetch();
     void status.refetch();
   };
+  const runScope: "library" | "models" | "sources" | "collections" =
+    scope === "library"
+      ? "library"
+      : scope === "models"
+        ? "models"
+        : scope.startsWith("source:")
+          ? "sources"
+          : "collections";
+  const runIds =
+    scope === "pick"
+      ? []
+      : runScope === "library"
+        ? []
+        : runScope === "models"
+          ? Object.keys(selectedModels)
+              .map(Number)
+              .sort((a, b) => a - b)
+          : [Number(runScope === "sources" ? scope.slice(7) : scope)];
+  // Administrators can see other users' runs in history, but the server's
+  // duplicate guard applies to this user's runs only.
+  const ownActiveRunIds = new Set(
+    listTasks()
+      .filter((task) => task.status === "pending" || task.status === "running")
+      .flatMap((task) => (task.similarityRunId === undefined ? [] : [task.similarityRunId])),
+  );
+  const activeRun = history.data?.pages
+    .flatMap((page) => page.items)
+    .find(
+      (run) =>
+        ownActiveRunIds.has(run.id) &&
+        isSimilarityRunActive(run) &&
+        run.scope === runScope &&
+        run.scope_ids.length === runIds.length &&
+        run.scope_ids.every((id, index) => id === runIds[index]),
+    );
   const start = useMutation({
-    mutationFn: () =>
-      scope === "library"
-        ? startSimilarityRun("library")
-        : scope === "models"
-          ? startSimilarityRun("models", Object.keys(selectedModels).map(Number))
-          : scope.startsWith("source:")
-            ? startSimilarityRun("sources", [Number(scope.slice(7))])
-            : startSimilarityRun("collections", [Number(scope)]),
-    onSuccess: refresh,
-    onError: toast.error,
+    mutationFn: () => startSimilarityRun(runScope, runIds),
+    onSuccess: (run) => {
+      trackSimilarityRun(run);
+      refresh();
+    },
+    onError: (error) => {
+      if (parseApiError(error).code === "similarity_run_active") refresh();
+      toast.error(error);
+    },
   });
   const cancel = useMutation({
     mutationFn: cancelSimilarityRun,
@@ -329,12 +363,13 @@ export function SimilaritySettingsPanel() {
         )}
       </details>
       <div className="flex flex-wrap items-end gap-3 border-y bg-muted/30 p-3">
-        <label className="min-w-0 basis-full space-y-1 text-xs sm:basis-72">
+        <div className="min-w-0 basis-full space-y-1 text-xs sm:basis-72">
           {t("similarity.scope")}
           <select
             className="block w-full rounded-md border border-input bg-background p-2 text-sm"
             value={scope}
             onChange={(event) => setScope(event.target.value)}
+            aria-label={t("similarity.scope")}
           >
             <option value="library">{t("similarity.library")}</option>
             <option value="models">{t("similarity.modelSet")}</option>
@@ -343,22 +378,41 @@ export function SimilaritySettingsPanel() {
                 {t("similarity.sourceScope", { name: source.name })}
               </option>
             ))}
-            {collections.data?.map((collection) => (
-              <option key={collection.id} value={collection.id}>
-                {collectionDisplayPath(collections.data ?? [], collection.path)}
-              </option>
-            ))}
+            <option value="pick">{uiText("Choose existing collection")}</option>
+            {scopeCollection && (
+              <option value={scopeCollection.id}>{scopeCollection.display_path}</option>
+            )}
           </select>
-        </label>
+          {scope === "pick" && (
+            <CollectionPicker
+              minRole="edit"
+              selectedPath={null}
+              emptyLabel={uiText("No editable collections.")}
+              onSelect={(collection) => {
+                if (collection === null) throw new Error("A collection is required");
+                setScopeCollection(collection);
+                setScope(String(collection.id));
+              }}
+            />
+          )}
+        </div>
         <Button
           loading={start.isPending}
           disabled={
-            !status.data?.enabled || (scope === "models" && !Object.keys(selectedModels).length)
+            !status.data?.enabled ||
+            scope === "pick" ||
+            (scope === "models" && !runIds.length) ||
+            !!activeRun
           }
           onClick={() => start.mutate()}
         >
           {t("similarity.start")}
         </Button>
+        {activeRun && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {t("similarity.activeScope")}
+          </p>
+        )}
       </div>
       {scope === "models" && (
         <div className="space-y-3 border-b p-4">

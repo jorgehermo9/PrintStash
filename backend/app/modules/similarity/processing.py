@@ -12,9 +12,9 @@ from sqlmodel import Session, col, select
 from app.core.errors import OperationError
 from app.db.models import File, GeometryFingerprint, SimilarityRun, User
 from app.db.session import SessionFactory
-from app.modules.media import geometry_analysis
+from app.modules.media import mesh_isolation, verification_isolation
 from app.modules.media.fingerprints import FingerprintResult
-from app.modules.media.thumbnail_engine import ThumbnailEngine, ThumbnailRequest
+from app.modules.media.thumbnail_engine import ThumbnailRequest
 from app.modules.similarity import (
     candidates,
     fingerprints,
@@ -180,7 +180,7 @@ class SimilarityProcessor:
                             )
                             metrics = None
                         else:
-                            metrics = ThumbnailEngine().generate(
+                            metrics = mesh_isolation.generate(
                                 ThumbnailRequest(
                                     path=path,
                                     file_type=file.file_type.value,
@@ -197,6 +197,13 @@ class SimilarityProcessor:
                 except artifact_content.ArtifactContentChangedError:
                     result, metrics = (
                         FingerprintResult("failed", failure_code="source_changed"),
+                        None,
+                    )
+                except mesh_isolation.MeshWorkerError as exc:
+                    # The worker died or was killed for this file's bytes. The run
+                    # walks the whole library, so the file fails alone.
+                    result, metrics = (
+                        FingerprintResult("failed", failure_code=exc.reason.value),
                         None,
                     )
                 except artifact_content.ArtifactContentError:
@@ -333,7 +340,7 @@ class SimilarityProcessor:
                         counters.get("verification_cached", 0) + 1
                     )
                     return
-                evidence = geometry_analysis.verify_paths(
+                evidence = verification_isolation.verify_paths(
                     path_a,
                     path_b,
                     first_type=fa.file_type.value,
@@ -343,7 +350,12 @@ class SimilarityProcessor:
                     sample_points=config.sample_points,
                     triangle_cap=config.triangle_cap,
                 )
-        except (GeometryError, artifact_content.ArtifactContentError):
+        except (
+            GeometryError,
+            mesh_isolation.MeshWorkerError,
+            artifact_content.ArtifactContentError,
+        ):
+            # A worker killed for this pair's bytes fails the pair, not the run.
             counters["verification_failed"] = counters.get("verification_failed", 0) + 1
             return
         counters["verified"] = counters.get("verified", 0) + 1

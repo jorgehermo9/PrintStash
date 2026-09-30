@@ -24,9 +24,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { aJob } from "@/test-support/factories";
+import { aSimilarityRun } from "@/test-support/similarity";
 import type { EventSocket } from "@/lib/events";
 import type { JobSource } from "@/lib/task-center";
 import type { JobStatus } from "@/types";
+import type { SimilarityRun } from "@/types/similarity";
 
 // task-center holds module-private state, so each test gets a fresh module via
 // resetModules() + dynamic import. Fake timers (which also fake Date.now in
@@ -37,6 +39,7 @@ import type { JobStatus } from "@/types";
 type TaskCenter = typeof import("@/lib/task-center");
 
 const listJobs = vi.fn<JobSource>();
+const getSimilarityRun = vi.fn<(id: number) => Promise<SimilarityRun>>();
 
 /** A socket the test drives: `deliver` is the server sending one frame. */
 class FakeEventSocket implements EventSocket {
@@ -60,6 +63,7 @@ async function loadTaskCenter(): Promise<TaskCenter> {
   socket = new FakeEventSocket();
   events.setEventSocketFactory(async () => socket);
   taskCenter.setJobSource(listJobs);
+  taskCenter.setSimilarityRunSource(getSimilarityRun);
   return taskCenter;
 }
 
@@ -69,6 +73,7 @@ beforeEach(async () => {
   vi.resetModules();
   listJobs.mockReset();
   listJobs.mockResolvedValue([]);
+  getSimilarityRun.mockReset();
   localStorage.clear();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-14T12:00:00Z"));
@@ -79,7 +84,85 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("resetTasksForNewSetup", () => {
+  it("forgets old installation tasks before syncing a new installation", async () => {
+    tc.trackImportJob("old-job", "reconcile");
+
+    tc.resetTasksForNewSetup();
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()).toHaveLength(0);
+    expect(listJobs).toHaveBeenCalledWith([]);
+    expect(localStorage.getItem("printstash:import-tasks:v1")).toBeNull();
+  });
+
+  it("forgets dismissed job ids from the old installation", async () => {
+    const taskId = tc.trackImportJob("reused-job", "Old import");
+    tc.updateTask(taskId, { status: "completed" });
+    tc.clearCompletedTasks();
+    tc.resetTasksForNewSetup();
+    listJobs.mockResolvedValue([aJob({ job_id: "reused-job", state: "running" })]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()).toMatchObject([{ jobId: "reused-job", status: "running" }]);
+  });
+
+  it("ignores a previous installation job response received after reset", async () => {
+    let deliver: (jobs: JobStatus[]) => void = () => {};
+    listJobs.mockImplementationOnce(
+      () => new Promise<JobStatus[]>((resolve) => (deliver = resolve)),
+    );
+    tc.trackImportJob("old-job", "reconcile");
+    const syncing = tc.syncImportJobs();
+
+    tc.resetTasksForNewSetup();
+    deliver([aJob({ job_id: "old-job", state: "running" })]);
+    await syncing;
+
+    expect(tc.listTasks()).toHaveLength(0);
+  });
+});
+
 describe("createTask", () => {
+  it("marks a browser ZIP transfer interrupted after reload", async () => {
+    tc.createTask({ title: "Prepare parts.zip", status: "running", archiveUploading: true });
+
+    vi.resetModules();
+    const reloaded = await loadTaskCenter();
+
+    expect(reloaded.listTasks()[0]).toMatchObject({
+      status: "failed",
+      archiveUploading: false,
+      detail: "ZIP upload interrupted. Select the file again.",
+    });
+  });
+
+  it("keeps the ZIP review destination when the server job completes", async () => {
+    const taskId = tc.createTask({
+      title: "Prepare parts.zip",
+      status: "running",
+      archiveUploading: true,
+      archiveCollection: "parts",
+      archiveTags: ["functional"],
+    });
+    listJobs.mockResolvedValue([
+      aJob({ job_id: "archive-job", kind: "ingestion.archive_inspect", state: "completed" }),
+    ]);
+
+    tc.attachTaskToImportJob(taskId, "archive-job");
+    await tc.syncImportJobs();
+
+    const task = tc.listTasks()[0];
+    expect(task).toMatchObject({
+      jobId: "archive-job",
+      status: "completed",
+      archiveCollection: "parts",
+      archiveTags: ["functional"],
+    });
+    expect(tc.needsArchiveReview(task)).toBe(true);
+  });
+
   it("creates a pending task with a unique id and zero progress", () => {
     const id = tc.createTask({ title: "Upload Cube" });
     const tasks = tc.listTasks();
@@ -106,6 +189,24 @@ describe("createTask", () => {
       vi.advanceTimersByTime(1);
     }
     expect(tc.listTasks()).toHaveLength(20);
+  });
+
+  it("keeps a prepared ZIP available after newer tasks fill the history", async () => {
+    const reviewId = tc.createTask({
+      title: "Prepare archive.zip",
+      jobId: "archive-1",
+      jobKind: "ingestion.archive_inspect",
+      status: "completed",
+    });
+    for (let i = 0; i < 25; i++) tc.createTask({ title: `other-${i}` });
+
+    expect(tc.listTasks().some((task) => task.id === reviewId)).toBe(true);
+    tc.clearCompletedTasks();
+    expect(tc.listTasks().some((task) => task.id === reviewId)).toBe(true);
+
+    vi.resetModules();
+    tc = await loadTaskCenter();
+    expect(tc.listTasks().some((task) => task.id === reviewId)).toBe(true);
   });
 });
 
@@ -193,6 +294,70 @@ describe("trackServerJob", () => {
         .map((task) => task.title)
         .sort(),
     ).toEqual(localTitles.sort());
+  });
+});
+
+describe("trackSimilarityRun", () => {
+  it("shows a queued analysis in Tasks as soon as it starts", () => {
+    const id = tc.trackSimilarityRun(aSimilarityRun());
+
+    expect(tc.listTasks()).toMatchObject([
+      { id, similarityRunId: 1, title: "Similar model analysis", status: "pending" },
+    ]);
+  });
+
+  it("keeps one analysis task across reloads", async () => {
+    const id = tc.trackSimilarityRun(aSimilarityRun());
+
+    vi.resetModules();
+    tc = await loadTaskCenter();
+    expect(tc.trackSimilarityRun(aSimilarityRun())).toBe(id);
+    expect(tc.listTasks()).toHaveLength(1);
+  });
+
+  it("shows running comparison counts from the durable run", async () => {
+    tc.trackSimilarityRun(aSimilarityRun());
+    getSimilarityRun.mockResolvedValue(
+      aSimilarityRun({ state: "running", counters: { artifacts_processed: 3, verified: 2 } }),
+    );
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()[0]).toMatchObject({
+      similarityRunId: 1,
+      status: "running",
+      detail: "3 Artifacts · 2 comparisons",
+    });
+  });
+
+  it("completes the task only when the analysis run completes", async () => {
+    tc.trackSimilarityRun(aSimilarityRun());
+    getSimilarityRun.mockResolvedValue(aSimilarityRun({ state: "completed" }));
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()[0]).toMatchObject({ status: "completed", progress: 100 });
+  });
+
+  it("reports a failed analysis in Tasks", async () => {
+    tc.trackSimilarityRun(aSimilarityRun());
+    getSimilarityRun.mockResolvedValue(aSimilarityRun({ state: "failed" }));
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()[0]).toMatchObject({
+      status: "failed",
+      detail: "Analysis stopped. Check the run details and try again.",
+    });
+  });
+
+  it("reports a cancelled analysis in Tasks", async () => {
+    tc.trackSimilarityRun(aSimilarityRun());
+    getSimilarityRun.mockResolvedValue(aSimilarityRun({ state: "cancelled" }));
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()[0]).toMatchObject({ status: "failed", detail: "Cancelled" });
   });
 });
 
@@ -464,6 +629,72 @@ describe("subscribeTasks", () => {
 });
 
 describe("syncImportJobs", () => {
+  it("shows the number of ZIP models imported while the job runs", async () => {
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "zip-import",
+        kind: "ingestion.archive_selection",
+        state: "running",
+        stage: "ingesting",
+        processed: 2,
+        succeeded: 1,
+        failed: 1,
+        total: 4,
+        progress: 50,
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.taskDetail(tc.listTasks()[0])).toBe(
+      "1 of 4 models imported · continues in background",
+    );
+  });
+
+  it("uses the live ZIP job percentage for task progress", async () => {
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "zip-import",
+        kind: "ingestion.archive_selection",
+        state: "running",
+        stage: "ingesting",
+        processed: 2,
+        total: 4,
+        progress: 50,
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()[0].progress).toBe(50);
+  });
+
+  it("shows live portable import counts from the job", async () => {
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "portable-import",
+        kind: "ingestion.library_import",
+        state: "running",
+        stage: "ingesting",
+        processed: 23,
+        total: 92,
+        succeeded: 22,
+        skipped: 1,
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()[0]).toMatchObject({
+      jobKind: "ingestion.library_import",
+      status: "running",
+      processed: 23,
+      total: 92,
+      progress: 25,
+      detail: "ingesting 23/92 · continues in background",
+    });
+  });
+
   it("passes active task ids to the reconnect source", async () => {
     const taskId = tc.trackImportJob("missed-job", "Recreate Model preview images");
     tc.updateTask(taskId, { status: "running" });
@@ -617,6 +848,122 @@ describe("syncImportJobs", () => {
     await tc.syncImportJobs();
 
     expect(tc.taskTitle(tc.listTasks()[0])).toBe("Backup");
+  });
+
+  it("describes manual backup archive progress from its Job", async () => {
+    tc.trackImportJob("backup-progress", "Backup");
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "backup-progress",
+        kind: "backups.create",
+        state: "running",
+        stage: "archiving",
+        processed: 3,
+        total: 8,
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.taskDetail(tc.listTasks()[0])).toBe(
+      "Archiving 3 of 8 files · continues in background",
+    );
+  });
+
+  it("describes the scheduled backup publication destination", async () => {
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "scheduled-backup",
+        kind: "backups.automatic",
+        state: "running",
+        stage: "publishing",
+        current_item: "Offsite",
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.taskDetail(tc.listTasks()[0])).toBe(
+      "Publishing backup to Offsite · continues in background",
+    );
+  });
+
+  it("shows a scheduled backup that finished before the browser discovered it", async () => {
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "fast-scheduled-backup",
+        kind: "backups.automatic",
+        state: "completed",
+        completion: "complete",
+        updated_at: "2026-06-14T11:59:00Z",
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()).toMatchObject([
+      {
+        jobId: "fast-scheduled-backup",
+        status: "completed",
+        detail: "Backup created",
+      },
+    ]);
+  });
+
+  it("does not restore an older scheduled backup after clearing the latest", async () => {
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "older-scheduled-backup",
+        kind: "backups.automatic",
+        state: "completed",
+        updated_at: "2026-06-14T10:00:00Z",
+      }),
+      aJob({
+        job_id: "latest-scheduled-backup",
+        kind: "backups.automatic",
+        state: "completed",
+        updated_at: "2026-06-14T11:00:00Z",
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+    expect(tc.listTasks().map((task) => task.jobId)).toEqual(["latest-scheduled-backup"]);
+
+    tc.clearCompletedTasks();
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()).toEqual([]);
+  });
+
+  it("ignores stale scheduled backup history", async () => {
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "stale-scheduled-backup",
+        kind: "backups.automatic",
+        state: "completed",
+        updated_at: "2026-06-12T11:00:00Z",
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.listTasks()).toEqual([]);
+  });
+
+  it("reports a partial backup instead of a generic Job count", async () => {
+    tc.trackImportJob("partial-backup", "Backup");
+    listJobs.mockResolvedValue([
+      aJob({
+        job_id: "partial-backup",
+        kind: "backups.create",
+        state: "completed",
+        completion: "partial",
+      }),
+    ]);
+
+    await tc.syncImportJobs();
+
+    expect(tc.taskDetail(tc.listTasks()[0])).toBe("Backup created; some destinations failed");
   });
 
   it("titles a discovered import Job as an import", async () => {

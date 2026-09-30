@@ -17,13 +17,18 @@ from app.db.models.types import (
     WorkPriority,
 )
 
-ImportStage = Literal[
+JobStage = Literal[
     "resolving",
     "downloading",
     "inspecting",
     "extracting",
     "hashing",
     "ingesting",
+    "snapshotting",
+    "archiving",
+    "verifying",
+    "publishing",
+    "finalizing",
     "completed",
 ]
 JobCompletion = Literal["complete", "partial"]
@@ -48,6 +53,13 @@ class JobFailedItem(BaseModel):
     retryable: bool = False
 
 
+class JobStagingSummary(BaseModel):
+    retained_bytes: int = Field(ge=0)
+    lease_count: int = Field(ge=1)
+    earliest_expiry: datetime
+    discard_available: bool
+
+
 class JobStatus(BaseModel):
     """One background Job: what it is doing, and what it did.
 
@@ -59,6 +71,7 @@ class JobStatus(BaseModel):
     """
 
     job_id: str
+    staging: JobStagingSummary | None
     kind: JobKind
     owner_user_id: Optional[int] = Field(default=None, exclude=True)
     state: JobState
@@ -79,7 +92,7 @@ class JobStatus(BaseModel):
     label: Optional[str] = None
     progress: Optional[float] = None
     result: Optional[dict[str, Any]] = None
-    stage: Optional[ImportStage] = None
+    stage: Optional[JobStage] = None
     current_item: Optional[str] = None
     processed: int = 0
     total: Optional[int] = None

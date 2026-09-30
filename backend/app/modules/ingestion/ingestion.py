@@ -9,6 +9,7 @@ the committed bytes, so an upload is durable as soon as its bytes are.
 
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from dataclasses import dataclass, replace
@@ -36,7 +37,6 @@ from app.db.models import (
     Model,
     ModelTagLink,
     OwnedStorageObject,
-    StagingLease,
     StorageObjectState,
     User,
 )
@@ -377,6 +377,7 @@ def persist_artifact(
     provenance_context: ProvenanceContext | None = None,
     session_factory: SessionFactory | None = None,
     staged_origin: StagedRemoteObject | None = None,
+    auto_recommend_first_gcode: bool = True,
 ) -> File:
     """Persist a staged artifact onto *model*: the only Artifact-persistence path.
 
@@ -547,7 +548,7 @@ def persist_artifact(
                     session.flush()
             else:
                 # A Model's first live G-code claims the recommendation marker.
-                is_recommended = not recommended_rows
+                is_recommended = auto_recommend_first_gcode and not recommended_rows
 
         file_row = File(
             model_id=model_id,
@@ -806,6 +807,12 @@ class StagedArtifact:
     source_url: Optional[str] = None
     target_library_id: int | None = None
     staged_origin: StagedRemoteObject | None = None
+    native_context: dict[str, Any] | None = None
+    revision_label: str | None = None
+    revision_status: FileRevisionStatus | None = None
+    revision_notes: str | None = None
+    is_recommended: bool = False
+    auto_recommend_first_gcode: bool = True
 
 
 @dataclass(frozen=True)
@@ -927,6 +934,20 @@ def commit_staged_artifact(
             external_library_id=dest.external_library_id,
             source_mtime=dest.source_mtime,
             ingestion_key=ingestion_key,
+            meta={
+                "native_context_json": json.dumps(
+                    artifact.native_context,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            }
+            if artifact.native_context is not None
+            else None,
+            revision_label=artifact.revision_label,
+            revision_status=artifact.revision_status,
+            revision_notes=artifact.revision_notes,
+            is_recommended=artifact.is_recommended,
+            auto_recommend_first_gcode=artifact.auto_recommend_first_gcode,
             provenance_context=provenance_context,
             session_factory=session_factory,
             staged_origin=artifact.staged_origin,
@@ -954,15 +975,9 @@ def release_job_staging(
     """
     session_factory = session_factory or get_session_factory()
     with session_factory.scoped_session() as session:
-        leases = session.exec(
-            select(StagingLease).where(
-                StagingLease.job_id == job_id,
-                StagingLease.capture_upload_slot_origin_id.is_(None),  # type: ignore[union-attr]
-            )
-        ).all()
-        for lease in leases:
-            Path(lease.path).unlink(missing_ok=True)
-            session.delete(lease)
+        from .staging_cleanup import release_job
+
+        release_job(session, job_id)
         session.commit()
 
 

@@ -130,6 +130,7 @@ def _compose_storage_backend(
     if not recovery_only:
         try:
             storage_backend.ensure_setup()
+            storage_backend.probe_staging(Path(settings.staging_dir))
         except Exception as exc:
             # Provider reachability and root probes are runtime health, not
             # process-start prerequisites. Keep the API/admin health surface
@@ -156,8 +157,7 @@ def _compose_storage_backend(
         storage_backend.capabilities.tier.value,
         storage_backend.capabilities.object_identity.value,
     )
-    for warning in storage_backend.capabilities.warnings:
-        logger.warning("storage capability warning: %s", warning)
+    storage_backend.report_capability_warnings()
     bound = bind_backend(storage_backend)
     if recover_publications and storage_backend.backend_name != "unavailable":
         from app.modules.ingestion.inbox import reconcile_storage_publications
@@ -183,6 +183,13 @@ def _prepare_storage_for_startup(
             logger.warning(
                 "reconciled %d interrupted pending import(s)", interrupted_imports
             )
+    if recover_publications:
+        from app.modules.ingestion.staging_cleanup import prune_expired, reconcile_jobs
+
+        with get_session_factory().scoped_session() as session:
+            reconcile_jobs(session)
+            prune_expired(session, backend=backend)
+            session.commit()
     return backend
 
 

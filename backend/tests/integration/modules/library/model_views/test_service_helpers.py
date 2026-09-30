@@ -384,6 +384,16 @@ class TestMetadataReadLoadsProfiles:
 
         assert result.filament_cost == 2.0
 
+    @pytest.mark.parametrize("raw", ["not-json", '{"version": 2}'])
+    def test_ignores_a_corrupt_native_context(
+        self, db_session: Session, raw: str
+    ) -> None:
+        md = Metadata(file_id=1, native_context_json=raw)
+
+        result = models_projections.metadata_read(db_session, md)
+
+        assert result.native_context is None
+
 
 # --------------------------------------------------------------------------- #
 # ingestion — collision-safe NAS write path

@@ -710,17 +710,21 @@ class TestIngestModel:
         Image.new("RGB", (12, 10), (220, 30, 20)).save(replacement_buffer, format="PNG")
         replacement = replacement_buffer.getvalue()
 
+        from app.modules.derivatives import producers
         from app.modules.media.thumbnail_engine import (
-            ThumbnailEngine,
+            GeometryNotRequested,
             ThumbnailResult,
             ThumbnailStrategy,
         )
 
+        # Mesh derivatives run in a worker process that a patch here cannot
+        # reach, so the stand-in replaces the seam the producer calls.
         monkeypatch.setattr(
-            ThumbnailEngine,
+            producers.mesh_isolation,
             "generate",
-            lambda _engine, _request: ThumbnailResult(
+            lambda _request: ThumbnailResult(
                 image=replacement,
+                geometry_outcome=GeometryNotRequested(),
                 geometry={
                     "bbox_x_mm": None,
                     "bbox_y_mm": None,

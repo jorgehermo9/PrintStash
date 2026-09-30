@@ -1,0 +1,42 @@
+name: GHCR Nightly Images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ghcr-nightly-main
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Require main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check dispatch ref
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$REF" != "refs/heads/main" ]]; then
+            echo "::error::Nightly images must be built from main"
+            exit 1
+          fi
+      - name: Require successful CI for this commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/verify-ci-run.py ci.yml "$GITHUB_SHA"
+
+  publish:
+    needs: guard
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    uses: ./.github/workflows/container-publish.yml
+    with:
+      nightly: true
+    secrets: inherit

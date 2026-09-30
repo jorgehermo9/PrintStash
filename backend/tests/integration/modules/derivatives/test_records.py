@@ -26,6 +26,7 @@ from app.db.models import (
     DerivativeState,
 )
 from app.modules.derivatives import records
+from app.modules.derivatives.kinds import recipes_for
 
 
 @pytest.fixture
@@ -106,7 +107,7 @@ class TestNeeded:
         needed = records.needed(
             db_session,
             mesh,
-            {DerivativeKind.METADATA: 1, DerivativeKind.THUMBNAIL: 1},
+            recipes_for(mesh),
             now=utcnow(),
         )
 
@@ -119,7 +120,10 @@ class TestNeeded:
         make_derivative(mesh, DerivativeKind.THUMBNAIL, recipe_version=0)
 
         assert records.needed(
-            db_session, mesh, {DerivativeKind.THUMBNAIL: 1}, now=utcnow()
+            db_session,
+            mesh,
+            {DerivativeKind.THUMBNAIL: recipes_for(mesh)[DerivativeKind.THUMBNAIL]},
+            now=utcnow(),
         ) == {DerivativeKind.THUMBNAIL}
 
     def test_a_regeneration_makes_a_ready_kind_owed_again(
@@ -134,13 +138,22 @@ class TestNeeded:
         db_session.commit()
 
         assert records.needed(
-            db_session, mesh, {DerivativeKind.THUMBNAIL: 1}, now=utcnow()
+            db_session,
+            mesh,
+            {DerivativeKind.THUMBNAIL: recipes_for(mesh)[DerivativeKind.THUMBNAIL]},
+            now=utcnow(),
         ) == {DerivativeKind.THUMBNAIL}
 
 
 class TestBegin:
     def test_opens_a_running_attempt(self, db_session: Session, mesh) -> None:
-        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
+        row = records.begin(
+            db_session,
+            mesh,
+            DerivativeKind.THUMBNAIL,
+            recipes_for(mesh)[DerivativeKind.THUMBNAIL],
+            now=utcnow(),
+        )
 
         assert (row.state, row.attempts) == (DerivativeState.RUNNING, 1)
 
@@ -156,7 +169,13 @@ class TestBegin:
             next_attempt_at=utcnow(),
         )
 
-        row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=utcnow())
+        row = records.begin(
+            db_session,
+            mesh,
+            DerivativeKind.THUMBNAIL,
+            recipes_for(mesh)[DerivativeKind.THUMBNAIL],
+            now=utcnow(),
+        )
 
         assert (row.attempts, row.failure_reason, row.next_attempt_at) == (
             3,
@@ -231,6 +250,30 @@ class TestOutcomes:
 
         assert row.next_attempt_at == now + timedelta(days=1)
 
+    def test_timeouts_stop_at_the_configured_attempt_limit(self, db_session, mesh):
+        now = utcnow()
+        row = None
+        for _ in range(settings.derivative_max_attempts):
+            row = records.begin(db_session, mesh, DerivativeKind.THUMBNAIL, 1, now=now)
+            records.mark_failed(
+                db_session,
+                row,
+                "timeout",
+                now=now,
+                deterministic=False,
+                duration_ms=300_000,
+                peak_rss_bytes=123_456,
+            )
+            db_session.commit()
+            if row.next_attempt_at is not None:
+                now = row.next_attempt_at
+        assert row is not None
+        assert row.attempts == settings.derivative_max_attempts
+        assert row.next_attempt_at is None
+        assert records.satisfied(row, now=now)
+        assert row.duration_ms == 300_000
+        assert row.peak_rss_bytes == 123_456
+
     def test_a_deterministic_failure_is_terminal_at_once(
         self, db_session: Session, mesh
     ) -> None:
@@ -271,7 +314,7 @@ class TestWithdrawAndRetry:
         records.cancel(
             db_session,
             mesh,
-            {DerivativeKind.METADATA: 1, DerivativeKind.THUMBNAIL: 1},
+            recipes_for(mesh),
             now=utcnow(),
         )
         db_session.commit()
@@ -302,7 +345,11 @@ class TestWithdrawAndRetry:
         make_derivative(mesh, DerivativeKind.METADATA, state=DerivativeState.CANCELLED)
         make_derivative(mesh, DerivativeKind.THUMBNAIL, state=DerivativeState.CANCELLED)
 
-        records.reset(db_session, mesh, {DerivativeKind.THUMBNAIL: 1})
+        records.reset(
+            db_session,
+            mesh,
+            {DerivativeKind.THUMBNAIL: recipes_for(mesh)[DerivativeKind.THUMBNAIL]},
+        )
 
         assert set(records.rows_for(db_session, mesh)) == {DerivativeKind.METADATA}
 

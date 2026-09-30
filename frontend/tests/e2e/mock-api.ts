@@ -8,6 +8,32 @@ import type { SearchStatus } from "../../src/types/search";
 
 const now = "2026-06-04T00:24:22.000000";
 
+function mockCollection(id: number, name: string, path: string, modelCount: number) {
+  return {
+    id,
+    name,
+    slug: path,
+    path,
+    parent_id: null,
+    model_count: modelCount,
+    effective_role: "admin",
+    tags: [],
+    has_readme: false,
+  };
+}
+
+function mockCollections() {
+  const rows = [mockCollection(1, "maraio", "maraio", 1)];
+  if (inboxCollectionId !== null) {
+    rows.push(mockCollection(42, "Capture bracket", "capture-bracket", 0));
+  }
+  return rows;
+}
+
+function mockNode(row: ReturnType<typeof mockCollection>) {
+  return { ...row, child_count: 0, descendant_count: 0, display_path: row.name };
+}
+
 const metadata = {
   slicer_name: "OrcaSlicer",
   slicer_version: "OrcaSlicer 2.3.1",
@@ -42,6 +68,7 @@ const model = {
   hash: "59b3ca0dd226918a7e65c4417a6c2ea2314f821b77bed988fa9eb7fec86d3f30",
   collection: "maraio",
   collection_id: 1,
+  collection_label: "maraio",
   description: null,
   source_url: "https://www.printables.com/model/123-skadis-kitchen-roll-screw",
   effective_role: "admin",
@@ -210,6 +237,7 @@ const state = {
   externalLibrariesEnabled: false,
   ingestJobQueued: false,
   thumbnailRebuildQueued: false,
+  previewJobCancelled: false,
   apiKeySequence: 0,
   inboxCaptured: false,
   inboxImported: false,
@@ -234,7 +262,7 @@ function workOverview() {
         scope: "worker",
         partitioned: false,
         queued: 4,
-        running: 2,
+        running: state.previewJobCancelled ? 1 : 2,
       },
       {
         name: "ingest",
@@ -253,7 +281,7 @@ function workOverview() {
         label: "Mesh previews and geometry",
         lane: "derive.native",
         queued: 4,
-        running: 2,
+        running: state.previewJobCancelled ? 1 : 2,
         interrupted: 0,
         failed: 1,
         completed: 120,
@@ -280,7 +308,7 @@ function workOverview() {
         executor_id: "all-mock-host-1",
         role: "all",
         hostname: "mock-host",
-        app_version: "0.13.0",
+        app_version: "0.14.0",
         lanes: ["derive.native", "ingest", "maintenance"],
         started_at: now,
         heartbeat_at: now,
@@ -304,6 +332,72 @@ function workOverview() {
     ],
     failed_derivatives: 1,
   };
+}
+
+function workJobs() {
+  const base = {
+    kind: "derivatives.mesh",
+    priority: "interactive",
+    attempts: 1,
+    resubmits: 0,
+    model_id: null,
+    file_id: null,
+    error: null,
+    retryable: false,
+    created_at: now,
+    updated_at: now,
+    started_at: null,
+    finished_at: null,
+    committed_at: now,
+    step: null,
+    total_steps: null,
+    result: null,
+    stage: null,
+    current_item: null,
+    processed: 0,
+    total: null,
+    succeeded: 0,
+    deduplicated: 0,
+    skipped: 0,
+    failed: 0,
+    completion: null,
+    failed_items: [],
+  };
+  return [
+    ...(!state.previewJobCancelled
+      ? [
+          {
+            ...base,
+            job_id: "mock-preview-1",
+            label: "Preview of skadis kitchen roll screw",
+            state: "running",
+            model_id: model.id,
+            file_id: 1,
+            started_at: now,
+            stage: "inspecting",
+            current_item: "skadis_kitchen-roll_screw.stl",
+            processed: 1,
+            total: 2,
+            progress: 45,
+          },
+        ]
+      : []),
+    {
+      ...base,
+      job_id: "mock-preview-2",
+      label: "Another model preview",
+      state: "running",
+      started_at: now,
+      progress: 20,
+    },
+    ...Array.from({ length: 4 }, (_, index) => ({
+      ...base,
+      job_id: `mock-preview-queued-${index}`,
+      label: `Queued model preview ${index + 1}`,
+      state: "queued",
+      progress: null,
+    })),
+  ];
 }
 
 function artifactUploadStatus(uploadState: "created" | "uploading" | "ingesting") {
@@ -337,6 +431,7 @@ export function resetMockApiState(): void {
   state.externalLibrariesEnabled = false;
   state.ingestJobQueued = false;
   state.thumbnailRebuildQueued = false;
+  state.previewJobCancelled = false;
   state.apiKeySequence = 0;
   state.inboxCaptured = false;
   state.inboxImported = false;
@@ -907,33 +1002,34 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
       });
       return;
     }
-    const collections = [
-      {
-        id: 1,
-        name: "maraio",
-        slug: "maraio",
-        path: "maraio",
-        parent_id: null,
-        model_count: 1,
-        effective_role: "admin",
-        tags: [],
-        has_readme: false,
-      },
-    ];
-    if (inboxCollectionId !== null) {
-      collections.push({
-        id: 42,
-        name: "Capture bracket",
-        slug: "capture-bracket",
-        path: "capture-bracket",
-        parent_id: null,
-        model_count: 0,
-        effective_role: "admin",
-        tags: [],
-        has_readme: false,
-      });
-    }
-    sendJson(res, collections);
+    sendJson(res, mockCollections());
+    return;
+  }
+  // The tree a level, a lookup or a search at a time. Every mock collection is
+  // a top-level folder with nothing below it.
+  if (url.pathname === "/api/v1/collections/children") {
+    const top = url.searchParams.get("parent_id") === null;
+    sendJson(res, { items: top ? mockCollections().map(mockNode) : [], next_cursor: null });
+    return;
+  }
+  if (url.pathname === "/api/v1/collections/lookup") {
+    const path = url.searchParams.get("path");
+    const id = url.searchParams.get("id");
+    const found = mockCollections().find((row) =>
+      path !== null ? row.path === path : id !== null && row.id === Number(id),
+    );
+    if (found === undefined) sendJson(res, { detail: "collection_not_found" }, 404);
+    else sendJson(res, { collection: mockNode(found), ancestors: [] });
+    return;
+  }
+  if (url.pathname === "/api/v1/collections/search") {
+    const query = (url.searchParams.get("q") ?? "").toLowerCase();
+    sendJson(res, {
+      items: mockCollections()
+        .filter((row) => row.name.toLowerCase().includes(query))
+        .map(mockNode),
+      next_cursor: null,
+    });
     return;
   }
   if (url.pathname === "/api/v1/collections/1/permissions") {
@@ -1646,6 +1742,10 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   if (url.pathname === "/api/v1/jobs") {
+    if (url.searchParams.get("include_system") === "true") {
+      sendJson(res, workJobs());
+      return;
+    }
     sendJson(
       res,
       state.ingestJobQueued
@@ -1675,6 +1775,12 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
           ]
         : [],
     );
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/v1/jobs/mock-preview-1/cancel") {
+    state.previewJobCancelled = true;
+    drainRequest(req, () => sendJson(res, { job_id: "mock-preview-1", state: "cancelled" }));
     return;
   }
 
@@ -1789,7 +1895,7 @@ function handle(req: IncomingMessage, res: ServerResponse): void {
     sendJson(res, {
       status: "ok",
       name: "PrintStash",
-      version: "0.13.0",
+      version: "0.14.0",
       components: {
         database: { ok: true },
         storage: {

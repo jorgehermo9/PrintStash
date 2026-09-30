@@ -216,7 +216,10 @@ must never be copied as production identity configuration.
 - [ ] Task Center shows queued, running, completed, partial, failed, cancelled,
       and retry states; completed tasks remain terminal after restart.
 - [ ] Parser failures preserve the Artifact and show bounded error details.
-- [ ] OrcaSlicer/API-key upload creates the expected Model/Revision and never logs the key.
+- [ ] OrcaSlicer/API-key upload attaches a single-object slice to its exact
+      existing source Model as a `needs_test` Revision and never logs the key.
+- [ ] An unknown or duplicate source filename creates no Model/Revision; a
+      multi-object plate stays standalone, or is rejected in strict mode.
 
 ## 8. URL capture, Pending Imports, extension, and provenance
 

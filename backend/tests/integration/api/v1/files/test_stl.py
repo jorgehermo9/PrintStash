@@ -21,7 +21,10 @@ from fastapi.testclient import TestClient
 
 from app.core.config import _overlay
 from app.modules.storage.storage_backend.runtime import get_backend
-from tests.fixtures.three_mf_projects import build_3d_builder_component_project
+from tests.fixtures.three_mf_projects import (
+    build_3d_builder_component_project,
+    build_instanced_project,
+)
 
 CONVERTED = b"converted-stl-bytes"
 
@@ -127,7 +130,7 @@ class TestFileAsStl:
         row = make_file(model, filename="model.3mf", ftype="3mf", path=key, sha256=sha)
         remove_blob(get_backend().stl_cache_key(sha))
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes",
+            "app.modules.media.stl_isolation.to_stl_bytes",
             lambda _path, *, file_type=None: CONVERTED,
         )
 
@@ -135,6 +138,74 @@ class TestFileAsStl:
 
         assert response.status_code == 200, response.text
         assert response.content == CONVERTED
+
+    def test_refuses_a_3mf_whose_placements_exceed_the_budget(
+        self,
+        client: TestClient,
+        auth_headers,
+        monkeypatch: pytest.MonkeyPatch,
+        make_model,
+        make_file,
+        remove_blob,
+    ) -> None:
+        """#259: the viewer route cannot be made to expand placements in the API.
+
+        The file is a few KiB, so the size estimate admits it; only the worker's
+        expanded-face count sees 3,600 faces against a 1,000-face budget. That the
+        loader is never handed to trimesh is asserted where it is observable, in
+        `test_stl_worker.py`; here the route has to answer with an error.
+        """
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
+        monkeypatch.setitem(_overlay, "mesh_memory_budget_fraction", 0)
+        model = make_model("stl-instanced")
+        key = "instanced.3mf"
+        payload = build_instanced_project(300)
+        get_backend().write_bytes(payload, key)
+        sha = hashlib.sha256(payload).hexdigest()
+        row = make_file(
+            model,
+            filename="instanced.3mf",
+            ftype="3mf",
+            path=key,
+            sha256=sha,
+            size_bytes=len(payload),
+        )
+        remove_blob(get_backend().stl_cache_key(sha))
+
+        response = client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "stl_conversion_failed"
+
+    def test_a_worker_that_cannot_finish_is_a_conversion_failure(
+        self,
+        client: TestClient,
+        auth_headers,
+        monkeypatch: pytest.MonkeyPatch,
+        make_model,
+        make_file,
+        remove_blob,
+    ) -> None:
+        """A killed or timed-out worker answers like any conversion that failed."""
+        from app.modules.media.mesh_isolation import MeshWorkerError
+        from app.modules.media.thumbnail_engine import ThumbnailFailureReason
+
+        model = make_model("stl-worker-killed")
+        key = "killed.3mf"
+        get_backend().write_bytes(b"fake-3mf-bytes", key)
+        sha = "d4" * 32
+        row = make_file(model, filename="killed.3mf", ftype="3mf", path=key, sha256=sha)
+        remove_blob(get_backend().stl_cache_key(sha))
+
+        def killed(_path, *, file_type=None):
+            raise MeshWorkerError(ThumbnailFailureReason.RESOURCE_LIMIT)
+
+        monkeypatch.setattr("app.modules.media.stl_isolation.to_stl_bytes", killed)
+
+        response = client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "stl_conversion_failed"
 
     def test_denies_conversion_before_materialization_when_headroom_is_unavailable(
         self,
@@ -157,7 +228,7 @@ class TestFileAsStl:
         )
         remove_blob(get_backend().stl_cache_key(sha))
         converter = MagicMock(return_value=CONVERTED)
-        monkeypatch.setattr("app.modules.media.mesh_processing.to_stl_bytes", converter)
+        monkeypatch.setattr("app.modules.media.stl_isolation.to_stl_bytes", converter)
         monkeypatch.setitem(_overlay, "storage_min_free_bytes", 10**18)
 
         response = client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)
@@ -189,7 +260,7 @@ class TestFileAsStl:
             conversions["n"] += 1
             return CONVERTED
 
-        monkeypatch.setattr("app.modules.media.mesh_processing.to_stl_bytes", counted)
+        monkeypatch.setattr("app.modules.media.stl_isolation.to_stl_bytes", counted)
 
         client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)
         second = client.get(f"/api/v1/files/{row.id}/stl", headers=auth_headers)
@@ -216,7 +287,7 @@ class TestFileAsStl:
         row = make_file(model, filename="race.3mf", ftype="3mf", path=key, sha256=sha)
         remove_blob(get_backend().stl_cache_key(sha))
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes",
+            "app.modules.media.stl_isolation.to_stl_bytes",
             lambda _path, *, file_type=None: CONVERTED,
         )
 
@@ -251,7 +322,7 @@ class TestFileAsStl:
         )
         remove_blob(get_backend().stl_cache_key(sha))
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes",
+            "app.modules.media.stl_isolation.to_stl_bytes",
             lambda _path, *, file_type=None: CONVERTED,
         )
 
@@ -281,7 +352,7 @@ class TestFileAsStl:
             model, filename="broken.obj", ftype="obj", path=key, sha256="c2" * 32
         )
         monkeypatch.setattr(
-            "app.modules.media.mesh_processing.to_stl_bytes",
+            "app.modules.media.stl_isolation.to_stl_bytes",
             lambda _path, *, file_type=None: None,
         )
 

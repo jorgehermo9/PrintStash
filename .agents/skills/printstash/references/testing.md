@@ -67,6 +67,13 @@ classes for each feature so none are silently skipped:
   (local default; S3 branch when the change touches storage keys)
 - **SQLite and PostgreSQL** — dialect-sensitive SQL (`postgres` marker) when
   the change adds a query, index, or migration
+- **Scale** — a read that grows with the library runs as many statements, and
+  binds as many parameters, at ten times the size. Register a
+  collection-scoped listing in `tests/_library_reads.py`, which puts it under
+  `tests/repo/test_read_scaling.py` (every PR) and the `scale` lane's budgets at
+  25,000 collections and 100,000 Models (Deep CI). Build big libraries with
+  `tests.factories.library_scale.build_library_at_scale`, never a loop of
+  `make_*` calls
 
 The fixtures make the Nth test nearly free — `db_session`, `client`,
 `auth_headers`, the provider emulators, and `_patch_engine` truncating every
@@ -215,13 +222,12 @@ that never happened, so `142->exit` means the loop at line 142 never finished
 without breaking. The HTML report colours partial branches distinctly and is the
 faster way in when a module has many.
 
-### The floors are two-sided, so they move
+### Floors block regressions
 
-Every suite gates on a floor that may not fall *and* may not be left behind:
-exceed it by more than the slack and the run fails, telling you to raise it. A
-floor nobody is ever forced to move stops being a gate — it becomes a number
-everything clears by twenty points. So a PR that improves coverage sometimes has
-to edit the floor, and that edit is the point, not an annoyance.
+Every suite gates on lower bounds. Falling below a floor fails the run;
+exceeding it by more than its slack prints a maintenance notice. Raise a floor
+when reviewing coverage debt, without blocking a PR that improves coverage.
+The full gates run nightly in `Deep CI` and on the release commit before tagging.
 
 There is also a floor **per module** (backend, `printstash-core`) or **per area**
 (frontend), because the aggregate is blunt: at 21,000 statements a 900-line
@@ -720,19 +726,18 @@ render data without logic.
 ## Validate before you report
 
 Backend: `cd backend && ./scripts/test.sh fast -q` for the loop,
-`./scripts/test.sh full -q` before claiming green, and `./scripts/test.sh
-coverage` when the change touches `app/` — that lane is what CI gates on, and it
-is the only one that runs the coverage floors. Then `uv run ruff check app/
+`./scripts/test.sh pr -q` for the required CI selection, and `./scripts/test.sh
+coverage` for a coverage-floor change or release validation. The coverage lane
+is the only one that runs the floors. Then `uv run ruff check app/
 tests/` and `uv run pyright`.
 
-`printstash-core`: `cd backend/packages/printstash-core && ./scripts/test.sh
-coverage`.
+`printstash-core`: run affected tests locally; use `./scripts/test.sh coverage`
+for coverage-floor work or release validation.
 
 Frontend: `pnpm lint && pnpm format:check && pnpm typecheck`, then the affected
 Vitest files and Playwright spec selected by [running tests](running-tests.md).
-CI runs the full `pnpm test` and `pnpm coverage` gates; a localized `src/`
+PR CI runs `pnpm test`; `Deep CI` runs `pnpm coverage`. A localized `src/`
 change does not require repeating those full suites locally.
 
 Report the exact result — never say tests passed without running them, and paste
-failures verbatim. A coverage floor that had to be raised is part of the result;
-say which one and to what.
+failures verbatim. Report a coverage-floor maintenance notice when relevant.

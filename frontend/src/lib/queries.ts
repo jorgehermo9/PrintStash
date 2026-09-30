@@ -18,7 +18,6 @@ import {
   getSpoolmanStatus,
   getVaultConfig,
   getVaultStats,
-  listCollections,
   listFilamentProfiles,
   listFleetQueue,
   listModelPage,
@@ -30,11 +29,17 @@ import {
   listPrinters,
   listSpools,
   listTags,
+  listCollectionChildren,
+  lookupCollection,
+  lookupCollectionById,
+  searchCollections,
   type StatsPeriod,
 } from "@/lib/api";
 import { queryKeys } from "@/lib/query-client";
 import type {
-  CollectionRead,
+  CollectionLookupRead,
+  CollectionPage,
+  CollectionRole,
   Dashboard,
   FleetSummary,
   FilamentProfileRead,
@@ -74,7 +79,7 @@ import type {
  * The api-layer reads these hooks depend on, gathered into one collaborator.
  *
  * Every production render uses `defaultQueryApi` — the context default — so no
- * provider is required and the call sites stay `useCollections()`. Tests wrap
+ * provider is required. Tests wrap
  * the tree in `QueryApiProvider` to drive the hooks against an in-memory
  * implementation instead of intercepting this module's imports.
  */
@@ -87,7 +92,6 @@ export const defaultQueryApi = {
   getSpoolmanStatus,
   getVaultConfig,
   getVaultStats,
-  listCollections,
   listFilamentProfiles,
   listFleetQueue,
   listModelPage,
@@ -99,6 +103,10 @@ export const defaultQueryApi = {
   listPrinters,
   listSpools,
   listTags,
+  listCollectionChildren,
+  lookupCollection,
+  lookupCollectionById,
+  searchCollections,
 };
 
 export type QueryApi = typeof defaultQueryApi;
@@ -112,18 +120,75 @@ function useQueryApi(): QueryApi {
   return useContext(QueryApiContext);
 }
 
-export function useCollections() {
-  const api = useQueryApi();
-  return useQuery<CollectionRead[]>({
-    queryKey: queryKeys.collections,
-    queryFn: () => api.listCollections({ fresh: true }),
-  });
-}
-
 function collectionReadmeOptions(api: QueryApi, collectionId: number) {
   return queryOptions<string | null>({
     queryKey: queryKeys.collectionReadme(collectionId),
     queryFn: async () => (await api.getCollectionReadme(collectionId)).readme,
+  });
+}
+
+/**
+ * One level of the collection tree, a page at a time: `parentId` null is the
+ * caller's top level. Loaded only while `enabled` (a row that is open), so the
+ * tree fetches what the user expands and nothing else.
+ */
+export function useCollectionChildren(parentId: number | null, options?: { enabled?: boolean }) {
+  const api = useQueryApi();
+  return useInfiniteQuery({
+    queryKey: queryKeys.collectionChildren(parentId),
+    queryFn: ({ pageParam }: { pageParam: string | null }) =>
+      api.listCollectionChildren(parentId, pageParam),
+    initialPageParam: null,
+    getNextPageParam: (page: CollectionPage) => page.next_cursor,
+    enabled: options?.enabled ?? true,
+  });
+}
+
+/** The collection at `path` and its ancestors; idle while `path` is null. */
+export function useCollectionLookup(path: string | null) {
+  const api = useQueryApi();
+  return useQuery<CollectionLookupRead>({
+    queryKey: queryKeys.collectionLookup(path),
+    queryFn: () => {
+      if (path === null || path === "") throw new Error("Collection lookup requires a path");
+      return api.lookupCollection(path);
+    },
+    enabled: path !== null && path !== "",
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** A saved collection id and its named path; idle while no id is selected. */
+export function useCollectionLookupById(id: number | null) {
+  const api = useQueryApi();
+  return useQuery<CollectionLookupRead>({
+    queryKey: queryKeys.collectionLookupById(id),
+    queryFn: () => {
+      if (id === null) throw new Error("Collection lookup requires an id");
+      return api.lookupCollectionById(id);
+    },
+    enabled: id !== null,
+  });
+}
+
+/**
+ * Collections whose name contains `query`, held at `minRole` or above — for
+ * pickers and the tree's name filter. The caller debounces `query`.
+ */
+export function useCollectionSearch(
+  query: string,
+  minRole: CollectionRole = "view",
+  options?: { enabled?: boolean },
+) {
+  const api = useQueryApi();
+  return useInfiniteQuery({
+    queryKey: queryKeys.collectionSearch(query, minRole),
+    queryFn: ({ pageParam }: { pageParam: string | null }) =>
+      api.searchCollections(query, minRole, pageParam),
+    initialPageParam: null,
+    getNextPageParam: (page: CollectionPage) => page.next_cursor,
+    enabled: options?.enabled ?? true,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -154,7 +219,7 @@ export function useTags() {
  * added on one screen shows up on every other without a manual reload.
  *
  * `fresh: true` bypasses the legacy in-memory cache in `request.ts` so TanStack
- * Query stays the single source of truth, matching `useCollections`/`useTags`.
+ * Query stays the single source of truth, matching the other taxonomy hooks.
  */
 export function usePrinters(options?: { enabled?: boolean; refetchInterval?: number }) {
   const api = useQueryApi();

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.core.time import ensure_utc
 from app.db.models import CollectionRole, FileRevisionStatus, FileType, PrintJobState
+from app.schemas.orca import OrcaNativeContext
 from app.schemas.printers import (
     PrintJobIdentityRead,
     PrintJobReportedMetadataRead,
@@ -37,6 +38,7 @@ class MetadataRead(BaseModel):
     filament_cost: Optional[float] = None
     material_type: Optional[str] = None
     material_brand: Optional[str] = None
+    native_context: Optional[OrcaNativeContext] = None
 
     bbox_x_mm: Optional[float] = None
     bbox_y_mm: Optional[float] = None
@@ -142,6 +144,7 @@ class ModelRead(BaseModel):
     hash: str
     collection: Optional[str] = None
     collection_id: Optional[int] = None
+    collection_label: Optional[str]
     description: Optional[str] = None
     source_url: Optional[str] = None
     effective_role: Optional[CollectionRole] = None
@@ -243,6 +246,8 @@ class ModelListItem(BaseModel):
     slug: str
     collection: Optional[str] = None
     collection_id: Optional[int] = None
+    # The collection's name path (``Parts/Brackets``); None outside a collection.
+    collection_label: Optional[str] = None
     source_url: Optional[str] = None
     effective_role: Optional[CollectionRole] = None
     tags: List[str] = []
@@ -282,6 +287,8 @@ class OutlinerModelRead(BaseModel):
     name: str
     collection: Optional[str] = None
     collection_id: Optional[int] = None
+    # The collection's name path (``Parts/Brackets``); None outside a collection.
+    collection_label: Optional[str] = None
 
 
 class ModelFilters(BaseModel):
@@ -581,6 +588,35 @@ class CollectionRead(BaseModel):
     # Lets a folder view skip the readme request for the folders (most of them)
     # that have none.
     has_readme: bool = False
+
+
+class CollectionNodeRead(CollectionRead):
+    """One collection in the lazily loaded tree.
+
+    ``model_count`` covers the whole subtree, as ``descendant_count`` does for
+    collections. ``display_path`` joins the names of
+    the ancestors the caller can see, so a row can be labelled without the tree
+    above it having been loaded.
+    """
+
+    child_count: int
+    # Every collection below this one, at any depth.
+    descendant_count: int
+    display_path: str
+
+
+class CollectionPage(BaseModel):
+    """A page of collections; ``next_cursor`` is ``None`` on the last one."""
+
+    items: List[CollectionNodeRead]
+    next_cursor: Optional[str] = None
+
+
+class CollectionLookupRead(BaseModel):
+    """A collection found by path, with the visible ancestors above it, root first."""
+
+    collection: CollectionNodeRead
+    ancestors: List[CollectionNodeRead]
 
 
 class CollectionCreate(BaseModel):

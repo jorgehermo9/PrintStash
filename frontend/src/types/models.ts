@@ -81,6 +81,7 @@ export interface ModelRead {
   hash: string;
   collection: string | null;
   collection_id: number | null;
+  collection_label: string | null;
   description: string | null;
   source_url: string | null;
   effective_role: CollectionRole | null;
@@ -173,6 +174,8 @@ export interface ModelListItem {
   slug: string;
   collection: string | null;
   collection_id: number | null;
+  /** Names of the collection's visible ancestors, e.g. `Parts/Brackets`; null outside one. */
+  collection_label: string | null;
   source_url: string | null;
   effective_role: CollectionRole | null;
   tags: string[];
@@ -457,7 +460,15 @@ export type DerivativeKind = "metadata" | "thumbnail" | "toolpath";
 export type WorkPriority = "interactive" | "backfill";
 
 /** One background Job, from `/api/v1/jobs`. */
+export interface JobStagingSummary {
+  retained_bytes: number;
+  lease_count: number;
+  earliest_expiry: string;
+  discard_available: boolean;
+}
+
 export interface JobStatus {
+  staging: JobStagingSummary | null;
   job_id: string;
   kind: JobKind;
   state: JobState;
@@ -485,6 +496,11 @@ export interface JobStatus {
     | "extracting"
     | "hashing"
     | "ingesting"
+    | "snapshotting"
+    | "archiving"
+    | "verifying"
+    | "publishing"
+    | "finalizing"
     | "completed"
     | null;
   current_item: string | null;
@@ -775,6 +791,8 @@ export interface OutlinerModelRead {
   name: string;
   collection: string | null;
   collection_id: number | null;
+  /** Names of the collection's visible ancestors, e.g. `Parts/Brackets`; null outside one. */
+  collection_label: string | null;
 }
 
 export interface ListModelPageParams extends Omit<ListModelsParams, "offset"> {
@@ -859,6 +877,28 @@ export interface CollectionRead {
   tags: string[];
   /** False lets a folder view skip the readme request entirely. */
   has_readme: boolean;
+}
+
+/** One collection of the lazily loaded tree (`/collections/children`, `/lookup`, `/search`). */
+export interface CollectionNodeRead extends CollectionRead {
+  /** Direct children; zero means the row has nothing to expand into. */
+  child_count: number;
+  /** Every collection below this one, at any depth. */
+  descendant_count: number;
+  /** Names of the visible ancestors and this collection, e.g. `Parts/Brackets`. */
+  display_path: string;
+}
+
+export interface CollectionPage {
+  items: CollectionNodeRead[];
+  /** Null on the last page. */
+  next_cursor: string | null;
+}
+
+export interface CollectionLookupRead {
+  collection: CollectionNodeRead;
+  /** Visible ancestors, root first. */
+  ancestors: CollectionNodeRead[];
 }
 
 export interface CollectionPermissionRead {
